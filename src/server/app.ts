@@ -311,7 +311,7 @@ export function createApp(database: WorkbenchDatabase) {
   });
 
   app.get('/api/work-items', (request, response) => {
-    const view = request.query.view === 'archive' ? 'archive' : 'active';
+    const view = request.query.view === 'archive' ? 'archive' : request.query.view === 'workbench' ? 'workbench' : 'active';
     const limit = Number(request.query.limit ?? 50);
     if (!Number.isFinite(limit)) return response.status(400).json({ error: 'Invalid page limit.' });
     response.json(repository.listPage(view, limit, typeof request.query.cursor === 'string' ? request.query.cursor : null, typeof request.query.query === 'string' ? request.query.query : ''));

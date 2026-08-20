@@ -26,6 +26,7 @@ import {
   Sparkles,
   User,
   X,
+  Wrench,
 } from 'lucide-react';
 import { type CSSProperties, type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -93,7 +94,7 @@ function SortableQueueItem({ item, index, selected, draggable, onSelect }: { ite
   </div>;
 }
 
-function CreateTask({ onClose }: { onClose: () => void }) {
+function CreateTask({ onClose, defaultProjectName = '' }: { onClose: () => void; defaultProjectName?: string }) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<'search' | 'link' | 'ai' | 'manual'>('search');
   const [sourceQuery, setSourceQuery] = useState('');
@@ -103,7 +104,7 @@ function CreateTask({ onClose }: { onClose: () => void }) {
   const [aiDraftReady, setAiDraftReady] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [projectName, setProjectName] = useState('');
+  const [projectName, setProjectName] = useState(defaultProjectName);
   const createManual = useMutation({
     mutationFn: api.createWorkItem,
     onSuccess: async () => {
@@ -133,7 +134,7 @@ function CreateTask({ onClose }: { onClose: () => void }) {
     setSubmittedSourceQuery('');
   }
   const addSearchResult = useMutation({
-    mutationFn: (result: { title: string; summary: string; url: string | null }) => api.createWorkItem({ title: result.title.replace(/^[^·]+ · /, ''), description: result.summary, projectName: null, status: 'backlog', dueDate: null, sourceUrl: result.url, workspacePath: null }),
+    mutationFn: (result: { title: string; summary: string; url: string | null }) => api.createWorkItem({ title: result.title.replace(/^[^·]+ · /, ''), description: result.summary, projectName: defaultProjectName || null, status: 'backlog', dueDate: null, sourceUrl: result.url, workspacePath: null }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['work-items'] });
       onClose();
@@ -146,7 +147,7 @@ function CreateTask({ onClose }: { onClose: () => void }) {
   const generateDraft = useMutation({
     mutationFn: api.generateTaskDraft,
     onSuccess: ({ draft }) => {
-      setTitle(draft.title); setDescription(draft.description); setProjectName(draft.projectName ?? ''); setAiDraftReady(true);
+      setTitle(draft.title); setDescription(draft.description); setProjectName(defaultProjectName || draft.projectName || ''); setAiDraftReady(true);
     },
   });
 
@@ -872,7 +873,7 @@ export function App() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [showSources, setShowSources] = useState(false);
-  const [view, setView] = useState<'active' | 'archive' | 'discovery' | 'context'>('active');
+  const [view, setView] = useState<'active' | 'workbench' | 'archive' | 'discovery' | 'context'>('active');
   const [agentConversationId, setAgentConversationId] = useState<string | null>(null);
   const [pendingTaskNavigation, setPendingTaskNavigation] = useState<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
@@ -883,8 +884,8 @@ export function App() {
     return () => window.clearTimeout(timeout);
   }, [search]);
   const items = useInfiniteQuery({
-    queryKey: ['work-items', view === 'archive' ? 'archive' : 'active', debouncedSearch],
-    queryFn: ({ pageParam }) => api.listWorkItems(view === 'archive' ? 'archive' : 'active', debouncedSearch, pageParam),
+    queryKey: ['work-items', view === 'archive' ? 'archive' : view === 'workbench' ? 'workbench' : 'active', debouncedSearch],
+    queryFn: ({ pageParam }) => api.listWorkItems(view === 'archive' ? 'archive' : view === 'workbench' ? 'workbench' : 'active', debouncedSearch, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
     enabled: view === 'active' || view === 'archive',
@@ -913,11 +914,12 @@ export function App() {
   });
   const filtered = useMemo(() => items.data?.pages.flatMap((page) => page.items) ?? [], [items.data?.pages]);
   const { renderedItems, renderedRows } = useMemo(() => {
-    const progress = view === 'active' ? filtered.filter((item) => item.status === 'in_progress') : [];
-    const attention = view === 'active' ? filtered.filter((item) => item.status !== 'in_progress') : [];
+    const stackView = view === 'active' || view === 'workbench';
+    const progress = stackView ? filtered.filter((item) => item.status === 'in_progress') : [];
+    const attention = stackView ? filtered.filter((item) => item.status !== 'in_progress') : [];
     return {
-      renderedItems: view === 'active' ? [...progress, ...attention] : filtered,
-      renderedRows: view === 'active' ? [
+      renderedItems: stackView ? [...progress, ...attention] : filtered,
+      renderedRows: stackView ? [
         { type: 'header' as const, id: 'in-progress-header', label: 'In progress', count: progress.length, group: 'progress' as const },
         ...progress.map((item) => ({ type: 'item' as const, id: item.id, item, group: 'progress' as const })),
         { type: 'header' as const, id: 'attention-header', label: 'Attention stack', count: attention.length, group: 'attention' as const },
@@ -942,7 +944,7 @@ export function App() {
     setSearch('');
     setDebouncedSearch('');
     setPendingTaskNavigation(taskId);
-    setView(item.archivedAt ? 'archive' : 'active');
+    setView(item.archivedAt ? 'archive' : item.projectName?.toLowerCase() === 'workbench' ? 'workbench' : 'active');
   }
 
   function handleDragEnd(event: DragEndEvent) {
@@ -970,6 +972,7 @@ export function App() {
         <div className="brand"><span className="brand-mark">W</span><span>Workbench</span></div>
         <nav>
           <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={() => { setView('active'); setSelectedId(null); }}><Command size={16} /> Attention stack <span>{workItemCounts.data?.active ?? '…'}</span></button>
+          <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={() => { setView('workbench'); setSelectedId(null); }}><Wrench size={16} /> Workbench <span>{workItemCounts.data?.workbench ?? '…'}</span></button>
           <button className={`nav-item ${view === 'archive' ? 'active' : ''}`} onClick={() => { setView('archive'); setSelectedId(null); }}><Archive size={16} /> Archive <span>{workItemCounts.data?.archive ?? '…'}</span></button>
           <DiscoveryNav active={view === 'discovery'} onClick={() => { setView('discovery'); setSelectedId(null); }} />
           <button className={`nav-item ${view === 'context' ? 'active' : ''}`} onClick={() => { setView('context'); setSelectedId(null); setAgentConversationId(null); }}><MessageCircle size={16} /> Agent console</button>
@@ -979,8 +982,9 @@ export function App() {
 
       {view === 'context' ? <SharedWorkspace initialConversationId={agentConversationId} onOpenTask={(taskId) => { void openTaskFromConversation(taskId); }} /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { void openTaskFromConversation(taskId); }} onOpenStack={() => { setSelectedId(null); setView('active'); }} /> : <><main className="queue-panel">
         <header className="queue-header">
-          <div><span className="eyebrow">{view === 'active' ? 'Focus' : 'History'}</span><h2>{view === 'active' ? 'Attention stack' : 'Archive'}</h2></div>
+          <div><span className="eyebrow">{view === 'active' ? 'Focus' : view === 'workbench' ? 'Build' : 'History'}</span><h2>{view === 'active' ? 'Attention stack' : view === 'workbench' ? 'Workbench roadmap' : 'Archive'}</h2></div>
           <div className="header-actions">
+            {(view === 'active' || view === 'workbench') && <>
             {view === 'active' && <>
             <button className="button secondary compact" onClick={() => planQueue.mutate()} disabled={planQueue.isPending}>
               {planQueue.isPending ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} {planQueue.isPending ? 'Reordering…' : 'Reorder stack'}
@@ -988,6 +992,7 @@ export function App() {
             <button className="icon-button" onClick={() => sync.mutate()} aria-label="Refresh Linear catalog" title="Refresh Linear catalog">
               <RefreshCw size={16} className={sync.isPending ? 'spin' : ''} />
             </button>
+            </>}
             <button className="button primary compact" onClick={() => setShowCreate(true)}><Plus size={15} /> New</button>
             </>}
           </div>
@@ -1005,18 +1010,18 @@ export function App() {
           </div>
         )}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <div ref={queueScrollRef} className="queue-list" role="list" aria-label={view === 'active' ? 'Work stacks' : 'Archived tasks'} onScroll={(event) => {
+        <div ref={queueScrollRef} className="queue-list" role="list" aria-label={view === 'archive' ? 'Archived tasks' : view === 'workbench' ? 'Workbench roadmap' : 'Work stacks'} onScroll={(event) => {
           const element = event.currentTarget;
           if (element.scrollHeight - element.scrollTop - element.clientHeight < 500 && items.hasNextPage && !items.isFetchingNextPage) void items.fetchNextPage();
         }}>
           {items.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading queue…</div>}
           {items.isError && <div className="list-state error-message">Could not load work items. <button className="button secondary compact" onClick={() => items.refetch()}>Retry</button></div>}
-          {!items.isLoading && !items.isError && filtered.length === 0 && <div className="list-state">{debouncedSearch ? 'No matching work items.' : view === 'active' ? 'No work items yet. Add one or connect Linear.' : 'No archived tasks.'}</div>}
-          <SortableContext items={view === 'active' && !debouncedSearch ? renderedItems.map((item) => item.id) : []} strategy={verticalListSortingStrategy}>
+          {!items.isLoading && !items.isError && filtered.length === 0 && <div className="list-state">{debouncedSearch ? 'No matching work items.' : view === 'active' ? 'No work items yet. Add one or connect Linear.' : view === 'workbench' ? 'No Workbench roadmap tasks yet.' : 'No archived tasks.'}</div>}
+          <SortableContext items={(view === 'active' || view === 'workbench') && !debouncedSearch ? renderedItems.map((item) => item.id) : []} strategy={verticalListSortingStrategy}>
             <div className="queue-rows">
               {renderedRows.map((rendered, index) => rendered.type === 'header'
                 ? <div key={rendered.id} className={`stack-header stack-header-${rendered.group}`}><span>{rendered.label}</span><strong>{rendered.count}</strong></div>
-                : <div key={rendered.id} className={`task-group-row task-group-${rendered.group}`}><SortableQueueItem item={rendered.item} index={index} selected={selectedId === rendered.item.id} draggable={view === 'active' && !debouncedSearch && !items.isFetchingNextPage} onSelect={() => setSelectedId(rendered.item.id)} /></div>)}
+                : <div key={rendered.id} className={`task-group-row task-group-${rendered.group}`}><SortableQueueItem item={rendered.item} index={index} selected={selectedId === rendered.item.id} draggable={(view === 'active' || view === 'workbench') && !debouncedSearch && !items.isFetchingNextPage} onSelect={() => setSelectedId(rendered.item.id)} /></div>)}
             </div>
           </SortableContext>
           {items.isFetchingNextPage && <div className="page-state"><LoaderCircle className="spin" size={14} /> Loading more…</div>}
@@ -1026,7 +1031,7 @@ export function App() {
       </main>
 
       {selectedId ? <TaskDetail id={selectedId} onClose={() => setSelectedId(null)} onOpenTask={setSelectedId} onOpenConversation={(conversationId) => { setAgentConversationId(conversationId); setView('context'); }} /> : <section className="detail-empty"><Sparkles /><h2>Choose your next move</h2><p>Select an item or add something new.</p></section>}</>}
-      {showCreate && <CreateTask onClose={() => setShowCreate(false)} />}
+      {showCreate && <CreateTask onClose={() => setShowCreate(false)} defaultProjectName={view === 'workbench' ? 'Workbench' : ''} />}
       {showSources && <SourcesDialog onClose={() => setShowSources(false)} />}
     </div>
   );

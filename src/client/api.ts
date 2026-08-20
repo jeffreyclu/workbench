@@ -43,7 +43,7 @@ export const api = {
   publishArtifact: (input: { path: string; title?: string; conversationId?: string; workItemId?: string }) =>
     request<{ artifact: PublishedArtifact }>('/api/artifacts/publish', { method: 'POST', body: JSON.stringify(input) }),
   revokeArtifact: (id: string) => request<void>(`/api/artifacts/${id}`, { method: 'DELETE' }),
-  listWorkItems: (view: 'active' | 'archive', query: string, cursor?: string) => {
+  listWorkItems: (view: 'active' | 'workbench' | 'archive', query: string, cursor?: string) => {
     const params = new URLSearchParams({ view, limit: '50' });
     if (query) params.set('query', query);
     if (cursor) params.set('cursor', cursor);
@@ -111,7 +111,7 @@ export const api = {
     if (cursor) params.set('cursor', cursor);
     return request<ConversationPage>(`/api/shared/conversations?${params}`);
   },
-  getWorkItemCounts: () => request<{ active: number; archive: number }>('/api/work-item-counts'),
+  getWorkItemCounts: () => request<{ active: number; workbench: number; archive: number }>('/api/work-item-counts'),
   createSharedConversation: (title = 'New conversation') => request<{ conversation: SharedConversation }>('/api/shared/conversations', { method: 'POST', body: JSON.stringify({ title }) }),
   archiveSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/archive`, { method: 'POST' }),
   restoreSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/restore`, { method: 'POST' }),

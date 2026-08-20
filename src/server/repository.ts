@@ -369,10 +369,19 @@ export class WorkItemRepository {
   }
 
   list(): WorkItem[] {
+    return this.listStack('attention');
+  }
+
+  listWorkbench(): WorkItem[] {
+    return this.listStack('workbench');
+  }
+
+  private listStack(stack: 'attention' | 'workbench'): WorkItem[] {
     const rows = this.database
       .prepare(`
         SELECT * FROM work_items
         WHERE is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled')
+          AND ${stack === 'workbench' ? "project_name = 'Workbench' COLLATE NOCASE" : "COALESCE(project_name, '') != 'Workbench' COLLATE NOCASE"}
         ORDER BY queue_position ASC, created_at ASC
       `)
       .all() as unknown as WorkItemRow[];
@@ -384,7 +393,7 @@ export class WorkItemRepository {
     return rows.map((row) => this.withAgentOutcome(mapWorkItem(row)));
   }
 
-  listPage(view: 'active' | 'archive', limit: number, cursor: string | null, query: string): WorkItemPage {
+  listPage(view: 'active' | 'workbench' | 'archive', limit: number, cursor: string | null, query: string): WorkItemPage {
     const safeLimit = Math.max(1, Math.min(100, limit));
     const needle = query.trim() ? `%${query.trim()}%` : null;
     let cursorValues: { position?: number; archivedAt?: string; id: string } | null = null;
@@ -395,22 +404,23 @@ export class WorkItemRepository {
     }
     const search = `(? IS NULL OR title LIKE ? COLLATE NOCASE OR source_identifier LIKE ? COLLATE NOCASE OR project_name LIKE ? COLLATE NOCASE)`;
     const searchArgs = [needle, needle, needle, needle];
-    const active = `is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled')`;
+    const active = `is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled') AND COALESCE(project_name, '') != 'Workbench' COLLATE NOCASE`;
+    const workbench = `is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled') AND project_name = 'Workbench' COLLATE NOCASE`;
     const archived = `archived_at IS NOT NULL`;
-    const where = view === 'active' ? active : archived;
-    const cursorClause = view === 'active'
+    const where = view === 'active' ? active : view === 'workbench' ? workbench : archived;
+    const cursorClause = view !== 'archive'
       ? `(? IS NULL OR queue_position > ? OR (queue_position = ? AND id > ?))`
       : `(? IS NULL OR archived_at < ? OR (archived_at = ? AND id < ?))`;
-    const cursorArgs = view === 'active'
+    const cursorArgs = view !== 'archive'
       ? [cursorValues?.id ?? null, cursorValues?.position ?? null, cursorValues?.position ?? null, cursorValues?.id ?? null]
       : [cursorValues?.id ?? null, cursorValues?.archivedAt ?? null, cursorValues?.archivedAt ?? null, cursorValues?.id ?? null];
-    const order = view === 'active' ? 'queue_position ASC, id ASC' : 'archived_at DESC, id DESC';
+    const order = view !== 'archive' ? 'queue_position ASC, id ASC' : 'archived_at DESC, id DESC';
     const rows = this.database.prepare(`SELECT * FROM work_items WHERE ${where} AND ${search} AND ${cursorClause} ORDER BY ${order} LIMIT ?`)
       .all(...searchArgs, ...cursorArgs, safeLimit + 1) as unknown as WorkItemRow[];
     const hasMore = rows.length > safeLimit;
     const pageRows = rows.slice(0, safeLimit);
     const last = pageRows.at(-1);
-    const nextCursor = hasMore && last ? Buffer.from(JSON.stringify(view === 'active'
+    const nextCursor = hasMore && last ? Buffer.from(JSON.stringify(view !== 'archive'
       ? { position: last.queue_position, id: last.id }
       : { archivedAt: last.archived_at, id: last.id })).toString('base64url') : null;
     const totalCount = Number((this.database.prepare(`SELECT COUNT(*) AS count FROM work_items WHERE ${where} AND ${search}`)
@@ -418,11 +428,12 @@ export class WorkItemRepository {
     return { items: pageRows.map((row) => this.withAgentOutcome(mapWorkItem(row))), nextCursor, totalCount, proposal: view === 'active' ? this.getPendingProposal() : null };
   }
 
-  getWorkItemCounts(): { active: number; archive: number } {
+  getWorkItemCounts(): { active: number; workbench: number; archive: number } {
     const row = this.database.prepare(`SELECT
-      SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled') THEN 1 ELSE 0 END) AS active,
-      SUM(CASE WHEN archived_at IS NOT NULL THEN 1 ELSE 0 END) AS archive FROM work_items`).get() as { active: number | null; archive: number | null };
-    return { active: Number(row.active ?? 0), archive: Number(row.archive ?? 0) };
+      SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled') AND COALESCE(project_name, '') != 'Workbench' COLLATE NOCASE THEN 1 ELSE 0 END) AS active,
+      SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled') AND project_name = 'Workbench' COLLATE NOCASE THEN 1 ELSE 0 END) AS workbench,
+      SUM(CASE WHEN archived_at IS NOT NULL THEN 1 ELSE 0 END) AS archive FROM work_items`).get() as { active: number | null; workbench: number | null; archive: number | null };
+    return { active: Number(row.active ?? 0), workbench: Number(row.workbench ?? 0), archive: Number(row.archive ?? 0) };
   }
 
   get(id: string): WorkItem | null {
@@ -474,8 +485,10 @@ export class WorkItemRepository {
     return this.get(id);
   }
 
-  reorder(orderedItemIds: string[]): WorkItem[] {
-    const currentIds = this.list().map((item) => item.id);
+  reorder(orderedItemIds: string[], stack?: 'attention' | 'workbench'): WorkItem[] {
+    const inferredStack = stack ?? (this.get(orderedItemIds[0] ?? '')?.projectName?.toLowerCase() === 'workbench' ? 'workbench' : 'attention');
+    const stackItems = inferredStack === 'workbench' ? this.listWorkbench() : this.list();
+    const currentIds = stackItems.map((item) => item.id);
     if (currentIds.length !== orderedItemIds.length || !currentIds.every((id) => orderedItemIds.includes(id))) {
       throw new Error('Queue order must contain every active queued item exactly once.');
     }
@@ -489,11 +502,12 @@ export class WorkItemRepository {
       this.database.exec('ROLLBACK');
       throw error;
     }
-    return this.list();
+    return inferredStack === 'workbench' ? this.listWorkbench() : this.list();
   }
 
   move(itemId: string, neighbor: { beforeId?: string; afterId?: string }): WorkItem[] {
-    const ids = this.list().map((item) => item.id);
+    const stack = this.get(itemId)?.projectName?.toLowerCase() === 'workbench' ? 'workbench' : 'attention';
+    const ids = (stack === 'workbench' ? this.listWorkbench() : this.list()).map((item) => item.id);
     const from = ids.indexOf(itemId);
     const neighborId = neighbor.beforeId ?? neighbor.afterId;
     const target = neighborId ? ids.indexOf(neighborId) : -1;
@@ -501,18 +515,20 @@ export class WorkItemRepository {
     ids.splice(from, 1);
     const updatedTarget = ids.indexOf(neighborId!);
     ids.splice(updatedTarget + (neighbor.afterId ? 1 : 0), 0, itemId);
-    return this.reorder(ids);
+    return this.reorder(ids, stack);
   }
 
   moveForAttention(id: string, destination: 'top' | 'bottom', reason: string): WorkItem[] {
-    const ids = this.list().map((item) => item.id);
-    if (!ids.includes(id) || ids.length < 2) return this.list();
+    const stack = this.get(id)?.projectName?.toLowerCase() === 'workbench' ? 'workbench' : 'attention';
+    const stackItems = stack === 'workbench' ? this.listWorkbench() : this.list();
+    const ids = stackItems.map((item) => item.id);
+    if (!ids.includes(id) || ids.length < 2) return stackItems;
     const now = new Date().toISOString();
     this.database.prepare("UPDATE queue_proposals SET status = 'superseded', resolved_at = ? WHERE status = 'pending'").run(now);
     const without = ids.filter((itemId) => itemId !== id);
-    this.reorder(destination === 'top' ? [id, ...without] : [...without, id]);
+    this.reorder(destination === 'top' ? [id, ...without] : [...without, id], stack);
     this.addActivity(id, 'system', 'queue_moved', `${destination === 'top' ? 'Promoted for attention' : 'Demoted while the agent works'}: ${reason}`);
-    return this.list();
+    return stack === 'workbench' ? this.listWorkbench() : this.list();
   }
 
   getPendingProposal(): QueueProposal | null {
@@ -596,10 +612,11 @@ export class WorkItemRepository {
         projectName: parent.projectName, workspacePath: task.workspacePath ?? parent.workspacePath, dueDate: null,
         parentWorkItemId: parent.id,
       }));
-      const current = this.list();
+      const stack = parent.projectName?.toLowerCase() === 'workbench' ? 'workbench' : 'attention';
+      const current = stack === 'workbench' ? this.listWorkbench() : this.list();
       const childIds = children.map((item) => item.id);
       const ordered = current.flatMap((item) => item.id === parent.id ? [item.id, ...childIds] : childIds.includes(item.id) ? [] : [item.id]);
-      this.reorder(ordered);
+      this.reorder(ordered, stack);
       this.update(parent.id, { status: 'done' });
       this.addActivity(parent.id, 'system', 'decomposed', `Approved plan created ${selectedTasks.length} of ${plan.tasks.length} proposed tasks.`);
     }
@@ -671,7 +688,9 @@ export class WorkItemRepository {
       );
 
     this.addActivity(id, 'system', 'created', 'Manual work item created.');
-    this.reorder([id, ...this.list().map((item) => item.id).filter((itemId) => itemId !== id)]);
+    const stack = input.projectName?.toLowerCase() === 'workbench' ? 'workbench' : 'attention';
+    const stackItems = stack === 'workbench' ? this.listWorkbench() : this.list();
+    this.reorder([id, ...stackItems.map((item) => item.id).filter((itemId) => itemId !== id)], stack);
     return this.get(id)!;
   }
 
@@ -682,11 +701,12 @@ export class WorkItemRepository {
       title, description, priority: 2, status: 'ready', projectName: parent.projectName,
       workspacePath: parent.workspacePath, dueDate: null, sourceUrl: null, parentWorkItemId: parent.id,
     });
-    const activeIds = this.list().map((item) => item.id);
+    const stack = parent.projectName?.toLowerCase() === 'workbench' ? 'workbench' : 'attention';
+    const activeIds = (stack === 'workbench' ? this.listWorkbench() : this.list()).map((item) => item.id);
     const withoutFollowUp = activeIds.filter((id) => id !== followUp.id);
     const parentIndex = withoutFollowUp.indexOf(parentId);
     withoutFollowUp.splice(parentIndex >= 0 ? parentIndex + 1 : 0, 0, followUp.id);
-    this.reorder(withoutFollowUp);
+    this.reorder(withoutFollowUp, stack);
     this.addActivity(parentId, 'jeffrey', 'follow_up', `Created follow-up task: ${title}`);
     this.addActivity(followUp.id, 'system', 'follow_up', `Created as a follow-up to: ${parent.title}`);
     return this.get(followUp.id);
@@ -740,7 +760,9 @@ export class WorkItemRepository {
       this.database.exec('ROLLBACK');
       throw error;
     }
-    this.reorder([id, ...this.list().map((entry) => entry.id).filter((entryId) => entryId !== id)]);
+    const stack = item.projectName?.toLowerCase() === 'workbench' ? 'workbench' : 'attention';
+    const stackItems = stack === 'workbench' ? this.listWorkbench() : this.list();
+    this.reorder([id, ...stackItems.map((entry) => entry.id).filter((entryId) => entryId !== id)], stack);
     this.addActivity(id, 'system', 'restored', 'Restored from the archive.');
     return this.get(id);
   }

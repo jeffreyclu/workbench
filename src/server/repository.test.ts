@@ -27,7 +27,7 @@ describe('WorkItemRepository', () => {
 
     expect(item.source).toBe('manual');
     expect(item.isQueued).toBe(true);
-    expect(repository.list().map((entry) => entry.id)).toContain(item.id);
+    expect(repository.listWorkbench().map((entry) => entry.id)).toContain(item.id);
     expect(repository.update(item.id, { status: 'in_progress' })?.status).toBe('in_progress');
     expect(repository.listActivity(item.id)).toHaveLength(1);
   });
@@ -127,9 +127,9 @@ describe('WorkItemRepository', () => {
     repository.resolveExecutionPlan(plan.id, 'accepted', [1]);
 
     expect(repository.get(parent.id)?.status).toBe('done');
-    expect(repository.list().map((item) => item.title)).toEqual(['Implement migration']);
-    expect(repository.list()[0].workspacePath).toBe('/tmp/project');
-    expect(repository.list()[0].parentWorkItemId).toBe(parent.id);
+    expect(repository.listWorkbench().map((item) => item.title)).toEqual(['Implement migration']);
+    expect(repository.listWorkbench()[0].workspacePath).toBe('/tmp/project');
+    expect(repository.listWorkbench()[0].parentWorkItemId).toBe(parent.id);
   });
 
   it('preserves relative order when daily context does not justify a move', () => {
@@ -266,7 +266,17 @@ describe('WorkItemRepository', () => {
     repository.create({ title: 'Active', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const archived = repository.create({ title: 'Archived', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     repository.archive(archived.id, false);
-    expect(repository.getWorkItemCounts()).toEqual({ active: 1, archive: 1 });
+    expect(repository.getWorkItemCounts()).toEqual({ active: 1, workbench: 0, archive: 1 });
+  });
+
+  it('keeps Workbench roadmap tasks in an independently ordered stack', () => {
+    const attention = repository.create({ title: 'Customer task', description: '', priority: 2, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
+    const first = repository.create({ title: 'Workbench one', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const second = repository.create({ title: 'Workbench two', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    repository.move(first.id, { beforeId: second.id });
+    expect(repository.list().map((item) => item.id)).toEqual([attention.id]);
+    expect(repository.listWorkbench().map((item) => item.id)).toEqual([first.id, second.id]);
+    expect(repository.getWorkItemCounts()).toEqual({ active: 1, workbench: 2, archive: 0 });
   });
 
   it('deduplicates discoveries and only creates a task after approval', () => {
