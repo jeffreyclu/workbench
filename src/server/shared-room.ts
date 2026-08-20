@@ -75,6 +75,7 @@ export async function runSharedBackgroundJob(
   messageId: string,
   job: (signal: AbortSignal, onProgress: (body: string) => void) => Promise<string>,
 ): Promise<void> {
+  const target = repository.listSharedMessages(1_000).find((message) => message.id === messageId);
   // Claim a lease so the scheduler knows this process is actively working on this message.
   if (!repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS)) return;
 
@@ -87,7 +88,10 @@ export async function runSharedBackgroundJob(
     repository.updateSharedMessage(messageId, controller.signal.aborted
       ? { status: 'canceled' }
       : { status: 'failed', error: error instanceof Error ? error.message : 'Background job failed.' });
-  } finally { activeReplies.delete(messageId); }
+  } finally {
+    activeReplies.delete(messageId);
+    if (target) settleLinkedTask(repository, target.conversationId, 'Agent work finished; review the conversation.');
+  }
 }
 
 export async function replyInSharedRoom(repository: WorkItemRepository, agent: AgentRun['agent'], messageId: string, runId?: string): Promise<void> {
@@ -111,7 +115,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const connectionContext = await connectionContextForPrompt(repository, [latestUserMessage, ...recentSourceReferences].join('\n'));
     const prompt = `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.
 
-${repository.getSharedContext(target.conversationId)}
+${repository.getSharedContext(target.conversationId, { conversationId: target.conversationId })}
 
 ${connectionContext}
 

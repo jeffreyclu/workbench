@@ -432,7 +432,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const selfHostingGuard = resolve(cwd) === resolve(process.cwd())
       ? `\n\nWorkbench self-hosting safety:\nYou are editing the source checkout used by the preview, while the live control plane runs from a promoted snapshot. Do not start, stop, restart, or kill Workbench, Vite, ngrok, or their ports. Do not run runtime:promote. You may run the repository's normal typecheck, tests, and build; those do not deploy your changes. Report that runtime approval is required after verification.`
       : '';
-    const sharedContext = [repository.getSharedContext(), externalContext].filter(Boolean).join('\n\n');
+    const sharedContext = [repository.getSharedContext(undefined, { workItemId: item.id }), externalContext].filter(Boolean).join('\n\n');
     const prompt = buildPrompt(item, run, sharedContext) + selfHostingGuard;
     repository.updateRun(run.id, { model: modelFor('codex', 'economy'), executionProfile: 'economy' });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
@@ -456,14 +456,16 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       const match = output.match(/<workbench-plan>([\s\S]*?)<\/workbench-plan>/);
       if (!match) throw new Error('Strategy completed without a valid Workbench task decomposition.');
       const parsed = JSON.parse(match[1]) as { summary?: unknown; tasks?: Array<{ title?: unknown; description?: unknown; workspacePath?: unknown }> };
-      if (typeof parsed.summary !== 'string' || !Array.isArray(parsed.tasks) || !parsed.tasks.length) throw new Error('Agent returned an invalid task decomposition.');
+      if (typeof parsed.summary !== 'string' || !Array.isArray(parsed.tasks) || parsed.tasks.length < 2) throw new Error('Complex work must be decomposed into at least two independently executable follow-up tasks.');
       repository.createExecutionPlan(item.id, parsed.summary, parsed.tasks.map((task) => {
         if (typeof task.title !== 'string' || typeof task.description !== 'string') throw new Error('Every planned task needs a title and description.');
         return { title: task.title, description: task.description, workspacePath: typeof task.workspacePath === 'string' ? task.workspacePath : null };
       }));
     }
-    repository.update(item.id, { status: 'ready' });
-    repository.moveForAttention(item.id, 'top', `${run.agent} completed ${run.kind}; review the result.`);
+    if (!repository.activeRunsForItem(item.id).length) {
+      repository.update(item.id, { status: 'ready' });
+      repository.moveForAttention(item.id, 'top', `${run.agent} completed ${run.kind}; review the result.`);
+    }
     repository.addActivity(item.id, run.agent, 'progress', `Completed ${run.kind}.`);
     notifyAgentRunFinished(item, { agent: result.agent, kind: run.kind }, 'completed', output);
   } catch (error) {
@@ -526,9 +528,11 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
     || /\b(?:pr|pull request|diff|patch)\b[^\n.!?]{0,40}\breview\b/.test(title)
     || (/(?:github\.com\/[^/]+\/[^/]+\/pull\/\d+)/.test(item.sourceUrl ?? '') && /\b(review|feedback|approve|regression)\b/.test(text));
   const implementation = /\b(implement|build|code|fix|debug|refactor|test|edit|update|reduce|trim|rewrite|remove|add|change|create|write)\b/.test(text);
-  const documentStrategy = /\b(spec|rfc|technical document|design doc|proposal)\b/.test(text);
+  const implementationTitle = /\b(implement|build|code|fix|debug|refactor|test|edit|update|reduce|trim|rewrite|remove|add|change)\b/.test(title);
+  const documentStrategy = /\b(spec|rfc|technical document|design doc|proposal)\b/.test(title)
+    && /\b(plan|draft|write|create|produce|author|revise|define|spec|rfc|proposal)\b/.test(title);
   if (explicitCodeReview && !implementation) { kind = 'review'; agent = 'codex'; }
-  else if (documentStrategy) { kind = 'strategy'; agent = 'claude'; }
+  else if (documentStrategy && !implementationTitle) { kind = 'strategy'; agent = 'claude'; }
   else if (implementation) { kind = 'execute'; agent = 'codex'; }
   else if (/\b(research|investigate|explore|compare|evaluate)\b/.test(text)) { kind = 'research'; agent = 'claude'; }
 
@@ -539,7 +543,7 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
   if (complex && kind !== 'review') {
     return {
       kind: 'strategy', agent: 'claude', complex: true,
-      instructions: `WORKBENCH_DECOMPOSITION: This appears complex. Research the relevant context, then produce an approval-ready strategy. Do not implement yet. End with exactly one machine-readable block in this form: <workbench-plan>{"summary":"approval-ready strategy","tasks":[{"title":"independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null}]}</workbench-plan>. Tasks must be self-contained and ordered by recommended attention.`,
+      instructions: `WORKBENCH_DECOMPOSITION: This appears complex. Research the relevant context, then produce an approval-ready strategy. Do not implement yet. Propose at least two independently executable follow-up tasks. End with exactly one machine-readable block in this form: <workbench-plan>{"summary":"approval-ready strategy","tasks":[{"title":"first independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null},{"title":"second independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null}]}</workbench-plan>. Tasks must be self-contained and ordered by recommended attention.`,
     };
   }
   return {
@@ -552,20 +556,70 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
   };
 }
 
+export function classificationForKind(item: WorkItem, kind: AgentRun['kind']): ReturnType<typeof classifyExecution> {
+  let agent: AgentRun['agent'] = kind === 'execute' || kind === 'review' ? 'codex' : 'claude';
+  if (kind === 'execute' && isDocumentWork(item)) agent = 'claude';
+  const assignedAgent = item.assignees.find((assignee): assignee is AgentRun['agent'] => assignee === 'codex' || assignee === 'claude');
+  if (assignedAgent && kind !== 'review') agent = assignedAgent;
+  return {
+    kind, agent, complex: false,
+    instructions: kind === 'review'
+      ? 'Perform the authoritative frontend-reviewer first pass. Review only; do not modify code or execute tests.'
+      : kind === 'execute' && isBackendImplementation(item)
+        ? 'Execute this self-contained backend task through the authoritative backend-engineer persona. Make authorized changes and return observed evidence and verification.'
+        : `Execute this self-contained ${kind} task end to end. Use the appropriate tools, make necessary changes when authorized, and return evidence and verification.`,
+  };
+}
+
 export async function classifyExecutionRobust(
   item: WorkItem,
-  route: (prompt: string) => Promise<string> = async (prompt) => (await runAgentCommandWithFallback('codex', process.cwd(), prompt, undefined, undefined, undefined, 'economy')).output,
+  route: (prompt: string) => Promise<string> = async (prompt) => (await runAgentCommandWithFallback('codex', process.cwd(), prompt, undefined, undefined, undefined, 'standard')).output,
 ): Promise<ReturnType<typeof classifyExecution>> {
   const deterministic = classifyExecution(item);
-  const text = `${item.title}\n${item.description}`;
-  if (deterministic.kind !== 'analysis' || /\b(summarize|explain|discuss|organize|prepare|understand|grok)\b/i.test(text)) return deterministic;
   try {
-    const output = await route(`Classify this Workbench task by the action Jeffrey expects. Reply with exactly one word: research, analysis, strategy, execute, or review. Review means a read-only code review of a PR, pull request, diff, patch, or implementation—not reading context before another task. Execute means making an authorized code, document, or configuration change. Strategy means producing a plan, RFC, spec, or proposal. Research means investigating unknowns. Analysis means explaining, summarizing, or advising without changes.\n\nTITLE: ${item.title}\nDESCRIPTION: ${item.description.slice(0, 6_000)}`);
-    const kind = output.toLowerCase().match(/\b(research|analysis|strategy|execute|review)\b/)?.[1] as AgentRun['kind'] | undefined;
+    const output = await route(`You are the authoritative task-intent classifier for Jeffrey's engineering Workbench. Classify the deliverable he expects—not incidental verbs in the context or steps an agent may take along the way.
+
+Kinds:
+- execute: change code, configuration, documentation, design artifacts, or external state. "Implement from a spec" is execute.
+- review: read-only review of an existing PR, diff, patch, or implementation whose deliverable is review findings. "Review context then implement" is execute.
+- strategy: the requested deliverable itself is a plan, technical spec, RFC, proposal, decomposition, or implementation strategy.
+- research: investigate unknown facts/options and return evidence or findings without making the downstream change.
+- analysis: explain, summarize, organize, advise, or discuss already-available information without changing state.
+
+Set complex=true only when the task should first be decomposed for approval because it spans multiple independently executable changes, systems, or phases. A difficult but self-contained implementation is not automatically complex.
+
+Return exactly:
+<classification>{"kind":"execute|review|strategy|research|analysis","complex":false,"reason":"one short concrete sentence"}</classification>
+
+TITLE: ${item.title}
+DESCRIPTION:
+${item.description.slice(0, 12_000)}
+PROJECT: ${item.projectName ?? 'none'}
+SOURCE: ${item.sourceUrl ?? item.sourceIdentifier ?? item.source}`);
+    const structured = output.match(/<classification>([\s\S]*?)<\/classification>/)?.[1];
+    const parsed = structured ? JSON.parse(structured) as { kind?: unknown; complex?: unknown } : null;
+    const kind = ((typeof parsed?.kind === 'string' ? parsed.kind.toLowerCase().match(/^(research|analysis|strategy|execute|review)$/)?.[1] : undefined)
+      ?? output.toLowerCase().match(/\b(research|analysis|strategy|execute|review)\b/)?.[1]) as AgentRun['kind'] | undefined;
     if (!kind) return deterministic;
-    const routedItem = { ...item, title: kind === 'review' ? `Code review: ${item.title}` : item.title };
-    const classified = classifyExecution(routedItem);
-    return kind === 'analysis' ? deterministic : { ...classified, kind, agent: kind === 'review' || kind === 'execute' ? 'codex' : 'claude' };
+    const complex = typeof parsed?.complex === 'boolean' ? parsed.complex : deterministic.complex;
+    if (complex && kind !== 'review') {
+      return {
+        kind: 'strategy', agent: 'claude', complex: true,
+        instructions: `WORKBENCH_DECOMPOSITION: This appears complex. Research the relevant context, then produce an approval-ready strategy. Do not implement yet. Propose at least two independently executable follow-up tasks. End with exactly one machine-readable block in this form: <workbench-plan>{"summary":"approval-ready strategy","tasks":[{"title":"first independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null},{"title":"second independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null}]}</workbench-plan>. Tasks must be self-contained and ordered by recommended attention.`,
+      };
+    }
+    let agent: AgentRun['agent'] = kind === 'execute' || kind === 'review' ? 'codex' : 'claude';
+    if (kind === 'execute' && isDocumentWork(item)) agent = 'claude';
+    const assignedAgent = item.assignees.find((assignee): assignee is AgentRun['agent'] => assignee === 'codex' || assignee === 'claude');
+    if (assignedAgent && kind !== 'review') agent = assignedAgent;
+    return {
+      kind, agent, complex: false,
+      instructions: kind === 'review'
+        ? 'Perform the authoritative frontend-reviewer first pass. Review only; do not modify code or execute tests.'
+        : kind === 'execute' && isBackendImplementation(item)
+          ? 'Execute this self-contained backend task through the authoritative backend-engineer persona. Make authorized changes and return observed evidence and verification.'
+          : `Execute this self-contained ${kind} task end to end. Use the appropriate tools, make necessary changes when authorized, and return evidence and verification.`,
+    };
   } catch {
     return deterministic;
   }

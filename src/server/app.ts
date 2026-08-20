@@ -1,4 +1,4 @@
-import express, { type ErrorRequestHandler } from 'express';
+import express, { type ErrorRequestHandler, type Response } from 'express';
 import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, isAbsolute, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -7,13 +7,21 @@ import {
   createActivitySchema,
   bulkDiscoveryActionSchema,
   createAgentRunSchema,
+  createArtifactCommentSchema,
+  updateArtifactSchema,
+  artifactLibraryViewSchema,
   createWorkItemReferenceSchema,
   createWorkItemSchema,
   generateTaskDraftSchema,
   createQueueProposalSchema,
   createSharedMessageSchema,
   createSharedConversationSchema,
+  createMemorySchema,
+  listMemoriesQuerySchema,
+  supersedeMemorySchema,
+  updateMemorySchema,
   reorderQueueSchema,
+  runKindSchema,
   resolveSourceUrlSchema,
   searchSourcesSchema,
   sourceProviderSchema,
@@ -26,28 +34,36 @@ import { z } from 'zod';
 import type { WorkbenchDatabase } from './database.js';
 import { LinearProvider } from './providers/linear.js';
 import { WorkItemRepository } from './repository.js';
-import { cancelAgentRun, classifyExecutionRobust, executeAgentRun, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback } from './agent-runner.js';
+import { cancelAgentRun, classificationForKind, classifyExecutionRobust, executeAgentRun, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback } from './agent-runner.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, runSharedBackgroundJob } from './shared-room.js';
 import { createAuthGate } from './auth.js';
 import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMessage } from './slack-notify.js';
 import { finishRemoteMcpOAuth, startRemoteMcpOAuth } from './remote-mcp.js';
 import { contextForPrompt, listBrokerConnections, resolveBrokerUrl, searchBrokerSources } from './connection-broker.js';
 import { artifactContentHash, CloudflarePagesPublisher, createArtifactId } from './artifact-publisher.js';
+import { ArtifactLibrary, artifactFeedbackConfig, createCommentRateLimiter } from './artifact-library.js';
 import { runDiscovery, shouldRunDiscoveryCatchUp } from './discovery.js';
 import { isRuntimeApproval, promoteRuntime } from './runtime-promotion.js';
 import { isArtifactAllowed } from './artifact-access.js';
 import { LEASE_MS, OWNER_ID } from './scheduler.js';
+import { createWorkbenchMcpHandler, rejectUnsupportedMcpMethod } from './workbench-mcp.js';
 
 export function createApp(database: WorkbenchDatabase) {
   const app = express();
   const repository = new WorkItemRepository(database);
   const artifactPublisher = new CloudflarePagesPublisher();
+  const artifacts = new ArtifactLibrary(database);
+  const allowComment = createCommentRateLimiter();
   app.use(createAuthGate(undefined));
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/health', (_request, response) => {
     response.json({ ok: true });
   });
+
+  app.post('/mcp', createWorkbenchMcpHandler(repository));
+  app.get('/mcp', rejectUnsupportedMcpMethod);
+  app.delete('/mcp', rejectUnsupportedMcpMethod);
 
   app.get('/api/discovery', (request, response) => {
     const view = z.enum(['pending', 'reviewed']).catch('pending').parse(request.query.view);
@@ -142,36 +158,67 @@ export function createApp(database: WorkbenchDatabase) {
     response.sendFile(realCandidate);
   });
 
+  const artifactPathSchema = z.object({
+    path: z.string().min(1).max(8_000),
+    title: z.string().trim().min(1).max(300).optional(),
+    conversationId: z.string().uuid().optional(),
+    workItemId: z.string().uuid().optional(),
+  });
+
+  /**
+   * Artifact links arrive as agent prose ("see notes/report.md:12"), so the same
+   * normalization — strip file://, strip a trailing :line:column, resolve against
+   * the task workspace, then re-check the real path against the allowed roots —
+   * has to run for every artifact route.
+   */
+  function resolveArtifactFile(input: { path: string; conversationId?: string; workItemId?: string }): { path: string } | { status: number; error: string } {
+    const conversation = input.conversationId ? repository.listConversations('all').find((entry) => entry.id === input.conversationId) : null;
+    const item = repository.get(input.workItemId ?? conversation?.workItemId ?? '');
+    const workspace = realpathSync(item ? resolveWorkingDirectory(item) : process.cwd());
+    const requestedPath = input.path.replace(/^file:\/\//, '').replace(/:(\d+)(?::\d+)?$/, '');
+    const candidate = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(workspace, requestedPath);
+    if (!existsSync(candidate) || !statSync(candidate).isFile()) return { status: 404, error: 'Artifact file not found.' };
+    const realCandidate = realpathSync(candidate);
+    if (!isArtifactAllowed(realCandidate, workspace)) return { status: 403, error: 'Artifact is outside the allowed development roots.' };
+    return { path: realCandidate };
+  }
+
+  /**
+   * One publish path for first publications, republishes, and restores of a
+   * revoked share. The plan is decided from the content hash before anything is
+   * deployed, so an unchanged file costs nothing and a changed one always gets
+   * its own version snapshot.
+   */
+  async function publishArtifact(input: { sourcePath: string; title: string; workItemId?: string | null; conversationId?: string | null }) {
+    const contentHash = artifactContentHash(input.sourcePath, input.title);
+    const plan = artifacts.planPublication(input.sourcePath, contentHash, createArtifactId());
+    if (!plan.needsDeploy && plan.existing) {
+      return { artifact: { id: plan.existing.id, title: plan.existing.title, url: plan.existing.url }, changed: false, published: false, kind: plan.kind };
+    }
+    for (const supersededId of plan.supersededIds) artifactPublisher.removeLocal(supersededId);
+    const feedback = artifactFeedbackConfig();
+    const published = await artifactPublisher.publish({
+      id: plan.id, title: input.title, sourcePath: input.sourcePath, version: plan.version,
+      feedback: feedback ? { artifactId: plan.id, endpointOrigin: feedback.endpointOrigin } : null,
+    });
+    artifacts.supersede(plan.supersededIds);
+    const summary = artifacts.recordPublication({
+      id: plan.id, sourcePath: input.sourcePath, title: input.title, url: published.url, contentHash,
+      version: plan.version, workItemId: input.workItemId ?? null, conversationId: input.conversationId ?? null,
+    }, plan.kind);
+    return { artifact: { id: summary.id, title: summary.title, url: summary.url }, changed: plan.kind === 'republished', published: true, kind: plan.kind, created: plan.kind === 'published' };
+  }
+
   app.post('/api/artifacts/publish', async (request, response) => {
     try {
-      const input = z.object({
-        path: z.string().min(1).max(8_000),
-        title: z.string().trim().min(1).max(300).optional(),
-        conversationId: z.string().uuid().optional(),
-        workItemId: z.string().uuid().optional(),
-      }).parse(request.body);
+      const input = artifactPathSchema.parse(request.body);
+      const resolved = resolveArtifactFile(input);
+      if ('error' in resolved) return response.status(resolved.status).json({ error: resolved.error });
+      const title = input.title ?? basename(resolved.path).replace(/\.[^.]+$/, '');
       const conversation = input.conversationId ? repository.listConversations('all').find((entry) => entry.id === input.conversationId) : null;
       const item = repository.get(input.workItemId ?? conversation?.workItemId ?? '');
-      const workspace = realpathSync(item ? resolveWorkingDirectory(item) : process.cwd());
-      const requestedPath = input.path.replace(/^file:\/\//, '').replace(/:(\d+)(?::\d+)?$/, '');
-      const candidate = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(workspace, requestedPath);
-      if (!existsSync(candidate) || !statSync(candidate).isFile()) return response.status(404).json({ error: 'Artifact file not found.' });
-      const realCandidate = realpathSync(candidate);
-      if (!isArtifactAllowed(realCandidate, workspace)) return response.status(403).json({ error: 'Artifact is outside the allowed development roots.' });
-      const title = input.title ?? basename(realCandidate).replace(/\.[^.]+$/, '');
-      const contentHash = artifactContentHash(realCandidate, title);
-      const existing = database.prepare('SELECT id, public_url, content_hash FROM published_artifacts WHERE source_path = ? AND revoked_at IS NULL ORDER BY published_at DESC').all(realCandidate) as Array<{ id: string; public_url: string; content_hash: string | null }>;
-      const canonical = existing[0];
-      if (canonical?.content_hash === contentHash) return response.json({ artifact: { id: canonical.id, title, url: canonical.public_url }, changed: false, published: false });
-      const id = canonical?.id ?? createArtifactId();
-      for (const duplicate of existing.slice(1)) artifactPublisher.removeLocal(duplicate.id);
-      const artifact = await artifactPublisher.publish({ id, title, sourcePath: realCandidate });
-      const now = new Date().toISOString();
-      if (canonical) database.prepare('UPDATE published_artifacts SET title = ?, public_url = ?, content_hash = ?, published_at = ? WHERE id = ?').run(title, artifact.url, contentHash, now, id);
-      else database.prepare('INSERT INTO published_artifacts (id, source_path, work_item_id, conversation_id, title, public_url, content_hash, published_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(id, realCandidate, item?.id ?? null, input.conversationId ?? null, title, artifact.url, contentHash, now);
-      if (existing.length > 1) database.prepare(`UPDATE published_artifacts SET revoked_at = ? WHERE id IN (${existing.slice(1).map(() => '?').join(',')})`).run(now, ...existing.slice(1).map((entry) => entry.id));
-      response.status(canonical ? 200 : 201).json({ artifact, changed: Boolean(canonical), published: true });
+      const result = await publishArtifact({ sourcePath: resolved.path, title, workItemId: item?.id ?? null, conversationId: input.conversationId ?? null });
+      response.status(result.published && result.kind === 'published' ? 201 : 200).json(result);
     } catch (error) {
       response.status(error instanceof ZodError ? 400 : 500).json({ error: error instanceof Error ? error.message : 'Could not publish artifact.' });
     }
@@ -179,29 +226,98 @@ export function createApp(database: WorkbenchDatabase) {
 
   app.get('/api/artifacts/status', (request, response) => {
     try {
-      const input = z.object({ path: z.string().min(1).max(8_000), conversationId: z.string().uuid().optional(), workItemId: z.string().uuid().optional() }).parse(request.query);
-      const conversation = input.conversationId ? repository.listConversations('all').find((entry) => entry.id === input.conversationId) : null;
-      const item = repository.get(input.workItemId ?? conversation?.workItemId ?? '');
-      const workspace = realpathSync(item ? resolveWorkingDirectory(item) : process.cwd());
-      const requestedPath = input.path.replace(/^file:\/\//, '').replace(/:(\d+)(?::\d+)?$/, '');
-      const candidate = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(workspace, requestedPath);
-      if (!existsSync(candidate) || !statSync(candidate).isFile()) return response.status(404).json({ error: 'Artifact file not found.' });
-      const realCandidate = realpathSync(candidate);
-      if (!isArtifactAllowed(realCandidate, workspace)) return response.status(403).json({ error: 'Artifact is outside the allowed development roots.' });
-      const row = database.prepare('SELECT id, title, public_url, content_hash FROM published_artifacts WHERE source_path = ? AND revoked_at IS NULL ORDER BY published_at DESC LIMIT 1').get(realCandidate) as { id: string; title: string; public_url: string; content_hash: string | null } | undefined;
-      if (!row) return response.json({ artifact: null, changed: false });
-      response.json({ artifact: { id: row.id, title: row.title, url: row.public_url }, changed: row.content_hash !== artifactContentHash(realCandidate, row.title) });
+      const input = artifactPathSchema.parse(request.query);
+      const resolved = resolveArtifactFile(input);
+      if ('error' in resolved) return response.status(resolved.status).json({ error: resolved.error });
+      const plan = artifacts.planPublication(resolved.path, artifactContentHash(resolved.path, input.title ?? basename(resolved.path).replace(/\.[^.]+$/, '')), '');
+      if (!plan.existing || plan.existing.revokedAt) return response.json({ artifact: null, changed: false });
+      response.json({ artifact: { id: plan.existing.id, title: plan.existing.title, url: plan.existing.url }, changed: plan.kind === 'republished' });
     } catch (error) { response.status(error instanceof ZodError ? 400 : 500).json({ error: error instanceof Error ? error.message : 'Could not inspect artifact.' }); }
+  });
+
+  app.get('/api/artifacts', (request, response) => {
+    const view = artifactLibraryViewSchema.parse(request.query.view);
+    response.json({ artifacts: artifacts.list(view), counts: artifacts.counts() });
+  });
+
+  app.get('/api/artifacts/:id', (request, response) => {
+    const artifact = artifacts.get(request.params.id);
+    if (!artifact) return response.status(404).json({ error: 'Published artifact not found.' });
+    const available = existsSync(artifact.sourcePath) && statSync(artifact.sourcePath).isFile();
+    const latest = artifacts.latestVersion(artifact.id);
+    const changed = available && latest ? artifactContentHash(artifact.sourcePath, artifact.title) !== latest.contentHash : false;
+    response.json(artifacts.detail(artifact.id, { available, changed }));
+  });
+
+  app.post('/api/artifacts/:id/republish', async (request, response) => {
+    try {
+      const artifact = artifacts.get(request.params.id);
+      if (!artifact) return response.status(404).json({ error: 'Published artifact not found.' });
+      if (!existsSync(artifact.sourcePath) || !statSync(artifact.sourcePath).isFile()) {
+        return response.status(409).json({ error: `The source file is gone (${artifact.sourcePath}). Publish it again from the file it came from.` });
+      }
+      const result = await publishArtifact({ sourcePath: artifact.sourcePath, title: artifact.title });
+      response.json({ ...result, artifact: artifacts.get(artifact.id) });
+    } catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : 'Could not republish artifact.' }); }
+  });
+
+  app.patch('/api/artifacts/:id', (request, response) => {
+    try {
+      const input = updateArtifactSchema.parse(request.body);
+      const artifact = artifacts.link(request.params.id, input);
+      if (!artifact) return response.status(404).json({ error: 'Published artifact not found.' });
+      response.json({ artifact });
+    } catch (error) { response.status(error instanceof ZodError ? 400 : 500).json({ error: error instanceof Error ? error.message : 'Could not update artifact.' }); }
   });
 
   app.delete('/api/artifacts/:id', async (request, response) => {
     try {
-      const row = database.prepare('SELECT id FROM published_artifacts WHERE id = ? AND revoked_at IS NULL').get(request.params.id);
-      if (!row) return response.status(404).json({ error: 'Published artifact not found.' });
+      const artifact = artifacts.get(request.params.id);
+      if (!artifact || artifact.revokedAt) return response.status(404).json({ error: 'Published artifact not found.' });
       await artifactPublisher.revoke(request.params.id);
-      database.prepare('UPDATE published_artifacts SET revoked_at = ? WHERE id = ?').run(new Date().toISOString(), request.params.id);
-      response.status(204).end();
+      response.json({ artifact: artifacts.markRevoked(request.params.id) });
     } catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : 'Could not revoke artifact.' }); }
+  });
+
+  // Coworker feedback. The published page lives on another origin and its reader
+  // holds no Workbench token, so this endpoint answers CORS preflight, allows only
+  // the artifact host, and is rate limited per artifact.
+  function applyFeedbackCors(response: Response): boolean {
+    const feedback = artifactFeedbackConfig();
+    if (!feedback) return false;
+    response.setHeader('Access-Control-Allow-Origin', feedback.pageOrigin);
+    response.setHeader('Access-Control-Allow-Headers', 'content-type');
+    response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    response.setHeader('Vary', 'Origin');
+    return true;
+  }
+
+  app.options('/api/artifacts/:id/comments', (_request, response) => {
+    applyFeedbackCors(response);
+    response.status(204).end();
+  });
+
+  app.post('/api/artifacts/:id/comments', (request, response) => {
+    try {
+      applyFeedbackCors(response);
+      const input = createArtifactCommentSchema.parse(request.body);
+      const artifact = artifacts.get(request.params.id);
+      if (!artifact || artifact.revokedAt) return response.status(404).json({ error: 'This shared page is no longer accepting feedback.' });
+      if (!allowComment(artifact.id)) return response.status(429).json({ error: 'Too much feedback too quickly. Try again shortly.' });
+      response.status(201).json({ comment: artifacts.addComment(artifact.id, input) });
+    } catch (error) { response.status(error instanceof ZodError ? 400 : 500).json({ error: error instanceof Error ? error.message : 'Could not record feedback.' }); }
+  });
+
+  app.get('/api/artifacts/:id/comments', (request, response) => {
+    if (!artifacts.get(request.params.id)) return response.status(404).json({ error: 'Published artifact not found.' });
+    response.json({ comments: artifacts.listComments(request.params.id) });
+  });
+
+  app.patch('/api/artifacts/:id/comments/:commentId', (request, response) => {
+    const resolved = z.object({ resolved: z.boolean() }).parse(request.body).resolved;
+    const comment = artifacts.resolveComment(request.params.id, request.params.commentId, resolved);
+    if (!comment) return response.status(404).json({ error: 'Feedback not found.' });
+    response.json({ comment });
   });
 
   app.get('/api/shared/conversations', (request, response) => {
@@ -323,6 +439,41 @@ export function createApp(database: WorkbenchDatabase) {
       });
       response.status(202).json({ jobMessage });
     } catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : 'Could not start task extraction.' }); }
+  });
+
+  // --- Structured memories (Phase 1) -----------------------------------------
+  app.get('/api/memories', (request, response) => {
+    const input = listMemoriesQuerySchema.parse(request.query);
+    response.json({ memories: repository.listMemoriesStructured(input) });
+  });
+
+  app.post('/api/memories', (request, response) => {
+    const input = createMemorySchema.parse(request.body);
+    response.status(201).json({ memory: repository.createMemory(input) });
+  });
+
+  // Declared before /api/memories/:id/:action-style routes so "supersede" is
+  // never mistaken for a dynamic :id segment.
+  app.post('/api/memories/:id/supersede', (request, response) => {
+    const input = supersedeMemorySchema.parse(request.body);
+    const memory = repository.supersedeMemory(request.params.id, input);
+    if (!memory) return response.status(404).json({ error: 'Memory not found.' });
+    response.status(201).json({ memory });
+  });
+
+  app.patch('/api/memories/:id', (request, response) => {
+    const input = updateMemorySchema.parse(request.body);
+    const memory = repository.updateMemory(request.params.id, input);
+    if (!memory) return response.status(404).json({ error: 'Memory not found.' });
+    response.json({ memory });
+  });
+
+  // Soft delete: sets status to 'rejected' and returns the row so the client
+  // doesn't need a refetch. Never 204 — the row still carries provenance.
+  app.delete('/api/memories/:id', (request, response) => {
+    const memory = repository.rejectMemory(request.params.id);
+    if (!memory) return response.status(404).json({ error: 'Memory not found.' });
+    response.json({ memory });
   });
 
   app.get('/api/work-items', (request, response) => {
@@ -449,11 +600,12 @@ export function createApp(database: WorkbenchDatabase) {
     response.status(204).end();
   });
 
-  app.post('/api/work-items/:id/classify', async (request, response) => {
+  app.post('/api/work-items/:id/classify', (request, response) => {
     const item = repository.get(request.params.id);
     if (!item) return response.status(404).json({ error: 'Work item not found.' });
-    const classification = repository.setClassification(item.id, await classifyExecutionRobust(item));
-    repository.addActivity(item.id, 'system', 'classification', `Classified as ${classification.kind}${classification.complex ? ' (requires decomposition)' : ''}.`);
+    const { kind } = z.object({ kind: runKindSchema }).parse(request.body);
+    const classification = repository.setClassification(item.id, classificationForKind(item, kind));
+    repository.addActivity(item.id, 'jeffrey', 'classification', `Set task type to ${classification.kind}.`);
     response.json({ classification });
   });
 
