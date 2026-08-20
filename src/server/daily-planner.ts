@@ -9,14 +9,14 @@ export async function createAgentDailyProposal(repository: WorkItemRepository, s
   const prompt = `You are the daily planning agent for Jeffrey's attention stack.
 
 Current stack, highest attention first:
-${items.map((item, index) => `${index + 1}. [${item.id}] ${item.title}\nStatus: ${item.status}; due: ${item.dueDate ?? 'none'}; source: ${item.sourceUrl ?? item.sourceIdentifier ?? item.source}\n${item.description.slice(0, 300)}`).join('\n\n')}
+${items.map((item, index) => `${index + 1}. [${item.id}] ${item.title}\nStatus: ${item.status}; due: ${item.dueDate ?? 'none'}; last meaningful activity: ${item.lastTouchedAt}; source: ${item.sourceUrl ?? item.sourceIdentifier ?? item.source}\n${item.description.slice(0, 300)}`).join('\n\n')}
 
 New source signals from the last scan:
 ${signals.slice(0, 30).map((signal) => `[${signal.provider}] ${signal.title} (${signal.occurredAt ?? 'unknown time'})\n${signal.summary.slice(0, 240)}\n${signal.url ?? ''}`).join('\n\n')}
 
 Scan errors: ${scanErrors.join('; ') || 'none'}
 
-Preserve the existing relative order unless a source signal creates a meaningful reason to promote or demote a task. Recency alone is not sufficient. Do not add catalog items to the stack. Return every task ID exactly once. End with exactly:
+Preserve the existing relative order unless source context or task aging creates a meaningful reason to promote or demote a task. Treat tasks untouched for 3+ days as increasingly important anti-starvation candidates; call out their age in the rationale. Do not displace active or urgent work solely because another task is old. Do not add catalog items to the stack. Return every task ID exactly once. End with exactly:
 <queue-proposal>{"orderedItemIds":["id"],"rationale":"specific reasons for meaningful movements, or why no movement is needed"}</queue-proposal>`;
   const { output } = await runAgentCommandWithFallback('claude', process.cwd(), prompt, undefined, undefined, undefined, 'economy');
   const match = output.match(/<queue-proposal>([\s\S]*?)<\/queue-proposal>/);

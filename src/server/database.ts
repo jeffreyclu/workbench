@@ -29,6 +29,7 @@ const migrations = [
       parent_work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      last_touched_at TEXT,
       UNIQUE(source, source_identifier)
     );
 
@@ -237,6 +238,9 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
           AND agent_runs.requested_target = 'auto'
       );
     `);
+  }
+  if (!columns.some((column) => column.name === 'last_touched_at')) {
+    database.exec('ALTER TABLE work_items ADD COLUMN last_touched_at TEXT; UPDATE work_items SET last_touched_at = created_at WHERE last_touched_at IS NULL;');
   }
   const messageColumns = database.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
   if (!messageColumns.some((column) => column.name === 'conversation_id')) database.exec('ALTER TABLE shared_messages ADD COLUMN conversation_id TEXT;');

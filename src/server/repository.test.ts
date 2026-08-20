@@ -139,6 +139,19 @@ describe('WorkItemRepository', () => {
     expect(repository.list().map((item) => item.id)).toEqual([second.id, first.id]);
   });
 
+  it('promotes tasks that have gone untouched for several days without resetting their age during reorder', () => {
+    const old = repository.create({ title: 'Stale follow-up', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const recent = repository.create({ title: 'Recent task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const tenDaysAgo = new Date(Date.now() - 10 * 86_400_000).toISOString();
+    database.prepare('UPDATE work_items SET last_touched_at = ? WHERE id = ?').run(tenDaysAgo, old.id);
+
+    const proposal = repository.buildDailyProposal();
+
+    expect(proposal.rationale).toContain('10 days without activity');
+    expect(repository.list().map((item) => item.id)).toEqual([old.id, recent.id]);
+    expect(repository.get(old.id)?.lastTouchedAt).toBe(tenDaysAgo);
+  });
+
   it('stores source credentials without returning them in connection metadata', () => {
     repository.setSourceConnection('github', 'Work GitHub', { token: 'secret-token', query: 'org:writer' });
     expect(repository.getSourceSettings('github')).toEqual({ token: 'secret-token', query: 'org:writer' });

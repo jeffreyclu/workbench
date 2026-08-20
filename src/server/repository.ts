@@ -25,6 +25,7 @@ interface WorkItemRow {
   parent_work_item_id: string | null;
   created_at: string;
   updated_at: string;
+  last_touched_at: string | null;
 }
 
 interface ActivityRow {
@@ -62,6 +63,7 @@ function mapWorkItem(row: WorkItemRow): WorkItem {
     providerUpdatedAt: row.provider_updated_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    lastTouchedAt: row.last_touched_at ?? row.created_at,
   };
 }
 
@@ -529,6 +531,8 @@ export class WorkItemRepository {
       let score = 0;
       if (item.status === 'in_progress') score += 4;
       if (item.status === 'blocked') score -= 2;
+      const untouchedDays = Math.max(0, (now - new Date(item.lastTouchedAt).getTime()) / 86_400_000);
+      if (untouchedDays >= 3) score += Math.min(6, Math.floor(untouchedDays / 3) * 2);
       if (item.dueDate) {
         const days = (new Date(item.dueDate).getTime() - now) / 86_400_000;
         if (days < 0) score += 10;
@@ -538,11 +542,11 @@ export class WorkItemRepository {
       return score;
     };
     const ranked = items
-      .map((item, index) => ({ item, index, score: urgency(item) }))
+      .map((item, index) => ({ item, index, score: urgency(item), untouchedDays: Math.floor(Math.max(0, (now - new Date(item.lastTouchedAt).getTime()) / 86_400_000)) }))
       .sort((a, b) => b.score - a.score || a.index - b.index);
     const moved = ranked.filter((entry, index) => entry.index !== index && entry.score !== 0);
     const rationale = moved.length
-      ? moved.map(({ item, score }) => `${item.title}: ${score > 0 ? 'promoted for active/due context' : 'moved behind actionable work because it is blocked'}.`).join(' ')
+      ? moved.map(({ item, score, untouchedDays }) => `${item.title}: ${untouchedDays >= 3 ? `promoted after ${untouchedDays} days without activity` : score > 0 ? 'promoted for active/due context' : 'moved behind actionable work because it is blocked'}.`).join(' ')
       : 'No meaningful new task context justified changing yesterday’s order.';
     return this.createProposal(ranked.map(({ item }) => item.id), rationale);
   }
@@ -633,8 +637,8 @@ export class WorkItemRepository {
       .prepare(`
         INSERT INTO work_items (
           id, title, description, status, priority, queue_position, source, is_queued,
-          project_name, workspace_path, due_date, source_url, parent_work_item_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 1, ?, ?, ?, ?, ?, ?, ?)
+          project_name, workspace_path, due_date, source_url, parent_work_item_id, created_at, updated_at, last_touched_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 1, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         id,
@@ -648,6 +652,7 @@ export class WorkItemRepository {
         input.dueDate,
         input.sourceUrl ?? null,
         input.parentWorkItemId ?? null,
+        now,
         now,
         now,
       );
@@ -753,9 +758,10 @@ export class WorkItemRepository {
     const assignments = entries.map(([column]) => `${column} = ?`).join(', ');
     const values = entries.map(([, value]) => value);
     const assignmentMode = changes.assignees ? ", agent_assignment_mode = 'manual'" : '';
+    const now = new Date().toISOString();
     this.database
-      .prepare(`UPDATE work_items SET ${assignments}${assignmentMode}, updated_at = ? WHERE id = ?`)
-      .run(...values, new Date().toISOString(), id);
+      .prepare(`UPDATE work_items SET ${assignments}${assignmentMode}, updated_at = ?, last_touched_at = ? WHERE id = ?`)
+      .run(...values, now, now, id);
     return this.get(id);
   }
 
@@ -801,6 +807,7 @@ export class WorkItemRepository {
     this.database
       .prepare('INSERT INTO activities (id, work_item_id, actor, kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(activity.id, activity.workItemId, activity.actor, activity.kind, activity.body, activity.createdAt);
+    if (kind !== 'queue_moved') this.database.prepare('UPDATE work_items SET last_touched_at = ? WHERE id = ?').run(activity.createdAt, workItemId);
     return activity;
   }
 
@@ -894,7 +901,7 @@ export class WorkItemRepository {
           UPDATE work_items SET
             title = ?, description = ?, status = ?, source_url = ?, project_name = ?,
             labels_json = ?, due_date = ?, provider_payload_json = ?,
-            provider_updated_at = ?, updated_at = ?
+            provider_updated_at = ?, updated_at = ?, last_touched_at = ?
           WHERE id = ?
         `)
         .run(
@@ -907,6 +914,7 @@ export class WorkItemRepository {
           input.dueDate,
           JSON.stringify(input.providerPayload),
           input.providerUpdatedAt,
+          now,
           now,
           existing.id,
         );
@@ -924,8 +932,8 @@ export class WorkItemRepository {
         INSERT INTO work_items (
           id, title, description, status, priority, queue_position, source, is_queued,
           source_identifier, source_url, project_name, labels_json, due_date,
-          provider_payload_json, provider_updated_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'linear', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          provider_payload_json, provider_updated_at, created_at, updated_at, last_touched_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'linear', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         id,
@@ -941,6 +949,7 @@ export class WorkItemRepository {
         input.dueDate,
         JSON.stringify(input.providerPayload),
         input.providerUpdatedAt,
+        now,
         now,
         now,
       );

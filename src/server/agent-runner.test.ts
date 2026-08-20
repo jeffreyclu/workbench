@@ -9,7 +9,7 @@ const item = (title: string, description = ''): WorkItem => ({
   source: 'manual', isQueued: true, sourceIdentifier: null, sourceUrl: null,
   archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete', agentOutcome: null,
   projectName: null, workspacePath: null, strategy: '', assignees: [], labels: [],
-  dueDate: null, providerUpdatedAt: null, createdAt: '', updatedAt: '',
+  dueDate: null, providerUpdatedAt: null, createdAt: '', updatedAt: '', lastTouchedAt: '',
 });
 
 describe('classifyExecution', () => {

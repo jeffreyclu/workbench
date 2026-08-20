@@ -37,6 +37,7 @@ export const workItemSchema = z.object({
   providerUpdatedAt: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  lastTouchedAt: z.string(),
 });
 
 export type WorkItem = z.infer<typeof workItemSchema>;
