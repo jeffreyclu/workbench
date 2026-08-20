@@ -214,6 +214,83 @@ const migrations = [
 
     CREATE INDEX IF NOT EXISTS idx_work_item_references_item
       ON work_item_references(work_item_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS artifact_versions (
+      id TEXT PRIMARY KEY,
+      artifact_id TEXT NOT NULL REFERENCES published_artifacts(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      source_path TEXT NOT NULL,
+      content_hash TEXT NOT NULL DEFAULT '',
+      url TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      published_at TEXT NOT NULL,
+      UNIQUE(artifact_id, version)
+    );
+
+    CREATE TABLE IF NOT EXISTS artifact_events (
+      id TEXT PRIMARY KEY,
+      artifact_id TEXT NOT NULL REFERENCES published_artifacts(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      version INTEGER,
+      detail TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_artifact_events_artifact
+      ON artifact_events(artifact_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS artifact_comments (
+      id TEXT PRIMARY KEY,
+      artifact_id TEXT NOT NULL REFERENCES published_artifacts(id) ON DELETE CASCADE,
+      version INTEGER,
+      author TEXT NOT NULL DEFAULT 'Coworker',
+      body TEXT NOT NULL,
+      resolved_at TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_artifact_comments_artifact
+      ON artifact_comments(artifact_id, created_at DESC);
+
+    -- Structured, provenanced durable memory (Phase 1 of the memory strategy).
+    -- Coexists with the older shared_memories archive during the overlap phase;
+    -- both feed one prompt block (see WorkItemRepository.getSharedContext).
+    -- We do NOT migrate shared_memories rows here — that stays Phase 2 scope.
+    CREATE TABLE IF NOT EXISTS memories (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK (kind IN ('constraint', 'preference', 'decision', 'convention', 'fact')),
+      scope TEXT NOT NULL CHECK (scope IN ('global', 'project', 'workspace', 'reference')),
+      project_name TEXT,
+      workspace_path TEXT,
+      body TEXT NOT NULL CHECK (length(body) <= 800),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('proposed', 'active', 'superseded', 'rejected')),
+      -- supersedes_id intentionally has no REFERENCES/FK constraint: it links a
+      -- memory to the row it replaces, and a hard self-referencing FK would need
+      -- deferred enforcement to avoid ordering issues (the row it supersedes
+      -- must already exist) and can't ON DELETE CASCADE without risking a
+      -- supersession chain silently losing history. Validate the target exists
+      -- in application code (see supersedeMemory) instead.
+      supersedes_id TEXT,
+      -- source_task_id / source_conversation_id / source_message_id are also
+      -- unconstrained by FK on purpose (R5): deleting a conversation or task
+      -- must not cascade-delete the memories it produced. Provenance can go
+      -- stale; callers render it defensively (see contracts.Memory usage).
+      source_task_id TEXT,
+      source_conversation_id TEXT,
+      source_message_id TEXT,
+      source_quote TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_memories_selection
+      ON memories(status, scope, project_name, workspace_path);
+    CREATE INDEX IF NOT EXISTS idx_memories_reference
+      ON memories(status, source_task_id, source_conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_memories_created
+      ON memories(created_at DESC);
   `,
 ];
 
@@ -303,6 +380,17 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
   if (!runColumns.some((column) => column.name === 'execution_profile')) database.exec('ALTER TABLE agent_runs ADD COLUMN execution_profile TEXT;');
   const artifactColumns = database.prepare('PRAGMA table_info(published_artifacts)').all() as Array<{ name: string }>;
   if (!artifactColumns.some((column) => column.name === 'content_hash')) database.exec('ALTER TABLE published_artifacts ADD COLUMN content_hash TEXT;');
+  if (!artifactColumns.some((column) => column.name === 'current_version')) database.exec('ALTER TABLE published_artifacts ADD COLUMN current_version INTEGER NOT NULL DEFAULT 1;');
+  database.exec(`
+    INSERT INTO artifact_versions (id, artifact_id, version, title, source_path, content_hash, url, note, published_at)
+      SELECT 'v1-' || id, id, 1, title, source_path, COALESCE(content_hash, ''), public_url, '', published_at
+      FROM published_artifacts
+      WHERE NOT EXISTS (SELECT 1 FROM artifact_versions WHERE artifact_versions.artifact_id = published_artifacts.id);
+    INSERT INTO artifact_events (id, artifact_id, kind, version, detail, created_at)
+      SELECT 'e1-' || id, id, 'published', 1, '', published_at
+      FROM published_artifacts
+      WHERE NOT EXISTS (SELECT 1 FROM artifact_events WHERE artifact_events.artifact_id = published_artifacts.id);
+  `);
   const discoveryColumns = database.prepare('PRAGMA table_info(discovery_candidates)').all() as Array<{ name: string }>;
   if (!discoveryColumns.some((column) => column.name === 'relevance')) database.exec('ALTER TABLE discovery_candidates ADD COLUMN relevance INTEGER NOT NULL DEFAULT 1;');
   if (!discoveryColumns.some((column) => column.name === 'suggested_work_item_id')) database.exec('ALTER TABLE discovery_candidates ADD COLUMN suggested_work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL;');

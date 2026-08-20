@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { Activity, AgentRun, Assignee, ConversationPage, DiscoveryCandidate, DiscoveryCandidateStatus, DiscoveryInbox, DiscoveryRun, ExecutionPlan, LinearProviderConfig, PlannedTask, PublishedArtifact, QueueProposal, SharedAttachment, SharedConversation, SharedMessage, SourceConnection, SourceProvider, TaskClassification, WorkItem, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../shared/contracts.js';
+import type { Activity, AgentRun, ArtifactSummary, Assignee, ConversationPage, DiscoveryCandidate, DiscoveryCandidateStatus, DiscoveryInbox, DiscoveryRun, ExecutionPlan, LinearProviderConfig, Memory, PlannedTask, QueueProposal, SharedAttachment, SharedConversation, SharedMemory, SharedMessage, SourceConnection, SourceProvider, TaskClassification, WorkItem, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../shared/contracts.js';
 import type { WorkbenchDatabase } from './database.js';
+import { ArtifactLibrary } from './artifact-library.js';
 
 interface WorkItemRow {
   id: string;
@@ -36,6 +37,37 @@ interface ActivityRow {
   body: string;
   created_at: string;
 }
+
+interface MemoryRow {
+  id: string;
+  kind: Memory['kind'];
+  scope: Memory['scope'];
+  project_name: string | null;
+  workspace_path: string | null;
+  body: string;
+  status: Memory['status'];
+  supersedes_id: string | null;
+  source_task_id: string | null;
+  source_conversation_id: string | null;
+  source_message_id: string | null;
+  source_quote: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapMemory(row: MemoryRow): Memory {
+  return {
+    id: row.id, kind: row.kind, scope: row.scope,
+    projectName: row.project_name, workspacePath: row.workspace_path,
+    body: row.body, status: row.status, supersedesId: row.supersedes_id,
+    sourceTaskId: row.source_task_id, sourceConversationId: row.source_conversation_id,
+    sourceMessageId: row.source_message_id, sourceQuote: row.source_quote,
+    createdBy: row.created_by, createdAt: row.created_at, updatedAt: row.updated_at,
+  };
+}
+
+const MEMORY_KIND_PRIORITY: Record<Memory['kind'], number> = { constraint: 0, preference: 1, decision: 2, convention: 3, fact: 4 };
 
 function mapWorkItem(row: WorkItemRow): WorkItem {
   const sourceTags = new Set<string>();
@@ -137,22 +169,29 @@ export class WorkItemRepository {
 
   resolveDiscoveryCandidate(id: string, action: 'convert' | 'dismiss' | 'snooze' | 'merge', workItemId?: string): DiscoveryCandidate | null {
     const row = this.database.prepare('SELECT * FROM discovery_candidates WHERE id = ?').get(id) as Record<string, string | null> | undefined;
-    if (!row) return null;
+    if (!row || row.status !== 'pending') return null;
     const candidate = this.mapDiscoveryCandidate(row); const now = new Date().toISOString();
+    const claimed = this.database.prepare("UPDATE discovery_candidates SET status = 'resolving', updated_at = ? WHERE id = ? AND status = 'pending'").run(now, id).changes;
+    if (!claimed) return null;
     let linkedId = workItemId ?? null;
-    if (action === 'convert') {
-      const item = this.create({ title: candidate.title, description: candidate.description, priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null, sourceUrl: candidate.sourceUrl });
-      linkedId = item.id;
-      this.addActivity(item.id, 'system', 'discovered', `Discovered overnight from ${candidate.provider}.`);
-    } else if (action === 'merge') {
-      const item = linkedId ? this.get(linkedId) : null;
-      if (!item) throw new Error('Choose an existing task to merge into.');
-      this.addActivity(item.id, 'system', 'discovered', `${candidate.provider}: ${candidate.title}${candidate.sourceUrl ? `\n${candidate.sourceUrl}` : ''}`);
+    try {
+      if (action === 'convert') {
+        const item = this.create({ title: candidate.title, description: candidate.description, priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null, sourceUrl: candidate.sourceUrl });
+        linkedId = item.id;
+        this.addActivity(item.id, 'system', 'discovered', `Discovered overnight from ${candidate.provider}.`);
+      } else if (action === 'merge') {
+        const item = linkedId ? this.get(linkedId) : null;
+        if (!item) throw new Error('Choose an existing task to merge into.');
+        this.addActivity(item.id, 'system', 'discovered', `${candidate.provider}: ${candidate.title}${candidate.sourceUrl ? `\n${candidate.sourceUrl}` : ''}`);
+      }
+      const status = action === 'convert' ? 'converted' : action === 'merge' ? 'merged' : action === 'dismiss' ? 'dismissed' : 'snoozed';
+      const snoozedUntil = action === 'snooze' ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : null;
+      this.database.prepare("UPDATE discovery_candidates SET status = ?, work_item_id = ?, snoozed_until = ?, updated_at = ? WHERE id = ? AND status = 'resolving'").run(status, linkedId, snoozedUntil, now, id);
+      return this.mapDiscoveryCandidate(this.database.prepare('SELECT * FROM discovery_candidates WHERE id = ?').get(id) as Record<string, string | null>);
+    } catch (error) {
+      this.database.prepare("UPDATE discovery_candidates SET status = 'pending', updated_at = ? WHERE id = ? AND status = 'resolving'").run(new Date().toISOString(), id);
+      throw error;
     }
-    const status = action === 'convert' ? 'converted' : action === 'merge' ? 'merged' : action === 'dismiss' ? 'dismissed' : 'snoozed';
-    const snoozedUntil = action === 'snooze' ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : null;
-    this.database.prepare('UPDATE discovery_candidates SET status = ?, work_item_id = ?, snoozed_until = ?, updated_at = ? WHERE id = ?').run(status, linkedId, snoozedUntil, now, id);
-    return this.mapDiscoveryCandidate(this.database.prepare('SELECT * FROM discovery_candidates WHERE id = ?').get(id) as Record<string, string | null>);
   }
 
   updateDiscoveryCandidate(id: string, changes: { title?: string; description?: string }): DiscoveryCandidate | null {
@@ -210,6 +249,10 @@ export class WorkItemRepository {
       id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
       forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
     }));
+  }
+
+  getConversation(id: string): SharedConversation | null {
+    return this.listConversations('all').find((conversation) => conversation.id === id) ?? null;
   }
 
   listConversationPage(limit: number, cursor: string | null, view: 'active' | 'archive' = 'active'): ConversationPage {
@@ -298,7 +341,7 @@ export class WorkItemRepository {
 
   listSourceConnections(): SourceConnection[] {
     const rows = this.database.prepare('SELECT provider, label, last_scanned_at, last_error FROM source_connections ORDER BY provider').all() as Array<Record<string, string | null>>;
-    return rows.map((row) => ({ provider: row.provider as SourceProvider, connected: true, label: row.label!, lastScannedAt: row.last_scanned_at, lastError: row.last_error }));
+    return rows.map((row) => ({ provider: row.provider as SourceProvider, connected: true, label: row.label!, lastScannedAt: row.last_scanned_at, lastError: row.last_error, configurationState: row.last_error ? 'reauth_required' as const : 'connected' as const, health: row.last_error ? 'unavailable' as const : row.last_scanned_at ? 'healthy' as const : 'unknown' as const }));
   }
 
   getSourceSettings(provider: SourceProvider): Record<string, string> | null {
@@ -316,6 +359,10 @@ export class WorkItemRepository {
 
   updateSourceScan(provider: SourceProvider, error: string | null): void {
     this.database.prepare('UPDATE source_connections SET last_scanned_at = ?, last_error = ? WHERE provider = ?').run(new Date().toISOString(), error, provider);
+  }
+
+  markSourceReauthRequired(provider: SourceProvider, message: string): void {
+    this.database.prepare('UPDATE source_connections SET last_scanned_at = ?, last_error = ? WHERE provider = ?').run(new Date().toISOString(), message, provider);
   }
 
   removeSourceConnection(provider: SourceProvider): void {
@@ -400,15 +447,199 @@ export class WorkItemRepository {
     return this.listSharedMessages(1_000).find((message) => message.id === id) ?? null;
   }
 
-  getSharedContext(excludeConversationId?: string): string {
+  /**
+   * excludeConversationId: don't quote the conversation we're currently replying in
+   * back at itself. scope: which structured memories to surface — resolved from a
+   * work item, a conversation (which resolves to its linked work item), or neither
+   * (global memories only, correct for contexts with no known project yet).
+   */
+  getSharedContext(excludeConversationId?: string, scope?: { workItemId?: string; conversationId?: string }): string {
     const messages = this.listSharedMessages(120).filter((message) => message.conversationId !== excludeConversationId);
-    const archived = this.database.prepare("SELECT body FROM shared_memories WHERE kind IN ('task_archive', 'conversation_archive') ORDER BY created_at DESC LIMIT 20").all() as Array<{ body: string }>;
-    const recent = messages.filter((message) => message.status === 'completed' && message.body).slice(-8);
-    const format = (message: SharedMessage) => `${message.author}: ${message.body.slice(0, 2_000)}`;
+    const allMemories = this.listMemories(undefined, 50);
+    const recent = messages.filter((message) => message.status === 'completed' && message.body).slice(-6);
+    const format = (message: SharedMessage) => `${message.author}: ${message.body.slice(0, 1_500)}`;
+
+    // Phase 1: the ~8k char budget (~2k tokens) is split 60/40 between structured
+    // memories and the legacy archive/assistant-note lines below. This is a
+    // deliberate mitigation for the overlap phase where both sources feed the
+    // same prompt block (see docs/memory-strategy.md, R2) — it costs the archive
+    // block some headroom, but caps how much a bad structured memory can crowd out.
+    const totalBudget = 8_000;
+    const structuredBudget = Math.floor(totalBudget * 0.6);
+    const { memories: scopedMemories, omitted: cappedOmitted } = this.selectScopedMemories(scope);
+    let structuredBudgetRemaining = structuredBudget;
+    const structuredLines: string[] = [];
+    for (const memory of scopedMemories) {
+      const line = `- [${memory.kind}] ${memory.body}`;
+      if (line.length > structuredBudgetRemaining) break;
+      structuredLines.push(line);
+      structuredBudgetRemaining -= line.length + 1;
+    }
+    const structuredOmitted = cappedOmitted + (scopedMemories.length - structuredLines.length);
+    const structuredBlock = structuredLines.length
+      ? [
+        'Structured memories (durable facts/decisions/preferences/constraints):',
+        '```',
+        ...structuredLines,
+        '```',
+        structuredOmitted > 0 ? `(${structuredOmitted} more structured memories omitted due to budget)` : '',
+      ].filter(Boolean).join('\n')
+      : '';
+
+    let budgetRemaining = totalBudget - structuredBudget;
+    const memoriesLines: string[] = [];
+    for (const { kind, body } of allMemories) {
+      const truncated = body.slice(0, 1_500);
+      const line = `${kind.startsWith('assistant_') ? 'memory' : 'archive'}: ${truncated}`;
+      if (line.length > budgetRemaining) break;
+      memoriesLines.push(line);
+      budgetRemaining -= line.length + 1; // +1 for newline
+    }
+
+    const memoriesText = memoriesLines.join('\n');
+    const omitted = allMemories.length - memoriesLines.length;
+    const recentText = recent.map(format).join('\n');
+
     return [
-      'Durable context from archived work:', archived.length ? archived.map(({ body }) => `archive: ${body.slice(0, 2_000)}`).join('\n') : 'No archived context yet.',
-      '', 'Recent shared room:', recent.length ? recent.map(format).join('\n') : 'No recent conversation.',
-    ].join('\n');
+      structuredBlock,
+      'Durable context from archived work:',
+      memoriesText || 'No durable context yet.',
+      omitted > 0 ? `(${omitted} older memories omitted due to budget)` : '',
+      '', 'Recent shared room:',
+      recentText || 'No recent conversation.',
+    ].filter(Boolean).join('\n');
+  }
+
+  private resolveMemoryScope(scope?: { workItemId?: string; conversationId?: string }): { workItemId: string | null; conversationId: string | null; projectName: string | null; workspacePath: string | null } {
+    if (!scope) return { workItemId: null, conversationId: null, projectName: null, workspacePath: null };
+    let workItemId = scope.workItemId ?? null;
+    const conversationId = scope.conversationId ?? null;
+    if (!workItemId && conversationId) {
+      const conversation = this.database.prepare('SELECT work_item_id FROM shared_conversations WHERE id = ?').get(conversationId) as { work_item_id: string | null } | undefined;
+      workItemId = conversation?.work_item_id ?? null;
+    }
+    let projectName: string | null = null;
+    let workspacePath: string | null = null;
+    if (workItemId) {
+      const item = this.database.prepare('SELECT project_name, workspace_path FROM work_items WHERE id = ?').get(workItemId) as { project_name: string | null; workspace_path: string | null } | undefined;
+      projectName = item?.project_name ?? null;
+      workspacePath = item?.workspace_path ?? null;
+    }
+    return { workItemId, conversationId, projectName, workspacePath };
+  }
+
+  /** Active-only scoped memory selection: global (capped) -> project -> workspace -> linked-reference, each sorted by kind priority then recency. */
+  private selectScopedMemories(scope?: { workItemId?: string; conversationId?: string }): { memories: Memory[]; omitted: number } {
+    if (process.env.WORKBENCH_MEMORY_DISABLED === '1') return { memories: [], omitted: 0 };
+    const resolved = this.resolveMemoryScope(scope);
+    const sortPartition = (rows: MemoryRow[]) => rows.map(mapMemory).sort((a, b) => (
+      MEMORY_KIND_PRIORITY[a.kind] - MEMORY_KIND_PRIORITY[b.kind]
+    ) || (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+
+    const globalRows = this.database.prepare(`SELECT * FROM memories WHERE status = 'active' AND scope = 'global'`).all() as unknown as MemoryRow[];
+    const sortedGlobal = sortPartition(globalRows);
+    const globalOmitted = Math.max(0, sortedGlobal.length - 10);
+    const global = sortedGlobal.slice(0, 10);
+
+    const project = resolved.projectName
+      ? sortPartition(this.database.prepare(`SELECT * FROM memories WHERE status = 'active' AND scope = 'project' AND project_name = ?`).all(resolved.projectName) as unknown as MemoryRow[])
+      : [];
+
+    const workspace = resolved.workspacePath
+      ? sortPartition(this.database.prepare(`SELECT * FROM memories WHERE status = 'active' AND scope = 'workspace' AND workspace_path = ?`).all(resolved.workspacePath) as unknown as MemoryRow[])
+      : [];
+
+    const reference = (resolved.workItemId || resolved.conversationId)
+      ? sortPartition(this.database.prepare(`SELECT * FROM memories WHERE status = 'active' AND scope = 'reference' AND (source_task_id = ? OR source_conversation_id = ?)`).all(resolved.workItemId ?? null, resolved.conversationId ?? null) as unknown as MemoryRow[])
+      : [];
+
+    return { memories: [...global, ...project, ...workspace, ...reference], omitted: globalOmitted };
+  }
+
+  createMemory(input: {
+    kind: Memory['kind']; scope: Memory['scope']; projectName: string | null; workspacePath: string | null; body: string;
+    sourceTaskId: string | null; sourceConversationId: string | null; sourceMessageId: string | null; sourceQuote: string | null; createdBy: string | null;
+  }): Memory {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    this.database.prepare(`
+      INSERT INTO memories (id, kind, scope, project_name, workspace_path, body, status, supersedes_id, source_task_id, source_conversation_id, source_message_id, source_quote, created_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, input.kind, input.scope, input.projectName, input.workspacePath, input.body, input.sourceTaskId, input.sourceConversationId, input.sourceMessageId, input.sourceQuote, input.createdBy, now, now);
+    return this.getMemory(id)!;
+  }
+
+  getMemory(id: string): Memory | null {
+    const row = this.database.prepare('SELECT * FROM memories WHERE id = ?').get(id) as MemoryRow | undefined;
+    return row ? mapMemory(row) : null;
+  }
+
+  listMemoriesStructured(filter?: { scope?: Memory['scope']; projectName?: string; status?: Memory['status']; kind?: Memory['kind'] }): Memory[] {
+    const rows = this.database.prepare(`
+      SELECT * FROM memories
+      WHERE (? IS NULL OR scope = ?)
+        AND (? IS NULL OR project_name = ?)
+        AND (? IS NULL OR status = ?)
+        AND (? IS NULL OR kind = ?)
+      ORDER BY created_at DESC, id DESC
+    `).all(
+      filter?.scope ?? null, filter?.scope ?? null,
+      filter?.projectName ?? null, filter?.projectName ?? null,
+      filter?.status ?? null, filter?.status ?? null,
+      filter?.kind ?? null, filter?.kind ?? null,
+    ) as unknown as MemoryRow[];
+    return rows.map(mapMemory);
+  }
+
+  updateMemory(id: string, changes: { kind?: Memory['kind']; body?: string; projectName?: string | null; workspacePath?: string | null; status?: Memory['status'] }): Memory | null {
+    const entries = Object.entries({
+      kind: changes.kind, body: changes.body, project_name: changes.projectName, workspace_path: changes.workspacePath, status: changes.status,
+    }).filter((entry): entry is [string, string | null] => entry[1] !== undefined);
+    if (!entries.length) return this.getMemory(id);
+    entries.push(['updated_at', new Date().toISOString()]);
+    this.database.prepare(`UPDATE memories SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE id = ?`)
+      .run(...entries.map(([, value]) => value), id);
+    return this.getMemory(id);
+  }
+
+  /** Marks the current memory superseded and creates its active replacement, preserving scope/project/workspace/source. Returns the replacement. */
+  supersedeMemory(id: string, input: { kind: Memory['kind']; body: string }): Memory | null {
+    const current = this.getMemory(id);
+    if (!current) return null;
+    const now = new Date().toISOString();
+    this.database.prepare(`UPDATE memories SET status = 'superseded', updated_at = ? WHERE id = ?`).run(now, id);
+    const replacementId = randomUUID();
+    this.database.prepare(`
+      INSERT INTO memories (id, kind, scope, project_name, workspace_path, body, status, supersedes_id, source_task_id, source_conversation_id, source_message_id, source_quote, created_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(replacementId, input.kind, current.scope, current.projectName, current.workspacePath, input.body, id, current.sourceTaskId, current.sourceConversationId, current.sourceMessageId, current.sourceQuote, current.createdBy, now, now);
+    return this.getMemory(replacementId);
+  }
+
+  rejectMemory(id: string): Memory | null {
+    const current = this.getMemory(id);
+    if (!current) return null;
+    this.database.prepare(`UPDATE memories SET status = 'rejected', updated_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
+    return this.getMemory(id);
+  }
+
+  listMemories(kind?: SharedMemory['kind'], limit = 50): SharedMemory[] {
+    const safeLimit = Math.max(1, Math.min(100, limit));
+    const rows = this.database.prepare(`
+      SELECT id, kind, body, created_at FROM shared_memories
+      WHERE (? IS NULL OR kind = ?)
+      ORDER BY created_at DESC, id DESC LIMIT ?
+    `).all(kind ?? null, kind ?? null, safeLimit) as Array<{ id: string; kind: SharedMemory['kind']; body: string; created_at: string }>;
+    return rows.map((row) => ({ id: row.id, kind: row.kind, body: row.body, createdAt: row.created_at }));
+  }
+
+  recordMemory(actor: 'codex' | 'claude', body: string): SharedMemory {
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    const kind: SharedMemory['kind'] = actor === 'codex' ? 'assistant_codex' : 'assistant_claude';
+    this.database.prepare('INSERT INTO shared_memories (id, kind, body, created_at) VALUES (?, ?, ?, ?)')
+      .run(id, kind, body, createdAt);
+    return { id, kind, body, createdAt };
   }
 
   list(): WorkItem[] {
@@ -495,7 +726,7 @@ export class WorkItemRepository {
     item = {
       ...item,
       sourceTags: [...new Set([...item.sourceTags.filter((tag) => tag !== 'Manual' || normalizedProviders.length === 0), ...normalizedProviders])],
-      classificationKind: classification?.kind ?? latest?.kind ?? null,
+      classificationKind: classification?.kind ?? null,
       classificationComplex: classification?.complex ?? false,
     };
     if (!latest) return item;
@@ -649,11 +880,24 @@ export class WorkItemRepository {
 
   getPendingExecutionPlan(workItemId: string): ExecutionPlan | null {
     const row = this.database.prepare("SELECT * FROM execution_plans WHERE work_item_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1").get(workItemId) as Record<string, string | null> | undefined;
-    return row ? {
+    return row ? this.mapExecutionPlan(row) : null;
+  }
+
+  listExecutionPlans(workItemId: string, status?: ExecutionPlan['status']): ExecutionPlan[] {
+    const rows = this.database.prepare(`
+      SELECT * FROM execution_plans
+      WHERE work_item_id = ? AND (? IS NULL OR status = ?)
+      ORDER BY created_at DESC, id DESC
+    `).all(workItemId, status ?? null, status ?? null) as Array<Record<string, string | null>>;
+    return rows.map((row) => this.mapExecutionPlan(row));
+  }
+
+  private mapExecutionPlan(row: Record<string, string | null>): ExecutionPlan {
+    return {
       id: row.id!, workItemId: row.work_item_id!, status: row.status as ExecutionPlan['status'],
       summary: row.summary!, tasks: JSON.parse(row.tasks_json!) as PlannedTask[],
       createdAt: row.created_at!, resolvedAt: row.resolved_at,
-    } : null;
+    };
   }
 
   createExecutionPlan(workItemId: string, summary: string, tasks: PlannedTask[]): ExecutionPlan {
@@ -1133,9 +1377,10 @@ export class WorkItemRepository {
     }));
   }
 
-  listArtifactsForWorkItem(workItemId: string): PublishedArtifact[] {
-    const rows = this.database.prepare('SELECT id, public_url, title FROM published_artifacts WHERE work_item_id = ? AND revoked_at IS NULL ORDER BY published_at DESC').all(workItemId) as Array<{ id: string; public_url: string; title: string }>;
-    return rows.map((row) => ({ id: row.id, url: row.public_url, title: row.title }));
+  // The artifact library owns artifact reads; the task graph just asks it for the
+  // live shares belonging to this task.
+  listArtifactsForWorkItem(workItemId: string): ArtifactSummary[] {
+    return new ArtifactLibrary(this.database).listForWorkItem(workItemId).filter((artifact) => !artifact.revokedAt);
   }
 
   listReferences(workItemId: string): WorkItemReference[] {

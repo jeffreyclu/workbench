@@ -157,11 +157,11 @@ describe('WorkItemRepository', () => {
     expect(repository.list()[0]).toEqual(expect.objectContaining({ classificationKind: 'execute', classificationComplex: false }));
   });
 
-  it('uses the latest run kind as the card classification for tasks created before classifications were saved', () => {
+  it('does not misrepresent a generic chat run as a saved task classification', () => {
     const item = repository.create({ title: 'Legacy executed task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     repository.createRun(item.id, 'research', 'auto', 'claude', 'Investigate it.');
 
-    expect(repository.list()[0]).toEqual(expect.objectContaining({ classificationKind: 'research', classificationComplex: false }));
+    expect(repository.list()[0]).toEqual(expect.objectContaining({ classificationKind: null, classificationComplex: false }));
   });
 
   it('promotes tasks that have gone untouched for several days without resetting their age during reorder', () => {
@@ -547,6 +547,112 @@ describe('WorkItemRepository', () => {
       expect(recovered?.status).toBe('failed');
       expect(recovered?.error).toMatch(/Interrupted by API restart/);
       expect(recovered?.body).toBe('partial output'); // Partial output is preserved for inspection.
+    });
+  });
+
+  describe('structured memories (Phase 1)', () => {
+    // Regression guard: this must stay byte-identical to the pre-memory output
+    // whenever no structured memories exist and no scope is passed, so this test
+    // must run against a fresh, memory-free database and fail loudly if the
+    // shape of getSharedContext's output ever changes for that case.
+    it('produces byte-identical output to the pre-memory implementation when there are no structured memories', () => {
+      const conversation = repository.createConversation('Queue operating model');
+      repository.createSharedMessage('jeffrey', 'The queue order is the priority.', 'completed', conversation.id);
+      repository.createSharedMessage('claude', 'Preserve yesterday’s order unless context changes.', 'completed', conversation.id);
+      repository.createSharedMessage('codex', '', 'running', conversation.id);
+      repository.setConversationArchived(conversation.id, true);
+
+      const context = repository.getSharedContext();
+      const archiveBody = [
+        'Archived conversation: Queue operating model',
+        'jeffrey: The queue order is the priority.',
+        'claude: Preserve yesterday’s order unless context changes.',
+      ].join('\n\n');
+      const recentText = [
+        'jeffrey: The queue order is the priority.',
+        'claude: Preserve yesterday’s order unless context changes.',
+      ].join('\n');
+      expect(context).toBe([
+        'Durable context from archived work:',
+        `archive: ${archiveBody}`,
+        'Recent shared room:',
+        recentText,
+      ].join('\n'));
+    });
+
+    it('creates a memory, lists it, and edits it, changing prompt output', () => {
+      const memory = repository.createMemory({
+        kind: 'constraint', scope: 'global', projectName: null, workspacePath: null,
+        body: 'Never deploy on Fridays.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: 'jeffrey',
+      });
+      expect(repository.getMemory(memory.id)).toEqual(memory);
+      expect(repository.listMemoriesStructured().map((entry) => entry.id)).toContain(memory.id);
+      expect(repository.getSharedContext()).toContain('Never deploy on Fridays.');
+
+      const updated = repository.updateMemory(memory.id, { body: 'Never deploy after 4pm on Fridays.' });
+      expect(updated?.body).toBe('Never deploy after 4pm on Fridays.');
+      expect(repository.getSharedContext()).toContain('Never deploy after 4pm on Fridays.');
+      expect(repository.getSharedContext()).not.toContain('Never deploy on Fridays.');
+    });
+
+    it('filters by status: proposed/superseded/rejected never appear in scoped selection', () => {
+      const active = repository.createMemory({ kind: 'fact', scope: 'global', projectName: null, workspacePath: null, body: 'Active fact.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
+      const rejected = repository.createMemory({ kind: 'fact', scope: 'global', projectName: null, workspacePath: null, body: 'Rejected fact.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
+      repository.rejectMemory(rejected.id);
+      const superseded = repository.createMemory({ kind: 'fact', scope: 'global', projectName: null, workspacePath: null, body: 'Old fact.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
+      const replacement = repository.supersedeMemory(superseded.id, { kind: 'fact', body: 'New fact.' });
+
+      const context = repository.getSharedContext();
+      expect(context).toContain(active.body);
+      expect(context).toContain(replacement!.body);
+      expect(context).not.toContain('Rejected fact.');
+      expect(context).not.toContain('Old fact.');
+      expect(repository.getMemory(superseded.id)?.status).toBe('superseded');
+      expect(repository.getMemory(rejected.id)?.status).toBe('rejected');
+    });
+
+    it('orders global memories by kind priority (constraint > preference > decision > convention > fact) then recency', () => {
+      repository.createMemory({ kind: 'fact', scope: 'global', projectName: null, workspacePath: null, body: 'A fact.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
+      repository.createMemory({ kind: 'constraint', scope: 'global', projectName: null, workspacePath: null, body: 'A constraint.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
+      repository.createMemory({ kind: 'convention', scope: 'global', projectName: null, workspacePath: null, body: 'A convention.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
+
+      const context = repository.getSharedContext();
+      const constraintIndex = context.indexOf('A constraint.');
+      const conventionIndex = context.indexOf('A convention.');
+      const factIndex = context.indexOf('A fact.');
+      expect(constraintIndex).toBeGreaterThan(-1);
+      expect(constraintIndex).toBeLessThan(conventionIndex);
+      expect(conventionIndex).toBeLessThan(factIndex);
+    });
+
+    it('caps global memories at 10 and reports the rest as omitted', () => {
+      for (let index = 0; index < 12; index += 1) {
+        repository.createMemory({ kind: 'fact', scope: 'global', projectName: null, workspacePath: null, body: `Fact ${index}.`, sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
+      }
+      const context = repository.getSharedContext();
+      expect(context).toMatch(/\(2 more structured memories omitted due to budget\)/);
+    });
+
+    it('scopes memories: a project-scoped memory does not appear in another project\'s prompt (criterion 1)', () => {
+      const itemA = repository.create({ title: 'Task A', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+      const itemB = repository.create({ title: 'Task B', description: '', priority: 2, status: 'ready', projectName: 'Other Project', workspacePath: null, dueDate: null });
+      repository.createMemory({ kind: 'preference', scope: 'project', projectName: 'Workbench', workspacePath: null, body: 'Workbench prefers small PRs.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
+
+      const contextForA = repository.getSharedContext(undefined, { workItemId: itemA.id });
+      const contextForB = repository.getSharedContext(undefined, { workItemId: itemB.id });
+      expect(contextForA).toContain('Workbench prefers small PRs.');
+      expect(contextForB).not.toContain('Workbench prefers small PRs.');
+    });
+
+    it('honors the WORKBENCH_MEMORY_DISABLED kill switch', () => {
+      repository.createMemory({ kind: 'constraint', scope: 'global', projectName: null, workspacePath: null, body: 'Kill switch test fact.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
+      expect(repository.getSharedContext()).toContain('Kill switch test fact.');
+      process.env.WORKBENCH_MEMORY_DISABLED = '1';
+      try {
+        expect(repository.getSharedContext()).not.toContain('Kill switch test fact.');
+      } finally {
+        delete process.env.WORKBENCH_MEMORY_DISABLED;
+      }
     });
   });
 });

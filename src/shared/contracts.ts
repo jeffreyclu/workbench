@@ -79,7 +79,10 @@ export interface ResolvedSourceDraft { source: string; sourceUrl: string; title:
 
 export const sourceProviderSchema = z.enum(['github', 'slack', 'confluence', 'gmail']);
 export type SourceProvider = z.infer<typeof sourceProviderSchema>;
-export interface SourceConnection { provider: SourceProvider; connected: boolean; label: string; lastScannedAt: string | null; lastError: string | null; }
+export type SourceAuthMode = 'oauth' | 'api_key' | 'managed_externally';
+export type SourceConfigurationState = 'unconfigured' | 'authorizing' | 'connected' | 'reauth_required' | 'disabled';
+export type SourceHealthState = 'unknown' | 'healthy' | 'degraded' | 'unavailable';
+export interface SourceConnection { provider: SourceProvider; connected: boolean; label: string; lastScannedAt: string | null; lastError: string | null; authMode?: SourceAuthMode; configurationState?: SourceConfigurationState; health?: SourceHealthState; }
 export type DiscoveryCandidateStatus = 'pending' | 'converted' | 'merged' | 'dismissed' | 'snoozed';
 export interface DiscoveryCandidate {
   id: string;
@@ -122,7 +125,7 @@ export const bulkDiscoveryActionSchema = z.object({
   action: z.enum(['convert', 'dismiss', 'snooze']),
 });
 export type BrokerSourceId = 'slack' | 'figma' | 'linear' | 'atlassian' | 'github' | 'google';
-export type BrokerConnectionState = 'connected' | 'needs_auth' | 'disabled' | 'error';
+export type BrokerConnectionState = 'connected' | 'needs_auth' | 'reauth_required' | 'disabled' | 'error';
 export interface BrokerConnection {
   id: BrokerSourceId;
   name: string;
@@ -212,7 +215,7 @@ export interface WorkItemDetail {
   executionPlan: ExecutionPlan | null;
   classification: TaskClassification | null;
   conversations: SharedConversation[];
-  artifacts: PublishedArtifact[];
+  artifacts: ArtifactSummary[];
   references: WorkItemReference[];
 }
 
@@ -356,7 +359,87 @@ export interface SharedMessage {
 
 export interface SharedAttachment { name: string; path: string; mimeType: string; size: number; }
 export interface PublishedArtifact { id: string; url: string; title: string; }
+
+// --- Artifact library -------------------------------------------------------
+//
+// A published artifact is a stable identity (id + public URL) with an ordered
+// list of versions. Republishing appends a version and moves the latest
+// snapshot; revoking takes every version offline without losing the history.
+
+export const artifactEventKindSchema = z.enum(['published', 'republished', 'revoked', 'restored', 'commented', 'linked']);
+export type ArtifactEventKind = z.infer<typeof artifactEventKindSchema>;
+
+export interface ArtifactVersion {
+  id: string;
+  artifactId: string;
+  version: number;
+  title: string;
+  url: string;
+  contentHash: string;
+  note: string;
+  publishedAt: string;
+}
+
+export interface ArtifactEvent {
+  id: string;
+  artifactId: string;
+  kind: ArtifactEventKind;
+  version: number | null;
+  detail: string;
+  createdAt: string;
+}
+
+export interface ArtifactComment {
+  id: string;
+  artifactId: string;
+  version: number | null;
+  author: string;
+  body: string;
+  resolvedAt: string | null;
+  createdAt: string;
+}
+
+export interface ArtifactSummary {
+  id: string;
+  title: string;
+  url: string;
+  sourcePath: string;
+  version: number;
+  versionCount: number;
+  workItemId: string | null;
+  workItemTitle: string | null;
+  conversationId: string | null;
+  conversationTitle: string | null;
+  publishedAt: string;
+  revokedAt: string | null;
+  commentCount: number;
+  openCommentCount: number;
+}
+
+export interface ArtifactDetail {
+  artifact: ArtifactSummary;
+  versions: ArtifactVersion[];
+  events: ArtifactEvent[];
+  comments: ArtifactComment[];
+  sourceAvailable: boolean;
+  sourceChanged: boolean;
+}
+
+export const createArtifactCommentSchema = z.object({
+  author: z.string().trim().min(1).max(80).default('Coworker'),
+  body: z.string().trim().min(1).max(5_000),
+  version: z.coerce.number().int().positive().optional(),
+});
+
+export const updateArtifactSchema = z.object({
+  title: z.string().trim().min(1).max(300).optional(),
+  workItemId: z.string().uuid().nullable().optional(),
+  conversationId: z.string().uuid().nullable().optional(),
+});
+
+export const artifactLibraryViewSchema = z.enum(['published', 'revoked', 'all']).catch('published');
 export interface SharedConversation { id: string; title: string; workItemId: string | null; forkedFromConversationId: string | null; archivedAt: string | null; createdAt: string; updatedAt: string; isActive?: boolean; }
+export interface SharedMemory { id: string; kind: 'assistant_codex' | 'assistant_claude' | 'task_archive' | 'conversation_archive'; body: string; createdAt: string; }
 
 export const createSharedMessageSchema = z.object({
   conversationId: z.string().uuid(),
@@ -374,4 +457,73 @@ export const createSharedConversationSchema = z.object({ title: z.string().trim(
 
 export const updateSharedMessageSchema = z.object({
   pinned: z.boolean(),
+});
+
+// --- Structured memory (Phase 1) --------------------------------------------
+//
+// A memory is a small, provenanced fact/decision/preference/constraint/convention
+// that should keep showing up in agent prompts until it's edited away. Distinct
+// from the older free-text `shared_memories` archive: memories are structured,
+// scoped (global/project/workspace/reference), and status-tracked so a bad one
+// can be superseded or rejected without deleting history.
+
+export const memoryKindSchema = z.enum(['constraint', 'preference', 'decision', 'convention', 'fact']);
+export const memoryScopeSchema = z.enum(['global', 'project', 'workspace', 'reference']);
+export const memoryStatusSchema = z.enum(['proposed', 'active', 'superseded', 'rejected']);
+
+export interface Memory {
+  id: string;
+  kind: z.infer<typeof memoryKindSchema>;
+  scope: z.infer<typeof memoryScopeSchema>;
+  projectName: string | null;
+  workspacePath: string | null;
+  body: string;
+  status: z.infer<typeof memoryStatusSchema>;
+  supersedesId: string | null;
+  sourceTaskId: string | null;
+  sourceConversationId: string | null;
+  sourceMessageId: string | null;
+  sourceQuote: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const createMemorySchema = z.object({
+  kind: memoryKindSchema,
+  scope: memoryScopeSchema,
+  projectName: z.string().trim().max(200).nullable().default(null),
+  workspacePath: z.string().trim().max(1_000).nullable().default(null),
+  body: z.string().trim().min(1).max(800),
+  sourceTaskId: z.string().uuid().nullable().default(null),
+  sourceConversationId: z.string().uuid().nullable().default(null),
+  sourceMessageId: z.string().uuid().nullable().default(null),
+  sourceQuote: z.string().trim().max(2_000).nullable().default(null),
+  createdBy: z.string().trim().max(80).nullable().default(null),
+}).refine((input) => (input.scope !== 'project' || Boolean(input.projectName)), {
+  message: 'projectName is required when scope is "project".', path: ['projectName'],
+}).refine((input) => (input.scope !== 'workspace' || Boolean(input.workspacePath)), {
+  message: 'workspacePath is required when scope is "workspace".', path: ['workspacePath'],
+}).refine((input) => (input.scope !== 'reference' || Boolean(input.sourceTaskId || input.sourceConversationId)), {
+  message: 'sourceTaskId or sourceConversationId is required when scope is "reference".', path: ['sourceTaskId'],
+});
+
+export const updateMemorySchema = z.object({
+  kind: memoryKindSchema.optional(),
+  body: z.string().trim().min(1).max(800).optional(),
+  projectName: z.string().trim().max(200).nullable().optional(),
+  workspacePath: z.string().trim().max(1_000).nullable().optional(),
+  status: memoryStatusSchema.optional(),
+});
+
+export const listMemoriesQuerySchema = z.object({
+  scope: memoryScopeSchema.optional(),
+  projectName: z.string().trim().max(200).optional(),
+  status: memoryStatusSchema.optional(),
+  kind: memoryKindSchema.optional(),
+});
+
+export const supersedeMemorySchema = z.object({
+  kind: memoryKindSchema,
+  body: z.string().trim().min(1).max(800),
 });
