@@ -99,6 +99,8 @@ nav { display: grid; gap: 3px; }
 @keyframes task-shimmer { to { transform: translateX(120%); } }
 @media (prefers-reduced-motion: reduce) { .task-group-progress .queue-item::after { animation: none; opacity: .35; } }
 .task-group-attention .queue-item { background: #121318; border-color: #202536; }
+.task-group-archive .queue-item { background: #121318; border-color: #292d3d; }
+.task-group-archive .queue-item:hover:not(.dragging) { background: #171820; border-color: #343a50; }
 .queue-item { position: relative; display: grid; grid-template-columns: 27px minmax(0, 1fr); gap: 8px; align-items: start; width: 100%; min-height: 78px; padding: 14px 10px; color: inherit; background: transparent; border: 1px solid transparent; border-radius: 8px; text-align: left; cursor: pointer; touch-action: manipulation; transition: margin-left 160ms ease, width 160ms ease, background-color 160ms ease, border-color 160ms ease; }
 .queue-item:hover:not(.dragging) { width: calc(100% - 5px); margin-left: 5px; background: #171715; }
 .queue-item.selected { width: calc(100% - 9px); margin-left: 9px; background: #1c1c19; border-color: #33332d; }
