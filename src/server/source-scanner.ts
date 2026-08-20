@@ -13,7 +13,7 @@ async function requestJson<T>(url: string, headers: Record<string, string>): Pro
 }
 
 async function scanGitHub(settings: Record<string, string>): Promise<SourceSignal[]> {
-  const query = (settings.query || 'is:open involves:@me').replace(/\b(?:org|user):(?:"[^"]+"|\S+)/gi, '').trim();
+  const query = (settings.query || 'is:open is:pr review-requested:@me').replace(/\b(?:org|user):(?:"[^"]+"|\S+)/gi, '').trim();
   const organizations = ['writer', 'WriterInternal', 'WriterColab'];
   const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${settings.token}`, 'User-Agent': 'workbench-local' };
   const responses = await Promise.all(organizations.map((organization) => requestJson<{ items: Array<{ title: string; body: string | null; html_url: string; updated_at: string; repository_url: string }> }>(

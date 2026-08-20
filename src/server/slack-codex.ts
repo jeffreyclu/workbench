@@ -31,7 +31,13 @@ Return exactly one block and no other text:
 }
 
 export async function scanSlackWithCodex(run: CodexRunner = defaultRunner): Promise<SourceSignal[]> {
-  const output = await run(`Use the authenticated Slack connector to find Jeffrey's recent Slack context that may require work or change task priority. Focus on messages involving or directed to Jeffrey, active threads, requests, decisions, blockers, and follow-ups from the last 24 hours. Exclude routine chatter and do not invent tasks. Return at most 30 signals.
+  const output = await run(`Use the authenticated Slack connector to find Jeffrey's recent Slack context that may require work or change task priority. Search the last 24 hours.
+
+Rank these highest:
+1. A teammate directly asking Jeffrey to review code, a pull request, or a concrete implementation change.
+2. A request, decision, blocker, incident, or follow-up involving the Connectors team or connectors product work.
+
+Also include other concrete, actionable requests directed to Jeffrey. Exclude routine chatter, generic mentions, FYIs, and broad announcements without an action. Prefer the original request or thread permalink and include who asked and the concrete requested action in the summary. Do not invent tasks. Return at most 20 signals.
 
 Return exactly one block and no other text:
 <slack-result>{"signals":[{"title":"concise signal title","summary":"standalone context including relevant authors and thread details","url":"Slack permalink or null","occurredAt":"ISO timestamp or null"}]}</slack-result>`);

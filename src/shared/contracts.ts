@@ -89,6 +89,7 @@ export interface DiscoveryCandidate {
   updatedAt: string;
   snoozedUntil: string | null;
   workItemId: string | null;
+  relevance: number;
 }
 export interface DiscoveryRun {
   id: string;

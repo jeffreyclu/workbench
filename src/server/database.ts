@@ -175,6 +175,7 @@ const migrations = [
       snoozed_until TEXT,
       work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
       run_id TEXT REFERENCES discovery_runs(id) ON DELETE SET NULL
+      ,relevance INTEGER NOT NULL DEFAULT 1
     );
 
     CREATE INDEX IF NOT EXISTS idx_discovery_inbox
@@ -254,6 +255,8 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
   if (!runColumns.some((column) => column.name === 'execution_profile')) database.exec('ALTER TABLE agent_runs ADD COLUMN execution_profile TEXT;');
   const artifactColumns = database.prepare('PRAGMA table_info(published_artifacts)').all() as Array<{ name: string }>;
   if (!artifactColumns.some((column) => column.name === 'content_hash')) database.exec('ALTER TABLE published_artifacts ADD COLUMN content_hash TEXT;');
+  const discoveryColumns = database.prepare('PRAGMA table_info(discovery_candidates)').all() as Array<{ name: string }>;
+  if (!discoveryColumns.some((column) => column.name === 'relevance')) database.exec('ALTER TABLE discovery_candidates ADD COLUMN relevance INTEGER NOT NULL DEFAULT 1;');
   return database;
 }
 

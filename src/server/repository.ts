@@ -85,7 +85,7 @@ export class WorkItemRepository {
   getDiscoveryInbox(): DiscoveryInbox {
     const now = new Date().toISOString();
     this.database.prepare("UPDATE discovery_candidates SET status = 'pending', snoozed_until = NULL, updated_at = ? WHERE status = 'snoozed' AND snoozed_until <= ?").run(now, now);
-    const candidates = (this.database.prepare("SELECT * FROM discovery_candidates WHERE status = 'pending' ORDER BY COALESCE(occurred_at, discovered_at) DESC, updated_at DESC").all() as Array<Record<string, string | null>>).map((row) => this.mapDiscoveryCandidate(row));
+    const candidates = (this.database.prepare("SELECT * FROM discovery_candidates WHERE status = 'pending' ORDER BY relevance DESC, COALESCE(occurred_at, discovered_at) DESC, updated_at DESC").all() as Array<Record<string, string | number | null>>).map((row) => this.mapDiscoveryCandidate(row));
     const run = this.database.prepare('SELECT * FROM discovery_runs ORDER BY started_at DESC LIMIT 1').get() as Record<string, string | number | null> | undefined;
     return { candidates, pendingCount: candidates.length, lastRun: run ? this.mapDiscoveryRun(run) : null, running: run?.status === 'running' };
   }
@@ -103,16 +103,16 @@ export class WorkItemRepository {
       .run(failed ? 'failed' : 'completed', new Date().toISOString(), candidateCount, JSON.stringify(errors), id);
   }
 
-  upsertDiscoveryCandidate(input: { fingerprint: string; provider: string; title: string; description: string; sourceUrl: string | null; occurredAt: string | null; runId: string }): boolean {
+  upsertDiscoveryCandidate(input: { fingerprint: string; provider: string; title: string; description: string; sourceUrl: string | null; occurredAt: string | null; runId: string; relevance?: number }): boolean {
     const now = new Date().toISOString();
     const existing = this.database.prepare('SELECT status FROM discovery_candidates WHERE fingerprint = ?').get(input.fingerprint) as { status: DiscoveryCandidateStatus } | undefined;
     if (existing) {
-      this.database.prepare(`UPDATE discovery_candidates SET title = ?, description = ?, source_url = ?, occurred_at = ?, updated_at = ?, run_id = ? WHERE fingerprint = ?`)
-        .run(input.title, input.description, input.sourceUrl, input.occurredAt, now, input.runId, input.fingerprint);
+      this.database.prepare(`UPDATE discovery_candidates SET title = ?, description = ?, source_url = ?, occurred_at = ?, updated_at = ?, run_id = ?, relevance = ? WHERE fingerprint = ?`)
+        .run(input.title, input.description, input.sourceUrl, input.occurredAt, now, input.runId, input.relevance ?? 1, input.fingerprint);
       return false;
     }
-    this.database.prepare(`INSERT INTO discovery_candidates (id, fingerprint, provider, title, description, source_url, occurred_at, status, discovered_at, updated_at, run_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`).run(randomUUID(), input.fingerprint, input.provider, input.title, input.description, input.sourceUrl, input.occurredAt, now, now, input.runId);
+    this.database.prepare(`INSERT INTO discovery_candidates (id, fingerprint, provider, title, description, source_url, occurred_at, status, discovered_at, updated_at, run_id, relevance)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`).run(randomUUID(), input.fingerprint, input.provider, input.title, input.description, input.sourceUrl, input.occurredAt, now, now, input.runId, input.relevance ?? 1);
     return true;
   }
 
@@ -156,9 +156,9 @@ export class WorkItemRepository {
     return resolved;
   }
 
-  private mapDiscoveryCandidate(row: Record<string, string | null>): DiscoveryCandidate {
-    return { id: row.id!, provider: row.provider!, title: row.title!, description: row.description ?? '', sourceUrl: row.source_url, occurredAt: row.occurred_at,
-      status: row.status as DiscoveryCandidateStatus, discoveredAt: row.discovered_at!, updatedAt: row.updated_at!, snoozedUntil: row.snoozed_until, workItemId: row.work_item_id };
+  private mapDiscoveryCandidate(row: Record<string, string | number | null>): DiscoveryCandidate {
+    return { id: String(row.id), provider: String(row.provider), title: String(row.title), description: String(row.description ?? ''), sourceUrl: row.source_url ? String(row.source_url) : null, occurredAt: row.occurred_at ? String(row.occurred_at) : null,
+      status: row.status as DiscoveryCandidateStatus, discoveredAt: String(row.discovered_at), updatedAt: String(row.updated_at), snoozedUntil: row.snoozed_until ? String(row.snoozed_until) : null, workItemId: row.work_item_id ? String(row.work_item_id) : null, relevance: Number(row.relevance ?? 1) };
   }
 
   private mapDiscoveryRun(row: Record<string, string | number | null>): DiscoveryRun {
