@@ -296,5 +296,9 @@ describe('WorkItemRepository', () => {
     expect(repository.listActivity(target.id).some((entry) => entry.body.includes('Second signal'))).toBe(true);
     expect(repository.resolveDiscoveryCandidates([first.id, third.id], 'dismiss').map((candidate) => candidate.status)).toEqual(['dismissed', 'dismissed']);
     expect(repository.getDiscoveryInbox().pendingCount).toBe(0);
+    expect(repository.getDiscoveryInbox('reviewed').reviewedCount).toBe(3);
+    expect(repository.restoreDiscoveryCandidate(first.id)).toEqual(expect.objectContaining({ status: 'pending' }));
+    expect(repository.getDiscoveryInbox().candidates.map((candidate) => candidate.id)).toContain(first.id);
+    expect(repository.restoreDiscoveryCandidate(second.id)).toBeNull();
   });
 });

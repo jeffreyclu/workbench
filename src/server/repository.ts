@@ -84,12 +84,14 @@ export interface ProviderWorkItem {
 export class WorkItemRepository {
   constructor(private readonly database: WorkbenchDatabase) {}
 
-  getDiscoveryInbox(): DiscoveryInbox {
+  getDiscoveryInbox(view: 'pending' | 'reviewed' = 'pending'): DiscoveryInbox {
     const now = new Date().toISOString();
     this.database.prepare("UPDATE discovery_candidates SET status = 'pending', snoozed_until = NULL, updated_at = ? WHERE status = 'snoozed' AND snoozed_until <= ?").run(now, now);
-    const candidates = (this.database.prepare("SELECT * FROM discovery_candidates WHERE status = 'pending' ORDER BY relevance DESC, COALESCE(occurred_at, discovered_at) DESC, updated_at DESC").all() as Array<Record<string, string | number | null>>).map((row) => this.mapDiscoveryCandidate(row));
+    const where = view === 'pending' ? "status = 'pending'" : "status IN ('converted', 'merged', 'dismissed', 'snoozed')";
+    const candidates = (this.database.prepare(`SELECT * FROM discovery_candidates WHERE ${where} ORDER BY ${view === 'pending' ? 'relevance DESC, COALESCE(occurred_at, discovered_at) DESC' : 'updated_at DESC'}`).all() as Array<Record<string, string | number | null>>).map((row) => this.mapDiscoveryCandidate(row));
+    const counts = this.database.prepare(`SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) pending, SUM(CASE WHEN status IN ('converted', 'merged', 'dismissed', 'snoozed') THEN 1 ELSE 0 END) reviewed FROM discovery_candidates`).get() as { pending: number | null; reviewed: number | null };
     const run = this.database.prepare('SELECT * FROM discovery_runs ORDER BY started_at DESC LIMIT 1').get() as Record<string, string | number | null> | undefined;
-    return { candidates, pendingCount: candidates.length, lastRun: run ? this.mapDiscoveryRun(run) : null, running: run?.status === 'running' };
+    return { candidates, pendingCount: Number(counts.pending ?? 0), reviewedCount: Number(counts.reviewed ?? 0), lastRun: run ? this.mapDiscoveryRun(run) : null, running: run?.status === 'running' };
   }
 
   startDiscoveryRun(): DiscoveryRun {
@@ -156,6 +158,13 @@ export class WorkItemRepository {
       if (candidate) resolved.push(candidate);
     }
     return resolved;
+  }
+
+  restoreDiscoveryCandidate(id: string): DiscoveryCandidate | null {
+    const now = new Date().toISOString();
+    const changed = this.database.prepare("UPDATE discovery_candidates SET status = 'pending', snoozed_until = NULL, updated_at = ? WHERE id = ? AND status IN ('dismissed', 'snoozed')").run(now, id).changes;
+    if (!changed) return null;
+    return this.mapDiscoveryCandidate(this.database.prepare('SELECT * FROM discovery_candidates WHERE id = ?').get(id) as Record<string, string | number | null>);
   }
 
   private mapDiscoveryCandidate(row: Record<string, string | number | null>): DiscoveryCandidate {

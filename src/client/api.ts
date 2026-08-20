@@ -33,12 +33,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  getDiscoveryInbox: () => request<DiscoveryInbox>('/api/discovery'),
+  getDiscoveryInbox: (view: 'pending' | 'reviewed' = 'pending') => request<DiscoveryInbox>(`/api/discovery?view=${view}`),
   scanDiscovery: () => request<{ started: boolean }>('/api/discovery/scan', { method: 'POST' }),
   resolveDiscovery: (id: string, action: 'convert' | 'dismiss' | 'snooze' | 'merge', workItemId?: string) =>
     request(`/api/discovery/${id}/${action}`, { method: 'POST', body: JSON.stringify({ workItemId }) }),
   updateDiscovery: (id: string, input: { title?: string; description?: string }) => request(`/api/discovery/${id}`, { method: 'PATCH', body: JSON.stringify(input) }),
   bulkResolveDiscovery: (ids: string[], action: 'convert' | 'dismiss' | 'snooze') => request('/api/discovery/bulk', { method: 'POST', body: JSON.stringify({ ids, action }) }),
+  restoreDiscovery: (id: string) => request(`/api/discovery/${id}/restore`, { method: 'POST' }),
   publishArtifact: (input: { path: string; title?: string; conversationId?: string; workItemId?: string }) =>
     request<{ artifact: PublishedArtifact }>('/api/artifacts/publish', { method: 'POST', body: JSON.stringify(input) }),
   revokeArtifact: (id: string) => request<void>(`/api/artifacts/${id}`, { method: 'DELETE' }),

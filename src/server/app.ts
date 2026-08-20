@@ -45,12 +45,21 @@ export function createApp(database: WorkbenchDatabase) {
     response.json({ ok: true });
   });
 
-  app.get('/api/discovery', (_request, response) => response.json(repository.getDiscoveryInbox()));
+  app.get('/api/discovery', (request, response) => {
+    const view = z.enum(['pending', 'reviewed']).catch('pending').parse(request.query.view);
+    response.json(repository.getDiscoveryInbox(view));
+  });
 
   app.post('/api/discovery/scan', (_request, response) => {
     const inbox = repository.getDiscoveryInbox();
     if (!inbox.running) void runDiscovery(repository).catch((error) => console.error('Discovery scan failed:', error));
     response.status(202).json({ started: !inbox.running });
+  });
+
+  app.post('/api/discovery/:id/restore', (request, response) => {
+    const candidate = repository.restoreDiscoveryCandidate(request.params.id);
+    if (!candidate) return response.status(409).json({ error: 'Only dismissed or snoozed discoveries can be restored.' });
+    response.json({ candidate });
   });
 
   app.post('/api/discovery/:id/:action', (request, response) => {

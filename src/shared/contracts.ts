@@ -103,6 +103,7 @@ export interface DiscoveryRun {
 export interface DiscoveryInbox {
   candidates: DiscoveryCandidate[];
   pendingCount: number;
+  reviewedCount: number;
   lastRun: DiscoveryRun | null;
   running: boolean;
 }
