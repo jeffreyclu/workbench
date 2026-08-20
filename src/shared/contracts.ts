@@ -28,6 +28,7 @@ export const workItemSchema = z.object({
   agentOutcome: z.enum(['finished', 'follow_ups', 'needs_attention']).nullable(),
   sourceIdentifier: z.string().nullable(),
   sourceUrl: z.string().nullable(),
+  sourceTags: z.array(z.string()),
   projectName: z.string().nullable(),
   workspacePath: z.string().nullable(),
   strategy: z.string(),

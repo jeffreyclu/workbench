@@ -82,7 +82,7 @@ function SortableQueueItem({ item, index, selected, draggable, onSelect }: { ite
     {draggable ? <button className="drag-handle" onClick={(event) => event.stopPropagation()} aria-label={`Reorder ${item.title}`} {...attributes} {...listeners}><GripVertical size={15} /></button> : <span className="rank">{String(index + 1).padStart(2, '0')}</span>}
     <span className="item-copy">
       <strong>{item.title}</strong>
-      <span className="item-meta"><span>{item.sourceIdentifier ?? 'Manual'} · {item.projectName ?? 'Personal'}</span></span>
+      <span className="item-meta"><span>{item.sourceIdentifier ? `${item.sourceIdentifier} · ` : ''}{item.projectName ?? 'Personal'}</span><span className="source-tags">{item.sourceTags.map((source) => <span key={source} className={`source-tag source-${source.toLowerCase()}`}>{source}</span>)}</span></span>
       {isHumanOnly && <span className="human-only-marker"><User size={11} /> Your task</span>}
       {item.agentOutcome && <span className={`agent-outcome agent-outcome-${item.agentOutcome}`}>
         {item.agentOutcome === 'needs_attention' ? <AlertTriangle size={11} /> : item.agentOutcome === 'follow_ups' ? <Sparkles size={11} /> : <Check size={11} />}

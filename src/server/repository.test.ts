@@ -313,6 +313,7 @@ describe('WorkItemRepository', () => {
     expect(repository.updateDiscoveryCandidate(first.id, { title: 'Edited signal', description: 'Useful context' })).toEqual(expect.objectContaining({ title: 'Edited signal', description: 'Useful context' }));
     expect(repository.resolveDiscoveryCandidate(second.id, 'merge', target.id)).toEqual(expect.objectContaining({ status: 'merged', workItemId: target.id }));
     expect(repository.listActivity(target.id).some((entry) => entry.body.includes('Second signal'))).toBe(true);
+    expect(repository.get(target.id)?.sourceTags).toEqual(['Linear']);
     expect(repository.resolveDiscoveryCandidates([first.id, third.id], 'dismiss').map((candidate) => candidate.status)).toEqual(['dismissed', 'dismissed']);
     expect(repository.getDiscoveryInbox().pendingCount).toBe(0);
     expect(repository.getDiscoveryInbox('reviewed').reviewedCount).toBe(3);

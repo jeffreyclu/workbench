@@ -38,6 +38,19 @@ interface ActivityRow {
 }
 
 function mapWorkItem(row: WorkItemRow): WorkItem {
+  const sourceTags = new Set<string>();
+  if (row.source === 'linear') sourceTags.add('Linear');
+  if (row.source_url) {
+    try {
+      const host = new URL(row.source_url).hostname.toLowerCase();
+      if (host.includes('slack.com')) sourceTags.add('Slack');
+      else if (host.includes('github.com')) sourceTags.add('GitHub');
+      else if (host.includes('atlassian.net') || host.includes('confluence')) sourceTags.add('Atlassian');
+      else if (host.includes('figma.com')) sourceTags.add('Figma');
+      else if (host.includes('claude.ai')) sourceTags.add('Claude');
+    } catch { /* Preserve legacy URLs without inventing a source. */ }
+  }
+  if (!sourceTags.size && row.source === 'manual') sourceTags.add('Manual');
   return {
     id: row.id,
     title: row.title,
@@ -54,6 +67,7 @@ function mapWorkItem(row: WorkItemRow): WorkItem {
     agentOutcome: null,
     sourceIdentifier: row.source_identifier,
     sourceUrl: row.source_url,
+    sourceTags: [...sourceTags],
     projectName: row.project_name,
     workspacePath: row.workspace_path,
     strategy: row.strategy,
@@ -444,6 +458,9 @@ export class WorkItemRepository {
   }
 
   private withAgentOutcome(item: WorkItem): WorkItem {
+    const discoveredProviders = this.database.prepare("SELECT DISTINCT provider FROM discovery_candidates WHERE work_item_id = ? AND status IN ('converted', 'merged') ORDER BY provider").all(item.id) as Array<{ provider: string }>;
+    const normalizedProviders = discoveredProviders.map(({ provider }) => provider === 'github' ? 'GitHub' : provider === 'confluence' ? 'Atlassian' : provider.charAt(0).toUpperCase() + provider.slice(1));
+    item = { ...item, sourceTags: [...new Set([...item.sourceTags.filter((tag) => tag !== 'Manual' || normalizedProviders.length === 0), ...normalizedProviders])] };
     const latest = this.database.prepare(`SELECT created_at FROM agent_runs WHERE work_item_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`)
       .get(item.id) as { created_at: string } | undefined;
     if (!latest) return item;

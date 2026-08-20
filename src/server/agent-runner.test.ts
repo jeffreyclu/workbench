@@ -6,7 +6,7 @@ import { buildPrompt, classifyExecution, isAgentCapacityError, readableAgentEven
 
 const item = (title: string, description = ''): WorkItem => ({
   id: 'item', title, description, status: 'ready', priority: 2, queuePosition: 1,
-  source: 'manual', isQueued: true, sourceIdentifier: null, sourceUrl: null,
+  source: 'manual', isQueued: true, sourceIdentifier: null, sourceUrl: null, sourceTags: ['Manual'],
   archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete', agentOutcome: null,
   projectName: null, workspacePath: null, strategy: '', assignees: [], labels: [],
   dueDate: null, providerUpdatedAt: null, createdAt: '', updatedAt: '', lastTouchedAt: '',
