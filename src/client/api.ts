@@ -37,6 +37,8 @@ export const api = {
   scanDiscovery: () => request<{ started: boolean }>('/api/discovery/scan', { method: 'POST' }),
   resolveDiscovery: (id: string, action: 'convert' | 'dismiss' | 'snooze' | 'merge', workItemId?: string) =>
     request(`/api/discovery/${id}/${action}`, { method: 'POST', body: JSON.stringify({ workItemId }) }),
+  updateDiscovery: (id: string, input: { title?: string; description?: string }) => request(`/api/discovery/${id}`, { method: 'PATCH', body: JSON.stringify(input) }),
+  bulkResolveDiscovery: (ids: string[], action: 'convert' | 'dismiss' | 'snooze') => request('/api/discovery/bulk', { method: 'POST', body: JSON.stringify({ ids, action }) }),
   publishArtifact: (input: { path: string; title?: string; conversationId?: string; workItemId?: string }) =>
     request<{ artifact: PublishedArtifact }>('/api/artifacts/publish', { method: 'POST', body: JSON.stringify(input) }),
   revokeArtifact: (id: string) => request<void>(`/api/artifacts/${id}`, { method: 'DELETE' }),

@@ -267,4 +267,21 @@ describe('WorkItemRepository', () => {
     expect(resolved.status).toBe('converted');
     expect(repository.list()).toEqual([expect.objectContaining({ title: 'Review updated proposal', sourceUrl: 'https://writer.slack.com/a' })]);
   });
+
+  it('edits, merges, and bulk resolves pending discoveries', () => {
+    const target = repository.create({ title: 'Existing task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const run = repository.startDiscoveryRun();
+    for (const [fingerprint, title] of [['one', 'First signal'], ['two', 'Second signal'], ['three', 'Third signal']]) {
+      repository.upsertDiscoveryCandidate({ fingerprint, provider: 'linear', title, description: '', sourceUrl: `https://linear.app/${fingerprint}`, occurredAt: null, runId: run.id });
+    }
+    const candidates = repository.getDiscoveryInbox().candidates;
+    const first = candidates.find((candidate) => candidate.title === 'First signal')!;
+    const second = candidates.find((candidate) => candidate.title === 'Second signal')!;
+    const third = candidates.find((candidate) => candidate.title === 'Third signal')!;
+    expect(repository.updateDiscoveryCandidate(first.id, { title: 'Edited signal', description: 'Useful context' })).toEqual(expect.objectContaining({ title: 'Edited signal', description: 'Useful context' }));
+    expect(repository.resolveDiscoveryCandidate(second.id, 'merge', target.id)).toEqual(expect.objectContaining({ status: 'merged', workItemId: target.id }));
+    expect(repository.listActivity(target.id).some((entry) => entry.body.includes('Second signal'))).toBe(true);
+    expect(repository.resolveDiscoveryCandidates([first.id, third.id], 'dismiss').map((candidate) => candidate.status)).toEqual(['dismissed', 'dismissed']);
+    expect(repository.getDiscoveryInbox().pendingCount).toBe(0);
+  });
 });

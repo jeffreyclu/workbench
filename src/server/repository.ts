@@ -136,6 +136,26 @@ export class WorkItemRepository {
     return this.mapDiscoveryCandidate(this.database.prepare('SELECT * FROM discovery_candidates WHERE id = ?').get(id) as Record<string, string | null>);
   }
 
+  updateDiscoveryCandidate(id: string, changes: { title?: string; description?: string }): DiscoveryCandidate | null {
+    const entries = Object.entries(changes).filter((entry): entry is [string, string] => entry[1] !== undefined);
+    if (!entries.length) return null;
+    const columns: Record<string, string> = { title: 'title', description: 'description' };
+    const now = new Date().toISOString();
+    const changed = this.database.prepare(`UPDATE discovery_candidates SET ${entries.map(([key]) => `${columns[key]} = ?`).join(', ')}, updated_at = ? WHERE id = ? AND status = 'pending'`)
+      .run(...entries.map(([, value]) => value), now, id).changes;
+    if (!changed) return null;
+    return this.mapDiscoveryCandidate(this.database.prepare('SELECT * FROM discovery_candidates WHERE id = ?').get(id) as Record<string, string | null>);
+  }
+
+  resolveDiscoveryCandidates(ids: string[], action: 'convert' | 'dismiss' | 'snooze'): DiscoveryCandidate[] {
+    const resolved: DiscoveryCandidate[] = [];
+    for (const id of ids) {
+      const candidate = this.resolveDiscoveryCandidate(id, action);
+      if (candidate) resolved.push(candidate);
+    }
+    return resolved;
+  }
+
   private mapDiscoveryCandidate(row: Record<string, string | null>): DiscoveryCandidate {
     return { id: row.id!, provider: row.provider!, title: row.title!, description: row.description ?? '', sourceUrl: row.source_url, occurredAt: row.occurred_at,
       status: row.status as DiscoveryCandidateStatus, discoveredAt: row.discovered_at!, updatedAt: row.updated_at!, snoozedUntil: row.snoozed_until, workItemId: row.work_item_id };

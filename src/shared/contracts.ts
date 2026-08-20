@@ -104,6 +104,15 @@ export interface DiscoveryInbox {
   lastRun: DiscoveryRun | null;
   running: boolean;
 }
+export const updateDiscoveryCandidateSchema = z.object({
+  title: z.string().trim().min(1).max(300).optional(),
+  description: z.string().max(20_000).optional(),
+});
+export const resolveDiscoveryCandidateSchema = z.object({ workItemId: z.string().uuid().optional() });
+export const bulkDiscoveryActionSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(200),
+  action: z.enum(['convert', 'dismiss', 'snooze']),
+});
 export type BrokerSourceId = 'slack' | 'figma' | 'linear' | 'atlassian' | 'github' | 'google';
 export type BrokerConnectionState = 'connected' | 'needs_auth' | 'disabled' | 'error';
 export interface BrokerConnection {

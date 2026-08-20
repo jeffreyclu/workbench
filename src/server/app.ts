@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
 import {
   createActivitySchema,
+  bulkDiscoveryActionSchema,
   createAgentRunSchema,
   createWorkItemSchema,
   generateTaskDraftSchema,
@@ -16,6 +17,8 @@ import {
   searchSourcesSchema,
   sourceProviderSchema,
   updateSharedMessageSchema,
+  updateDiscoveryCandidateSchema,
+  resolveDiscoveryCandidateSchema,
   updateWorkItemSchema,
 } from '../shared/contracts.js';
 import { z } from 'zod';
@@ -52,10 +55,21 @@ export function createApp(database: WorkbenchDatabase) {
 
   app.post('/api/discovery/:id/:action', (request, response) => {
     const action = z.enum(['convert', 'dismiss', 'snooze', 'merge']).parse(request.params.action);
-    const body = z.object({ workItemId: z.string().uuid().optional() }).parse(request.body ?? {});
+    const body = resolveDiscoveryCandidateSchema.parse(request.body ?? {});
     const candidate = repository.resolveDiscoveryCandidate(request.params.id, action, body.workItemId);
     if (!candidate) return response.status(404).json({ error: 'Discovery candidate not found.' });
     response.json({ candidate, item: candidate.workItemId ? repository.get(candidate.workItemId) : null });
+  });
+
+  app.patch('/api/discovery/:id', (request, response) => {
+    const candidate = repository.updateDiscoveryCandidate(request.params.id, updateDiscoveryCandidateSchema.parse(request.body));
+    if (!candidate) return response.status(404).json({ error: 'Pending discovery candidate not found.' });
+    response.json({ candidate });
+  });
+
+  app.post('/api/discovery/bulk', (request, response) => {
+    const input = bulkDiscoveryActionSchema.parse(request.body);
+    response.json({ candidates: repository.resolveDiscoveryCandidates(input.ids, input.action) });
   });
 
   setTimeout(() => {
