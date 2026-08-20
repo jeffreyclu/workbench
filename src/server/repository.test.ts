@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { dispatchNextSharedTurn } from './shared-room.js';
+import { cancelSharedReply, dispatchNextSharedTurn } from './shared-room.js';
 
 describe('WorkItemRepository', () => {
   let database: WorkbenchDatabase;
@@ -236,7 +236,7 @@ describe('WorkItemRepository', () => {
     expect(repository.nextQueuedSharedTurn(conversation.id)).toBeNull();
   });
 
-  it('does not dispatch or cancel a queued turn while a reply is active', () => {
+  it('does not dispatch or cancel a queued turn while the same agent is active', () => {
     const conversation = repository.createConversation('Busy thread');
     const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);
     const queued = repository.createSharedMessage('jeffrey', 'Do this afterward', 'queued', conversation.id, [], 'codex');
@@ -246,6 +246,37 @@ describe('WorkItemRepository', () => {
       expect.objectContaining({ id: running.id, status: 'running' }),
       expect.objectContaining({ id: queued.id, status: 'queued' }),
     ]));
+  });
+
+  it('makes a turn addressed to a different agent eligible while another agent is busy', () => {
+    const conversation = repository.createConversation('Busy thread, different target');
+    repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);
+    const queued = repository.createSharedMessage('jeffrey', 'Claude, take this', 'queued', conversation.id, [], 'claude');
+
+    expect(repository.nextQueuedSharedTurn(conversation.id, new Set(['codex']))).toEqual({ message: queued, dispatchTarget: 'claude' });
+    expect(repository.nextQueuedSharedTurn(conversation.id, new Set(['codex', 'claude']))).toBeNull();
+  });
+
+  it('promotes a queued turn ahead of earlier-queued turns in the same conversation', () => {
+    const conversation = repository.createConversation('Queue jump');
+    repository.createSharedMessage('jeffrey', 'First in line', 'queued', conversation.id, [], 'claude');
+    const second = repository.createSharedMessage('jeffrey', 'Second in line', 'queued', conversation.id, [], 'claude');
+    expect(repository.promoteQueuedSharedMessage(second.id)).toEqual(expect.objectContaining({ id: second.id }));
+    expect(repository.nextQueuedSharedTurn(conversation.id)).toEqual(expect.objectContaining({ message: expect.objectContaining({ id: second.id }) }));
+  });
+
+  it('does not promote a message that is not queued', () => {
+    const conversation = repository.createConversation('Not queued');
+    const completed = repository.createSharedMessage('jeffrey', 'Already answered', 'completed', conversation.id);
+    expect(repository.promoteQueuedSharedMessage(completed.id)).toBeNull();
+  });
+
+  it('cancels a queued message before it dispatches, without touching a running reply', () => {
+    const conversation = repository.createConversation('Cancel queued');
+    const queued = repository.createSharedMessage('jeffrey', 'Never mind', 'queued', conversation.id, [], 'claude');
+    const canceled = cancelSharedReply(repository, queued.id);
+    expect(canceled).toEqual(expect.objectContaining({ id: queued.id, status: 'canceled' }));
+    expect(repository.nextQueuedSharedTurn(conversation.id)).toBeNull();
   });
 
   it('paginates conversations in stable updated order', () => {

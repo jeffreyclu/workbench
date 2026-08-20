@@ -334,6 +334,7 @@ export class WorkItemRepository {
       createdAt: String(row.created_at), attachments: JSON.parse(String(row.attachments_json ?? '[]')) as SharedAttachment[],
       model: row.model ? String(row.model) : null,
       executionProfile: row.execution_profile as SharedMessage['executionProfile'] ?? null,
+      dispatchTarget: row.dispatch_target as SharedMessage['dispatchTarget'] ?? 'none',
     }));
   }
 
@@ -341,7 +342,7 @@ export class WorkItemRepository {
     const conversation = conversationId ? this.listConversations('all').find((item) => item.id === conversationId) : this.ensureDefaultConversation();
     if (!conversation) throw new Error('Conversation not found.');
     const message: SharedMessage = {
-      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), attachments, model: null, executionProfile: null,
+      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), attachments, model: null, executionProfile: null, dispatchTarget: dispatchTarget as SharedMessage['dispatchTarget'],
     };
     this.database.prepare(`
       INSERT INTO shared_messages (id, conversation_id, author, body, pinned, status, error, attachments_json, dispatch_target, created_at)
@@ -352,13 +353,33 @@ export class WorkItemRepository {
     return message;
   }
 
-  nextQueuedSharedTurn(conversationId: string): { message: SharedMessage; dispatchTarget: 'auto' | 'codex' | 'claude' | 'both' } | null {
-    const row = this.database.prepare(`SELECT id, dispatch_target FROM shared_messages
+  nextQueuedSharedTurn(conversationId: string, busyAgents: ReadonlySet<AgentRun['agent']> = new Set()): { message: SharedMessage; dispatchTarget: 'auto' | 'codex' | 'claude' | 'both' } | null {
+    const rows = this.database.prepare(`SELECT id, dispatch_target FROM shared_messages
       WHERE conversation_id = ? AND author = 'jeffrey' AND status = 'queued'
-      ORDER BY created_at ASC, rowid ASC LIMIT 1`).get(conversationId) as { id: string; dispatch_target: string } | undefined;
-    if (!row || !['auto', 'codex', 'claude', 'both'].includes(row.dispatch_target)) return null;
-    const message = this.listSharedMessages(1_000, conversationId).find((entry) => entry.id === row.id);
-    return message ? { message, dispatchTarget: row.dispatch_target as 'auto' | 'codex' | 'claude' | 'both' } : null;
+      ORDER BY created_at ASC, rowid ASC`).all(conversationId) as Array<{ id: string; dispatch_target: string }>;
+    const messages = this.listSharedMessages(1_000, conversationId);
+    for (const row of rows) {
+      if (!['auto', 'codex', 'claude', 'both'].includes(row.dispatch_target)) continue;
+      const dispatchTarget = row.dispatch_target as 'auto' | 'codex' | 'claude' | 'both';
+      const agents = dispatchTarget === 'both' ? ['codex', 'claude'] as const
+        : dispatchTarget === 'auto' ? [this.selectBalancedAgent('codex')] : [dispatchTarget];
+      if (agents.some((agent) => busyAgents.has(agent))) continue;
+      const message = messages.find((entry) => entry.id === row.id);
+      if (message) return { message, dispatchTarget };
+    }
+    return null;
+  }
+
+  promoteQueuedSharedMessage(id: string): SharedMessage | null {
+    const message = this.listSharedMessages(1_000).find((item) => item.id === id);
+    if (!message || message.status !== 'queued') return null;
+    const earliest = this.database.prepare(`SELECT MIN(created_at) AS value FROM shared_messages WHERE conversation_id = ? AND status = 'queued'`)
+      .get(message.conversationId) as { value: string | null };
+    const promotedAt = earliest.value && earliest.value <= message.createdAt
+      ? new Date(new Date(earliest.value).getTime() - 1).toISOString()
+      : message.createdAt;
+    this.database.prepare('UPDATE shared_messages SET created_at = ? WHERE id = ?').run(promotedAt, id);
+    return this.listSharedMessages(1_000).find((item) => item.id === id) ?? null;
   }
 
   updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; executionProfile?: SharedMessage['executionProfile'] }): SharedMessage | null {

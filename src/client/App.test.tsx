@@ -85,6 +85,21 @@ describe('shared room', () => {
     fireEvent.keyDown(composer, { key: 'Enter', code: 'Enter' });
     await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1));
   });
+
+  it('shows the selected recipient on Jeffrey messages', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000001';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const body = String(input).includes('/api/shared/conversations')
+        ? { conversations: [{ id: conversationId, title: 'Workbench', workItemId: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }] }
+        : { messages: [{ id: 'message-1', conversationId, author: 'jeffrey', body: 'Please review this.', pinned: false, status: 'completed', error: '', createdAt: '2026-01-01T00:00:00Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'both' }] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    expect(await screen.findByText('To Codex + Claude')).toBeTruthy();
+  });
 });
 
 describe('agent activity stream', () => {

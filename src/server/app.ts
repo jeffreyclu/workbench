@@ -26,13 +26,14 @@ import type { WorkbenchDatabase } from './database.js';
 import { LinearProvider } from './providers/linear.js';
 import { WorkItemRepository } from './repository.js';
 import { cancelAgentRun, classifyExecution, executeAgentRun, isAgentRunActive, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback } from './agent-runner.js';
-import { cancelSharedReply, dispatchNextSharedTurn, isSharedReplyActive, runSharedBackgroundJob } from './shared-room.js';
+import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, isSharedReplyActive, runSharedBackgroundJob } from './shared-room.js';
 import { createAuthGate } from './auth.js';
 import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMessage } from './slack-notify.js';
 import { finishRemoteMcpOAuth, startRemoteMcpOAuth } from './remote-mcp.js';
 import { listBrokerConnections, resolveBrokerUrl, searchBrokerSources } from './connection-broker.js';
 import { artifactContentHash, CloudflarePagesPublisher, createArtifactId } from './artifact-publisher.js';
 import { runDiscovery, shouldRunDiscoveryCatchUp } from './discovery.js';
+import { isRuntimeApproval, promoteRuntime } from './runtime-promotion.js';
 
 export function createApp(database: WorkbenchDatabase) {
   const app = express();
@@ -266,6 +267,13 @@ export function createApp(database: WorkbenchDatabase) {
       writeFileSync(path, Buffer.from(attachment.dataBase64, 'base64'));
       return { name: attachment.name, path, mimeType: attachment.mimeType, size: attachment.size };
     });
+    if (isRuntimeApproval(input.body)) {
+      const message = repository.createSharedMessage('jeffrey', input.body, 'completed', input.conversationId, attachments, 'none');
+      const reply = repository.createSharedMessage('system', 'Approval received. Preparing the Workbench preview for promotion…', 'running', input.conversationId);
+      void runSharedBackgroundJob(repository, reply.id, (signal, onProgress) => promoteRuntime(database, signal, onProgress));
+      response.status(202).json({ message, replies: [reply] });
+      return;
+    }
     const agents = input.dispatchTo === 'both' ? ['codex', 'claude'] as const
       : input.dispatchTo === 'none' ? [] : [input.dispatchTo];
     const message = repository.createSharedMessage('jeffrey', input.body, agents.length ? 'queued' : 'completed', input.conversationId, attachments, input.dispatchTo);
@@ -282,8 +290,14 @@ export function createApp(database: WorkbenchDatabase) {
 
   app.post('/api/shared/messages/:id/cancel', (request, response) => {
     const message = cancelSharedReply(repository, request.params.id);
-    if (!message) return response.status(404).json({ error: 'Running response not found.' });
+    if (!message) return response.status(404).json({ error: 'Running or queued message not found.' });
     response.json({ message });
+  });
+
+  app.post('/api/shared/messages/:id/interject', (request, response) => {
+    const replies = interjectQueuedSharedMessage(repository, request.params.id);
+    if (!replies) return response.status(404).json({ error: 'Queued message not found.' });
+    response.json({ replies });
   });
 
   app.post('/api/shared/messages/:id/create-tasks', (request, response) => {
@@ -602,7 +616,7 @@ export function createApp(database: WorkbenchDatabase) {
     response.json({ config: repository.setLinearConfig(config) });
   });
 
-  const clientPath = resolve('dist/client');
+  const clientPath = resolve(process.env.WORKBENCH_CLIENT_PATH ?? 'dist/client');
   if (existsSync(clientPath)) {
     app.use(express.static(clientPath));
     app.get('*splat', (_request, response) => response.sendFile(resolve(clientPath, 'index.html')));

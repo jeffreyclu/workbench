@@ -301,6 +301,7 @@ export interface SharedMessage {
   attachments: SharedAttachment[];
   model: string | null;
   executionProfile: 'routing' | 'economy' | 'standard' | 'deep' | null;
+  dispatchTarget: 'auto' | 'both' | 'codex' | 'claude' | 'none';
 }
 
 export interface SharedAttachment { name: string; path: string; mimeType: string; size: number; }

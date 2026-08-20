@@ -455,6 +455,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
     mutationFn: api.cancelSharedReply,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] }),
   });
+  const interjectMessage = useMutation({
+    mutationFn: api.interjectSharedMessage,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] }),
+  });
   const updateConversationOwner = useMutation({
     mutationFn: (target: 'both' | 'codex' | 'claude') => {
       const keepJeffrey = linkedWorkItem.data?.item.assignees.includes('jeffrey') ? ['jeffrey' as const] : [];
@@ -526,11 +530,18 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
           {messages.data?.messages.map((message) => (
             <article className={`shared-message shared-${message.author}`} key={message.id}>
               <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
+                {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
                 {message.model && <span className="model-badge">{message.executionProfile === 'routing' ? 'routing' : message.model}</span>}
                 {message.status === 'running' && <button onClick={() => cancelReply.mutate(message.id)} title="Cancel response"><X size={12} /></button>}
               </header>
               {message.status === 'running' && <p className="thinking"><LoaderCircle className="spin" size={13} /> Live · {message.body ? 'receiving activity' : 'starting agent'}</p>}
-              {message.status === 'queued' && <p className="queued-message"><LoaderCircle size={13} /> Queued · starts after the current agent finishes</p>}
+              {message.status === 'queued' && (
+                <div className="queued-message">
+                  <LoaderCircle size={13} /> Queued · starts after the current agent finishes
+                  <button type="button" className="queued-message-action" onClick={() => interjectMessage.mutate(message.id)} disabled={interjectMessage.isPending} title="Interrupt the current agent and send this now">Interject now</button>
+                  <button type="button" className="queued-message-action" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} title="Cancel this queued message">Cancel</button>
+                </div>
+              )}
               {message.body && (message.author === 'codex' || message.author === 'claude'
                 ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} />
                 : <p>{message.body}</p>)}
@@ -601,7 +612,13 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
   });
   const cancelRun = useMutation({
     mutationFn: api.cancelAgentRun,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
+    onSuccess: async ({ run }) => {
+      queryClient.setQueryData<WorkItemDetail>(['work-item', id], (current) => current && {
+        ...current,
+        runs: current.runs.map((currentRun) => currentRun.id === run.id ? run : currentRun),
+      });
+      await queryClient.invalidateQueries({ queryKey: ['work-items'] });
+    },
   });
   const resolveExecutionPlan = useMutation({
     mutationFn: (resolution: 'accepted' | 'rejected') => api.resolveExecutionPlan(detail.data!.executionPlan!.id, resolution, resolution === 'accepted' ? [...selectedExecutionTaskIndexes] : undefined),

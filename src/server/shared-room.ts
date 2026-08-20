@@ -27,8 +27,12 @@ export function linearContextForPrompt(repository: WorkItemRepository, message: 
 }
 
 export function dispatchNextSharedTurn(repository: WorkItemRepository, conversationId: string): SharedMessage[] {
-  if (repository.listSharedMessages(1_000, conversationId).some((message) => message.status === 'running')) return [];
-  const queued = repository.nextQueuedSharedTurn(conversationId);
+  const busyAgents = new Set(
+    repository.listSharedMessages(1_000, conversationId)
+      .filter((message) => message.status === 'running' && (message.author === 'codex' || message.author === 'claude'))
+      .map((message) => message.author as AgentRun['agent']),
+  );
+  const queued = repository.nextQueuedSharedTurn(conversationId, busyAgents);
   if (!queued) return [];
   repository.updateSharedMessage(queued.message.id, { status: 'completed' });
   const agents = queued.dispatchTarget === 'both' ? ['codex', 'claude'] as const
@@ -136,7 +140,11 @@ Respond directly to Jeffrey's latest message. Be concise and useful. Build on th
 
 export function cancelSharedReply(repository: WorkItemRepository, messageId: string) {
   const message = repository.listSharedMessages(1_000).find((item) => item.id === messageId);
-  if (!message || message.status !== 'running') return null;
+  if (!message || (message.status !== 'running' && message.status !== 'queued')) return null;
+  if (message.status === 'queued') {
+    repository.updateSharedMessage(messageId, { status: 'canceled' });
+    return { ...message, status: 'canceled' as const };
+  }
   activeReplies.get(messageId)?.abort();
   repository.updateSharedMessage(messageId, { status: 'canceled' });
   const runId = replyRunIds.get(messageId);
@@ -144,4 +152,25 @@ export function cancelSharedReply(repository: WorkItemRepository, messageId: str
   const dispatched = dispatchNextSharedTurn(repository, message.conversationId);
   if (!dispatched.length) settleLinkedTask(repository, message.conversationId, 'Agent conversation was canceled; review or redirect the task.');
   return { ...message, status: 'canceled' as const };
+}
+
+export function interjectQueuedSharedMessage(repository: WorkItemRepository, messageId: string): SharedMessage[] | null {
+  const message = repository.listSharedMessages(1_000).find((item) => item.id === messageId);
+  if (!message || message.status !== 'queued') return null;
+  const targetAgents = message.dispatchTarget === 'both' ? ['codex', 'claude'] as const
+    : message.dispatchTarget === 'auto' ? ['codex', 'claude'] as const
+    : message.dispatchTarget === 'none' ? [] : [message.dispatchTarget];
+  const running = repository.listSharedMessages(1_000, message.conversationId)
+    .filter((item) => item.status === 'running' && targetAgents.includes(item.author as AgentRun['agent']));
+  // Do not call cancelSharedReply here: it dispatches the next queued message
+  // after each cancellation, which can let an older turn win before this one
+  // is promoted. Steering must make this exact message the next dispatch.
+  for (const runningMessage of running) {
+    activeReplies.get(runningMessage.id)?.abort();
+    repository.updateSharedMessage(runningMessage.id, { status: 'canceled' });
+    const runId = replyRunIds.get(runningMessage.id);
+    if (runId) repository.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString() });
+  }
+  repository.promoteQueuedSharedMessage(messageId);
+  return dispatchNextSharedTurn(repository, message.conversationId);
 }
