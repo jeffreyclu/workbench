@@ -104,8 +104,8 @@ export const api = {
       body: JSON.stringify(config),
     }),
   listSourceConnections: () => request<{ connections: BrokerConnection[] }>('/api/source-connections'),
-  startMcpOAuth: (provider: 'confluence', serverUrl?: string) => request<{ url: string }>(`/api/source-connections/${provider}/mcp/oauth/start`, { method: 'POST', body: JSON.stringify({ serverUrl }) }),
-  disconnectSource: (provider: 'confluence' | 'github') => request<void>(`/api/source-connections/${provider}`, { method: 'DELETE' }),
+  startMcpOAuth: (provider: 'confluence' | 'slack' | 'gmail', serverUrl?: string) => request<{ url: string }>(`/api/source-connections/${provider}/mcp/oauth/start`, { method: 'POST', body: JSON.stringify({ serverUrl }) }),
+  disconnectSource: (provider: 'confluence' | 'slack' | 'gmail' | 'github') => request<void>(`/api/source-connections/${provider}`, { method: 'DELETE' }),
   listSharedConversations: (view: 'active' | 'archive', cursor?: string) => {
     const params = new URLSearchParams({ limit: '30', view });
     if (cursor) params.set('cursor', cursor);

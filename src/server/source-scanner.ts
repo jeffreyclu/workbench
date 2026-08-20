@@ -1,7 +1,7 @@
 import type { SourceProvider } from '../shared/contracts.js';
 import { WorkItemRepository } from './repository.js';
 import { scanSlackMcp } from './slack-mcp.js';
-import { isMcpReauthenticationError, scanRemoteMcp } from './remote-mcp.js';
+import { isMcpReauthenticationError, mcpAuthenticationMessage, scanRemoteMcp } from './remote-mcp.js';
 import { scanSlackWithCodex } from './slack-codex.js';
 
 export interface SourceSignal { provider: string; title: string; summary: string; url: string | null; occurredAt: string | null; }
@@ -68,7 +68,7 @@ export async function scanConnectedSources(repository: WorkItemRepository): Prom
       return { signals, error: null };
     } catch (error) {
       const needsAuth = isMcpReauthenticationError(error);
-      const message = needsAuth ? 'Authorization expired. Reconnect this source.' : error instanceof Error ? error.message : 'Scan failed.';
+      const message = needsAuth ? mcpAuthenticationMessage(provider) : error instanceof Error ? error.message : 'Scan failed.';
       if (needsAuth) repository.removeSourceConnection(provider);
       else repository.updateSourceScan(provider, message);
       return { signals: [] as SourceSignal[], error: `${provider}: ${message}` };

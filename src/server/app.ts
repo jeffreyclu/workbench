@@ -370,8 +370,8 @@ export function createApp(database: WorkbenchDatabase) {
 
   app.post('/api/source-connections/:provider/mcp/oauth/start', async (request, response, next) => {
     try {
-      const provider = z.literal('confluence').parse(request.params.provider);
-      const defaultUrl = 'https://mcp.atlassian.com/v1/mcp/authv2';
+      const provider = z.enum(['confluence', 'slack', 'gmail']).parse(request.params.provider);
+      const defaultUrl = provider === 'confluence' ? 'https://mcp.atlassian.com/v1/mcp/authv2' : null;
       const serverUrl = z.string().url().parse(request.body?.serverUrl || defaultUrl);
       const callbackBase = process.env.APP_API_ORIGIN ?? `http://localhost:${process.env.PORT ?? 4317}/api/source-connections`;
       response.json({ url: await startRemoteMcpOAuth(provider, serverUrl, callbackBase) });
@@ -380,7 +380,7 @@ export function createApp(database: WorkbenchDatabase) {
 
   app.get('/api/source-connections/:provider/mcp/oauth/callback', async (request, response) => {
     try {
-      const provider = z.literal('confluence').parse(request.params.provider);
+      const provider = z.enum(['confluence', 'slack', 'gmail']).parse(request.params.provider);
       const code = z.string().min(1).parse(request.query.code);
       const state = z.string().min(1).parse(request.query.state);
       const settings = await finishRemoteMcpOAuth(provider, code, state);

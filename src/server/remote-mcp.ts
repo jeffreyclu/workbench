@@ -30,6 +30,11 @@ export function isMcpReauthenticationError(error: unknown): boolean {
   return /refresh[_ ]token.*invalid|invalid[_ ]grant|token.*(?:expired|revoked)|unauthori[sz]ed|authentication required/i.test(message);
 }
 
+export function mcpAuthenticationMessage(provider: SourceProvider): string {
+  const name = provider === 'confluence' ? 'Atlassian' : provider === 'gmail' ? 'Google Workspace' : provider.charAt(0).toUpperCase() + provider.slice(1);
+  return `${name} authorization expired. Reconnect this source.`;
+}
+
 export async function startRemoteMcpOAuth(provider: PendingMcp['provider'], serverUrl: string, callbackBase: string): Promise<string> {
   const state = randomUUID();
   const stored: StoredOAuth = { serverUrl };

@@ -1,7 +1,7 @@
 import type { BrokerConnection, BrokerSearchResponse, BrokerSourceId, ResolvedSourceDraft, SourceProvider } from '../shared/contracts.js';
 import type { WorkItemRepository } from './repository.js';
 import { resolveSourceUrl as resolveGenericSourceUrl } from './source-resolver.js';
-import { scanRemoteMcp } from './remote-mcp.js';
+import { isMcpReauthenticationError, mcpAuthenticationMessage, scanRemoteMcp } from './remote-mcp.js';
 import { scanSlackWithCodex, searchSlackWithCodex } from './slack-codex.js';
 import { searchFigmaWithCodex } from './managed-connector.js';
 import { scanSource, type SourceSignal } from './source-scanner.js';
@@ -18,6 +18,12 @@ function cached(key: string, load: () => Promise<SourceSignal[]>): Promise<Sourc
 
 function legacyConnection(repository: WorkItemRepository, provider: SourceProvider) {
   return repository.listSourceConnections().find((entry) => entry.provider === provider);
+}
+
+function recoverAuthentication(repository: WorkItemRepository, provider: SourceProvider, error: unknown): Error {
+  if (!isMcpReauthenticationError(error)) return error instanceof Error ? error : new Error('Source request failed.');
+  if (repository.getSourceSettings(provider)) repository.removeSourceConnection(provider);
+  return new Error(mcpAuthenticationMessage(provider));
 }
 
 export function listBrokerConnections(repository: WorkItemRepository): BrokerConnection[] {
@@ -60,7 +66,7 @@ export async function contextForPrompt(repository: WorkItemRepository, message: 
       const terms = query.toLowerCase().split(/\s+/).filter((term) => term.length > 2);
       const matches = terms.length ? signals.filter((signal) => terms.some((term) => `${signal.title}\n${signal.summary}\n${signal.url ?? ''}`.toLowerCase().includes(term))) : signals;
       blocks.push(matches.length ? format(label, matches) : `Workbench found no ${label} matches for ${query ? `“${query}”` : 'this request'}.`);
-    } catch (error) { blocks.push(`Workbench ${label} connection failed: ${error instanceof Error ? error.message : 'unknown error'}.`); }
+    } catch (error) { blocks.push(`Workbench ${label} connection failed: ${recoverAuthentication(repository, provider, error).message}.`); }
   }
   return blocks.length ? `External-service access policy: Workbench fetched the following data. Use it directly; do not start another authentication flow or ask Jeffrey to open a dialog.\n\n${blocks.join('\n\n')}` : '';
 }
@@ -70,7 +76,9 @@ export async function resolveBrokerUrl(repository: WorkItemRepository, value: st
   if (url.hostname.includes('atlassian.net')) {
     const settings = repository.getSourceSettings('confluence');
     if (!settings) return resolveGenericSourceUrl(value);
-    const signals = await scanRemoteMcp('confluence', settings, value);
+    let signals: SourceSignal[];
+    try { signals = await scanRemoteMcp('confluence', settings, value); }
+    catch (error) { throw recoverAuthentication(repository, 'confluence', error); }
     const signal = signals[0];
     if (signal) return { source: 'Atlassian', sourceUrl: signal.url ?? value, title: signal.title, description: signal.summary || `Context from Atlassian: ${value}` };
   }
@@ -94,7 +102,8 @@ export async function searchBrokerSources(repository: WorkItemRepository, query:
       if (!settings) throw new Error('GitHub is not connected.');
       return cached(`github:search:${query}`, () => scanSource('github', { ...settings, query }));
     } catch (error) {
-      errors[source] = error instanceof Error ? error.message : 'Search failed.';
+      const provider = source === 'atlassian' ? 'confluence' : source === 'google' ? 'gmail' : source;
+      errors[source] = provider === 'figma' || provider === 'linear' ? (error instanceof Error ? error.message : 'Search failed.') : recoverAuthentication(repository, provider, error).message;
       return [];
     }
   }));
