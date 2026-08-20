@@ -19,15 +19,30 @@ Every task execution receives the durable lessons plus the 30 most recent comple
 
 ## Daily proposal
 
-Each morning, Workbench scans configured sources: Slack, GitHub, Linear, Confluence, and Gmail. The scan considers new source activity together with the existing stack.
+Each morning, Workbench scans configured sources: Slack, GitHub, Linear, Confluence, and Gmail. It then ranks the stack with a fixed set of named signals and gives every task a score:
 
-The result is a proposed order with a reason for every meaningful movement. Applying a proposal stores the complete previous ordering. Jeffrey can:
+- **Status** — work already in progress outranks work that is merely ready.
+- **Agent outcome** — a run that failed or left follow-ups pulls its task up.
+- **Aging** — days without activity, counted after the first day and capped so stale work never beats urgent work.
+- **Deadline** — overdue, due within a day, due within three days.
+- **Blockers** — waiting on open subtasks, or a blocker note nothing has resolved since.
+- **Source change** — the task's source moved since the last plan.
+- **Workload** — an agent is already on it, or too much is already in progress.
+- **Feedback** — signals Jeffrey keeps accepting count for slightly more; ones he rejects count for less. The adjustment is clamped so no single signal can take over.
+
+Two rules keep the stack calm and auditable:
+
+1. **Yesterday's order is the default.** Ranking starts from the current order and only swaps neighbours whose score gap clears a stability margin. Near-ties never move. Recency alone is not a reason to promote.
+2. **Every movement is explained and reversible.** A proposal carries a per-task record of its score, its signals, and where it moved. Applying a proposal stores the complete previous ordering.
+
+Jeffrey can:
 
 - Accept it, making the proposed order canonical.
 - Reject it, restoring the exact pre-proposal order.
 - Manually reorder it, superseding the proposal.
+- Undo the last ordering change, whoever caused it — a proposal, a manual drag, or an agent promoting its own work. Undo walks back one change at a time and skips snapshots that no longer describe the current stack.
 
-Agents should preserve yesterday's relative order by default. Recency alone is not sufficient reason to promote an item.
+The planning agent argues with this ranking rather than replacing it: it sees every score and signal, and must name the source signal behind any departure. If it fails or returns malformed data, the deterministic order stands.
 
 ## Task creation
 

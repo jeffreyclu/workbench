@@ -2,8 +2,9 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const authCookieName = 'workbench_token';
 const openPaths = new Set(['/api/health']);
+const artifactCommentPath = /^\/api\/artifacts\/[A-Za-z0-9_-]{1,64}\/comments$/;
 
-interface GateRequest { url?: string; headers: Record<string, string | string[] | undefined> }
+interface GateRequest { url?: string; method?: string; headers: Record<string, string | string[] | undefined> }
 interface GateResponse { statusCode: number; setHeader(name: string, value: string): unknown; end(body?: string): unknown }
 
 export function generateToken(): string {
@@ -50,6 +51,19 @@ function isLoopbackRequest(request: GateRequest): boolean {
 }
 
 /**
+ * Coworkers who open a shared artifact hold no Workbench token, so writing
+ * feedback back is the single route that answers without one — and only when
+ * feedback is configured. Reads of that feedback stay gated: the exemption
+ * covers POST and its CORS preflight, never GET.
+ */
+export function isOpenRequest(pathname: string, method = 'GET', env: NodeJS.ProcessEnv = process.env): boolean {
+  if (openPaths.has(pathname)) return true;
+  const feedbackConfigured = Boolean(env.WORKBENCH_PUBLIC_URL?.trim() && env.ARTIFACT_PUBLIC_BASE_URL?.trim());
+  const upper = method.toUpperCase();
+  return feedbackConfigured && (upper === 'POST' || upper === 'OPTIONS') && artifactCommentPath.test(pathname);
+}
+
+/**
  * Connect-style shared-secret gate, used by both Express and the Vite dev server
  * so a tunnelled Workbench cannot be read or driven by whoever finds the URL.
  * Disabled entirely for loopback Host headers. Tunnel and LAN hosts remain gated.
@@ -60,7 +74,7 @@ export function createAuthGate(token: string | null | undefined) {
     if (!expected) return next();
     if (isLoopbackRequest(request)) return next();
     const url = new URL(request.url ?? '/', 'http://workbench.invalid');
-    if (openPaths.has(url.pathname)) return next();
+    if (isOpenRequest(url.pathname, request.method)) return next();
 
     const offered = url.searchParams.get('token');
     if (offered && tokensMatch(expected, offered)) {
@@ -78,7 +92,7 @@ export function createAuthGate(token: string | null | undefined) {
     if (presented && tokensMatch(expected, presented)) return next();
 
     response.statusCode = 401;
-    if (url.pathname.startsWith('/api/')) {
+    if (url.pathname.startsWith('/api/') || url.pathname === '/mcp') {
       response.setHeader('content-type', 'application/json');
       response.end(JSON.stringify({ error: 'Unauthorized. Open Workbench with ?token=… once to authorize this device.' }));
       return;

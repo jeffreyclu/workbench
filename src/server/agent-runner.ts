@@ -300,7 +300,7 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string): { pr
   }
 }
 
-async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy'): Promise<AgentCommandResult> {
+async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void): Promise<AgentCommandResult> {
   const { command, args } = commandFor(agent, cwd, profile);
   return new Promise<AgentCommandResult>((resolveOutput, reject) => {
     const child = spawn(command, args, { cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -318,6 +318,14 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     let finalOutput = '';
     let lastProgressEvent = '';
     let reportedUsage: Omit<AgentUsage, 'estimatedCostUsd'> = { inputTokens: null, outputTokens: null };
+    let lastReportedUsage = '';
+    const reportUsage = (usage: Omit<AgentUsage, 'estimatedCostUsd'>) => {
+      reportedUsage = usage;
+      const signature = `${usage.inputTokens ?? ''}:${usage.outputTokens ?? ''}`;
+      if (signature === lastReportedUsage) return;
+      lastReportedUsage = signature;
+      onUsage?.({ ...usage, estimatedCostUsd: estimateUsageCost(agent, usage.inputTokens, usage.outputTokens) }, agent);
+    };
     const timeout = setTimeout(() => {
       child.kill('SIGTERM');
       reject(new Error('Agent run timed out after 30 minutes.'));
@@ -328,7 +336,7 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
       const lines = buffered.split('\n');
       buffered = lines.pop() ?? '';
       for (const line of lines.filter(Boolean)) {
-        try { const usage = usageFromEvent(JSON.parse(line)); if (usage) reportedUsage = usage; } catch { /* non-JSON provider output has no structured usage */ }
+        try { const usage = usageFromEvent(JSON.parse(line)); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
         const event = readableAgentEvent(agent, line);
         if (event.progress && event.progress !== lastProgressEvent) {
           progress += `${progress ? '\n\n' : ''}${event.progress}`;
@@ -346,6 +354,7 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
       clearTimeout(timeout);
       signal?.removeEventListener('abort', cancel);
       if (buffered.trim()) {
+        try { const usage = usageFromEvent(JSON.parse(buffered.trim())); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
         const event = readableAgentEvent(agent, buffered.trim());
         if (event.progress && event.progress !== lastProgressEvent) progress += `${progress ? '\n\n' : ''}${event.progress}`;
         if (event.final) finalOutput = event.final;
@@ -375,9 +384,10 @@ export async function runAgentCommandWithFallback(
   primary: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void,
   signal?: AbortSignal, onFallback?: (agent: AgentRun['agent'], reason: string) => void,
   profile: ExecutionProfile = 'economy',
+  onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void,
 ): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null }> {
   try {
-    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile);
+    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage);
     if (result.output.length < 1_000 && isAgentCapacityError(result.output)) throw new Error(result.output);
     return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
   } catch (error) {
@@ -387,7 +397,7 @@ export async function runAgentCommandWithFallback(
     onFallback?.(fallback, reason);
     const prefix = `${primary} is unavailable due to its usage limit. Continuing with ${fallback}.`;
     onProgress?.(prefix);
-    const result = await runAgentCommandWithUsage(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile);
+    const result = await runAgentCommandWithUsage(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile, onUsage);
     return { ...result, agent: fallback, fallbackFrom: primary, fallbackReason: reason.slice(0, 500) };
   }
 }
@@ -436,7 +446,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const prompt = buildPrompt(item, run, sharedContext) + selfHostingGuard;
     repository.updateRun(run.id, { model: modelFor('codex', 'economy'), executionProfile: 'economy' });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
-    const profile = await judgeExecutionProfile(prompt, cwd, controller.signal);
+    const profile = run.executionProfile ?? await judgeExecutionProfile(prompt, cwd, controller.signal);
     repository.updateRun(run.id, { model: modelFor(run.agent, profile), executionProfile: profile });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { model: modelFor(run.agent, profile), executionProfile: profile });
     const result = await runAgentCommandWithFallback(run.agent, cwd, prompt, (partialOutput) => {
@@ -447,7 +457,11 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       if (run.messageId) repository.updateSharedMessage(run.messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: reason.slice(0, 500) });
       if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [fallback]);
       repository.addActivity(item.id, 'system', 'agent_fallback', `${run.agent} was unavailable (${reason.slice(0, 240)}); continued with ${fallback}.`);
-    }, profile);
+    }, profile, (usage) => {
+      const telemetry = { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd };
+      repository.updateRun(run.id, telemetry);
+      if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
+    });
     const { output } = result;
     const telemetry = { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, estimatedCostUsd: result.usage.estimatedCostUsd, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
     repository.updateRun(run.id, { agent: result.agent, status: 'completed', output, completedAt: new Date().toISOString(), ...telemetry });
@@ -462,7 +476,11 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         return { title: task.title, description: task.description, workspacePath: typeof task.workspacePath === 'string' ? task.workspacePath : null };
       }));
     }
-    if (!repository.activeRunsForItem(item.id).length) {
+    // A decomposition can archive the parent while this process is winding
+    // down. Never resurrect or reorder that historical parent from a late
+    // completion callback.
+    const latestItem = repository.get(item.id);
+    if (!latestItem?.archivedAt && latestItem?.status !== 'done' && latestItem?.status !== 'canceled' && !repository.activeRunsForItem(item.id).length) {
       repository.update(item.id, { status: 'ready' });
       repository.moveForAttention(item.id, 'top', `${run.agent} completed ${run.kind}; review the result.`);
     }
@@ -473,8 +491,11 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       if (repository.getRun(run.id)?.status === 'canceled') return;
       repository.updateRun(run.id, { status: 'canceled', completedAt: new Date().toISOString() });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'canceled' });
-      repository.update(item.id, { status: 'ready' });
-      repository.moveForAttention(item.id, 'top', `${run.agent} execution was canceled.`);
+      const latestItem = repository.get(item.id);
+      if (!latestItem?.archivedAt && latestItem?.status !== 'done') {
+        repository.update(item.id, { status: 'ready' });
+        repository.moveForAttention(item.id, 'top', `${run.agent} execution was canceled.`);
+      }
       repository.addActivity(item.id, run.agent, 'progress', `Canceled ${run.kind}.`);
       return;
     }
@@ -487,8 +508,11 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     }
     repository.updateRun(run.id, { status: 'failed', error: message, completedAt: new Date().toISOString() });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'failed', error: message });
-    repository.update(item.id, { status: 'blocked' });
-    repository.moveForAttention(item.id, 'top', `${run.agent} execution failed and needs intervention.`);
+    const latestItem = repository.get(item.id);
+    if (!latestItem?.archivedAt && latestItem?.status !== 'done') {
+      repository.update(item.id, { status: 'blocked' });
+      repository.moveForAttention(item.id, 'top', `${run.agent} execution failed and needs intervention.`);
+    }
     repository.addActivity(item.id, run.agent, 'blocker', `${run.kind} failed: ${message}`);
     notifyAgentRunFinished(item, run, 'failed', message);
   } finally {
@@ -502,8 +526,11 @@ export function cancelAgentRun(repository: WorkItemRepository, id: string): Agen
   const completedAt = new Date().toISOString();
   repository.updateRun(id, { status: 'canceled', completedAt });
   if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'canceled' });
-  repository.update(run.workItemId, { status: 'ready' });
-  repository.moveForAttention(run.workItemId, 'top', `${run.agent} execution was canceled.`);
+  const item = repository.get(run.workItemId);
+  if (!item?.archivedAt && item?.status !== 'done') {
+    repository.update(run.workItemId, { status: 'ready' });
+    repository.moveForAttention(run.workItemId, 'top', `${run.agent} execution was canceled.`);
+  }
   repository.addActivity(run.workItemId, run.agent, 'progress', `Canceled ${run.kind}.`);
   const controller = activeRunControllers.get(id);
   if (controller) controller.abort();
@@ -517,12 +544,23 @@ export function resolveAgents(kind: AgentRun['kind'], target: AgentRun['requeste
   return kind === 'execute' ? ['codex'] : ['claude'];
 }
 
+function explicitDeliverableKind(title: string): AgentRun['kind'] | null {
+  const normalized = title.trim().toLowerCase();
+  if (/^(?:please\s+)?(?:review|code[- ]review)\b/.test(normalized) && /\b(?:pr|pull request|diff|patch|code|implementation|changes?)\b/.test(normalized)) return 'review';
+  if (/^(?:please\s+)?(?:research|investigate|explore|compare|evaluate)\b/.test(normalized)) return 'research';
+  if (/^(?:please\s+)?(?:plan|scope|design|draft|author|revise|write|create|produce)\b/.test(normalized) && /\b(?:plan|strategy|spec|rfc|proposal|technical document|design doc|architecture)\b/.test(normalized)) return 'strategy';
+  if (/^(?:please\s+)?(?:explain|summarize|describe|organize|discuss|assess)\b/.test(normalized)) return 'analysis';
+  if (/^(?:please\s+)?(?:implement|build|code|fix|debug|refactor|test|edit|update|reduce|trim|rewrite|remove|add|change|create|write|publish|deploy|install|configure|connect|move|rename|delete|archive|restore|enable|disable|set|convert|migrate|upgrade|replace|clean|automate|expose|advance|complete|finish|continue|resume)\b/.test(normalized)) return 'execute';
+  return null;
+}
+
 export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; agent: AgentRun['agent']; complex: boolean; instructions: string } {
   const text = `${item.title}\n${item.description}`.toLowerCase();
   const complex = /\b(migrate|redesign|re-architect|rebuild|epic|cross[- ]team|multi[- ]phase)\b/.test(text);
   let kind: AgentRun['kind'] = 'analysis';
   let agent: AgentRun['agent'] = 'claude';
   const title = item.title.toLowerCase();
+  const explicitKind = explicitDeliverableKind(title);
   const explicitCodeReview = /\bcode review\b/.test(title)
     || /\breview\b[^\n.!?]{0,80}\b(?:pr|pull request|diff|patch|code changes?|implementation)\b/.test(title)
     || /\b(?:pr|pull request|diff|patch)\b[^\n.!?]{0,40}\breview\b/.test(title)
@@ -531,7 +569,8 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
   const implementationTitle = /\b(implement|build|code|fix|debug|refactor|test|edit|update|reduce|trim|rewrite|remove|add|change)\b/.test(title);
   const documentStrategy = /\b(spec|rfc|technical document|design doc|proposal)\b/.test(title)
     && /\b(plan|draft|write|create|produce|author|revise|define|spec|rfc|proposal)\b/.test(title);
-  if (explicitCodeReview && !implementation) { kind = 'review'; agent = 'codex'; }
+  if (explicitKind) { kind = explicitKind; agent = explicitKind === 'execute' || explicitKind === 'review' ? 'codex' : 'claude'; }
+  else if (explicitCodeReview && !implementation) { kind = 'review'; agent = 'codex'; }
   else if (documentStrategy && !implementationTitle) { kind = 'strategy'; agent = 'claude'; }
   else if (implementation) { kind = 'execute'; agent = 'codex'; }
   else if (/\b(research|investigate|explore|compare|evaluate)\b/.test(text)) { kind = 'research'; agent = 'claude'; }
@@ -576,6 +615,7 @@ export async function classifyExecutionRobust(
   route: (prompt: string) => Promise<string> = async (prompt) => (await runAgentCommandWithFallback('codex', process.cwd(), prompt, undefined, undefined, undefined, 'standard')).output,
 ): Promise<ReturnType<typeof classifyExecution>> {
   const deterministic = classifyExecution(item);
+  const explicitKind = explicitDeliverableKind(item.title);
   try {
     const output = await route(`You are the authoritative task-intent classifier for Jeffrey's engineering Workbench. Classify the deliverable he expects—not incidental verbs in the context or steps an agent may take along the way.
 
@@ -601,24 +641,25 @@ SOURCE: ${item.sourceUrl ?? item.sourceIdentifier ?? item.source}`);
     const kind = ((typeof parsed?.kind === 'string' ? parsed.kind.toLowerCase().match(/^(research|analysis|strategy|execute|review)$/)?.[1] : undefined)
       ?? output.toLowerCase().match(/\b(research|analysis|strategy|execute|review)\b/)?.[1]) as AgentRun['kind'] | undefined;
     if (!kind) return deterministic;
+    const resolvedKind = explicitKind ?? kind;
     const complex = typeof parsed?.complex === 'boolean' ? parsed.complex : deterministic.complex;
-    if (complex && kind !== 'review') {
+    if (complex && resolvedKind !== 'review') {
       return {
         kind: 'strategy', agent: 'claude', complex: true,
         instructions: `WORKBENCH_DECOMPOSITION: This appears complex. Research the relevant context, then produce an approval-ready strategy. Do not implement yet. Propose at least two independently executable follow-up tasks. End with exactly one machine-readable block in this form: <workbench-plan>{"summary":"approval-ready strategy","tasks":[{"title":"first independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null},{"title":"second independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null}]}</workbench-plan>. Tasks must be self-contained and ordered by recommended attention.`,
       };
     }
-    let agent: AgentRun['agent'] = kind === 'execute' || kind === 'review' ? 'codex' : 'claude';
-    if (kind === 'execute' && isDocumentWork(item)) agent = 'claude';
+    let agent: AgentRun['agent'] = resolvedKind === 'execute' || resolvedKind === 'review' ? 'codex' : 'claude';
+    if (resolvedKind === 'execute' && isDocumentWork(item)) agent = 'claude';
     const assignedAgent = item.assignees.find((assignee): assignee is AgentRun['agent'] => assignee === 'codex' || assignee === 'claude');
     if (assignedAgent && kind !== 'review') agent = assignedAgent;
     return {
-      kind, agent, complex: false,
-      instructions: kind === 'review'
+      kind: resolvedKind, agent, complex: false,
+      instructions: resolvedKind === 'review'
         ? 'Perform the authoritative frontend-reviewer first pass. Review only; do not modify code or execute tests.'
-        : kind === 'execute' && isBackendImplementation(item)
+        : resolvedKind === 'execute' && isBackendImplementation(item)
           ? 'Execute this self-contained backend task through the authoritative backend-engineer persona. Make authorized changes and return observed evidence and verification.'
-          : `Execute this self-contained ${kind} task end to end. Use the appropriate tools, make necessary changes when authorized, and return evidence and verification.`,
+          : `Execute this self-contained ${resolvedKind} task end to end. Use the appropriate tools, make necessary changes when authorized, and return evidence and verification.`,
     };
   } catch {
     return deterministic;

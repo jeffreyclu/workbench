@@ -186,3 +186,136 @@ describe('/api/memories', () => {
     expect(deleted.memory.status).toBe('rejected');
   });
 });
+
+describe('GET /api/shared/search', () => {
+  let database: WorkbenchDatabase;
+  let repository: WorkItemRepository;
+  let server: Server;
+  let baseUrl: string;
+
+  beforeEach(async () => {
+    database = openDatabase(':memory:');
+    repository = new WorkItemRepository(database);
+    const app = createApp(database);
+    server = app.listen(0);
+    await new Promise<void>((resolveListen) => server.once('listening', () => resolveListen()));
+    const { port } = server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    database.close();
+  });
+
+  it('returns 200 with ranked results for a matching query', async () => {
+    const conversation = repository.createConversation('Search route thread');
+    repository.createSharedMessage('jeffrey', 'A message about full text search indexing.', 'completed', conversation.id);
+
+    const response = await fetch(`${baseUrl}/api/shared/search?q=indexing`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { results: Array<Record<string, unknown>> };
+    expect(body.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'message', conversationId: conversation.id }),
+    ]));
+  });
+
+  it('returns 400 when q is missing', async () => {
+    const response = await fetch(`${baseUrl}/api/shared/search`);
+    expect(response.status).toBe(400);
+  });
+
+  it('returns 400 when q is empty', async () => {
+    const response = await fetch(`${baseUrl}/api/shared/search?q=`);
+    expect(response.status).toBe(400);
+  });
+
+  it('returns an empty results array when nothing matches', async () => {
+    repository.createConversation('Some conversation');
+    const response = await fetch(`${baseUrl}/api/shared/search?q=zzz-no-such-token`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { results: unknown[] };
+    expect(body.results).toEqual([]);
+  });
+});
+
+describe('queue explainability and undo routes', () => {
+  let database: WorkbenchDatabase;
+  let repository: WorkItemRepository;
+  let server: Server;
+  let baseUrl: string;
+
+  beforeEach(async () => {
+    database = openDatabase(':memory:');
+    repository = new WorkItemRepository(database);
+    server = createApp(database).listen(0);
+    await new Promise<void>((resolveListen) => server.once('listening', () => resolveListen()));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    database.close();
+  });
+
+  const create = (title: string, status: 'ready' | 'backlog' = 'ready') =>
+    repository.create({ title, description: '', priority: 2, status, projectName: null, workspacePath: null, dueDate: null });
+
+  it('explains the current order without changing it', async () => {
+    const backlog = create('Vague idea', 'backlog');
+    const ready = create('Ready to go');
+    repository.reorder([backlog.id, ready.id]);
+
+    const response = await fetch(`${baseUrl}/api/queue/explain`);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { plan: { orderedItemIds: string[]; rationale: string; explanations: Array<{ itemId: string; signals: Array<{ key: string }> }> } };
+
+    expect(body.plan.orderedItemIds).toEqual([ready.id, backlog.id]);
+    expect(body.plan.rationale).toContain('ready to start');
+    expect(body.plan.explanations.find((entry) => entry.itemId === ready.id)?.signals.map((signal) => signal.key)).toEqual(['status']);
+    // Explaining is a read: the stored order is untouched.
+    expect(repository.list().map((entry) => entry.id)).toEqual([backlog.id, ready.id]);
+  });
+
+  it('reverses the last movement through /api/queue/undo and 404s when there is nothing left', async () => {
+    const first = create('First');
+    const second = create('Second');
+    repository.reorder([first.id, second.id]);
+
+    const moved = await fetch(`${baseUrl}/api/queue/order`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ itemId: second.id, beforeId: first.id }),
+    });
+    expect(moved.status).toBe(200);
+    expect(repository.list().map((entry) => entry.id)).toEqual([second.id, first.id]);
+
+    const undo = await fetch(`${baseUrl}/api/queue/undo`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    expect(undo.status).toBe(200);
+    const body = await undo.json() as { change: { actor: string; reason: string }; items: Array<{ id: string }> };
+    expect(body.items.map((entry) => entry.id)).toEqual([first.id, second.id]);
+    expect(body.change.actor).toBe('jeffrey');
+    expect(body.change.reason).toContain('Second');
+
+    const empty = await fetch(`${baseUrl}/api/queue/undo`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    expect(empty.status).toBe(404);
+  });
+
+  it('undoes an accepted proposal that reject can no longer reverse', async () => {
+    const fresh = create('Fresh');
+    const stale = create('Stale');
+    database.prepare('UPDATE work_items SET last_touched_at = ? WHERE id = ?').run(new Date(Date.now() - 9 * 86_400_000).toISOString(), stale.id);
+    repository.reorder([fresh.id, stale.id]);
+
+    const planned = await fetch(`${baseUrl}/api/queue/plan`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    const { proposal } = await planned.json() as { proposal: { id: string; explanations: Array<{ itemId: string; score: number }> } };
+    expect(repository.list().map((entry) => entry.id)).toEqual([stale.id, fresh.id]);
+    expect(proposal.explanations).toHaveLength(2);
+
+    const accepted = await fetch(`${baseUrl}/api/queue/proposals/${proposal.id}/accepted`, { method: 'POST' });
+    expect(accepted.status).toBe(200);
+
+    const undo = await fetch(`${baseUrl}/api/queue/undo`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    expect(undo.status).toBe(200);
+    expect(repository.list().map((entry) => entry.id)).toEqual([fresh.id, stale.id]);
+  });
+});

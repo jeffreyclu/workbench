@@ -88,7 +88,9 @@ const migrations = [
       agent TEXT NOT NULL,
       complex INTEGER NOT NULL DEFAULT 0,
       instructions TEXT NOT NULL DEFAULT '',
-      classified_at TEXT NOT NULL
+      classified_at TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'automatic',
+      classifier_version INTEGER NOT NULL DEFAULT 2
     );
 
     CREATE TABLE IF NOT EXISTS queue_proposals (
@@ -292,6 +294,81 @@ const migrations = [
     CREATE INDEX IF NOT EXISTS idx_memories_created
       ON memories(created_at DESC);
   `,
+  `
+    CREATE TABLE IF NOT EXISTS queue_order_history (
+      id TEXT PRIMARY KEY,
+      stack TEXT NOT NULL,
+      actor TEXT NOT NULL DEFAULT 'system',
+      reason TEXT NOT NULL DEFAULT '',
+      previous_order_json TEXT NOT NULL,
+      new_order_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      undone_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_queue_order_history_stack
+      ON queue_order_history(stack, created_at DESC);
+  `,
+  `
+    -- Full-text search (FTS5) over shared conversation titles and message
+    -- bodies. Design choice: standalone FTS5 tables that store their own
+    -- copy of the text, rather than 'content=""' (contentless) or
+    -- 'content="<table>"' (external content). External content tables map
+    -- rows by content_rowid, which would have to be the base table's
+    -- implicit rowid — but shared_conversations/shared_messages use a TEXT
+    -- PRIMARY KEY id, not INTEGER PRIMARY KEY, so "id" and "rowid" are two
+    -- different values on those tables. That mismatch is an easy source of
+    -- silent drift between the index and the row it's supposed to point at.
+    -- Duplicating the (small) title/body text costs a bit of disk space at
+    -- this app's scale and keeps every sync trigger below trivial: one
+    -- INSERT, one DELETE+INSERT, one DELETE.
+    CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts USING fts5(
+      id UNINDEXED,
+      title
+    );
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+      id UNINDEXED,
+      body
+    );
+
+    -- Kept in sync with triggers rather than application-level writes:
+    -- repository.ts has several entry points that insert or update
+    -- shared_conversations and shared_messages (createConversation,
+    -- createSharedMessage, updateSharedMessage, forkConversation, the
+    -- title-touch inside createSharedMessage, the archive/restore path,
+    -- etc.). A trigger on the base table guarantees the index can't drift
+    -- no matter which of those paths — present or future — writes the row.
+    CREATE TRIGGER IF NOT EXISTS conversations_fts_ai AFTER INSERT ON shared_conversations BEGIN
+      INSERT INTO conversations_fts(id, title) VALUES (new.id, new.title);
+    END;
+    CREATE TRIGGER IF NOT EXISTS conversations_fts_au AFTER UPDATE ON shared_conversations BEGIN
+      DELETE FROM conversations_fts WHERE id = old.id;
+      INSERT INTO conversations_fts(id, title) VALUES (new.id, new.title);
+    END;
+    CREATE TRIGGER IF NOT EXISTS conversations_fts_ad AFTER DELETE ON shared_conversations BEGIN
+      DELETE FROM conversations_fts WHERE id = old.id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON shared_messages BEGIN
+      INSERT INTO messages_fts(id, body) VALUES (new.id, new.body);
+    END;
+    CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON shared_messages BEGIN
+      DELETE FROM messages_fts WHERE id = old.id;
+      INSERT INTO messages_fts(id, body) VALUES (new.id, new.body);
+    END;
+    CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON shared_messages BEGIN
+      DELETE FROM messages_fts WHERE id = old.id;
+    END;
+
+    -- Backfill for rows that existed before these tables/triggers did.
+    -- Idempotent (NOT EXISTS guard) so it's safe to run on every startup.
+    INSERT INTO conversations_fts (id, title)
+      SELECT id, title FROM shared_conversations
+      WHERE NOT EXISTS (SELECT 1 FROM conversations_fts WHERE conversations_fts.id = shared_conversations.id);
+    INSERT INTO messages_fts (id, body)
+      SELECT id, body FROM shared_messages
+      WHERE NOT EXISTS (SELECT 1 FROM messages_fts WHERE messages_fts.id = shared_messages.id);
+  `,
 ];
 
 export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workbench.db') {
@@ -353,6 +430,20 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
     database.exec('ALTER TABLE work_items ADD COLUMN last_touched_at TEXT; UPDATE work_items SET last_touched_at = created_at WHERE last_touched_at IS NULL;');
   }
   const messageColumns = database.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+  const classificationColumns = database.prepare('PRAGMA table_info(work_item_classifications)').all() as Array<{ name: string }>;
+  if (!classificationColumns.some((column) => column.name === 'source')) {
+    database.exec("ALTER TABLE work_item_classifications ADD COLUMN source TEXT NOT NULL DEFAULT 'automatic';");
+    database.exec(`UPDATE work_item_classifications SET source = 'manual'
+      WHERE EXISTS (
+        SELECT 1 FROM activities
+        WHERE activities.work_item_id = work_item_classifications.work_item_id
+          AND activities.actor = 'jeffrey'
+          AND activities.kind = 'classification'
+      )`);
+  }
+  if (!classificationColumns.some((column) => column.name === 'classifier_version')) {
+    database.exec('ALTER TABLE work_item_classifications ADD COLUMN classifier_version INTEGER NOT NULL DEFAULT 1;');
+  }
   if (!messageColumns.some((column) => column.name === 'conversation_id')) database.exec('ALTER TABLE shared_messages ADD COLUMN conversation_id TEXT;');
   if (!messageColumns.some((column) => column.name === 'attachments_json')) database.exec("ALTER TABLE shared_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]';");
   if (!messageColumns.some((column) => column.name === 'dispatch_target')) database.exec("ALTER TABLE shared_messages ADD COLUMN dispatch_target TEXT NOT NULL DEFAULT 'none';");
@@ -409,6 +500,8 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
   if (!messageColumns.some((column) => column.name === 'attempt')) database.exec('ALTER TABLE shared_messages ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0;');
   if (!messageColumns.some((column) => column.name === 'max_attempts')) database.exec('ALTER TABLE shared_messages ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3;');
   if (!messageColumns.some((column) => column.name === 'next_attempt_at')) database.exec('ALTER TABLE shared_messages ADD COLUMN next_attempt_at TEXT;');
+  const proposalColumns = database.prepare('PRAGMA table_info(queue_proposals)').all() as Array<{ name: string }>;
+  if (!proposalColumns.some((column) => column.name === 'explanations_json')) database.exec('ALTER TABLE queue_proposals ADD COLUMN explanations_json TEXT;');
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_agent_runs_scheduler ON agent_runs(status, next_attempt_at);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_lease ON agent_runs(status, lease_expires_at);

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
-import { backoffDelayMs, buildPrompt, classifyExecution, classifyExecutionRobust, estimateUsageCost, isAgentCapacityError, isTransientAgentError, readableAgentEvent, resolveAgents, resolveWorkingDirectory, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { backoffDelayMs, buildPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, estimateUsageCost, isAgentCapacityError, isTransientAgentError, readableAgentEvent, resolveAgents, resolveWorkingDirectory, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 
 const item = (title: string, description = ''): WorkItem => ({
   id: 'item', title, description, status: 'ready', priority: 2, queuePosition: 1,
@@ -51,15 +51,44 @@ describe('classifyExecution', () => {
     expect(classifyExecution(item('Write CON-159 tech spec', 'Review all Markdown docs first, then write the proposal.')).kind).toBe('strategy');
     expect(classifyExecution(item('Fix the regression after reviewing the implementation')).kind).toBe('execute');
     expect(classifyExecution(item('Review architecture notes and create a summary')).kind).toBe('execute');
+    expect(classifyExecution(item('Implement the connectors UI', 'Follow the approved design spec and proposal.')).kind).toBe('execute');
   });
 
-  it('uses the economy router only for genuinely ambiguous actions', async () => {
+  it('uses the model classifier for ambiguous tasks', async () => {
     let calls = 0;
-    const result = await classifyExecutionRobust(item('Handle connector ownership'), async () => { calls += 1; return 'research'; });
+    const result = await classifyExecutionRobust(item('Handle connector ownership'), async () => { calls += 1; return '<classification>{"kind":"research","complex":false,"reason":"Unknowns must be investigated."}</classification>'; });
     expect(result.kind).toBe('research');
     expect(calls).toBe(1);
-    await classifyExecutionRobust(item('Review PR 5246'), async () => { calls += 1; return 'analysis'; });
-    expect(calls).toBe(1);
+    await classifyExecutionRobust(item('Review PR 5246'), async () => { calls += 1; return '<classification>{"kind":"review","complex":false,"reason":"The deliverable is PR findings."}</classification>'; });
+    expect(calls).toBe(2);
+  });
+
+  it('never lets the model relabel an explicit imperative deliverable', async () => {
+    const wrongResearchAnswer = async () => '<classification>{"kind":"research","complex":false,"reason":"Context should be inspected first."}</classification>';
+    await expect(classifyExecutionRobust(item('Publish all Markdown artifacts'), wrongResearchAnswer)).resolves.toEqual(expect.objectContaining({ kind: 'execute' }));
+    await expect(classifyExecutionRobust(item('Fix the connector modal'), wrongResearchAnswer)).resolves.toEqual(expect.objectContaining({ kind: 'execute' }));
+    await expect(classifyExecutionRobust(item('Deploy the approved preview'), wrongResearchAnswer)).resolves.toEqual(expect.objectContaining({ kind: 'execute' }));
+  });
+
+  it('uses explicit research, strategy, and analysis imperatives', () => {
+    expect(classifyExecution(item('Investigate connector pagination')).kind).toBe('research');
+    expect(classifyExecution(item('Plan the connector migration strategy')).kind).toBe('strategy');
+    expect(classifyExecution(item('Summarize the onboarding notes')).kind).toBe('analysis');
+  });
+
+  it('turns a model complexity judgment into a required multi-task decomposition', async () => {
+    const result = await classifyExecutionRobust(item('Rework connector authentication across the control plane'), async () =>
+      '<classification>{"kind":"execute","complex":true,"reason":"It spans independently deployable systems."}</classification>');
+
+    expect(result.kind).toBe('strategy');
+    expect(result.complex).toBe(true);
+    expect(result.instructions).toContain('at least two independently executable follow-up tasks');
+    expect(result.instructions).toContain('Do not implement yet');
+  });
+
+  it('honors a manually selected task type without invoking classification heuristics', () => {
+    expect(classificationForKind(item('Implement a connector'), 'research')).toEqual(expect.objectContaining({ kind: 'research', complex: false }));
+    expect(classificationForKind(item('Summarize a proposal'), 'execute')).toEqual(expect.objectContaining({ kind: 'execute', complex: false }));
   });
 
   it('makes frontend-reviewer the only entry point for every review run', () => {

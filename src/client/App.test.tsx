@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App, SharedWorkspace } from './App';
 import { hideWorkbenchControlBlocks, humanizeRunOutput } from './run-output';
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); window.localStorage.clear(); vi.unstubAllGlobals(); });
 
 describe('shared room', () => {
   it('renders its empty state without requiring scrollIntoView', async () => {
@@ -99,6 +99,73 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     expect(await screen.findByText('To Codex + Claude')).toBeTruthy();
+  });
+
+  it('remembers a different model choice for each conversation', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const firstId = '00000000-0000-4000-8000-000000000001';
+    const secondId = '00000000-0000-4000-8000-000000000002';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const body = String(input).includes('/api/shared/conversations') ? { conversations: [
+        { id: firstId, title: 'First task', workItemId: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+        { id: secondId, title: 'Second task', workItemId: null, createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
+      ] } : { messages: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={firstId} /></QueryClientProvider>);
+
+    const modelChoice = await screen.findByLabelText('Model choice') as HTMLSelectElement;
+    fireEvent.change(modelChoice, { target: { value: 'deep' } });
+    expect(modelChoice.value).toBe('deep');
+    fireEvent.click(screen.getByRole('button', { name: /Second task/i }));
+    expect(modelChoice.value).toBe('auto');
+    fireEvent.change(modelChoice, { target: { value: 'standard' } });
+    fireEvent.click(screen.getByRole('button', { name: /First task/i }));
+    expect(modelChoice.value).toBe('deep');
+  });
+
+  it('searches conversations, selects a result, and restores the list on clear', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const firstId = '00000000-0000-4000-8000-000000000001';
+    const matchedId = '00000000-0000-4000-8000-000000000002';
+    const searchMock = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/shared/search')) {
+        searchMock(url);
+        return new Response(JSON.stringify({
+          results: [{ type: 'message', conversationId: matchedId, conversationTitle: 'Matched conversation', messageId: 'message-1', snippet: 'found the [needle] here', rank: 0 }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [
+        { id: firstId, title: 'First task', workItemId: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+      ] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={firstId} /></QueryClientProvider>);
+
+    expect(await screen.findByRole('heading', { name: 'First task' })).toBeTruthy();
+    const searchInput = screen.getByLabelText('Search conversations');
+    fireEvent.change(searchInput, { target: { value: 'needle' } });
+
+    // Debounced: no request yet immediately after typing.
+    expect(searchMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(searchMock).toHaveBeenCalledWith(expect.stringContaining('q=needle')), { timeout: 1000 });
+
+    expect(await screen.findByText('Matched conversation')).toBeTruthy();
+    expect(screen.getByText('needle')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /First task/i })).toBeNull();
+
+    fireEvent.click(screen.getByText('Matched conversation'));
+    expect(await screen.findByRole('heading', { name: 'Matched conversation' })).toBeTruthy();
+    expect((searchInput as HTMLInputElement).value).toBe('');
+
+    fireEvent.change(searchInput, { target: { value: 'more' } });
+    await waitFor(() => expect(searchMock).toHaveBeenCalledWith(expect.stringContaining('q=more')));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    expect(await screen.findByRole('button', { name: /First task/i })).toBeTruthy();
   });
 });
 

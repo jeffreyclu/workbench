@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { Activity, AgentRun, ArtifactSummary, Assignee, ConversationPage, DiscoveryCandidate, DiscoveryCandidateStatus, DiscoveryInbox, DiscoveryRun, ExecutionPlan, LinearProviderConfig, Memory, PlannedTask, QueueProposal, SharedAttachment, SharedConversation, SharedMemory, SharedMessage, SourceConnection, SourceProvider, TaskClassification, WorkItem, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../shared/contracts.js';
+import type { Activity, AgentRun, ArtifactSummary, Assignee, ConversationPage, DiscoveryCandidate, DiscoveryCandidateStatus, DiscoveryInbox, DiscoveryRun, ExecutionPlan, LinearProviderConfig, Memory, PlannedTask, QueueItemExplanation, QueueOrderChange, QueueProposal, QueueSignalKey, SharedAttachment, SharedConversation, SharedMemory, SharedMessage, SharedMessagePage, SharedSearchResult, SourceConnection, SourceProvider, TaskClassification, WorkItem, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../shared/contracts.js';
+import { learnFeedbackWeights, planQueue, type FeedbackWeight, type QueueContext, type QueuePlan } from './queue-intelligence.js';
 import type { WorkbenchDatabase } from './database.js';
 import { ArtifactLibrary } from './artifact-library.js';
 
@@ -303,7 +304,7 @@ export class WorkItemRepository {
   private buildConversationMemory(id: string): string | null {
     const conversation = this.listConversations('all').find((entry) => entry.id === id);
     if (!conversation) return null;
-    const messages = this.listSharedMessages(1_000, id).filter((message) => message.status === 'completed' && message.body.trim()).slice(-8);
+    const messages = this.listAllSharedMessages(id).filter((message) => message.status === 'completed' && message.body.trim()).slice(-8);
     if (!messages.length) return null;
     return [`Archived conversation: ${conversation.title}`, ...messages.map((message) => `${message.author}: ${message.body.trim().slice(0, 1_500)}`)].join('\n\n').slice(0, 12_000);
   }
@@ -313,7 +314,7 @@ export class WorkItemRepository {
     if (!source) return null;
     const fork = this.createConversation(`${source.title} · fork`, source.workItemId);
     this.database.prepare('UPDATE shared_conversations SET forked_from_conversation_id = ? WHERE id = ?').run(source.id, fork.id);
-    const messages = this.listSharedMessages(1_000, source.id);
+    const messages = this.listAllSharedMessages(source.id);
     for (const message of messages) this.createSharedMessage(message.author, message.body, message.status === 'running' || message.status === 'queued' ? 'completed' : message.status, fork.id, message.attachments, 'none');
     return this.listConversations('all').find((conversation) => conversation.id === fork.id) ?? null;
   }
@@ -369,13 +370,8 @@ export class WorkItemRepository {
     this.database.prepare('DELETE FROM source_connections WHERE provider = ?').run(provider);
   }
 
-  listSharedMessages(limit = 100, conversationId?: string): SharedMessage[] {
-    const rows = this.database.prepare(`
-      SELECT * FROM (
-        SELECT * FROM shared_messages WHERE (? IS NULL OR conversation_id = ?) ORDER BY created_at DESC LIMIT ?
-      ) ORDER BY created_at ASC
-    `).all(conversationId ?? null, conversationId ?? null, limit) as Array<Record<string, string | number | null>>;
-    return rows.map((row) => ({
+  private mapSharedMessageRow(row: Record<string, string | number | null>): SharedMessage {
+    return {
       id: String(row.id), conversationId: String(row.conversation_id ?? ''), author: row.author as SharedMessage['author'], body: String(row.body),
       pinned: row.pinned === 1, status: row.status as SharedMessage['status'], error: String(row.error),
       createdAt: String(row.created_at), completedAt: row.completed_at ? String(row.completed_at) : null, attachments: JSON.parse(String(row.attachments_json ?? '[]')) as SharedAttachment[],
@@ -387,20 +383,164 @@ export class WorkItemRepository {
       dispatchTarget: row.dispatch_target as SharedMessage['dispatchTarget'] ?? 'none',
       attempt: Number(row.attempt ?? 0), maxAttempts: Number(row.max_attempts ?? 3),
       nextAttemptAt: row.next_attempt_at ? String(row.next_attempt_at) : null,
-    }));
+    };
   }
 
-  createSharedMessage(author: SharedMessage['author'], body: string, status: SharedMessage['status'] = 'completed', conversationId?: string, attachments: SharedAttachment[] = [], dispatchTarget = 'none'): SharedMessage {
+  /**
+   * Cursor-based pagination mirroring listConversationPage: page 1 (no cursor)
+   * returns the most recent `limit` messages in ascending (oldest-first) order
+   * for direct rendering; nextCursor, when present, fetches the next-older page
+   * (messages strictly before the oldest message already returned).
+   */
+  listSharedMessages(limit = 100, cursor: string | null = null, conversationId?: string): SharedMessagePage {
+    const safeLimit = Math.max(1, Math.min(200, limit));
+    let cursorValues: { createdAt: string; rowid: number } | null = null;
+    if (cursor) {
+      try { cursorValues = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { createdAt: string; rowid: number }; }
+      catch { throw new Error('Invalid message cursor.'); }
+      if (!cursorValues?.createdAt || !cursorValues.rowid) throw new Error('Invalid message cursor.');
+    }
+    // Tiebreak on rowid (insertion order), not id: several messages can share
+    // the same millisecond-resolution created_at, and id is a random UUID that
+    // would otherwise reorder same-timestamp messages arbitrarily.
+    const rows = this.database.prepare(`
+      SELECT rowid AS rowid, * FROM shared_messages
+      WHERE (? IS NULL OR conversation_id = ?)
+        AND (? IS NULL OR created_at < ? OR (created_at = ? AND rowid < ?))
+      ORDER BY created_at DESC, rowid DESC LIMIT ?
+    `).all(
+      conversationId ?? null, conversationId ?? null,
+      cursorValues?.rowid ?? null, cursorValues?.createdAt ?? null, cursorValues?.createdAt ?? null, cursorValues?.rowid ?? null,
+      safeLimit + 1,
+    ) as Array<Record<string, string | number | null>>;
+    const hasMore = rows.length > safeLimit;
+    const page = rows.slice(0, safeLimit).reverse();
+    const messages = page.map((row) => this.mapSharedMessageRow(row));
+    const oldestRow = page[0];
+    const nextCursor = hasMore && oldestRow ? Buffer.from(JSON.stringify({ createdAt: String(oldestRow.created_at), rowid: Number(oldestRow.rowid) })).toString('base64url') : null;
+    const totalCount = Number((this.database.prepare('SELECT COUNT(*) AS count FROM shared_messages WHERE (? IS NULL OR conversation_id = ?)')
+      .get(conversationId ?? null, conversationId ?? null) as { count: number }).count);
+    return { messages, nextCursor, totalCount };
+  }
+
+  /**
+   * Loops listSharedMessages page by page until exhausted. For internal logic
+   * that genuinely needs the whole conversation (or, with no conversationId,
+   * the whole table) rather than a bounded page — use sparingly, and prefer a
+   * targeted lookup (getSharedMessageById, listQueuedConversationIds) when one
+   * exists instead of pulling everything into memory.
+   */
+  listAllSharedMessages(conversationId?: string): SharedMessage[] {
+    const batches: SharedMessage[][] = [];
+    let cursor: string | null = null;
+    for (;;) {
+      const page = this.listSharedMessages(500, cursor, conversationId);
+      batches.push(page.messages);
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    return batches.reverse().flat();
+  }
+
+  getSharedMessageById(id: string): SharedMessage | null {
+    const row = this.database.prepare('SELECT * FROM shared_messages WHERE id = ?').get(id) as Record<string, string | number | null> | undefined;
+    return row ? this.mapSharedMessageRow(row) : null;
+  }
+
+  /**
+   * Turns a raw user query into a safe FTS5 MATCH expression: every
+   * whitespace-separated token is individually double-quoted (with internal
+   * `"` doubled per SQLite string-escaping rules), which makes FTS5 treat it
+   * as a literal string rather than syntax — so special characters and
+   * reserved keywords (`*`, `:`, `AND`, `OR`, `NOT`, unbalanced quotes, ...)
+   * can never produce a MATCH syntax error. Quoted tokens are implicitly
+   * ANDed by FTS5, i.e. "find rows containing all of these words".
+   */
+  private buildFtsMatchQuery(query: string): string | null {
+    const tokens = query.trim().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return null;
+    return tokens.map((token) => `"${token.replace(/"/g, '""')}"`).join(' ');
+  }
+
+  /**
+   * Combined, ranked full-text search over shared conversation titles and
+   * message bodies (see the conversations_fts/messages_fts tables and their
+   * sync triggers in database.ts). Each side is queried and ranked
+   * separately with FTS5 bm25() (lower = more relevant), then merged and
+   * re-sorted in application code — simplest way to produce one ranked list
+   * from two independent FTS tables without a fragile cross-table UNION.
+   */
+  searchShared(query: string, limit = 20): SharedSearchResult[] {
+    const matchQuery = this.buildFtsMatchQuery(query);
+    if (!matchQuery) return [];
+    const safeLimit = Math.max(1, Math.min(100, limit));
+
+    const conversationRows = this.database.prepare(`
+      SELECT
+        shared_conversations.id AS conversation_id,
+        shared_conversations.title AS conversation_title,
+        snippet(conversations_fts, 1, '[', ']', '…', 10) AS snippet,
+        bm25(conversations_fts) AS rank
+      FROM conversations_fts
+      JOIN shared_conversations ON shared_conversations.id = conversations_fts.id
+      WHERE conversations_fts MATCH ?
+      ORDER BY rank LIMIT ?
+    `).all(matchQuery, safeLimit) as Array<{ conversation_id: string; conversation_title: string; snippet: string; rank: number }>;
+
+    const messageRows = this.database.prepare(`
+      SELECT
+        shared_messages.id AS message_id,
+        shared_messages.conversation_id AS conversation_id,
+        COALESCE(shared_conversations.title, '') AS conversation_title,
+        snippet(messages_fts, 1, '[', ']', '…', 10) AS snippet,
+        bm25(messages_fts) AS rank
+      FROM messages_fts
+      JOIN shared_messages ON shared_messages.id = messages_fts.id
+      LEFT JOIN shared_conversations ON shared_conversations.id = shared_messages.conversation_id
+      WHERE messages_fts MATCH ?
+      ORDER BY rank LIMIT ?
+    `).all(matchQuery, safeLimit) as Array<{ message_id: string; conversation_id: string | null; conversation_title: string; snippet: string; rank: number }>;
+
+    const results: SharedSearchResult[] = [
+      ...conversationRows.map((row) => ({
+        type: 'conversation' as const,
+        conversationId: row.conversation_id,
+        conversationTitle: row.conversation_title,
+        messageId: null,
+        snippet: row.snippet,
+        rank: row.rank,
+      })),
+      ...messageRows
+        .filter((row) => row.conversation_id !== null)
+        .map((row) => ({
+          type: 'message' as const,
+          conversationId: row.conversation_id as string,
+          conversationTitle: row.conversation_title,
+          messageId: row.message_id,
+          snippet: row.snippet,
+          rank: row.rank,
+        })),
+    ];
+    results.sort((a, b) => a.rank - b.rank);
+    return results.slice(0, safeLimit);
+  }
+
+  listQueuedConversationIds(): string[] {
+    const rows = this.database.prepare("SELECT DISTINCT conversation_id FROM shared_messages WHERE status = 'queued'").all() as Array<{ conversation_id: string | null }>;
+    return rows.map((row) => row.conversation_id).filter((id): id is string => id !== null);
+  }
+
+  createSharedMessage(author: SharedMessage['author'], body: string, status: SharedMessage['status'] = 'completed', conversationId?: string, attachments: SharedAttachment[] = [], dispatchTarget = 'none', executionProfile: AgentRun['executionProfile'] = null): SharedMessage {
     const conversation = conversationId ? this.listConversations('all').find((item) => item.id === conversationId) : this.ensureDefaultConversation();
     if (!conversation) throw new Error('Conversation not found.');
     const message: SharedMessage = {
-      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), completedAt: ['completed', 'failed', 'canceled'].includes(status) ? new Date().toISOString() : null, attachments, model: null, executionProfile: null, inputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: dispatchTarget as SharedMessage['dispatchTarget'],
+      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), completedAt: ['completed', 'failed', 'canceled'].includes(status) ? new Date().toISOString() : null, attachments, model: null, executionProfile, inputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: dispatchTarget as SharedMessage['dispatchTarget'],
       attempt: 0, maxAttempts: 3, nextAttemptAt: null,
     };
     this.database.prepare(`
-      INSERT INTO shared_messages (id, conversation_id, author, body, pinned, status, error, attachments_json, dispatch_target, created_at, completed_at)
-      VALUES (?, ?, ?, ?, 0, ?, '', ?, ?, ?, ?)
-    `).run(message.id, message.conversationId, author, body, status, JSON.stringify(attachments), dispatchTarget, message.createdAt, message.completedAt);
+      INSERT INTO shared_messages (id, conversation_id, author, body, pinned, status, error, attachments_json, dispatch_target, created_at, completed_at, execution_profile)
+      VALUES (?, ?, ?, ?, 0, ?, '', ?, ?, ?, ?, ?)
+    `).run(message.id, message.conversationId, author, body, status, JSON.stringify(attachments), dispatchTarget, message.createdAt, message.completedAt, executionProfile);
     this.database.prepare('UPDATE shared_conversations SET updated_at = ?, title = CASE WHEN title = ? AND ? = ? THEN substr(?, 1, 80) ELSE title END WHERE id = ?')
       .run(message.createdAt, 'New conversation', author, 'jeffrey', body, message.conversationId);
     return message;
@@ -410,21 +550,20 @@ export class WorkItemRepository {
     const rows = this.database.prepare(`SELECT id, dispatch_target FROM shared_messages
       WHERE conversation_id = ? AND author = 'jeffrey' AND status = 'queued'
       ORDER BY created_at ASC, rowid ASC`).all(conversationId) as Array<{ id: string; dispatch_target: string }>;
-    const messages = this.listSharedMessages(1_000, conversationId);
     for (const row of rows) {
       if (!['auto', 'codex', 'claude', 'both'].includes(row.dispatch_target)) continue;
       const dispatchTarget = row.dispatch_target as 'auto' | 'codex' | 'claude' | 'both';
       const agents = dispatchTarget === 'both' ? ['codex', 'claude'] as const
         : dispatchTarget === 'auto' ? [this.selectBalancedAgent('codex')] : [dispatchTarget];
       if (agents.some((agent) => busyAgents.has(agent))) continue;
-      const message = messages.find((entry) => entry.id === row.id);
+      const message = this.getSharedMessageById(row.id);
       if (message) return { message, dispatchTarget };
     }
     return null;
   }
 
   promoteQueuedSharedMessage(id: string): SharedMessage | null {
-    const message = this.listSharedMessages(1_000).find((item) => item.id === id);
+    const message = this.getSharedMessageById(id);
     if (!message || message.status !== 'queued') return null;
     const earliest = this.database.prepare(`SELECT MIN(created_at) AS value FROM shared_messages WHERE conversation_id = ? AND status = 'queued'`)
       .get(message.conversationId) as { value: string | null };
@@ -432,7 +571,7 @@ export class WorkItemRepository {
       ? new Date(new Date(earliest.value).getTime() - 1).toISOString()
       : message.createdAt;
     this.database.prepare('UPDATE shared_messages SET created_at = ? WHERE id = ?').run(promotedAt, id);
-    return this.listSharedMessages(1_000).find((item) => item.id === id) ?? null;
+    return this.getSharedMessageById(id);
   }
 
   updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; outputTokens?: number | null; estimatedCostUsd?: number | null; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null }): SharedMessage | null {
@@ -444,7 +583,7 @@ export class WorkItemRepository {
     }).filter((entry): entry is [string, string | number] => entry[1] !== undefined);
     if (entries.length) this.database.prepare(`UPDATE shared_messages SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE id = ?`)
       .run(...entries.map(([, value]) => value), id);
-    return this.listSharedMessages(1_000).find((message) => message.id === id) ?? null;
+    return this.getSharedMessageById(id);
   }
 
   /**
@@ -454,7 +593,7 @@ export class WorkItemRepository {
    * (global memories only, correct for contexts with no known project yet).
    */
   getSharedContext(excludeConversationId?: string, scope?: { workItemId?: string; conversationId?: string }): string {
-    const messages = this.listSharedMessages(120).filter((message) => message.conversationId !== excludeConversationId);
+    const messages = this.listSharedMessages(120).messages.filter((message) => message.conversationId !== excludeConversationId);
     const allMemories = this.listMemories(undefined, 50);
     const recent = messages.filter((message) => message.status === 'completed' && message.body).slice(-6);
     const format = (message: SharedMessage) => `${message.author}: ${message.body.slice(0, 1_500)}`;
@@ -768,7 +907,7 @@ export class WorkItemRepository {
     return this.get(id);
   }
 
-  reorder(orderedItemIds: string[], stack?: 'attention' | 'workbench'): WorkItem[] {
+  reorder(orderedItemIds: string[], stack?: 'attention' | 'workbench', change?: { actor: QueueOrderChange['actor']; reason: string }): WorkItem[] {
     const inferredStack = stack ?? (this.get(orderedItemIds[0] ?? '')?.projectName?.toLowerCase() === 'workbench' ? 'workbench' : 'attention');
     const stackItems = inferredStack === 'workbench' ? this.listWorkbench() : this.list();
     const currentIds = stackItems.map((item) => item.id);
@@ -780,12 +919,65 @@ export class WorkItemRepository {
       const statement = this.database.prepare('UPDATE work_items SET queue_position = ?, updated_at = ? WHERE id = ?');
       const now = new Date().toISOString();
       orderedItemIds.forEach((id, index) => statement.run(index + 1, now, id));
+      // Movements are journalled so any of them can be undone, not just the ones
+      // that arrived as a proposal. Reorders that merely re-seat a task the caller
+      // just added or restored pass no `change` and are deliberately not journalled:
+      // their snapshot describes a different set of tasks, so replaying it would
+      // drop or resurrect work. No-ops are skipped so undo always lands on a change
+      // Jeffrey would actually notice.
+      if (change && currentIds.some((id, index) => id !== orderedItemIds[index])) {
+        this.database.prepare(`
+          INSERT INTO queue_order_history (id, stack, actor, reason, previous_order_json, new_order_json, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(randomUUID(), inferredStack, change.actor, change.reason, JSON.stringify(currentIds), JSON.stringify(orderedItemIds), now);
+      }
       this.database.exec('COMMIT');
     } catch (error) {
       this.database.exec('ROLLBACK');
       throw error;
     }
     return inferredStack === 'workbench' ? this.listWorkbench() : this.list();
+  }
+
+  listQueueHistory(stack: 'attention' | 'workbench' = 'attention', limit = 20): QueueOrderChange[] {
+    const rows = this.database.prepare('SELECT * FROM queue_order_history WHERE stack = ? ORDER BY created_at DESC, rowid DESC LIMIT ?')
+      .all(stack, Math.max(1, Math.min(100, limit))) as Array<Record<string, string | null>>;
+    return rows.map((row) => this.mapQueueOrderChange(row));
+  }
+
+  /**
+   * Reverses the most recent ordering change that still describes today's stack.
+   * Entries whose snapshot no longer matches (a task was added, completed, or
+   * archived since) are skipped rather than force-applied, because replaying a
+   * stale snapshot would silently drop or resurrect tasks.
+   */
+  undoLastQueueChange(stack: 'attention' | 'workbench' = 'attention'): { change: QueueOrderChange; items: WorkItem[] } | null {
+    const currentIds = new Set((stack === 'workbench' ? this.listWorkbench() : this.list()).map((item) => item.id));
+    const rows = this.database.prepare('SELECT * FROM queue_order_history WHERE stack = ? AND undone_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT 25')
+      .all(stack) as Array<Record<string, string | null>>;
+    for (const row of rows) {
+      const change = this.mapQueueOrderChange(row);
+      const applicable = change.previousOrder.length === currentIds.size && change.previousOrder.every((id) => currentIds.has(id));
+      if (!applicable) continue;
+      const undoneAt = new Date().toISOString();
+      const highWaterMark = Number((this.database.prepare('SELECT COALESCE(MAX(rowid), 0) AS mark FROM queue_order_history').get() as { mark: number }).mark);
+      this.database.prepare('UPDATE queue_order_history SET undone_at = ? WHERE id = ?').run(undoneAt, change.id);
+      this.database.prepare("UPDATE queue_proposals SET status = 'superseded', resolved_at = ? WHERE status = 'pending'").run(undoneAt);
+      const items = this.reorder(change.previousOrder, stack, { actor: 'jeffrey', reason: `Undo of: ${change.reason}` });
+      // The undo's own journal entry is closed immediately, so a second undo walks
+      // further back in history instead of toggling the same pair forever.
+      this.database.prepare('UPDATE queue_order_history SET undone_at = ? WHERE rowid > ? AND undone_at IS NULL').run(undoneAt, highWaterMark);
+      return { change: { ...change, undoneAt }, items };
+    }
+    return null;
+  }
+
+  private mapQueueOrderChange(row: Record<string, string | null>): QueueOrderChange {
+    return {
+      id: row.id!, stack: row.stack as QueueOrderChange['stack'], actor: row.actor as QueueOrderChange['actor'],
+      reason: row.reason ?? '', previousOrder: JSON.parse(row.previous_order_json!) as string[],
+      newOrder: JSON.parse(row.new_order_json!) as string[], createdAt: row.created_at!, undoneAt: row.undone_at,
+    };
   }
 
   move(itemId: string, neighbor: { beforeId?: string; afterId?: string }): WorkItem[] {
@@ -798,7 +990,7 @@ export class WorkItemRepository {
     ids.splice(from, 1);
     const updatedTarget = ids.indexOf(neighborId!);
     ids.splice(updatedTarget + (neighbor.afterId ? 1 : 0), 0, itemId);
-    return this.reorder(ids, stack);
+    return this.reorder(ids, stack, { actor: 'jeffrey', reason: `Manually moved “${this.get(itemId)?.title ?? itemId}”.` });
   }
 
   moveForAttention(id: string, destination: 'top' | 'bottom', reason: string): WorkItem[] {
@@ -809,7 +1001,7 @@ export class WorkItemRepository {
     const now = new Date().toISOString();
     this.database.prepare("UPDATE queue_proposals SET status = 'superseded', resolved_at = ? WHERE status = 'pending'").run(now);
     const without = ids.filter((itemId) => itemId !== id);
-    this.reorder(destination === 'top' ? [id, ...without] : [...without, id], stack);
+    this.reorder(destination === 'top' ? [id, ...without] : [...without, id], stack, { actor: 'agent', reason: `${destination === 'top' ? 'Promoted for attention' : 'Demoted while the agent works'}: ${reason}` });
     this.addActivity(id, 'system', 'queue_moved', `${destination === 'top' ? 'Promoted for attention' : 'Demoted while the agent works'}: ${reason}`);
     return stack === 'workbench' ? this.listWorkbench() : this.list();
   }
@@ -819,7 +1011,7 @@ export class WorkItemRepository {
     return row ? this.mapProposal(row) : null;
   }
 
-  createProposal(orderedItemIds: string[], rationale: string): QueueProposal {
+  createProposal(orderedItemIds: string[], rationale: string, explanations: QueueItemExplanation[] = []): QueueProposal {
     const previousOrder = this.list().map((item) => item.id);
     if (previousOrder.length !== orderedItemIds.length || !previousOrder.every((id) => orderedItemIds.includes(id))) {
       throw new Error('Proposal must contain every active queued item exactly once.');
@@ -828,54 +1020,82 @@ export class WorkItemRepository {
     const id = randomUUID();
     this.database.prepare("UPDATE queue_proposals SET status = 'superseded', resolved_at = ? WHERE status = 'pending'").run(now);
     this.database.prepare(`
-      INSERT INTO queue_proposals (id, status, previous_order_json, proposed_order_json, rationale, created_at)
-      VALUES (?, 'pending', ?, ?, ?, ?)
-    `).run(id, JSON.stringify(previousOrder), JSON.stringify(orderedItemIds), rationale, now);
-    this.reorder(orderedItemIds);
+      INSERT INTO queue_proposals (id, status, previous_order_json, proposed_order_json, rationale, explanations_json, created_at)
+      VALUES (?, 'pending', ?, ?, ?, ?, ?)
+    `).run(id, JSON.stringify(previousOrder), JSON.stringify(orderedItemIds), rationale, JSON.stringify(explanations), now);
+    this.reorder(orderedItemIds, undefined, { actor: 'agent', reason: 'Applied a daily stack proposal.' });
     return this.getPendingProposal()!;
   }
 
-  buildDailyProposal(): QueueProposal {
+  /**
+   * Gathers everything the ranking engine needs in a fixed number of queries.
+   * Kept in the repository so `queue-intelligence.ts` stays pure and testable.
+   */
+  buildQueueContext(now = Date.now()): QueueContext {
+    const openChildren = new Map<string, number>();
+    for (const row of this.database.prepare(`
+      SELECT parent_work_item_id AS parent, COUNT(*) AS count FROM work_items
+      WHERE parent_work_item_id IS NOT NULL AND archived_at IS NULL AND status NOT IN ('done', 'canceled')
+      GROUP BY parent_work_item_id
+    `).all() as Array<{ parent: string; count: number }>) openChildren.set(row.parent, Number(row.count));
+
+    const activeRuns = new Map<string, number>();
+    for (const row of this.database.prepare(`
+      SELECT work_item_id AS id, COUNT(*) AS count FROM agent_runs
+      WHERE status IN ('queued', 'running') GROUP BY work_item_id
+    `).all() as Array<{ id: string; count: number }>) activeRuns.set(row.id, Number(row.count));
+
+    // An item is treated as blocked in practice when its most recent narrative
+    // activity is a blocker note that no later progress or decision resolved.
+    const unresolvedBlockers = new Set<string>();
+    for (const row of this.database.prepare(`
+      SELECT work_item_id AS id, kind FROM activities
+      WHERE kind IN ('blocker', 'progress', 'decision', 'handoff')
+        AND created_at = (
+          SELECT MAX(created_at) FROM activities inner_activities
+          WHERE inner_activities.work_item_id = activities.work_item_id
+            AND inner_activities.kind IN ('blocker', 'progress', 'decision', 'handoff')
+        )
+    `).all() as Array<{ id: string; kind: string }>) if (row.kind === 'blocker') unresolvedBlockers.add(row.id);
+
+    // "Since the last plan" is the window that makes source movement meaningful:
+    // anything older was already visible when the previous order was agreed.
+    const lastPlan = this.database.prepare('SELECT created_at FROM queue_proposals ORDER BY created_at DESC LIMIT 1').get() as { created_at: string } | undefined;
+    const since = lastPlan?.created_at ?? new Date(now - 86_400_000).toISOString();
+    const sourceChanges = new Map<string, string>();
+    for (const row of this.database.prepare('SELECT id, source FROM work_items WHERE provider_updated_at IS NOT NULL AND provider_updated_at > ? AND is_queued = 1').all(since) as Array<{ id: string; source: string }>) {
+      sourceChanges.set(row.id, `its ${row.source} source changed since the last plan`);
+    }
+    for (const row of this.database.prepare("SELECT work_item_id AS id, provider FROM discovery_candidates WHERE work_item_id IS NOT NULL AND updated_at > ? AND status IN ('converted', 'merged')").all(since) as Array<{ id: string; provider: string }>) {
+      sourceChanges.set(row.id, `new ${row.provider} activity landed since the last plan`);
+    }
+
+    return { now, openChildren, activeRuns, unresolvedBlockers, sourceChanges, feedback: this.getQueueFeedbackWeights() };
+  }
+
+  /** Weights learned from the proposals Jeffrey accepted or rejected. */
+  getQueueFeedbackWeights(limit = 20): Map<QueueSignalKey, FeedbackWeight> {
+    const rows = this.database.prepare(`
+      SELECT status, explanations_json FROM queue_proposals
+      WHERE status IN ('accepted', 'rejected') AND explanations_json IS NOT NULL
+      ORDER BY created_at DESC LIMIT ?
+    `).all(limit) as Array<{ status: 'accepted' | 'rejected'; explanations_json: string }>;
+    return learnFeedbackWeights(rows.flatMap((row) => {
+      try { return [{ status: row.status, explanations: JSON.parse(row.explanations_json) as QueueItemExplanation[] }]; }
+      catch { return []; }
+    }));
+  }
+
+  /** Ranks the current stack without touching it. Backs the "why this order" view. */
+  explainQueue(now = Date.now()): QueuePlan {
+    return planQueue(this.list(), this.buildQueueContext(now));
+  }
+
+  buildDailyProposal(now = Date.now()): QueueProposal {
     const items = this.list();
     if (!items.length) throw new Error('Add at least one task before planning the stack.');
-    const now = Date.now();
-    const urgency = (item: WorkItem) => {
-      let score = 0;
-      if (item.status === 'in_progress') score += 20;
-      else if (item.status === 'ready') score += 4;
-      else if (item.status === 'blocked') score -= 8;
-      if (item.agentOutcome === 'needs_attention') score += 16;
-      else if (item.agentOutcome === 'follow_ups') score += 10;
-      else if (item.agentOutcome === 'finished') score -= 5;
-      if (item.assignees.includes('jeffrey')) score += 2;
-      const untouchedDays = Math.max(0, (now - new Date(item.lastTouchedAt).getTime()) / 86_400_000);
-      // Aging starts mattering after one day instead of leaving nearly the entire
-      // queue tied at zero. The cap prevents stale work from outranking urgent work.
-      if (untouchedDays >= 1) score += Math.min(8, Math.floor(untouchedDays));
-      if (item.dueDate) {
-        const days = (new Date(item.dueDate).getTime() - now) / 86_400_000;
-        if (days < 0) score += 10;
-        else if (days <= 1) score += 8;
-        else if (days <= 3) score += 5;
-      }
-      return score;
-    };
-    const ranked = items
-      .map((item, index) => ({ item, index, score: urgency(item), untouchedDays: Math.floor(Math.max(0, (now - new Date(item.lastTouchedAt).getTime()) / 86_400_000)) }))
-      .sort((a, b) => b.score - a.score || a.index - b.index);
-    const moved = ranked.filter((entry, index) => entry.index !== index);
-    const rationale = moved.length
-      ? moved.slice(0, 6).map(({ item, untouchedDays }) => {
-        if (item.agentOutcome === 'needs_attention') return `${item.title}: moved up because an agent run needs attention.`;
-        if (item.agentOutcome === 'follow_ups') return `${item.title}: moved up because agent follow-ups are waiting for review.`;
-        if (item.status === 'in_progress') return `${item.title}: kept with active work.`;
-        if (item.status === 'blocked') return `${item.title}: moved behind actionable work because it is blocked.`;
-        if (untouchedDays >= 1) return `${item.title}: promoted after ${untouchedDays} day${untouchedDays === 1 ? '' : 's'} without activity.`;
-        if (item.status === 'ready') return `${item.title}: moved ahead of backlog work because it is ready.`;
-        return `${item.title}: moved behind tasks that currently need more attention.`;
-      }).join(' ')
-      : 'No meaningful new task context justified changing yesterday’s order.';
-    return this.createProposal(ranked.map(({ item }) => item.id), rationale);
+    const plan = planQueue(items, this.buildQueueContext(now));
+    return this.createProposal(plan.orderedItemIds, plan.rationale, plan.explanations);
   }
 
   getPendingExecutionPlan(workItemId: string): ExecutionPlan | null {
@@ -928,8 +1148,11 @@ export class WorkItemRepository {
       const childIds = children.map((item) => item.id);
       const ordered = current.flatMap((item) => item.id === parent.id ? [item.id, ...childIds] : childIds.includes(item.id) ? [] : [item.id]);
       this.reorder(ordered, stack);
-      this.update(parent.id, { status: 'done' });
       this.addActivity(parent.id, 'system', 'decomposed', `Approved plan created ${selectedTasks.length} of ${plan.tasks.length} proposed tasks.`);
+      // The parent is now a historical decomposition record, not executable work.
+      // Archive it incomplete so it remains discoverable and distinct from a
+      // completed implementation; the selected children are the actionable work.
+      this.archive(parent.id, false);
     }
     const resolvedAt = new Date().toISOString();
     this.database.prepare('UPDATE execution_plans SET status = ?, resolved_at = ? WHERE id = ?').run(resolution, resolvedAt, id);
@@ -940,7 +1163,7 @@ export class WorkItemRepository {
     const row = this.database.prepare("SELECT * FROM queue_proposals WHERE id = ? AND status = 'pending'").get(id) as Record<string, string | null> | undefined;
     if (!row) return null;
     const proposal = this.mapProposal(row);
-    if (resolution === 'rejected') this.reorder(proposal.previousOrder);
+    if (resolution === 'rejected') this.reorder(proposal.previousOrder, undefined, { actor: 'jeffrey', reason: 'Rejected the daily stack proposal.' });
     const resolvedAt = new Date().toISOString();
     this.database.prepare('UPDATE queue_proposals SET status = ?, resolved_at = ? WHERE id = ?').run(resolution, resolvedAt, id);
     return { ...proposal, status: resolution, resolvedAt };
@@ -951,6 +1174,7 @@ export class WorkItemRepository {
       id: row.id!, status: row.status as QueueProposal['status'],
       previousOrder: JSON.parse(row.previous_order_json!) as string[],
       proposedOrder: JSON.parse(row.proposed_order_json!) as string[], rationale: row.rationale!,
+      explanations: row.explanations_json ? JSON.parse(row.explanations_json) as QueueItemExplanation[] : [],
       createdAt: row.created_at!, resolvedAt: row.resolved_at,
     };
   }
@@ -1109,24 +1333,25 @@ export class WorkItemRepository {
       .prepare(`UPDATE work_items SET ${assignments}${assignmentMode}, updated_at = ?, last_touched_at = ? WHERE id = ?`)
       .run(...values, now, now, id);
     if (changes.title !== undefined || changes.description !== undefined) {
-      this.database.prepare('DELETE FROM work_item_classifications WHERE work_item_id = ?').run(id);
+      this.database.prepare("DELETE FROM work_item_classifications WHERE work_item_id = ? AND source != 'manual'").run(id);
     }
     return this.get(id);
   }
 
   getClassification(workItemId: string): TaskClassification | null {
     const row = this.database.prepare('SELECT * FROM work_item_classifications WHERE work_item_id = ?').get(workItemId) as
-      { kind: AgentRun['kind']; agent: AgentRun['agent']; complex: number; instructions: string; classified_at: string } | undefined;
-    return row ? { kind: row.kind, agent: row.agent, complex: row.complex === 1, instructions: row.instructions, classifiedAt: row.classified_at } : null;
+      { kind: AgentRun['kind']; agent: AgentRun['agent']; complex: number; instructions: string; classified_at: string; source: TaskClassification['source']; classifier_version: number } | undefined;
+    if (row?.source === 'automatic' && row.classifier_version < 2) return null;
+    return row ? { kind: row.kind, agent: row.agent, complex: row.complex === 1, instructions: row.instructions, classifiedAt: row.classified_at, source: row.source } : null;
   }
 
-  setClassification(workItemId: string, classification: Omit<TaskClassification, 'classifiedAt'>): TaskClassification {
+  setClassification(workItemId: string, classification: Omit<TaskClassification, 'classifiedAt' | 'source'>, source: TaskClassification['source'] = 'automatic'): TaskClassification {
     const classifiedAt = new Date().toISOString();
-    this.database.prepare(`INSERT INTO work_item_classifications (work_item_id, kind, agent, complex, instructions, classified_at)
-      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(work_item_id) DO UPDATE SET kind = excluded.kind, agent = excluded.agent,
-      complex = excluded.complex, instructions = excluded.instructions, classified_at = excluded.classified_at`)
-      .run(workItemId, classification.kind, classification.agent, classification.complex ? 1 : 0, classification.instructions, classifiedAt);
-    return { ...classification, classifiedAt };
+    this.database.prepare(`INSERT INTO work_item_classifications (work_item_id, kind, agent, complex, instructions, classified_at, source, classifier_version)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 2) ON CONFLICT(work_item_id) DO UPDATE SET kind = excluded.kind, agent = excluded.agent,
+      complex = excluded.complex, instructions = excluded.instructions, classified_at = excluded.classified_at, source = excluded.source, classifier_version = excluded.classifier_version`)
+      .run(workItemId, classification.kind, classification.agent, classification.complex ? 1 : 0, classification.instructions, classifiedAt, source);
+    return { ...classification, classifiedAt, source };
   }
 
   getExplicitAgentAssignees(id: string): AgentRun['agent'][] {
@@ -1203,7 +1428,18 @@ export class WorkItemRepository {
   }
 
   getRunByMessage(messageId: string): AgentRun | null {
-    const row = this.database.prepare('SELECT id FROM agent_runs WHERE message_id = ? ORDER BY created_at DESC LIMIT 1').get(messageId) as { id: string } | undefined;
+    const row = this.database.prepare(`SELECT agent_runs.id
+      FROM agent_runs
+      LEFT JOIN shared_messages ON shared_messages.id = ?
+      WHERE agent_runs.message_id = ?
+        OR (
+          agent_runs.message_id IS NULL
+          AND agent_runs.conversation_id = shared_messages.conversation_id
+          AND agent_runs.agent = shared_messages.author
+          AND agent_runs.status IN ('queued', 'running')
+        )
+      ORDER BY CASE WHEN agent_runs.message_id = ? THEN 0 ELSE 1 END, agent_runs.created_at DESC
+      LIMIT 1`).get(messageId, messageId, messageId) as { id: string } | undefined;
     return row ? this.getRun(row.id) : null;
   }
 

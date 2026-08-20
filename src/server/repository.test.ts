@@ -92,7 +92,7 @@ describe('WorkItemRepository', () => {
     repository.createSharedMessage('claude', 'Preserve yesterday’s order unless context changes.', 'completed', conversation.id);
     repository.createSharedMessage('codex', '', 'running', conversation.id);
 
-    expect(repository.listSharedMessages()).toHaveLength(3);
+    expect(repository.listSharedMessages().messages).toHaveLength(3);
     repository.setConversationArchived(conversation.id, true);
     const context = repository.getSharedContext();
     expect(context).toContain('Durable context from archived work:');
@@ -114,7 +114,7 @@ describe('WorkItemRepository', () => {
 
     const fork = repository.forkConversation(conversation.id)!;
     expect(fork).toEqual(expect.objectContaining({ workItemId: task.id, forkedFromConversationId: conversation.id, archivedAt: null }));
-    expect(repository.listSharedMessages(100, fork.id).map((message) => message.body)).toEqual(['Investigate this', 'Here are the findings']);
+    expect(repository.listSharedMessages(100, null, fork.id).messages.map((message) => message.body)).toEqual(['Investigate this', 'Here are the findings']);
     expect(repository.setConversationArchived(conversation.id, false)?.archivedAt).toBeNull();
   });
 
@@ -126,7 +126,8 @@ describe('WorkItemRepository', () => {
     ]);
     repository.resolveExecutionPlan(plan.id, 'accepted', [1]);
 
-    expect(repository.get(parent.id)?.status).toBe('done');
+    expect(repository.get(parent.id)).toEqual(expect.objectContaining({ status: 'ready', archivedAt: expect.any(String), completionStatus: 'incomplete' }));
+    expect(repository.listArchived().map((item) => item.id)).toContain(parent.id);
     expect(repository.listWorkbench().map((item) => item.title)).toEqual(['Implement migration']);
     expect(repository.listWorkbench()[0].workspacePath).toBe('/tmp/project');
     expect(repository.listWorkbench()[0].parentWorkItemId).toBe(parent.id);
@@ -157,6 +158,35 @@ describe('WorkItemRepository', () => {
     expect(repository.list()[0]).toEqual(expect.objectContaining({ classificationKind: 'execute', classificationComplex: false }));
   });
 
+  it('never clears a manually selected classification when task copy changes', () => {
+    const item = repository.create({ title: 'Implement the card', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.setClassification(item.id, { kind: 'review', agent: 'codex', complex: false, instructions: 'Review it.' }, 'manual');
+
+    repository.update(item.id, { title: 'Implement and review the card', description: 'Updated details.' });
+
+    expect(repository.getClassification(item.id)).toEqual(expect.objectContaining({ kind: 'review', source: 'manual' }));
+  });
+
+  it('clears an automatic classification when task copy changes', () => {
+    const item = repository.create({ title: 'Investigate the card', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.setClassification(item.id, { kind: 'research', agent: 'claude', complex: false, instructions: 'Research it.' });
+
+    repository.update(item.id, { title: 'Implement the card' });
+
+    expect(repository.getClassification(item.id)).toBeNull();
+  });
+
+  it('invalidates stale automatic classifications without invalidating manual choices', () => {
+    const automatic = repository.create({ title: 'Publish the artifact', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const manual = repository.create({ title: 'Research the artifact', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.setClassification(automatic.id, { kind: 'research', agent: 'claude', complex: false, instructions: 'Research it.' });
+    repository.setClassification(manual.id, { kind: 'research', agent: 'claude', complex: false, instructions: 'Research it.' }, 'manual');
+    database.prepare('UPDATE work_item_classifications SET classifier_version = 1').run();
+
+    expect(repository.getClassification(automatic.id)).toBeNull();
+    expect(repository.getClassification(manual.id)).toEqual(expect.objectContaining({ kind: 'research', source: 'manual' }));
+  });
+
   it('does not misrepresent a generic chat run as a saved task classification', () => {
     const item = repository.create({ title: 'Legacy executed task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     repository.createRun(item.id, 'research', 'auto', 'claude', 'Investigate it.');
@@ -176,6 +206,104 @@ describe('WorkItemRepository', () => {
     expect(repository.list().map((item) => item.id)).toEqual([old.id, recent.id]);
     expect(repository.get(old.id)?.lastTouchedAt).toBe(tenDaysAgo);
     expect(repository.getDiscoveryInbox().queueProposal?.id).toBe(proposal.id);
+  });
+
+  it('records every ordering change and undoes them one step at a time', () => {
+    const first = repository.create({ title: 'First', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const second = repository.create({ title: 'Second', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const third = repository.create({ title: 'Third', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    expect(repository.list().map((item) => item.id)).toEqual([third.id, second.id, first.id]);
+
+    repository.move(first.id, { beforeId: third.id });
+    expect(repository.list().map((item) => item.id)).toEqual([first.id, third.id, second.id]);
+    repository.move(second.id, { beforeId: first.id });
+    expect(repository.list().map((item) => item.id)).toEqual([second.id, first.id, third.id]);
+
+    expect(repository.listQueueHistory().map((change) => change.actor)).toEqual(['jeffrey', 'jeffrey']);
+    expect(repository.listQueueHistory()[0].reason).toContain('Second');
+
+    expect(repository.undoLastQueueChange()?.items.map((item) => item.id)).toEqual([first.id, third.id, second.id]);
+    expect(repository.undoLastQueueChange()?.items.map((item) => item.id)).toEqual([third.id, second.id, first.id]);
+    expect(repository.undoLastQueueChange()).toBeNull();
+  });
+
+  it('skips ordering snapshots that no longer describe the stack instead of resurrecting tasks', () => {
+    const first = repository.create({ title: 'First', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const second = repository.create({ title: 'Second', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.move(first.id, { beforeId: second.id });
+    repository.update(second.id, { status: 'done' });
+
+    expect(repository.undoLastQueueChange()).toBeNull();
+    expect(repository.list().map((item) => item.id)).toEqual([first.id]);
+  });
+
+  it('journals neither a no-op reorder nor the reseating that follows creating a task', () => {
+    const first = repository.create({ title: 'First', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const second = repository.create({ title: 'Second', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.reorder([second.id, first.id]);
+
+    expect(repository.listQueueHistory()).toHaveLength(0);
+    expect(repository.undoLastQueueChange()).toBeNull();
+  });
+
+  it('attaches a per-task explanation to every daily proposal', () => {
+    const fresh = repository.create({ title: 'Fresh', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const stale = repository.create({ title: 'Stale', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    database.prepare('UPDATE work_items SET last_touched_at = ? WHERE id = ?').run(new Date(Date.now() - 6 * 86_400_000).toISOString(), stale.id);
+    repository.reorder([fresh.id, stale.id]);
+
+    const proposal = repository.buildDailyProposal();
+
+    expect(proposal.proposedOrder).toEqual([stale.id, fresh.id]);
+    const explanation = proposal.explanations.find((entry) => entry.itemId === stale.id)!;
+    expect(explanation.signals.map((signal) => signal.key)).toEqual(['status', 'aging']);
+    expect(explanation.score).toBe(10);
+    expect(explanation.previousPosition).toBe(2);
+    expect(explanation.proposedPosition).toBe(1);
+    expect(repository.getPendingProposal()?.explanations).toHaveLength(2);
+  });
+
+  it('demotes a parent that is waiting on its own open subtasks', () => {
+    const parent = repository.create({ title: 'Parent epic', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const sibling = repository.create({ title: 'Independent work', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.create({ title: 'Subtask', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null, parentWorkItemId: parent.id });
+    repository.reorder([parent.id, sibling.id, ...repository.list().map((item) => item.id).filter((id) => id !== parent.id && id !== sibling.id)]);
+
+    const plan = repository.explainQueue();
+
+    expect(plan.orderedItemIds[plan.orderedItemIds.length - 1]).toBe(parent.id);
+    expect(plan.rationale).toContain('waiting on 1 open subtask');
+  });
+
+  it('promotes a task whose provider source changed since the last plan', () => {
+    const quiet = repository.create({ title: 'Quiet', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const moved = repository.create({ title: 'Source moved', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.reorder([quiet.id, moved.id]);
+    repository.buildDailyProposal();
+    database.prepare('UPDATE work_items SET provider_updated_at = ? WHERE id = ?').run(new Date(Date.now() + 60_000).toISOString(), moved.id);
+
+    const plan = repository.explainQueue();
+
+    expect(plan.orderedItemIds).toEqual([moved.id, quiet.id]);
+    expect(plan.rationale).toContain('source changed since the last plan');
+  });
+
+  it('learns from resolved proposals and reports the weight it applied', () => {
+    const fresh = repository.create({ title: 'Fresh', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const stale = repository.create({ title: 'Stale', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    database.prepare('UPDATE work_items SET last_touched_at = ? WHERE id = ?').run(new Date(Date.now() - 6 * 86_400_000).toISOString(), stale.id);
+    repository.reorder([fresh.id, stale.id]);
+
+    for (let round = 0; round < 3; round += 1) {
+      const proposal = repository.buildDailyProposal();
+      repository.resolveProposal(proposal.id, 'accepted');
+      repository.reorder([fresh.id, stale.id]);
+    }
+
+    expect(repository.getQueueFeedbackWeights().get('aging')).toEqual({ weight: 1.3, accepted: 3, rejected: 0 });
+    const plan = repository.explainQueue();
+    expect(plan.explanations.find((entry) => entry.itemId === stale.id)?.signals.map((signal) => signal.key))
+      .toEqual(['status', 'aging', 'feedback']);
   });
 
   it('stores source credentials without returning them in connection metadata', () => {
@@ -200,10 +328,67 @@ describe('WorkItemRepository', () => {
     expect(repository.get(completed.id)?.completionStatus).toBe('completed');
     expect(repository.get(completed.id)?.status).toBe('done');
     expect(repository.listConversations().some((conversation) => conversation.id === archivedConversation.id)).toBe(false);
-    expect(repository.listSharedMessages(100, archivedConversation.id)).toEqual(expect.arrayContaining([expect.objectContaining({ body: 'Useful archived report' })]));
-    expect(repository.listSharedMessages().filter((message) => message.pinned)).toEqual([]);
+    expect(repository.listSharedMessages(100, null, archivedConversation.id).messages).toEqual(expect.arrayContaining([expect.objectContaining({ body: 'Useful archived report' })]));
+    expect(repository.listSharedMessages().messages.filter((message) => message.pinned)).toEqual([]);
     expect(repository.getSharedContext()).toContain('Archived task (incomplete): Paused work');
     expect(repository.getSharedContext()).toContain('Archived task (completed): Shipped work');
+  });
+
+  describe('full-text search over shared conversations and messages', () => {
+    it('ranks a matching message above an unrelated one and links back to its conversation', () => {
+      const conversation = repository.createConversation('Queue redesign');
+      repository.createSharedMessage('jeffrey', 'We should switch the queue to bm25 ranking.', 'completed', conversation.id);
+      repository.createSharedMessage('claude', 'Unrelated note about lunch.', 'completed', conversation.id);
+
+      const results = repository.searchShared('bm25');
+
+      expect(results).toEqual([
+        expect.objectContaining({ type: 'message', conversationId: conversation.id, conversationTitle: 'Queue redesign' }),
+      ]);
+    });
+
+    it('matches a conversation title as well as message bodies', () => {
+      const conversation = repository.createConversation('Search feature planning');
+      repository.createSharedMessage('jeffrey', 'No matching keyword here.', 'completed', conversation.id);
+
+      const results = repository.searchShared('planning');
+
+      expect(results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'conversation', conversationId: conversation.id, conversationTitle: 'Search feature planning' }),
+      ]));
+    });
+
+    it('returns an empty array for an empty or whitespace-only query', () => {
+      repository.createConversation('Some conversation');
+      expect(repository.searchShared('')).toEqual([]);
+      expect(repository.searchShared('   ')).toEqual([]);
+    });
+
+    it('returns an empty array when nothing matches', () => {
+      repository.createConversation('Some conversation');
+      expect(repository.searchShared('zzz-no-such-token')).toEqual([]);
+    });
+
+    it('does not throw on FTS5 special characters in the query', () => {
+      const conversation = repository.createConversation('Special characters');
+      repository.createSharedMessage('jeffrey', 'A message with "quotes" and colons.', 'completed', conversation.id);
+
+      expect(() => repository.searchShared('"quotes" AND OR NOT * : -- ;')).not.toThrow();
+    });
+
+    it('keeps the FTS index in sync when a message is edited or a conversation is deleted', () => {
+      const conversation = repository.createConversation('Editable thread');
+      const message = repository.createSharedMessage('jeffrey', 'original wording', 'completed', conversation.id);
+      repository.updateSharedMessage(message.id, { body: 'updated wording' });
+
+      expect(repository.searchShared('original')).toEqual([]);
+      expect(repository.searchShared('updated')).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'message', messageId: message.id }),
+      ]));
+
+      repository.deleteConversation(conversation.id);
+      expect(repository.searchShared('updated')).toEqual([]);
+    });
   });
 
   it('moves agent-owned work down and attention-ready work to the top', () => {
@@ -295,8 +480,29 @@ describe('WorkItemRepository', () => {
     const second = repository.createConversation('Second thread');
     repository.createSharedMessage('jeffrey', 'Review this file', 'completed', first.id, [{ name: 'App.tsx', path: '/tmp/App.tsx', mimeType: 'text/plain', size: 42 }]);
     repository.createSharedMessage('jeffrey', 'Separate context', 'completed', second.id);
-    expect(repository.listSharedMessages(100, first.id)).toEqual([expect.objectContaining({ body: 'Review this file', attachments: [expect.objectContaining({ name: 'App.tsx' })] })]);
-    expect(repository.listSharedMessages(100, second.id)).toHaveLength(1);
+    expect(repository.listSharedMessages(100, null, first.id).messages).toEqual([expect.objectContaining({ body: 'Review this file', attachments: [expect.objectContaining({ name: 'App.tsx' })] })]);
+    expect(repository.listSharedMessages(100, null, second.id).messages).toHaveLength(1);
+  });
+
+  it('paginates shared messages in stable chronological order beyond the old 100-message cap', () => {
+    const conversation = repository.createConversation('Long thread');
+    const created = Array.from({ length: 5 }, (_, index) => repository.createSharedMessage('jeffrey', `message ${index}`, 'completed', conversation.id));
+
+    const firstPage = repository.listSharedMessages(2, null, conversation.id);
+    expect(firstPage.messages.map((message) => message.body)).toEqual(['message 3', 'message 4']);
+    expect(firstPage.totalCount).toBe(5);
+    expect(firstPage.nextCursor).toBeTruthy();
+
+    const secondPage = repository.listSharedMessages(2, firstPage.nextCursor, conversation.id);
+    expect(secondPage.messages.map((message) => message.body)).toEqual(['message 1', 'message 2']);
+    expect(secondPage.nextCursor).toBeTruthy();
+
+    const thirdPage = repository.listSharedMessages(2, secondPage.nextCursor, conversation.id);
+    expect(thirdPage.messages.map((message) => message.body)).toEqual(['message 0']);
+    expect(thirdPage.nextCursor).toBeNull();
+
+    expect(repository.listAllSharedMessages(conversation.id).map((message) => message.id)).toEqual(created.map((message) => message.id));
+    expect(() => repository.listSharedMessages(2, 'not-a-real-cursor', conversation.id)).toThrow('Invalid message cursor.');
   });
 
   it('persists queued chat turns with their requested agent target', () => {
@@ -313,7 +519,7 @@ describe('WorkItemRepository', () => {
     const queued = repository.createSharedMessage('jeffrey', 'Do this afterward', 'queued', conversation.id, [], 'codex');
 
     expect(dispatchNextSharedTurn(repository, conversation.id)).toEqual([]);
-    expect(repository.listSharedMessages(100, conversation.id)).toEqual(expect.arrayContaining([
+    expect(repository.listSharedMessages(100, null, conversation.id).messages).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: running.id, status: 'running' }),
       expect.objectContaining({ id: queued.id, status: 'queued' }),
     ]));
@@ -348,6 +554,31 @@ describe('WorkItemRepository', () => {
     const canceled = cancelSharedReply(repository, queued.id);
     expect(canceled).toEqual(expect.objectContaining({ id: queued.id, status: 'canceled' }));
     expect(repository.nextQueuedSharedTurn(conversation.id)).toBeNull();
+  });
+
+  it('durably cancels the task run linked to a canceled chat reply', () => {
+    const task = repository.create({ title: 'Fix cancellation', description: '', priority: 2, status: 'in_progress', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const conversation = repository.getOrCreateWorkConversation(task.id, task.title);
+    const reply = repository.createSharedMessage('claude', 'Working', 'running', conversation.id);
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Fix it', conversation.id, reply.id);
+    repository.updateRun(run.id, { status: 'running' });
+
+    cancelSharedReply(repository, reply.id);
+
+    expect(repository.getRun(run.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
+    expect(repository.listSharedMessages(100, null, conversation.id).messages.find((message) => message.id === reply.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
+  });
+
+  it('cancels a legacy chat run that predates durable reply linkage', () => {
+    const task = repository.create({ title: 'Fix legacy cancellation', description: '', priority: 2, status: 'in_progress', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const conversation = repository.getOrCreateWorkConversation(task.id, task.title);
+    const reply = repository.createSharedMessage('claude', 'Working', 'running', conversation.id);
+    const run = repository.createRun(task.id, 'analysis', 'claude', 'claude', 'Continue', conversation.id);
+    repository.updateRun(run.id, { status: 'running' });
+
+    cancelSharedReply(repository, reply.id);
+
+    expect(repository.getRun(run.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
   });
 
   it('paginates conversations in stable updated order', () => {
@@ -513,7 +744,7 @@ describe('WorkItemRepository', () => {
       const message = repository.createSharedMessage('jeffrey', 'hi', 'queued', conversation.id);
       expect(repository.claimQueuedTurn(message.id)).toBe(true);
       expect(repository.claimQueuedTurn(message.id)).toBe(false);
-      expect(repository.listSharedMessages(10, conversation.id).find((entry) => entry.id === message.id)?.status).toBe('completed');
+      expect(repository.listSharedMessages(10, null, conversation.id).messages.find((entry) => entry.id === message.id)?.status).toBe('completed');
     });
 
     it('renewLeases extends only the caller-owned, still-live leases', () => {
@@ -530,7 +761,7 @@ describe('WorkItemRepository', () => {
       const conversation = repository.createConversation();
       const message = repository.createSharedMessage('codex', '', 'running', conversation.id);
       expect(repository.claimSharedMessage(message.id, 'owner-a', 60_000)).toBe(true);
-      expect(repository.listSharedMessages(10, conversation.id).find((m) => m.id === message.id)?.status).toBe('running');
+      expect(repository.listSharedMessages(10, null, conversation.id).messages.find((m) => m.id === message.id)?.status).toBe('running');
       // Second claim by a different owner fails.
       expect(repository.claimSharedMessage(message.id, 'owner-b', 60_000)).toBe(false);
     });
@@ -543,7 +774,7 @@ describe('WorkItemRepository', () => {
 
       const result = repository.reclaimExpired();
       expect(result.recoveredMessageIds).toContain(message.id);
-      const recovered = repository.listSharedMessages(10, conversation.id).find((m) => m.id === message.id);
+      const recovered = repository.listSharedMessages(10, null, conversation.id).messages.find((m) => m.id === message.id);
       expect(recovered?.status).toBe('failed');
       expect(recovered?.error).toMatch(/Interrupted by API restart/);
       expect(recovered?.body).toBe('partial output'); // Partial output is preserved for inspection.

@@ -60,6 +60,25 @@ export interface ConversationPage {
   totalCount: number;
 }
 
+export interface SharedMessagePage {
+  messages: SharedMessage[];
+  nextCursor: string | null;
+  totalCount: number;
+}
+
+export interface SharedSearchResult {
+  type: 'conversation' | 'message';
+  conversationId: string;
+  conversationTitle: string;
+  messageId: string | null;
+  snippet: string;
+  rank: number;
+}
+
+export interface SharedSearchResponse {
+  results: SharedSearchResult[];
+}
+
 export const createWorkItemSchema = z.object({
   title: z.string().trim().min(1).max(300),
   description: z.string().max(20_000).default(''),
@@ -225,6 +244,7 @@ export interface TaskClassification {
   complex: boolean;
   instructions: string;
   classifiedAt: string;
+  source: 'automatic' | 'manual';
 }
 
 export const taskLifecycleActionSchema = z.enum(['archive', 'complete']);
@@ -248,11 +268,13 @@ export interface ExecutionPlan {
 export const runKindSchema = z.enum(['research', 'analysis', 'strategy', 'execute', 'review']);
 export const agentTargetSchema = z.enum(['auto', 'codex', 'claude', 'both']);
 export const runStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'canceled']);
+export const executionProfileOverrideSchema = z.enum(['economy', 'standard', 'deep']).nullable().default(null);
 
 export const createAgentRunSchema = z.object({
   kind: runKindSchema,
   target: agentTargetSchema,
   instructions: z.string().trim().max(20_000).default(''),
+  executionProfile: executionProfileOverrideSchema,
 });
 
 export interface AgentRun {
@@ -307,14 +329,55 @@ export interface LinearProviderConfig {
   projectIds: string[];
 }
 
+export type QueueSignalKey =
+  | 'status'
+  | 'agent_outcome'
+  | 'ownership'
+  | 'aging'
+  | 'deadline'
+  | 'blocker'
+  | 'source_change'
+  | 'workload'
+  | 'feedback';
+
+/** One named reason a task scored where it did, with its point contribution. */
+export interface QueueSignal {
+  key: QueueSignalKey;
+  delta: number;
+  detail: string;
+}
+
+/** Per-task audit trail for a proposal: what it scored, why, and where it moved. */
+export interface QueueItemExplanation {
+  itemId: string;
+  title: string;
+  score: number;
+  signals: QueueSignal[];
+  previousPosition: number;
+  proposedPosition: number;
+}
+
 export interface QueueProposal {
   id: string;
   status: 'pending' | 'accepted' | 'rejected' | 'superseded';
   previousOrder: string[];
   proposedOrder: string[];
   rationale: string;
+  explanations: QueueItemExplanation[];
   createdAt: string;
   resolvedAt: string | null;
+}
+
+/** A reversible ordering change. Every reorder records one, whoever caused it. */
+export interface QueueOrderChange {
+  id: string;
+  stack: 'attention' | 'workbench';
+  reason: string;
+  actor: 'jeffrey' | 'agent' | 'system';
+  previousOrder: string[];
+  newOrder: string[];
+  createdAt: string;
+  undoneAt: string | null;
 }
 
 export const createQueueProposalSchema = z.object({
@@ -445,6 +508,7 @@ export const createSharedMessageSchema = z.object({
   conversationId: z.string().uuid(),
   body: z.string().trim().max(50_000).default(''),
   dispatchTo: z.enum(['auto', 'both', 'codex', 'claude', 'none']).default('auto'),
+  executionProfile: executionProfileOverrideSchema,
   attachments: z.array(z.object({
     name: z.string().trim().min(1).max(255),
     mimeType: z.string().max(200).default('application/octet-stream'),

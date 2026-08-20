@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { authCookieName, createAuthGate, generateToken, readCookie, tokensMatch } from './auth.js';
+import { authCookieName, createAuthGate, generateToken, isOpenRequest, readCookie, tokensMatch } from './auth.js';
 
 const token = 'test-secret-token';
 
@@ -33,6 +33,14 @@ describe('workbench auth gate', () => {
 
   it('rejects an unauthenticated API request with JSON and no data', () => {
     const result = call('/api/work-items');
+    expect(result.nexted).toBe(false);
+    expect(result.status).toBe(401);
+    expect(result.headers['content-type']).toBe('application/json');
+    expect(JSON.parse(result.body!).error).toContain('Unauthorized');
+  });
+
+  it('rejects an unauthenticated MCP request with JSON and no state', () => {
+    const result = call('/mcp');
     expect(result.nexted).toBe(false);
     expect(result.status).toBe(401);
     expect(result.headers['content-type']).toBe('application/json');
@@ -92,5 +100,26 @@ describe('workbench auth gate', () => {
   it('generates a URL-safe token with real entropy', () => {
     expect(generateToken()).toMatch(/^[\w-]{32,}$/);
     expect(generateToken()).not.toBe(generateToken());
+  });
+});
+
+describe('artifact feedback exemption', () => {
+  const configured = { WORKBENCH_PUBLIC_URL: 'https://jeffrey.ngrok-free.app', ARTIFACT_PUBLIC_BASE_URL: 'https://artifacts.example.com' } as NodeJS.ProcessEnv;
+
+  it('lets a coworker post feedback without a token once feedback is configured', () => {
+    expect(isOpenRequest('/api/artifacts/abc123/comments', 'POST', configured)).toBe(true);
+    expect(isOpenRequest('/api/artifacts/abc123/comments', 'OPTIONS', configured)).toBe(true);
+  });
+
+  it('never exposes reading that feedback, or any other route', () => {
+    expect(isOpenRequest('/api/artifacts/abc123/comments', 'GET', configured)).toBe(false);
+    expect(isOpenRequest('/api/artifacts', 'POST', configured)).toBe(false);
+    expect(isOpenRequest('/api/work-items', 'POST', configured)).toBe(false);
+    expect(isOpenRequest('/api/artifacts/abc123/../../work-items/comments', 'POST', configured)).toBe(false);
+  });
+
+  it('keeps the endpoint gated when feedback is not configured', () => {
+    expect(isOpenRequest('/api/artifacts/abc123/comments', 'POST', {})).toBe(false);
+    expect(isOpenRequest('/api/health', 'GET', {})).toBe(true);
   });
 });

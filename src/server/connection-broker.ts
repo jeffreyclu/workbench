@@ -2,7 +2,8 @@ import type { BrokerConnection, BrokerSearchResponse, BrokerSourceId, ResolvedSo
 import type { WorkItemRepository } from './repository.js';
 import { resolveSourceUrl as resolveGenericSourceUrl } from './source-resolver.js';
 import { isMcpReauthenticationError, mcpAuthenticationMessage, scanRemoteMcp } from './remote-mcp.js';
-import { scanSlackWithCodex, searchSlackWithCodex } from './slack-codex.js';
+import { searchSlackWithCodex } from './slack-codex.js';
+import { scanSlackMcp } from './slack-mcp.js';
 import { searchFigmaWithCodex } from './managed-connector.js';
 import { scanSource, type SourceSignal } from './source-scanner.js';
 
@@ -22,19 +23,22 @@ function legacyConnection(repository: WorkItemRepository, provider: SourceProvid
 
 function recoverAuthentication(repository: WorkItemRepository, provider: SourceProvider, error: unknown): Error {
   if (!isMcpReauthenticationError(error)) return error instanceof Error ? error : new Error('Source request failed.');
-  if (repository.getSourceSettings(provider)) repository.removeSourceConnection(provider);
-  return new Error(mcpAuthenticationMessage(provider));
+  const message = mcpAuthenticationMessage(provider);
+  if (repository.getSourceSettings(provider)) repository.markSourceReauthRequired(provider, message);
+  return new Error(message);
 }
 
 export function listBrokerConnections(repository: WorkItemRepository): BrokerConnection[] {
   const atlassian = legacyConnection(repository, 'confluence');
   const github = legacyConnection(repository, 'github');
+  const slack = legacyConnection(repository, 'slack');
+  const figmaConfigured = Boolean(process.env.FIGMA_ACCESS_TOKEN || process.env.FIGMA_TOKEN);
   return [
-    { id: 'slack', name: 'Slack', state: 'connected', host: 'managed_connector', capabilities: ['resolve_links', 'search'], configurable: false, lastError: null, detail: 'Workbench fetches Slack once and shares the context with either agent.' },
-    { id: 'figma', name: 'Figma', state: 'connected', host: 'managed_connector', capabilities: ['resolve_links'], configurable: false, lastError: null, detail: 'Available to agents through the managed Figma connector.' },
+    { id: 'slack', name: 'Slack', state: slack?.lastError ? 'reauth_required' : slack ? 'connected' : 'needs_auth', host: 'workbench', capabilities: ['resolve_links', 'search'], configurable: true, lastError: slack?.lastError ?? null, detail: slack ? 'Verified through Workbench Slack MCP.' : 'Connect Slack to enable Workbench-owned search.' },
+    { id: 'figma', name: 'Figma', state: figmaConfigured ? 'connected' : 'needs_auth', host: 'managed_connector', capabilities: ['resolve_links'], configurable: false, lastError: null, detail: figmaConfigured ? 'Configured through an externally managed Figma credential.' : 'Figma is not verified by Workbench.' },
     { id: 'linear', name: 'Linear', state: process.env.LINEAR_API_KEY ? 'connected' : 'needs_auth', host: 'workbench', capabilities: ['resolve_links', 'search', 'sync'], configurable: Boolean(process.env.LINEAR_API_KEY), lastError: null, detail: process.env.LINEAR_API_KEY ? 'Synced and scoped by Workbench.' : 'Add LINEAR_API_KEY to Workbench.' },
-    { id: 'atlassian', name: 'Atlassian', state: atlassian ? atlassian.lastError ? 'error' : 'connected' : 'needs_auth', host: 'workbench', capabilities: ['resolve_links', 'search'], configurable: true, lastError: atlassian?.lastError ?? null, detail: atlassian ? 'Jira and Confluence through one remote MCP connection.' : 'Authorization required for Jira and Confluence.' },
-    { id: 'github', name: 'GitHub', state: github ? github.lastError ? 'error' : 'connected' : process.env.GITHUB_TOKEN ? 'connected' : 'needs_auth', host: 'workbench', capabilities: ['resolve_links', 'search'], configurable: true, lastError: github?.lastError ?? null, detail: github || process.env.GITHUB_TOKEN ? 'Scoped to writer, WriterInternal, and WriterColab.' : 'GitHub connection is not configured.' },
+    { id: 'atlassian', name: 'Atlassian', state: atlassian ? atlassian.lastError ? 'reauth_required' : 'connected' : 'needs_auth', host: 'workbench', capabilities: ['resolve_links', 'search'], configurable: true, lastError: atlassian?.lastError ?? null, detail: atlassian ? 'Jira and Confluence through one remote MCP connection.' : 'Authorization required for Jira and Confluence.' },
+    { id: 'github', name: 'GitHub', state: github?.lastError ? 'reauth_required' : github || process.env.GITHUB_TOKEN ? 'connected' : 'needs_auth', host: 'workbench', capabilities: ['resolve_links', 'search'], configurable: true, lastError: github?.lastError ?? null, detail: github || process.env.GITHUB_TOKEN ? 'Uses one Workbench credential source for search and links.' : 'GitHub connection is not configured.' },
     { id: 'google', name: 'Google Workspace', state: 'disabled', host: 'managed_connector', capabilities: [], configurable: false, lastError: null, detail: 'Awaiting an approved Writer Google Workspace connector.' },
   ];
 }
@@ -69,7 +73,7 @@ export async function contextForPrompt(repository: WorkItemRepository, message: 
     if (provider !== 'slack' && !settings && !(provider === 'github' && process.env.GITHUB_TOKEN)) { blocks.push(`Workbench connection unavailable: ${label} is not connected.`); continue; }
     try {
       const providerQuery = sourceQuery(message, provider);
-      const signals = await cached(`${provider}:${providerQuery}`, () => provider === 'slack' ? scanSlackWithCodex() : provider === 'confluence' ? scanRemoteMcp(provider, settings!, providerQuery) : scanSource('github', settings ?? { token: process.env.GITHUB_TOKEN ?? '', query: providerQuery }));
+      const signals = await cached(`${provider}:${providerQuery}`, () => provider === 'slack' ? scanSlackMcp({ ...(settings ?? {}), query: providerQuery }) : provider === 'confluence' ? scanRemoteMcp(provider, settings!, providerQuery) : scanSource('github', settings ?? { token: process.env.GITHUB_TOKEN ?? '', query: providerQuery }));
       const terms = query.toLowerCase().split(/\s+/).filter((term) => term.length > 2);
       const matches = terms.length ? signals.filter((signal) => terms.some((term) => `${signal.title}\n${signal.summary}\n${signal.url ?? ''}`.toLowerCase().includes(term))) : signals;
       blocks.push(matches.length ? format(label, matches) : `Workbench found no ${label} matches for ${query ? `“${query}”` : 'this request'}.`);
@@ -98,7 +102,7 @@ export async function searchBrokerSources(repository: WorkItemRepository, query:
     try {
       if (source === 'google') throw new Error('Google Workspace is disabled pending Writer approval.');
       if (source === 'linear') return repository.searchLinear(query, 20).map((item) => ({ provider: 'linear', title: `${item.sourceIdentifier ?? 'Linear'} · ${item.title}`, summary: item.description, url: item.sourceUrl, occurredAt: item.providerUpdatedAt }));
-      if (source === 'slack') return cached(`slack:search:${query}`, () => searchSlackWithCodex(query, undefined, signal));
+      if (source === 'slack') { const settings = repository.getSourceSettings('slack'); if (!settings) throw new Error('Slack is not connected.'); return cached(`slack:search:${query}`, () => scanSlackMcp({ ...settings, query })); }
       if (source === 'figma') return cached(`figma:search:${query}`, () => searchFigmaWithCodex(query, signal));
       if (source === 'atlassian') {
         const settings = repository.getSourceSettings('confluence');

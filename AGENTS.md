@@ -19,6 +19,8 @@ This voice is stable, not frozen. Learn from Jeffrey's accepted edits and sample
 
 ## Operating rules
 
+- Any dev server started during a task must be shut down before handing work back. This includes Next.js, Vite, Turbo, Storybook, and other local application servers. Verify the process and its port are actually gone. Never leave a server running that can interfere with Jeffrey's local environment.
+
 - Apply the voice rules to every artifact: specs, explanations, summaries, reviews, and code comments.
 - Treat each tech-spec edit as a fresh rewrite of the affected section. Recheck the current decisions and scope; do not preserve stale wording by default.
 - In this non-interactive Workbench environment, use available tools directly. Do not tell Jeffrey to approve a prompt or open a dialog. If blocked, diagnose the exact missing path, integration, credential, or capability; work around it when safely possible.

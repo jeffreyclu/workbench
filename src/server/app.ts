@@ -357,6 +357,13 @@ export function createApp(database: WorkbenchDatabase) {
     response.status(201).json({ conversation });
   });
 
+  app.get('/api/shared/search', (request, response) => {
+    const query = z.string().trim().min(1).optional().parse(request.query.q);
+    if (!query) return response.status(400).json({ error: 'Query parameter "q" is required.' });
+    const limit = z.coerce.number().int().min(1).max(100).default(20).parse(request.query.limit);
+    response.json({ results: repository.searchShared(query, limit) });
+  });
+
   app.get('/api/shared/messages', (request, response) => {
     const conversationId = z.string().uuid().optional().parse(request.query.conversationId);
     // Recovery of runs whose owner process died is the scheduler's job (lease
@@ -366,10 +373,15 @@ export function createApp(database: WorkbenchDatabase) {
     // after a restart before the scheduler gets a chance to reclaim it properly.
     if (conversationId) dispatchNextSharedTurn(repository, conversationId);
     else {
-      const queuedConversationIds = new Set(repository.listSharedMessages(1_000).filter((message) => message.status === 'queued').map((message) => message.conversationId));
-      for (const queuedConversationId of queuedConversationIds) dispatchNextSharedTurn(repository, queuedConversationId);
+      for (const queuedConversationId of repository.listQueuedConversationIds()) dispatchNextSharedTurn(repository, queuedConversationId);
     }
-    response.json({ messages: repository.listSharedMessages(100, conversationId) });
+    const limit = z.coerce.number().int().min(1).max(200).default(100).parse(request.query.limit);
+    const cursor = z.string().optional().parse(request.query.cursor) ?? null;
+    try {
+      response.json(repository.listSharedMessages(limit, cursor, conversationId));
+    } catch {
+      response.status(400).json({ error: 'Invalid message cursor.' });
+    }
   });
 
   app.post('/api/shared/messages', (request, response) => {
@@ -393,7 +405,7 @@ export function createApp(database: WorkbenchDatabase) {
     }
     const agents = input.dispatchTo === 'both' ? ['codex', 'claude'] as const
       : input.dispatchTo === 'none' ? [] : [input.dispatchTo];
-    const message = repository.createSharedMessage('jeffrey', input.body, agents.length ? 'queued' : 'completed', input.conversationId, attachments, input.dispatchTo);
+    const message = repository.createSharedMessage('jeffrey', input.body, agents.length ? 'queued' : 'completed', input.conversationId, attachments, input.dispatchTo, input.executionProfile);
     const replies = agents.length ? dispatchNextSharedTurn(repository, input.conversationId) : [];
     response.status(202).json({ message, replies });
   });
@@ -419,14 +431,14 @@ export function createApp(database: WorkbenchDatabase) {
 
   app.post('/api/shared/messages/:id/create-tasks', (request, response) => {
     try {
-      const message = repository.listSharedMessages(1_000).find((item) => item.id === request.params.id);
+      const message = repository.getSharedMessageById(request.params.id);
       const conversation = message && repository.listConversations('all').find((item) => item.id === message.conversationId);
       if (!message || !conversation?.workItemId) return response.status(400).json({ error: 'This report is not linked to a task execution.' });
       const item = repository.get(conversation.workItemId);
       if (!item) return response.status(404).json({ error: 'Linked task not found.' });
       const existingPlan = repository.getPendingExecutionPlan(item.id);
       if (existingPlan) return response.json({ plan: existingPlan });
-      const existingJob = repository.listSharedMessages(100, conversation.id).find((entry) => entry.status === 'running' && entry.author === 'system' && entry.body.startsWith('Turning findings into tasks'));
+      const existingJob = repository.listSharedMessages(100, null, conversation.id).messages.find((entry) => entry.status === 'running' && entry.author === 'system' && entry.body.startsWith('Turning findings into tasks'));
       if (existingJob) return response.status(202).json({ jobMessage: existingJob });
       const jobMessage = repository.createSharedMessage('system', 'Turning findings into tasks…', 'running', conversation.id);
       void runSharedBackgroundJob(repository, jobMessage.id, async (signal, onProgress) => {
@@ -499,6 +511,21 @@ export function createApp(database: WorkbenchDatabase) {
   app.post('/api/queue/proposals', (request, response) => {
     const input = createQueueProposalSchema.parse(request.body);
     response.status(201).json({ proposal: repository.createProposal(input.orderedItemIds, input.rationale) });
+  });
+
+  app.get('/api/queue/explain', (_request, response, next) => {
+    try {
+      response.json({ plan: repository.explainQueue(), history: repository.listQueueHistory('attention') });
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/queue/undo', (request, response, next) => {
+    try {
+      const stack = z.enum(['attention', 'workbench']).default('attention').parse(request.body?.stack ?? 'attention');
+      const undone = repository.undoLastQueueChange(stack);
+      if (!undone) return response.status(404).json({ error: 'No ordering change left to undo for this stack.' });
+      response.json({ change: undone.change, items: undone.items });
+    } catch (error) { next(error); }
   });
 
   app.post('/api/queue/plan', (_request, response, next) => {
@@ -604,7 +631,7 @@ export function createApp(database: WorkbenchDatabase) {
     const item = repository.get(request.params.id);
     if (!item) return response.status(404).json({ error: 'Work item not found.' });
     const { kind } = z.object({ kind: runKindSchema }).parse(request.body);
-    const classification = repository.setClassification(item.id, classificationForKind(item, kind));
+    const classification = repository.setClassification(item.id, classificationForKind(item, kind), 'manual');
     repository.addActivity(item.id, 'jeffrey', 'classification', `Set task type to ${classification.kind}.`);
     response.json({ classification });
   });
@@ -721,7 +748,9 @@ export function createApp(database: WorkbenchDatabase) {
   app.post('/api/work-items/:id/execute', async (request, response) => {
     const item = repository.get(request.params.id);
     if (!item) return response.status(404).json({ error: 'Work item not found.' });
+    if (item.archivedAt || item.status === 'done' || item.status === 'canceled') return response.status(409).json({ error: 'Archived or completed tasks cannot be executed. Restore the task first.' });
     if (repository.activeRunsForItem(item.id).length) return response.status(409).json({ error: 'This task already has an active agent run.' });
+    const { executionProfile } = z.object({ executionProfile: z.enum(['economy', 'standard', 'deep']).nullable().default(null) }).parse(request.body ?? {});
     const classified = repository.getClassification(item.id) ?? repository.setClassification(item.id, await classifyExecutionRobust(item));
     const explicitlyAssigned = repository.getExplicitAgentAssignees(item.id);
     const agents = explicitlyAssigned.length ? explicitlyAssigned : [repository.selectBalancedAgent(classified.agent)];
@@ -731,7 +760,11 @@ export function createApp(database: WorkbenchDatabase) {
     repository.createSharedMessage('system', `Execute: ${item.title}`, 'completed', conversation.id);
     const runs = agents.map((agent) => {
       const reply = repository.createSharedMessage(agent, '', 'running', conversation.id);
-      return repository.createRun(item.id, classification.kind, explicitlyAssigned.length ? agent : 'auto', agent, classification.instructions, conversation.id, reply.id);
+      const run = repository.createRun(item.id, classification.kind, explicitlyAssigned.length ? agent : 'auto', agent, classification.instructions, conversation.id, reply.id);
+      if (!executionProfile) return run;
+      repository.updateRun(run.id, { executionProfile });
+      repository.updateSharedMessage(reply.id, { executionProfile });
+      return { ...run, executionProfile };
     });
     const activity = repository.addActivity(
       item.id,
@@ -749,6 +782,17 @@ export function createApp(database: WorkbenchDatabase) {
     const { selectedTaskIndexes } = z.object({ selectedTaskIndexes: z.array(z.number().int().nonnegative()).optional() }).parse(request.body ?? {});
     const plan = repository.resolveExecutionPlan(request.params.id, resolution, selectedTaskIndexes);
     if (!plan) return response.status(404).json({ error: 'Pending execution plan not found.' });
+    if (resolution === 'accepted') {
+      // Accepting a decomposition supersedes all execution still aimed at the
+      // parent. Cancel both durable task runs and chat replies so neither can
+      // continue mutating the original task after its children become canonical.
+      for (const run of repository.activeRunsForItem(plan.workItemId)) cancelAgentRun(repository, run.id);
+      for (const conversation of repository.listConversationsForWorkItem(plan.workItemId)) {
+        for (const message of repository.listAllSharedMessages(conversation.id)) {
+          if (message.status === 'queued' || message.status === 'running') cancelSharedReply(repository, message.id);
+        }
+      }
+    }
     response.json({ plan, items: repository.list() });
   });
 

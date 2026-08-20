@@ -43,7 +43,7 @@ async function waitForHealth(port: number, child: ChildProcess): Promise<void> {
 }
 
 async function deploy(releasePath = currentRelease()): Promise<void> {
-  if (deploying || active?.releasePath === releasePath) return;
+  if (deploying || (active?.releasePath === releasePath && active.child.exitCode === null)) return;
   deploying = true;
   const port = active?.port === runtimePorts[0] ? runtimePorts[1] : runtimePorts[0];
   const serverEntry = join(releasePath, 'src/server/index.ts');
@@ -68,6 +68,14 @@ async function deploy(releasePath = currentRelease()): Promise<void> {
     await waitForHealth(port, child);
     const previous = active;
     active = { releasePath, port, child };
+    child.once('exit', () => {
+      if (stopping || active?.child !== child) return;
+      active = null;
+      console.error(`Workbench backend on port ${port} exited; restarting the promoted release.`);
+      setTimeout(() => {
+        if (!stopping) void deploy().catch((error) => console.error('Runtime restart failed:', error));
+      }, 250).unref();
+    });
     console.log(`Workbench live runtime switched to ${releasePath.split('/').at(-1)}.`);
     if (previous) setTimeout(() => previous.child.kill('SIGTERM'), 2_000).unref();
   } catch (error) {

@@ -87,6 +87,28 @@ The token is a full-access credential: anyone holding the `?token=` link gets re
 on the queue and strategy notes and can trigger agent runs. Treat it like a password.
 Rotate by deleting `WORKBENCH_TOKEN` from `.env` and re-running `npm run share`.
 
+## Shared MCP API
+
+Codex and Claude can use the same canonical Workbench state through the stateless
+Streamable HTTP endpoint at `http://localhost:5173/mcp` (or `/mcp` on the configured
+tunnel hostname). Non-loopback clients must send `Authorization: Bearer
+<WORKBENCH_TOKEN>`. The endpoint uses the same repository/service boundary as the REST
+API; it never reads SQLite directly.
+
+The MCP contract covers tasks, stack order, discoveries, conversations, durable
+memories, execution plans, and immutable agent-run results. Mutations are deliberately
+narrow:
+
+- Manual tasks and locally owned task fields only; provider-owned fields cannot be set.
+- Codex/Claude activity, completed conversation messages, and attributed memories only;
+  assistants cannot impersonate Jeffrey or `system`.
+- Execution-plan proposals only; approval and child-task creation remain in Workbench.
+- Discovery resolution and exact active-stack reordering.
+
+MCP does not expose provider credentials, provider sync, agent dispatch/cancel/retry,
+result rewriting, hard delete, or artifact publication. Connect each MCP client to the
+same URL and bearer token; `tools/list` is the authoritative machine-readable contract.
+
 ### Notes
 
 - Outbound QUIC (UDP 7844) is blocked on the Writer network, so the Cloudflare paths are
@@ -120,6 +142,44 @@ deployments, configure an API token with Pages deployment access plus the accoun
 Publishing is intentionally unavailable until the project and public URL are configured. The publisher lives behind an adapter so it can
 be replaced with Writer-managed hosting later. The current snapshotter supports
 standalone Markdown, HTML, and text files; scripts and active content are removed.
+
+### The artifact library
+
+**Artifacts** in the sidebar is the record of everything you have shared. Each entry
+keeps its own history:
+
+- **Versions.** Republishing a changed file appends a version. `/<id>/` always serves
+  the current one and `/<id>/v2/` keeps that exact snapshot alive, so a link a coworker
+  already has never silently changes under them. Older snapshots link forward to the
+  latest.
+- **History.** Published, republished, revoked, restored, and feedback events, in order.
+- **Relationships.** The task and conversation an artifact came from, and you can link
+  it to a task after the fact.
+- **Republish and revoke.** Republish re-renders from the original file; you do not need
+  the path. Revoke takes every version offline and keeps the history. Republishing a
+  revoked artifact restores it.
+
+Republishing an unchanged file costs nothing — the content hash is compared before
+anything is deployed.
+
+### Feedback from coworkers
+
+Shared pages can carry a small feedback box. It is off by default. Turn it on by
+pointing Workbench at its own public hostname:
+
+```dotenv
+WORKBENCH_PUBLIC_URL=https://your-name.ngrok-free.app
+```
+
+Feedback lands in the artifact library, where you resolve it. Know what you are turning
+on before you do:
+
+- `POST /api/artifacts/<id>/comments` answers **without a `WORKBENCH_TOKEN`** — coworkers
+  hold no token. Nothing else opens: reading feedback still requires the token, and the
+  endpoint accepts writes only for an artifact that exists and is not revoked.
+- Submissions are rate limited per artifact (20 per 10 minutes, in memory).
+- Both settings must be present. With `WORKBENCH_PUBLIC_URL` empty, published pages carry
+  no script and no network access at all, and the endpoint stays gated.
 
 ## Configure Linear
 
@@ -216,5 +276,4 @@ npm start
 ## Near-term roadmap
 
 1. OAuth-based Linear connection and project selection
-2. MCP server exposing the shared work-item API to Codex and Claude
-3. Additional OAuth source adapters such as GitHub and Gmail
+2. Additional OAuth source adapters such as GitHub and Gmail

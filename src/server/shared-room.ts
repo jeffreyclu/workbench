@@ -29,7 +29,7 @@ export function linearContextForPrompt(repository: WorkItemRepository, message: 
 
 export function dispatchNextSharedTurn(repository: WorkItemRepository, conversationId: string): SharedMessage[] {
   const busyAgents = new Set(
-    repository.listSharedMessages(1_000, conversationId)
+    repository.listAllSharedMessages(conversationId)
       .filter((message) => message.status === 'running' && (message.author === 'codex' || message.author === 'claude'))
       .map((message) => message.author as AgentRun['agent']),
   );
@@ -48,11 +48,11 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     const attachmentText = queued.message.attachments.length ? ` · ${queued.message.attachments.length} attachment${queued.message.attachments.length === 1 ? '' : 's'}` : '';
     repository.addActivity(linkedItem.id, 'jeffrey', 'chat_started', `To ${agents.join(' and ')}${attachmentText}: ${queued.message.body.trim() || '(attachment-only message)'}`);
   }
-  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'running', conversationId));
+  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'running', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile));
   for (const reply of replies) {
     const agent = reply.author as AgentRun['agent'];
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'
-      ? repository.createRun(linkedItem.id, 'analysis', queued.dispatchTarget, agent, queued.message.body, conversationId)
+      ? repository.createRun(linkedItem.id, 'analysis', queued.dispatchTarget, agent, queued.message.body, conversationId, reply.id)
       : null;
     void replyInSharedRoom(repository, agent, reply.id, run?.id);
   }
@@ -60,7 +60,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
 }
 
 function settleLinkedTask(repository: WorkItemRepository, conversationId: string, reason: string): void {
-  if (repository.listSharedMessages(1_000, conversationId).some((message) => message.status === 'running')) return;
+  if (repository.listAllSharedMessages(conversationId).some((message) => message.status === 'running')) return;
   const conversation = repository.listConversations().find((item) => item.id === conversationId);
   if (!conversation?.workItemId) return;
   const item = repository.get(conversation.workItemId);
@@ -75,7 +75,7 @@ export async function runSharedBackgroundJob(
   messageId: string,
   job: (signal: AbortSignal, onProgress: (body: string) => void) => Promise<string>,
 ): Promise<void> {
-  const target = repository.listSharedMessages(1_000).find((message) => message.id === messageId);
+  const target = repository.getSharedMessageById(messageId);
   // Claim a lease so the scheduler knows this process is actively working on this message.
   if (!repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS)) return;
 
@@ -95,7 +95,7 @@ export async function runSharedBackgroundJob(
 }
 
 export async function replyInSharedRoom(repository: WorkItemRepository, agent: AgentRun['agent'], messageId: string, runId?: string): Promise<void> {
-  const target = repository.listSharedMessages(1_000).find((message) => message.id === messageId);
+  const target = repository.getSharedMessageById(messageId);
   if (!target) return;
 
   // Claim a lease so the scheduler knows this process is actively working on this message.
@@ -109,7 +109,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     repository.updateRun(runId, { status: 'running', startedAt: new Date().toISOString() });
   }
   try {
-    const thread = repository.listSharedMessages(100, target.conversationId).filter((message) => message.id !== messageId);
+    const thread = repository.listSharedMessages(100, null, target.conversationId).messages.filter((message) => message.id !== messageId);
     const latestUserMessage = [...thread].reverse().find((message) => message.author === 'jeffrey')?.body ?? '';
     const recentSourceReferences = thread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body);
     const connectionContext = await connectionContextForPrompt(repository, [latestUserMessage, ...recentSourceReferences].join('\n'));
@@ -129,7 +129,9 @@ Workbench self-hosting safety:
 This conversation is running inside the live Workbench control plane. Source edits appear in the preview at http://localhost:5174; the approved live release stays at http://localhost:5173. Never run runtime:promote, start, stop, restart, or kill Workbench, Vite, ngrok, or their ports from an agent response. Never claim either environment is down without an actual HTTP health check. If Jeffrey reports a preview bug, inspect and fix the source, verify it, and ask him to review the preview. Promotion happens only through Workbench's explicit preview-approval command after all agent work finishes.`;
     repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
     const guardedPrompt = prompt + selfHostingGuard;
-    const profile = await judgeExecutionProfile(latestUserMessage || guardedPrompt, process.cwd(), controller.signal);
+    const profile = target.executionProfile && target.executionProfile !== 'routing'
+      ? target.executionProfile
+      : await judgeExecutionProfile(latestUserMessage || guardedPrompt, process.cwd(), controller.signal);
     repository.updateSharedMessage(messageId, { model: modelFor(agent, profile), executionProfile: profile });
     if (runId) repository.updateRun(runId, { model: modelFor(agent, profile), executionProfile: profile });
     const result = await runAgentCommandWithFallback(agent, process.cwd(), guardedPrompt, (partial) => {
@@ -138,7 +140,11 @@ This conversation is running inside the live Workbench control plane. Source edi
     }, controller.signal, (fallback, reason) => {
       repository.updateSharedMessage(messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: agent, fallbackReason: reason.slice(0, 500) });
       if (runId) repository.updateRun(runId, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: agent, fallbackReason: reason.slice(0, 500) });
-    }, profile);
+    }, profile, (usage) => {
+      const telemetry = { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd };
+      repository.updateSharedMessage(messageId, telemetry);
+      if (runId) repository.updateRun(runId, telemetry);
+    });
     const telemetry = { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, estimatedCostUsd: result.usage.estimatedCostUsd, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
     repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'completed', ...telemetry });
     if (runId) repository.updateRun(runId, { agent: result.agent, output: result.output, status: 'completed', completedAt: new Date().toISOString(), ...telemetry });
@@ -163,7 +169,7 @@ This conversation is running inside the live Workbench control plane. Source edi
 }
 
 export function cancelSharedReply(repository: WorkItemRepository, messageId: string) {
-  const message = repository.listSharedMessages(1_000).find((item) => item.id === messageId);
+  const message = repository.getSharedMessageById(messageId);
   if (!message || (message.status !== 'running' && message.status !== 'queued')) return null;
   if (message.status === 'queued') {
     repository.updateSharedMessage(messageId, { status: 'canceled' });
@@ -171,7 +177,7 @@ export function cancelSharedReply(repository: WorkItemRepository, messageId: str
   }
   activeReplies.get(messageId)?.abort();
   repository.updateSharedMessage(messageId, { status: 'canceled' });
-  const runId = replyRunIds.get(messageId);
+  const runId = replyRunIds.get(messageId) ?? repository.getRunByMessage(messageId)?.id;
   if (runId) repository.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString() });
   const dispatched = dispatchNextSharedTurn(repository, message.conversationId);
   if (!dispatched.length) settleLinkedTask(repository, message.conversationId, 'Agent conversation was canceled; review or redirect the task.');
@@ -179,12 +185,12 @@ export function cancelSharedReply(repository: WorkItemRepository, messageId: str
 }
 
 export function interjectQueuedSharedMessage(repository: WorkItemRepository, messageId: string): SharedMessage[] | null {
-  const message = repository.listSharedMessages(1_000).find((item) => item.id === messageId);
+  const message = repository.getSharedMessageById(messageId);
   if (!message || message.status !== 'queued') return null;
   const targetAgents = message.dispatchTarget === 'both' ? ['codex', 'claude'] as const
     : message.dispatchTarget === 'auto' ? ['codex', 'claude'] as const
     : message.dispatchTarget === 'none' ? [] : [message.dispatchTarget];
-  const running = repository.listSharedMessages(1_000, message.conversationId)
+  const running = repository.listAllSharedMessages(message.conversationId)
     .filter((item) => item.status === 'running' && targetAgents.includes(item.author as AgentRun['agent']));
   // Do not call cancelSharedReply here: it dispatches the next queued message
   // after each cancellation, which can let an older turn win before this one
@@ -192,7 +198,7 @@ export function interjectQueuedSharedMessage(repository: WorkItemRepository, mes
   for (const runningMessage of running) {
     activeReplies.get(runningMessage.id)?.abort();
     repository.updateSharedMessage(runningMessage.id, { status: 'canceled' });
-    const runId = replyRunIds.get(runningMessage.id);
+    const runId = replyRunIds.get(runningMessage.id) ?? repository.getRunByMessage(runningMessage.id)?.id;
     if (runId) repository.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString() });
   }
   repository.promoteQueuedSharedMessage(messageId);
@@ -200,7 +206,7 @@ export function interjectQueuedSharedMessage(repository: WorkItemRepository, mes
 }
 
 function synthesisSource(repository: WorkItemRepository, conversationId: string, replyCreatedAt: string): { prompt: string; codex: SharedMessage; claude: SharedMessage } | null {
-  const messages = repository.listSharedMessages(1_000, conversationId);
+  const messages = repository.listAllSharedMessages(conversationId);
   const request = [...messages].reverse().find((message) => message.author === 'jeffrey' && message.dispatchTarget === 'both' && message.createdAt <= replyCreatedAt);
   if (!request) return null;
   const replies = messages.filter((message) => message.createdAt >= request.createdAt && (message.author === 'codex' || message.author === 'claude'));
@@ -223,7 +229,9 @@ async function synthesizeSharedTurn(repository: WorkItemRepository, conversation
   const profile = selectPromptExecutionProfile(source.prompt);
   repository.updateSharedMessage(message.id, { model: modelFor(agent, profile), executionProfile: profile });
   await runSharedBackgroundJob(repository, message.id, async (signal, onProgress) => {
-    const result = await runAgentCommandWithFallback(agent, process.cwd(), source.prompt, onProgress, signal, undefined, profile);
+    const result = await runAgentCommandWithFallback(agent, process.cwd(), source.prompt, onProgress, signal, undefined, profile, (usage) => {
+      repository.updateSharedMessage(message.id, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd });
+    });
     repository.updateSharedMessage(message.id, {
       model: modelFor(result.agent, profile), inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens,
       estimatedCostUsd: result.usage.estimatedCostUsd, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason,
