@@ -888,7 +888,7 @@ export function App() {
     queryFn: ({ pageParam }) => api.listWorkItems(view === 'archive' ? 'archive' : view === 'workbench' ? 'workbench' : 'active', debouncedSearch, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
-    enabled: view === 'active' || view === 'archive',
+    enabled: view === 'active' || view === 'workbench' || view === 'archive',
   });
   const workItemCounts = useQuery({ queryKey: ['work-item-counts'], queryFn: api.getWorkItemCounts, refetchInterval: 1_500 });
   const queueAgentActivity = useQuery({ queryKey: ['shared-message-activity'], queryFn: () => api.listSharedMessages(), refetchInterval: 1_000 });
