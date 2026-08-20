@@ -177,6 +177,7 @@ const migrations = [
       work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
       run_id TEXT REFERENCES discovery_runs(id) ON DELETE SET NULL
       ,relevance INTEGER NOT NULL DEFAULT 1
+      ,suggested_work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_discovery_inbox
@@ -261,6 +262,7 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
   if (!artifactColumns.some((column) => column.name === 'content_hash')) database.exec('ALTER TABLE published_artifacts ADD COLUMN content_hash TEXT;');
   const discoveryColumns = database.prepare('PRAGMA table_info(discovery_candidates)').all() as Array<{ name: string }>;
   if (!discoveryColumns.some((column) => column.name === 'relevance')) database.exec('ALTER TABLE discovery_candidates ADD COLUMN relevance INTEGER NOT NULL DEFAULT 1;');
+  if (!discoveryColumns.some((column) => column.name === 'suggested_work_item_id')) database.exec('ALTER TABLE discovery_candidates ADD COLUMN suggested_work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL;');
   return database;
 }
 

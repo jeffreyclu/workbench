@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { WorkItemRepository } from './repository.js';
 import { scanConnectedSources, type SourceSignal } from './source-scanner.js';
 import { LinearProvider } from './providers/linear.js';
+import { createAgentDailyProposal } from './daily-planner.js';
 
 function fingerprint(signal: SourceSignal): string {
   const identity = signal.url?.trim().toLowerCase() || `${signal.provider}:${signal.title.trim().toLowerCase()}`;
@@ -44,6 +45,10 @@ export async function runDiscovery(repository: WorkItemRepository): Promise<void
       if (!signal.title.trim()) continue;
       if (signal.occurredAt && new Date(signal.occurredAt) < since) continue;
       added += Number(repository.upsertDiscoveryCandidate({ fingerprint: fingerprint(signal), provider: signal.provider, title: signal.title.trim(), description: signal.summary.trim(), sourceUrl: signal.url, occurredAt: signal.occurredAt, runId: run.id, relevance: priority }));
+    }
+    if (repository.list().length) {
+      try { await createAgentDailyProposal(repository, rankedSignals.map(({ signal }) => signal), errors); }
+      catch (error) { errors.push(`reorder: ${error instanceof Error ? error.message : 'Could not prepare the morning stack proposal.'}`); }
     }
     repository.finishDiscoveryRun(run.id, added, errors);
   } catch (error) {

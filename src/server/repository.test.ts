@@ -150,6 +150,7 @@ describe('WorkItemRepository', () => {
     expect(proposal.rationale).toContain('10 days without activity');
     expect(repository.list().map((item) => item.id)).toEqual([old.id, recent.id]);
     expect(repository.get(old.id)?.lastTouchedAt).toBe(tenDaysAgo);
+    expect(repository.getDiscoveryInbox().queueProposal?.id).toBe(proposal.id);
   });
 
   it('stores source credentials without returning them in connection metadata', () => {
@@ -279,6 +280,14 @@ describe('WorkItemRepository', () => {
     const resolved = repository.resolveDiscoveryCandidate(inbox.candidates[0].id, 'convert')!;
     expect(resolved.status).toBe('converted');
     expect(repository.list()).toEqual([expect.objectContaining({ title: 'Review updated proposal', sourceUrl: 'https://writer.slack.com/a' })]);
+  });
+
+  it('suggests updating an existing task when discovery resolves to the same source URL', () => {
+    const existing = repository.create({ title: 'Review connector PR', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null, sourceUrl: 'https://github.com/writer/repo/pull/42' });
+    const run = repository.startDiscoveryRun();
+    repository.upsertDiscoveryCandidate({ fingerprint: 'pr-42', provider: 'github', title: 'Please review PR 42', description: 'New review request', sourceUrl: existing.sourceUrl, occurredAt: null, runId: run.id, relevance: 2 });
+
+    expect(repository.getDiscoveryInbox().candidates[0]).toEqual(expect.objectContaining({ suggestedWorkItemId: existing.id, relevance: 2 }));
   });
 
   it('edits, merges, and bulk resolves pending discoveries', () => {

@@ -91,6 +91,7 @@ export interface DiscoveryCandidate {
   snoozedUntil: string | null;
   workItemId: string | null;
   relevance: number;
+  suggestedWorkItemId: string | null;
 }
 export interface DiscoveryRun {
   id: string;
@@ -106,6 +107,7 @@ export interface DiscoveryInbox {
   reviewedCount: number;
   lastRun: DiscoveryRun | null;
   running: boolean;
+  queueProposal: QueueProposal | null;
 }
 export const updateDiscoveryCandidateSchema = z.object({
   title: z.string().trim().min(1).max(300).optional(),

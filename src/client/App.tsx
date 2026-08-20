@@ -787,7 +787,7 @@ function DiscoveryNav({ active, onClick }: { active: boolean; onClick: () => voi
   return <button className={`nav-item ${active ? 'active' : ''}`} onClick={onClick}><Search size={16} /> Discoveries <span>{inbox.data?.pendingCount ?? '…'}</span></button>;
 }
 
-function DiscoveryInboxView({ onOpenTask }: { onOpenTask: (id: string) => void }) {
+function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (id: string) => void; onOpenStack: () => void }) {
   const queryClient = useQueryClient();
   const [inboxView, setInboxView] = useState<'pending' | 'reviewed'>('pending');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -825,13 +825,14 @@ function DiscoveryInboxView({ onOpenTask }: { onOpenTask: (id: string) => void }
       <span>{lastRun?.completedAt ? `Last scan ${new Date(lastRun.completedAt).toLocaleString()}` : 'No completed scan yet'}</span>
       {lastRun?.errors.map((error) => <span className="error-message" key={error}>{error}</span>)}
     </div>
+    {inbox.data?.queueProposal && <div className="morning-proposal"><span><Sparkles size={15} /><strong>Morning stack proposal ready</strong><small>{inbox.data.queueProposal.rationale}</small></span><button className="button primary compact" onClick={onOpenStack}>Review reorder</button></div>}
     <div className="discovery-tabs"><button className={inboxView === 'pending' ? 'active' : ''} onClick={() => { setInboxView('pending'); setSelected(new Set()); }}>Pending <span>{inbox.data?.pendingCount ?? '…'}</span></button><button className={inboxView === 'reviewed' ? 'active' : ''} onClick={() => { setInboxView('reviewed'); setSelected(new Set()); }}>Reviewed <span>{inbox.data?.reviewedCount ?? '…'}</span></button></div>
     {inboxView === 'pending' && !!inbox.data?.candidates.length && <div className="discovery-bulkbar">
       <label><input type="checkbox" checked={selected.size === inbox.data.candidates.length} onChange={(event) => setSelected(event.target.checked ? new Set(inbox.data!.candidates.map((candidate) => candidate.id)) : new Set())} /> Select all</label>
       <span>{selected.size ? `${selected.size} selected` : 'Select items for bulk review'}</span>
       <button disabled={!selected.size || bulkResolve.isPending} onClick={() => bulkResolve.mutate('snooze')}>Tomorrow</button>
       <button disabled={!selected.size || bulkResolve.isPending} onClick={() => bulkResolve.mutate('dismiss')}>Dismiss</button>
-      <button className="accept" disabled={!selected.size || bulkResolve.isPending} onClick={() => bulkResolve.mutate('convert')}>Add to stack</button>
+      <button className="accept" disabled={!selected.size || bulkResolve.isPending} onClick={() => bulkResolve.mutate('convert')}>Add / update</button>
     </div>}
     <div className="discovery-list">
       {inbox.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading discoveries…</div>}
@@ -849,16 +850,17 @@ function DiscoveryCard({ candidate, selected, tasks, onSelected, onResolve }: { 
   const [title, setTitle] = useState(candidate.title);
   const [description, setDescription] = useState(candidate.description);
   const [mergeTarget, setMergeTarget] = useState('');
+  const suggestedTask = tasks.find((task) => task.id === candidate.suggestedWorkItemId);
   const update = useMutation({ mutationFn: () => api.updateDiscovery(candidate.id, { title: title.trim(), description }), onSuccess: () => { setEditing(false); void queryClient.invalidateQueries({ queryKey: ['discovery'] }); } });
   return <article className={`discovery-card ${selected ? 'selected' : ''}`}>
     <div className="discovery-source"><label><input type="checkbox" checked={selected} onChange={(event) => onSelected(event.target.checked)} /><span>{candidate.provider}</span>{candidate.relevance === 2 && <em>Focus</em>}</label><time>{new Date(candidate.occurredAt ?? candidate.discoveredAt).toLocaleString()}</time></div>
     {editing ? <div className="discovery-editor"><input value={title} onChange={(event) => setTitle(event.target.value)} /><textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={5} /><div><button className="button secondary compact" onClick={() => { setTitle(candidate.title); setDescription(candidate.description); setEditing(false); }}>Cancel</button><button className="button primary compact" disabled={!title.trim() || update.isPending} onClick={() => update.mutate()}><Check size={13} /> Save</button></div></div> : <><button className="discovery-copy" onClick={() => setEditing(true)} title="Edit before adding"><h3>{candidate.title}</h3>{candidate.description && <p>{candidate.description}</p>}</button>
     <div className="discovery-actions">
       {candidate.sourceUrl && <a className="button secondary compact" href={candidate.sourceUrl} target="_blank" rel="noreferrer"><ArrowUpRight size={13} /> Source</a>}
-      {!!tasks.length && <span className="discovery-merge"><select value={mergeTarget} onChange={(event) => setMergeTarget(event.target.value)}><option value="">Merge into task…</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select><button className="button secondary compact" disabled={!mergeTarget} onClick={() => onResolve('merge', mergeTarget)}>Merge</button></span>}
+      {suggestedTask ? <span className="discovery-match"><small>Already tracked as</small><strong>{suggestedTask.title}</strong><button className="button primary compact" onClick={() => onResolve('merge', suggestedTask.id)}>Add update</button></span> : !!tasks.length && <span className="discovery-merge"><select value={mergeTarget} onChange={(event) => setMergeTarget(event.target.value)}><option value="">Merge into task…</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select><button className="button secondary compact" disabled={!mergeTarget} onClick={() => onResolve('merge', mergeTarget)}>Merge</button></span>}
       <button className="button secondary compact" onClick={() => onResolve('snooze')}>Tomorrow</button>
       <button className="button secondary compact" onClick={() => onResolve('dismiss')}>Dismiss</button>
-      <button className="button primary compact" onClick={() => onResolve('convert')}>Add to stack</button>
+      <button className={`button ${suggestedTask ? 'secondary' : 'primary'} compact`} onClick={() => onResolve('convert')}>{suggestedTask ? 'Add separately' : 'Add to stack'}</button>
     </div></>}
   </article>;
 }
@@ -975,7 +977,7 @@ export function App() {
         </nav>
       </aside>
 
-      {view === 'context' ? <SharedWorkspace initialConversationId={agentConversationId} onOpenTask={(taskId) => { void openTaskFromConversation(taskId); }} /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { void openTaskFromConversation(taskId); }} /> : <><main className="queue-panel">
+      {view === 'context' ? <SharedWorkspace initialConversationId={agentConversationId} onOpenTask={(taskId) => { void openTaskFromConversation(taskId); }} /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { void openTaskFromConversation(taskId); }} onOpenStack={() => { setSelectedId(null); setView('active'); }} /> : <><main className="queue-panel">
         <header className="queue-header">
           <div><span className="eyebrow">{view === 'active' ? 'Focus' : 'History'}</span><h2>{view === 'active' ? 'Attention stack' : 'Archive'}</h2></div>
           <div className="header-actions">
