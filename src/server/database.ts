@@ -69,6 +69,8 @@ const migrations = [
       created_at TEXT NOT NULL,
       conversation_id TEXT,
       message_id TEXT
+      ,model TEXT
+      ,execution_profile TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_agent_runs_item
@@ -95,12 +97,15 @@ const migrations = [
       attachments_json TEXT NOT NULL DEFAULT '[]',
       dispatch_target TEXT NOT NULL DEFAULT 'none',
       created_at TEXT NOT NULL
+      ,model TEXT
+      ,execution_profile TEXT
     );
 
     CREATE TABLE IF NOT EXISTS shared_conversations (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       work_item_id TEXT,
+      forked_from_conversation_id TEXT,
       archived_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -108,6 +113,13 @@ const migrations = [
 
     CREATE INDEX IF NOT EXISTS idx_shared_messages_created
       ON shared_messages(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS shared_memories (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS execution_plans (
       id TEXT PRIMARY KEY,
@@ -127,6 +139,18 @@ const migrations = [
       last_scanned_at TEXT,
       last_error TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS published_artifacts (
+      id TEXT PRIMARY KEY,
+      source_path TEXT NOT NULL,
+      work_item_id TEXT,
+      conversation_id TEXT,
+      title TEXT NOT NULL,
+      public_url TEXT NOT NULL,
+      content_hash TEXT,
+      published_at TEXT NOT NULL,
+      revoked_at TEXT
+    );
   `,
 ];
 
@@ -137,6 +161,17 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
   const database = new DatabaseSync(absolutePath);
   database.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   for (const migration of migrations) database.exec(migration);
+  database.exec(`
+    INSERT OR IGNORE INTO shared_memories (id, kind, body, created_at)
+      SELECT id, 'task_archive', body, created_at FROM shared_messages
+      WHERE pinned = 1 AND author = 'system' AND body LIKE 'Archived task (%';
+    DELETE FROM shared_messages
+      WHERE pinned = 1 AND author = 'system' AND body LIKE 'Archived task (%';
+    DELETE FROM shared_conversations
+      WHERE work_item_id IS NULL AND NOT EXISTS (
+        SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id
+      );
+  `);
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_work_items_active_page ON work_items(queue_position, id)
       WHERE is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled');
@@ -178,12 +213,19 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
   if (!messageColumns.some((column) => column.name === 'conversation_id')) database.exec('ALTER TABLE shared_messages ADD COLUMN conversation_id TEXT;');
   if (!messageColumns.some((column) => column.name === 'attachments_json')) database.exec("ALTER TABLE shared_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]';");
   if (!messageColumns.some((column) => column.name === 'dispatch_target')) database.exec("ALTER TABLE shared_messages ADD COLUMN dispatch_target TEXT NOT NULL DEFAULT 'none';");
+  if (!messageColumns.some((column) => column.name === 'model')) database.exec('ALTER TABLE shared_messages ADD COLUMN model TEXT;');
+  if (!messageColumns.some((column) => column.name === 'execution_profile')) database.exec('ALTER TABLE shared_messages ADD COLUMN execution_profile TEXT;');
   const conversationColumns = database.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>;
   if (!conversationColumns.some((column) => column.name === 'work_item_id')) database.exec('ALTER TABLE shared_conversations ADD COLUMN work_item_id TEXT;');
   if (!conversationColumns.some((column) => column.name === 'archived_at')) database.exec('ALTER TABLE shared_conversations ADD COLUMN archived_at TEXT;');
+  if (!conversationColumns.some((column) => column.name === 'forked_from_conversation_id')) database.exec('ALTER TABLE shared_conversations ADD COLUMN forked_from_conversation_id TEXT;');
   const runColumns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
   if (!runColumns.some((column) => column.name === 'conversation_id')) database.exec('ALTER TABLE agent_runs ADD COLUMN conversation_id TEXT;');
   if (!runColumns.some((column) => column.name === 'message_id')) database.exec('ALTER TABLE agent_runs ADD COLUMN message_id TEXT;');
+  if (!runColumns.some((column) => column.name === 'model')) database.exec('ALTER TABLE agent_runs ADD COLUMN model TEXT;');
+  if (!runColumns.some((column) => column.name === 'execution_profile')) database.exec('ALTER TABLE agent_runs ADD COLUMN execution_profile TEXT;');
+  const artifactColumns = database.prepare('PRAGMA table_info(published_artifacts)').all() as Array<{ name: string }>;
+  if (!artifactColumns.some((column) => column.name === 'content_hash')) database.exec('ALTER TABLE published_artifacts ADD COLUMN content_hash TEXT;');
   return database;
 }
 

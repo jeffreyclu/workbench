@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frontend Architecture Walkthrough - Writer Connectors</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --color-bg: #ffffff;
+            --color-bg-secondary: #f8f9fa;
+            --color-text: #1a1a1a;
+            --color-text-muted: #666666;
+            --color-border: #e0e0e0;
+            --color-accent: #0066cc;
+            --color-accent-light: #e6f0ff;
+            --color-code-bg: #f5f5f5;
+            --color-code-text: #333333;
+            --color-verified: #0e7c0e;
+            --color-verified-bg: #f0f7f0;
+            --color-unverified: #b8860b;
+            --color-unverified-bg: #fffbf0;
+            --color-inferred: #6c5ce7;
+            --color-inferred-bg: #f5f3ff;
+            --spacing-xs: 0.5rem;
+            --spacing-sm: 1rem;
+            --spacing-md: 1.5rem;
+            --spacing-lg: 2rem;
+            --spacing-xl: 3rem;
+            --font-mono: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --color-bg: #1a1a1a;
+                --color-bg-secondary: #2a2a2a;
+                --color-text: #e0e0e0;
+                --color-text-muted: #999999;
+                --color-border: #404040;
+                --color-accent: #66b3ff;
+                --color-accent-light: #1a3d66;
+                --color-code-bg: #2a2a2a;
+                --color-code-text: #e0e0e0;
+                --color-verified-bg: #1a3a1a;
+                --color-unverified-bg: #3a3a1a;
+                --color-inferred-bg: #2a1a3a;
+            }
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            color: var(--color-text);
+            background-color: var(--color-bg);
+            line-height: 1.6;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            min-height: 100vh;
+            gap: 0;
+        }
+
+        @media (max-width: 900px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+            nav {
+                display: none;
+            }
+        }
+
+        nav {
+            background-color: var(--color-bg-secondary);
+            border-right: 1px solid var(--color-border);
+            padding: var(--spacing-lg);
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow-y: auto;
+        }
+
+        nav h3 {
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--color-text-muted);
+            margin-bottom: var(--spacing-md);
+            letter-spacing: 0.05em;
+        }
+
+        nav ul {
+            list-style: none;
+        }
+
+        nav li {
+            margin-bottom: var(--spacing-xs);
+        }
+
+        nav a {
+            display: block;
+            padding: var(--spacing-xs) var(--spacing-sm);
+            color: var(--color-text);
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+        }
+
+        nav a:hover {
+            background-color: var(--color-accent-light);
+            color: var(--color-accent);
+        }
+
+        nav a.active {
+            background-color: var(--color-accent);
+            color: white;
+            font-weight: 600;
+        }
+
+        nav .nav-section {
+            margin-bottom: var(--spacing-lg);
+        }
+
+        main {
+            padding: var(--spacing-xl);
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: var(--spacing-md);
+            color: var(--color-accent);
+            line-height: 1.2;
+        }
+
+        h2 {
+            font-size: 1.8rem;
+            margin-top: var(--spacing-xl);
+            margin-bottom: var(--spacing-md);
+            color: var(--color-accent);
+            border-bottom: 2px solid var(--color-border);
+            padding-bottom: var(--spacing-sm);
+        }
+
+        h2:first-of-type {
+            margin-top: 0;
+        }
+
+        h3 {
+            font-size: 1.3rem;
+            margin-top: var(--spacing-lg);
+            margin-bottom: var(--spacing-md);
+            color: var(--color-text);
+        }
+
+        h4 {
+            font-size: 1.05rem;
+            margin-top: var(--spacing-md);
+            margin-bottom: var(--spacing-sm);
+            color: var(--color-text);
+            font-weight: 600;
+        }
+
+        p {
+            margin-bottom: var(--spacing-md);
+            color: var(--color-text);
+        }
+
+        p strong {
+            font-weight: 600;
+            color: var(--color-text);
+        }
+
+        a {
+            color: var(--color-accent);
+            text-decoration: underline;
+            text-decoration-thickness: 1px;
+            text-underline-offset: 2px;
+        }
+
+        a:hover {
+            text-decoration-thickness: 2px;
+        }
+
+        ul, ol {
+            margin-left: var(--spacing-lg);
+            margin-bottom: var(--spacing-md);
+        }
+
+        li {
+            margin-bottom: var(--spacing-sm);
+        }
+
+        code {
+            font-family: var(--font-mono);
+            background-color: var(--color-code-bg);
+            color: var(--color-code-text);
+            padding: 0.2em 0.4em;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+
+        pre {
+            background-color: var(--color-code-bg);
+            color: var(--color-code-text);
+            padding: var(--spacing-md);
+            border-radius: 6px;
+            overflow-x: auto;
+            margin-bottom: var(--spacing-md);
+            border-left: 3px solid var(--color-accent);
+        }
+
+        pre code {
+            background-color: transparent;
+            padding: 0;
+            color: inherit;
+        }
+
+        .mermaid {
+            display: flex;
+            justify-content: center;
+            margin: var(--spacing-lg) 0;
+            background-color: var(--color-bg-secondary);
+            padding: var(--spacing-lg);
+            border-radius: 8px;
+            border: 1px solid var(--color-border);
+            overflow-x: auto;
+        }
+
+        .mermaid svg {
+            max-width: 100%;
+            height: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: var(--spacing-lg);
+            background-color: var(--color-bg-secondary);
+            border: 1px solid var(--color-border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        th {
+            background-color: var(--color-accent);
+            color: white;
+            padding: var(--spacing-sm);
+            text-align: left;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        td {
+            padding: var(--spacing-sm);
+            border-bottom: 1px solid var(--color-border);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background-color: var(--color-accent-light);
+        }
+
+        .note {
+            padding: var(--spacing-md);
+            border-radius: 6px;
+            margin: var(--spacing-md) 0;
+            border-left: 4px solid;
+        }
+
+        .note.verified {
+            background-color: var(--color-verified-bg);
+            border-left-color: var(--color-verified);
+            color: var(--color-verified);
+        }
+
+        .note.unverified {
+            background-color: var(--color-unverified-bg);
+            border-left-color: var(--color-unverified);
+            color: var(--color-unverified);
+        }
+
+        .note.inferred {
+            background-color: var(--color-inferred-bg);
+            border-left-color: var(--color-inferred);
+            color: var(--color-inferred);
+        }
+
+        .note strong {
+            color: inherit;
+        }
+
+        .note code {
+            background-color: rgba(255,255,255,0.3);
+        }
+
+        .hr {
+            border: none;
+            border-top: 2px solid var(--color-border);
+            margin: var(--spacing-xl) 0;
+        }
+
+        .intro-text {
+            font-size: 1.1rem;
+            color: var(--color-text-muted);
+            margin-bottom: var(--spacing-lg);
+            line-height: 1.8;
+        }
+
+        .diagram-caption {
+            font-size: 0.9rem;
+            color: var(--color-text-muted);
+            text-align: center;
+            margin-top: -var(--spacing-md);
+            margin-bottom: var(--spacing-md);
+        }
+
+        header {
+            margin-bottom: var(--spacing-xl);
+        }
+
+        .breadcrumb {
+            font-size: 0.9rem;
+            color: var(--color-text-muted);
+            margin-bottom: var(--spacing-md);
+        }
+
+        @media print {
+            .container {
+                grid-template-columns: 1fr;
+            }
+            nav {
+                display: none;
+            }
+            main {
+                padding: 0;
+            }
+        }
+
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border-width: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav>
+            <div class="nav-section">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="#section1">1. What is a monorepo?</a></li>
+                    <li><a href="#section2">2. Frontend setup</a></li>
+                    <li><a href="#section3">3. How clicks become updates</a></li>
+                </ul>
+            </div>
+            <div class="nav-section">
+                <h3>Core concepts</h3>
+                <ul>
+                    <li><a href="#section4a">4a. Routing</a></li>
+                    <li><a href="#section4b">4b. Components</a></li>
+                    <li><a href="#section4c">4c. Design System</a></li>
+                    <li><a href="#section4d">4d. State & data</a></li>
+                </ul>
+            </div>
+            <div class="nav-section">
+                <h3>Connectors page</h3>
+                <ul>
+                    <li><a href="#section5a">5a. Component tree</a></li>
+                    <li><a href="#section5b">5b. Backend routing</a></li>
+                    <li><a href="#section5c">5c. Legacy web-app</a></li>
+                </ul>
+            </div>
+            <div class="nav-section">
+                <h3>Reference</h3>
+                <ul>
+                    <li><a href="#section6">6. Quick reference map</a></li>
+                    <li><a href="#verification">Verification notes</a></li>
+                </ul>
+            </div>
+        </nav>
+
+        <main>
+            <header>
+                <div class="breadcrumb">Writer monorepo → Frontend walkthrough</div>
+                <h1>Frontend architecture walkthrough</h1>
+                <p class="intro-text"><strong>For a new connectors-team engineer</strong></p>
+                <p class="intro-text">Welcome. This document assumes you know how to code but know nothing about this specific codebase. Every internal term is defined the first time it's used. Diagrams come first; the prose under each explains what you're looking at.</p>
+                <p class="intro-text"><strong>By the end you should be able to answer:</strong> "I want to change X on the connectors page — which file?"</p>
+                <p class="intro-text"><strong>Section 6 is a cheat sheet for exactly that.</strong></p>
+            </header>
+
+            <div class="hr"></div>
+
+            <!-- Section 1 -->
+            <section id="section1">
+                <h2>1. What is a monorepo, and what's in this one</h2>
+
+                <p>A <strong>monorepo</strong> is one git repository that holds several otherwise-separate applications and services, instead of each one living in its own repo. You clone once, and everything is in front of you.</p>
+
+                <p><code>writer-monorepo</code> (checked out at <code>~/dev/writer-monorepo</code>) is one of Writer's monorepos. It is <strong>not</strong> a single npm/pnpm workspace with one root <code>package.json</code> — there is no root <code>package.json</code> at all. Instead, each top-level folder is a largely independent project with its own toolchain, dependency manager, and lockfile. They live in the same repo for coordinated review and deploy, not because they share a build graph.</p>
+
+                <div class="mermaid">
+                    graph TB
+                        subgraph repo["writer-monorepo (git repo, trunk-based on main)"]
+                            FE["frontend/<br/>Next.js 16 app<br/>package name: 'skynet'<br/>pnpm"]
+                            BE["backend/<br/>Python service<br/>(agent config, agent builder, etc.)"]
+                            GW["gateway/<br/>Bun + TypeScript<br/>(chat/channel gateway,<br/>feature-flag glue)"]
+                            DOCS["docs/<br/>architecture notes,<br/>initiatives, this file"]
+                            OTHER["agent-sdk/, evals/,<br/>cloudflare/, scripts/, ..."]
+                        end
+                        FE -.->|talks over HTTP, not imports| BE
+                        FE -.->|talks over HTTP, not imports| GW
+                </div>
+
+                <p class="diagram-caption">The writer-monorepo structure: independent projects, coordinated in one repository.</p>
+
+                <p>The piece you'll spend nearly all your time in is <code>frontend/</code>. Its <code>package.json</code> <code>name</code> field is literally <code>"skynet"</code> — that's also the internal deployment name (<code>skynet-frontend</code>), which is worth knowing so Slack/Grafana references make sense later.</p>
+
+                <p><strong>The connectors page you own is entirely inside <code>frontend/</code>.</strong> The two backend services it depends on (<code>connector-gateway</code> and <code>mcp-gateway</code>) are not in this repo at all — they live in a separate repo, <code>WriterInternal/be.mcp-gateway</code>, checked out nowhere on this machine but readable via the GitHub API. More on that in Section 3.</p>
+
+                <div class="note verified">
+                    <strong>✓ Verified</strong> by reading the repo directly: no root <code>package.json</code>, <code>frontend/package.json</code> name is <code>"skynet"</code>, <code>backend/</code> is a Python tree (<code>api.py</code>, <code>alembic/</code>, etc.), <code>gateway/</code> is Bun/TypeScript (<code>bun.lock</code>, <code>biome.jsonc</code>).
+                </div>
+            </section>
+
+            <div class="hr"></div>
+
+            <!-- Section 2 -->
+            <section id="section2">
+                <h2>2. Where the frontend app lives and how it's built</h2>
+
+                <p><code>frontend/</code> is a <strong>Next.js</strong> app (Next 16, using the <strong>App Router</strong> — the folder-based routing convention where a folder under <code>src/app/</code> becomes a URL path, and a <code>page.tsx</code> inside it is the page component). It builds with <code>next build --turbopack</code> and currently runs as <code>output: 'standalone'</code> (a server-rendering mode) — not a static export. There's a stated future direction of moving away from Next.js toward a plain static/web-components build, but nothing in the code shows that migration has started yet; treat it as a direction of travel, not current behavior.</p>
+
+                <div class="mermaid">
+                    graph TB
+                        subgraph frontend["frontend/src/"]
+                            APP["app/<br/>routes (Next App Router:<br/>folder path = URL path)"]
+                            COMP["components/<br/>React components,<br/>organized by feature area"]
+                            HOOKS["hooks/<br/>custom hooks, incl.<br/>react-query/ data-fetching hooks"]
+                            GEN["generated/<br/>auto-generated API<br/>clients + TanStack Query hooks"]
+                            PROV["providers/<br/>React context providers<br/>(config, feature flags, auth)"]
+                            LIB["lib/ · utils/ · types/ · stores/<br/>plumbing, helpers, client-side state"]
+                        end
+                        APP --> COMP
+                        COMP --> HOOKS
+                        HOOKS --> GEN
+                        APP --> PROV
+                </div>
+
+                <p class="diagram-caption">Frontend directory structure and dependencies.</p>
+
+                <p>A <strong>route</strong> in this app is a real folder path. For example, the connectors page route lives at:</p>
+
+                <pre><code>frontend/src/app/organization/[organizationId]/team/[teamId]/writer-agent/customize/connectors/page.tsx</code></pre>
+
+                <p><code>[organizationId]</code> and <code>[teamId]</code> are Next.js <strong>dynamic segments</strong> — folder names in square brackets become URL parameters. So visiting <code>/organization/4821/team/17/writer-agent/customize/connectors</code> renders this <code>page.tsx</code>, with <code>organizationId = "4821"</code> and <code>teamId = "17"</code> available to the component.</p>
+
+                <p>That file is intentionally thin — three lines — because Next.js requires a <code>page.tsx</code> per route, but the real work is delegated to a shared component:</p>
+
+                <pre><code>// frontend/src/app/.../connectors/page.tsx (verified, full file contents)
+import { CustomizeAgentPage } from '@/components/ui/customize/customize-agent-page';
+
+export default function CustomizeConnectorsPage() {
+  return &lt;CustomizeAgentPage section="connectors" /&gt;;
+}</code></pre>
+
+                <div class="note verified">
+                    <strong>✓ Verified</strong>: <code>frontend/package.json</code> scripts (<code>next dev --turbopack</code>, <code>next build --turbopack</code>), <code>frontend/next.config.ts</code> (<code>output: 'standalone'</code>), the App Router folder layout under <code>frontend/src/app/</code>, and the exact contents of the connectors <code>page.tsx</code> shown above.
+                </div>
+            </section>
+
+            <div class="hr"></div>
+
+            <!-- Section 3 -->
+            <section id="section3">
+                <h2>3. How a click becomes a screen update</h2>
+
+                <p>Two internal terms you need before this diagram makes sense:</p>
+
+                <ul>
+                    <li><strong>TanStack Query</strong> — a library that manages "server state" in React: it fetches data, caches it under a <strong>query key</strong> (an array that identifies what was fetched, e.g. <code>['mcp-gateway', 'v3', 'unified-user-profiles', orgId, teamId]</code>), tracks loading/error state, and lets you "invalidate" (mark stale and refetch) that cache after a mutation.</li>
+                    <li><strong>Feature flag</strong> — a runtime on/off switch, read from a flag service, that lets code branch to two different implementations without a deploy. This app can read flags from either <strong>Statsig</strong> or <strong>LaunchDarkly</strong>; <code>useFeatureFlag('connector-gateway')</code> is one specific flag.</li>
+                    <li><strong>Backend gateway</strong> — a backend HTTP service the frontend calls over the network (not imported as code). Connectors has two: <strong><code>mcp-gateway</code></strong> (the older API surface) and <strong><code>connector-gateway</code></strong> (the newer one, abbreviated <strong>CG</strong>). Both are hosted by the <em>same</em> backend service, <code>WriterInternal/be.mcp-gateway</code>, just under different URL prefixes (<code>/api/mcp-gateway/*</code> vs <code>/api/connector-gateway/*</code>). The frontend picks which prefix to call based on the <code>connector-gateway</code> feature flag.</li>
+                </ul>
+
+                <p><strong>Here is a real flow:</strong> a user enables a connector on the connectors page (clicking "Connect" on a row), traced through actual hook and function names in the code.</p>
+
+                <div class="mermaid">
+                    sequenceDiagram
+                        actor User
+                        participant Row as ConnectorTableRow (UI)
+                        participant Tab as ConnectorsTab
+                        participant Flag as useFeatureFlag('connector-gateway')
+                        participant Mut as useConnectOrganizationProfile (TanStack mutation hook)
+                        participant API as connectCgOrganizationProfile()
+                        participant CG as be.mcp-gateway<br/>/api/connector-gateway/v1/...
+                        participant Cache as TanStack Query cache
+
+                        User->>Row: clicks "Connect"
+                        Row->>Tab: onConnect(profileId)
+                        Tab->>Flag: read flag value
+                        Flag-->>Tab: true (CG path active)
+                        Tab->>Mut: mutate(profileId)
+                        Mut->>API: mutationFn(profileId)
+                        API->>CG: POST /organization/{orgId}/team/{teamId}/profiles/{profileId}/connect
+                        CG-->>API: 200 OK
+                        API-->>Mut: success
+                        Mut->>Cache: onSuccess -> invalidateConnectorProfileQueries(orgId, teamId)
+                        Cache->>Cache: mark unified-profiles query stale
+                        Cache-->>Tab: refetch triggered
+                        Tab-->>User: table re-renders with updated row status
+                </div>
+
+                <p class="diagram-caption">A click-to-update flow for enabling a connector.</p>
+
+                <p>If the flag were <code>false</code>, the same click would instead go through a different hook (<code>agentConnectors</code> / the legacy agent-config PUT mutation) and hit <code>/api/mcp-gateway/...</code> instead — same UI, different network path, different response shape. <code>ConnectorsTab</code> computes this branch once near the top of the component:</p>
+
+                <pre><code>// frontend/src/components/agents/manage-tabs/connectors-tab.tsx (verified excerpt)
+const { configData, onConnectorEnabledChange, ... } = useConnectorGateway ? cgConnectors : agentConnectors;</code></pre>
+
+                <div class="note verified">
+                    <strong>✓ Verified</strong> by reading: <code>useFeatureFlag</code> in <code>frontend/src/hooks/use-feature-flags.ts</code>; <code>useConnectOrganizationProfile</code> (a TanStack <code>useMutation</code> wrapping <code>connectCgOrganizationProfile</code>, with <code>onSuccess: () => invalidateConnectorProfileQueries(...)</code>) in <code>frontend/src/hooks/react-query/mcp-gateway/use-gateway.ts:538-548</code>; the <code>useConnectorGateway ? cgConnectors : agentConnectors</code> branch in <code>frontend/src/components/agents/manage-tabs/connectors-tab.tsx</code> (~line 181). The exact request/response payload shapes were not executed at runtime — this traces the code path, not an observed network call.
+                </div>
+            </section>
+
+            <div class="hr"></div>
+
+            <!-- Section 4 -->
+            <section id="section4">
+                <h2>4. The building blocks</h2>
+
+                <section id="section4a">
+                    <h3>4a. Routing</h3>
+
+                    <p>Next.js App Router: URL structure mirrors the folder structure under <code>frontend/src/app/</code>. Square brackets (<code>[organizationId]</code>) are dynamic params; parentheses (<code>(auth)</code>) are route groups that organize files without adding a URL segment. The connectors page also has two short "convenience" routes that redirect into the canonical one:</p>
+
+                    <div class="mermaid">
+                        graph LR
+                            A["/connectors"] -->|redirect| C["canonical:<br/>/organization/[organizationId]/team/[teamId]/<br/>writer-agent/customize/connectors"]
+                            B["/manage-writer-agent-connectors"] -->|redirect, or fallback<br/>to legacy tab| C
+                    </div>
+
+                    <p class="diagram-caption">Route redirects for convenient access.</p>
+
+                    <div class="note verified">
+                        <strong>✓ Verified</strong>: <code>frontend/src/app/connectors/page.tsx</code> and <code>frontend/src/app/manage-writer-agent-connectors/page.tsx</code> exist as separate route files from the canonical one; redirect logic itself (in <code>customize-simple-url-redirect.tsx</code>) was carried over from <code>writer-connectors-page-map.md</code>, not re-read line-by-line in this session.
+                    </div>
+                </section>
+
+                <section id="section4b">
+                    <h3>4b. Components</h3>
+
+                    <p>Components live under <code>frontend/src/components/</code>, organized by feature area (e.g. <code>components/agents/manage-tabs/</code> for the connectors table and its modals, <code>components/connectors/</code> for smaller shared pieces like the connector icon). There's no strict atomic-design layering — page-specific components and shared components sit near each other, and figuring out which is which matters before you edit (see Section 4c and Section 6).</p>
+                </section>
+
+                <section id="section4c">
+                    <h3>4c. The Writer Design System (WDS)</h3>
+
+                    <p><strong>WDS</strong> is Writer's shared component library, published as an npm package, <code>@writercolab/fe.wds</code> (confirmed as a real pinned dependency, version <code>1.105.1</code> in <code>frontend/package.json</code>), with a published <strong>Storybook</strong> (a hosted catalog of the components and their variants) that the Figma design files link directly into. You should not build a new button, table, or dialog primitive from scratch — pull it from WDS.</p>
+
+                    <div class="mermaid">
+                        graph TB
+                            WDS["@writercolab/fe.wds (npm package)<br/>separate repo: WriterColab/fe.wds"]
+                            Tab["connectors-tab.tsx"]
+                            WDS -->|Button, Heading, SearchInput,<br/>Table/TableBody/TableHead/TableRow,<br/>Pagination, toast| Tab
+                    </div>
+
+                    <p class="diagram-caption">Design System imports and usage.</p>
+
+                    <p>The connectors page imports WDS primitives directly at the top of its main file:</p>
+
+                    <pre><code>// frontend/src/components/agents/manage-tabs/connectors-tab.tsx (verified excerpt)
+import {
+  Button, Heading, SearchInput, Table, TableBody, TableHead, TableHeader, TableRow, Pagination,
+} from '@writercolab/fe.wds';</code></pre>
+
+                    <p>Not everything that <em>looks</em> like a design-system piece is one — <code>DefaultBadge</code> on the connectors page wraps an app-local badge component (<code>frontend/src/components/ui/badge.tsx</code>), not a WDS import. Check the import statement, not the visual, before assuming a component is upstream in WDS.</p>
+
+                    <div class="note verified">
+                        <strong>✓ Verified</strong>: the <code>@writercolab/fe.wds</code> dependency and version in <code>frontend/package.json</code>; the exact import list shown above, read directly from <code>connectors-tab.tsx</code>. The DefaultBadge/WDS distinction and the Storybook URL are carried over from <code>writer-frontend-stack.md</code> (the Storybook URL itself was flagged there as unreached from a sandboxed session — still unverified).
+                    </div>
+                </section>
+
+                <section id="section4d">
+                    <h3>4d. State and data-fetching</h3>
+
+                    <p>Two different kinds of state show up on this page, and it matters which one you're touching:</p>
+
+                    <ul>
+                        <li><strong>Server state</strong> (data that lives on a backend and can go stale) — handled by <strong>TanStack Query</strong> (<code>@tanstack/react-query</code>, confirmed <code>^5.75.2</code> in <code>frontend/package.json</code>). Custom hooks under <code>frontend/src/hooks/react-query/</code> wrap <code>useQuery</code>, <code>useInfiniteQuery</code>, and <code>useMutation</code>.</li>
+                        <li><strong>Local UI state</strong> (is this modal open, what's the search text) — handled with plain React <code>useState</code>, visible throughout <code>connectors-tab.tsx</code> (<code>isAddConnectorModalOpen</code>, <code>searchTerm</code>, etc.).</li>
+                    </ul>
+
+                    <div class="mermaid">
+                        graph LR
+                            UI["ConnectorsTab component"] -->|useState| Local["local UI state<br/>(modals, search, sort, pagination)"]
+                            UI -->|useQuery / useInfiniteQuery /<br/>useMutation| RQ["TanStack Query hooks<br/>frontend/src/hooks/react-query/"]
+                            RQ -->|HTTP| Backend["be.mcp-gateway<br/>(two API surfaces)"]
+                    </div>
+
+                    <p class="diagram-caption">State management layers on the connectors page.</p>
+
+                    <div class="note verified">
+                        <strong>✓ Verified</strong>: <code>@tanstack/react-query</code> version in <code>frontend/package.json</code>; the mixed <code>useState</code> / <code>useQuery</code>/<code>useInfiniteQuery</code>/<code>useMutation</code> usage read directly in <code>connectors-tab.tsx</code> and <code>use-gateway.ts</code>.
+                    </div>
+                </section>
+            </section>
+
+            <div class="hr"></div>
+
+            <!-- Section 5 -->
+            <section id="section5">
+                <h2>5. Where connectors fits</h2>
+
+                <section id="section5a">
+                    <h3>5a. Component tree</h3>
+
+                    <div class="mermaid">
+                        graph TB
+                            Page["CustomizeConnectorsPage<br/>(route: .../writer-agent/customize/connectors)"]
+                            Page --> CAP["CustomizeAgentPage section='connectors'"]
+                            CAP --> Shell["CustomizePageShell"]
+                            Shell --> Tab["ConnectorsTab<br/>(~640 lines: search, sort, pagination,<br/>modal state, permissions, 7+ query hooks)"]
+                            Tab --> Skel["ConnectorsTabSkeleton"]
+                            Tab --> Empty["ConnectorsEmptyState"]
+                            Tab --> Tbl["Table -> ConnectorTableRow[]"]
+                            Tbl --> Icon["ConnectorIcon"]
+                            Tbl --> Badge["DefaultBadge"]
+                            Tbl --> Status["ConnectorRowStatus"]
+                            Tab --> Explore["ExploreConnectorsModal -> ConnectorLibrary -> ConnectorCard[]"]
+                            Tab --> Preview["PreviewConnectorModal -> ToolRows -> ToolRow[]"]
+                            Tab --> Connect["ConnectConnectorModal"]
+                            Tab --> ApiKey["ConnectApiKeyModal"]
+                            Tab --> Allow["AllowConnectorsModal"]
+                    </div>
+
+                    <p class="diagram-caption">Component tree for the connectors page.</p>
+
+                    <p><code>ConnectorsTab</code> (<code>frontend/src/components/agents/manage-tabs/connectors-tab.tsx</code>) is the main change-concentration point — it owns search, client-side sort, client-side pagination, modal state, permission checks, feature-flag branching, and the mutation calls, all in one file. That's a known, named piece of tech debt on this team's plate, not an accident of this doc.</p>
+
+                    <div class="note verified">
+                        <strong>✓ Verified</strong> directly: the file exists at the stated path, is ~640 lines, imports 7+ query/mutation hooks (<code>useConnectOrganizationProfile</code>, <code>useListUnifiedUserProfiles</code>, <code>useDeleteProfile</code>, <code>useCgConnectors</code>, <code>useSignedLogoUrls</code>, <code>useAgentConnectors</code>, plus the modals' own hooks), and contains the <code>useState</code> calls for every modal listed. The rest of the tree below <code>ConnectorTableRow</code> (Icon, Badge, Status, and the modal internals) is carried over from <code>writer-connectors-page-map.md</code> and not individually re-opened in this session.
+                    </div>
+                </section>
+
+                <section id="section5b">
+                    <h3>5b. Which backend a call hits, and why</h3>
+
+                    <div class="mermaid">
+                        flowchart TB
+                            Flag{"useFeatureFlag('connector-gateway')"}
+                            Flag -->|true| CGPath["CG path:<br/>useCgConnectors, cgV1ConnectorsOptions,<br/>getApiConnectorGatewayV1... hooks"]
+                            Flag -->|false| LegacyPath["legacy path:<br/>useAgentConnectors,<br/>listOrgApps, agent-config PUT"]
+                            CGPath --> CGUrl["/api/connector-gateway/v1/organization/{orgId}/..."]
+                            LegacyPath --> LegacyUrl["/api/mcp-gateway/v2 or v3/organization/{orgId}/..."]
+                            CGUrl --> Svc["be.mcp-gateway<br/>(one Bun/Elysia service,<br/>two route surfaces)"]
+                            LegacyUrl --> Svc
+                    </div>
+
+                    <p class="diagram-caption">Feature flag routing to different backend surfaces.</p>
+
+                    <p>Both URL prefixes are served by the <strong>same backend service</strong> — <code>WriterInternal/be.mcp-gateway</code> — just under different route trees (<code>src/connector-gateway/</code> vs the legacy MCP gateway routes). That's why the flag switches <em>contract</em>, not <em>host</em>: same origin, different response shape, different <code>staleTime</code>/<code>gcTime</code> cache settings on the frontend side, so loading/empty/error states genuinely differ between the two paths.</p>
+
+                    <p>The CG path additionally passes through an <strong>adapter</strong> — <code>frontend/src/hooks/react-query/mcp-gateway/connector-gateway-adapter.ts</code> — that reshapes CG's native response into the legacy shape the rest of <code>ConnectorsTab</code> expects. This adapter is known to drop some fields (profile ownership/visibility, several app metadata fields, tool parameters/timestamps); see <code>docs/initiatives/connectors/connector-gateway-adapter-field-loss.md</code> for the full ledger before relying on a field that flows through it.</p>
+
+                    <div class="note verified">
+                        <strong>✓ Verified</strong> in this session: the <code>useFeatureFlag('connector-gateway')</code> branch pattern, appearing identically in <code>useListMcpGatewayApps</code>, <code>useListTools</code>, and <code>ConnectorsTab</code>'s own <code>useConnectorGateway ? cgConnectors : agentConnectors</code> branch; that both URL prefixes point at generated clients under <code>frontend/src/generated/mcp-gateway/</code>; that <code>be.mcp-gateway</code> is one service per its own README structure (<code>src/routes/</code> split into legacy and <code>src/connector-gateway/</code>). The adapter's specific field-loss claims are carried over from <code>writer-frontend-stack.md</code> / the field-loss ledger doc, not independently re-audited field-by-field in this session.
+                    </div>
+                </section>
+
+                <section id="section5c">
+                    <h3>5c. The other connectors page — <code>fe.web-app</code> (legacy)</h3>
+
+                    <p>There is a <strong>second, separate implementation of a connectors page</strong>, in a different repository, <code>WriterInternal/fe.web-app</code> (checked out at <code>~/dev/fe.web-app</code>), under <code>apps/service.writer-app/src/connectors/</code>. It is owned by the same connectors team but is considered <strong>legacy</strong> and is not the target of new design work — new work (e.g. the CON-159 redesign) targets the <code>writer-monorepo/frontend</code> implementation covered in this document.</p>
+
+                    <div class="mermaid">
+                        graph LR
+                            Team["Connectors team"] --> A["writer-monorepo/frontend<br/>(this doc, active target)"]
+                            Team --> B["fe.web-app/apps/service.writer-app/<br/>src/connectors/<br/>(LEGACY, modernization planned)"]
+                    </div>
+
+                    <p class="diagram-caption">Two connectors implementations, one active.</p>
+
+                    <div class="note verified">
+                        <strong>✓ Verified</strong> in this session: <code>apps/service.writer-app/src/connectors/</code> exists in <code>~/dev/fe.web-app</code> and contains <code>organisims/</code>, <code>entities/</code>, <code>features/</code>, <code>legacy/</code>, <code>pages/</code>, etc. — a real, separate implementation, confirming it isn't just a stub or redirect. The "legacy, not CON-159's target" framing is carried over from <code>writer-product-surfaces.md</code> and <code>writer-fe-web-app-local-setup.md</code>, sourced from Jeffrey's own 1:1 notes rather than independently re-derived here.
+                    </div>
+                </section>
+            </section>
+
+            <div class="hr"></div>
+
+            <!-- Section 6 -->
+            <section id="section6">
+                <h2>6. A map for finding your way</h2>
+
+                <p><strong>Use this table when you need to change something on the connectors page.</strong> "I want to change X" → find X in the left column → look in the "Look in" column for the file.</p>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>I want to change...</th>
+                            <th>Look in</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>The connectors page URL / route registration</td>
+                            <td><code>frontend/src/app/organization/[organizationId]/team/[teamId]/writer-agent/customize/connectors/page.tsx</code></td>
+                        </tr>
+                        <tr>
+                            <td>Page width, heading, outer spacing (shared across Connectors/Skills/Voice)</td>
+                            <td><code>frontend/src/components/ui/customize/customize-page-shell.tsx</code></td>
+                        </tr>
+                        <tr>
+                            <td>Search bar, table columns, pagination, loading/error states</td>
+                            <td><code>frontend/src/components/agents/manage-tabs/connectors-tab.tsx</code></td>
+                        </tr>
+                        <tr>
+                            <td>A single row's layout or its menu</td>
+                            <td><code>frontend/src/components/agents/manage-tabs/connector-table-row.tsx</code></td>
+                        </tr>
+                        <tr>
+                            <td>Connector logo/icon (high blast radius — 15+ other consumers)</td>
+                            <td><code>frontend/src/components/connectors/connector-icon.tsx</code></td>
+                        </tr>
+                        <tr>
+                            <td>The "Explore connectors" modal / library grid</td>
+                            <td><code>frontend/src/components/agents/manage-tabs/explore-connectors-modal.tsx</code>, <code>connector-library.tsx</code></td>
+                        </tr>
+                        <tr>
+                            <td>The connector detail / tools preview modal</td>
+                            <td><code>frontend/src/components/agents/manage-tabs/preview-connector-modal.tsx</code></td>
+                        </tr>
+                        <tr>
+                            <td>OAuth / API-key / consent dialogs</td>
+                            <td><code>connect-connector-modal.tsx</code>, <code>connect-api-key-modal.tsx</code>, <code>allow-connectors-modal.tsx</code> (same directory)</td>
+                        </tr>
+                        <tr>
+                            <td>Which backend a data call hits, and the CG/legacy branch itself</td>
+                            <td><code>frontend/src/hooks/react-query/mcp-gateway/use-gateway.ts</code></td>
+                        </tr>
+                        <tr>
+                            <td>What data the CG adapter drops or renames</td>
+                            <td><code>docs/initiatives/connectors/connector-gateway-adapter-field-loss.md</code></td>
+                        </tr>
+                        <tr>
+                            <td>Permission / who-can-see-what rules</td>
+                            <td><code>docs/</code> under <code>writer-connectors-permission-model.md</code> in your own notes, and <code>be.mcp-gateway/src/connector-gateway/profile/shared/is-tool-allowed.ts</code> / <code>is-tool-selected.ts</code> for enforcement</td>
+                        </tr>
+                        <tr>
+                            <td>A WDS component's available variants</td>
+                            <td>The WDS Storybook (published from <code>WriterColab/fe.wds</code>)</td>
+                        </tr>
+                        <tr>
+                            <td>The legacy, non-target connectors implementation</td>
+                            <td><code>~/dev/fe.web-app/apps/service.writer-app/src/connectors/</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <div class="hr"></div>
+
+            <!-- Verification -->
+            <section id="verification">
+                <h2>Verification notes</h2>
+
+                <h3>Confirmed by directly reading code in this session</h3>
+                <p>File paths cited inline above; repos read were <code>~/dev/writer-monorepo</code> and <code>~/dev/fe.web-app</code>:</p>
+                <ul>
+                    <li>No root <code>package.json</code>; <code>frontend/</code> is its own pnpm/Next.js project named <code>"skynet"</code>; <code>backend/</code> is Python; <code>gateway/</code> is Bun/TypeScript.</li>
+                    <li>The App Router folder structure under <code>frontend/src/app/</code>, including the exact connectors route path and the full contents of its <code>page.tsx</code>.</li>
+                    <li><code>next.config.ts</code> sets <code>output: 'standalone'</code>, and the build scripts use <code>next build --turbopack</code>.</li>
+                    <li><code>@writercolab/fe.wds</code> is a real pinned dependency (<code>1.105.1</code>) and is imported directly by <code>connectors-tab.tsx</code> (<code>Button</code>, <code>Heading</code>, <code>SearchInput</code>, <code>Table</code> family, <code>Pagination</code>, <code>toast</code>).</li>
+                    <li><code>@tanstack/react-query</code> <code>^5.75.2</code> is a real dependency; <code>connectors-tab.tsx</code> uses <code>useQuery</code>, <code>useInfiniteQuery</code>, and <code>useMutation</code> hooks from <code>frontend/src/hooks/react-query/</code>.</li>
+                    <li>The <code>useFeatureFlag('connector-gateway')</code> flag exists (<code>frontend/src/hooks/use-feature-flags.ts</code>) and gates parallel code paths in <code>useListMcpGatewayApps</code>, <code>useListTools</code>, and <code>ConnectorsTab</code>'s own <code>useConnectorGateway ? cgConnectors : agentConnectors</code> branch.</li>
+                    <li><code>useConnectOrganizationProfile</code> is a real TanStack mutation hook (<code>use-gateway.ts:538-548</code>) that calls <code>connectCgOrganizationProfile</code> and invalidates the profiles query cache on success — the basis for the Section 3 sequence diagram.</li>
+                    <li><code>apps/service.writer-app/src/connectors/</code> exists as a real, populated directory in <code>~/dev/fe.web-app</code>.</li>
+                    <li><code>DefaultBadge</code> on the connectors page wraps an app-local component, not a <code>@writercolab/fe.wds</code> import.</li>
+                </ul>
+
+                <h3>Carried over from <code>~/notes/knowledge/</code> without independent re-verification this session</h3>
+                <p>Out of scope for a docs pass to re-derive from scratch; flagged as static-code-verified as of 2026-08-19 by that knowledge base, not runtime-verified by anyone:</p>
+                <ul>
+                    <li>The full component tree below <code>ConnectorTableRow</code> (icon/badge/status internals) and the modal internals' exact prop wiring.</li>
+                    <li>The specific field-by-field list of what the CG adapter drops (profile ownership, app metadata, tool parameters/timestamps) — the adapter file and its general lossy behavior were spot-checked by path, but the full field ledger was not re-walked.</li>
+                    <li>The redirect logic inside <code>customize-simple-url-redirect.tsx</code>.</li>
+                    <li>That <code>be.mcp-gateway</code> is one Bun/Elysia service with two route surfaces — taken from <code>writer-repo-and-environment-map.md</code>, which documents having read that repo via the GitHub API; not re-read independently in this session since it isn't checked out locally.</li>
+                    <li>The WDS Storybook's live existence/URL — explicitly flagged in the source notes as unreached from a sandboxed session.</li>
+                    <li><code>fe.web-app</code>'s connectors page being "legacy" and out of scope for new design work — this is Jeffrey's own stated framing from his 1:1, not something derivable purely from the code.</li>
+                </ul>
+
+                <h3>Inferred, not confirmed</h3>
+                <ul>
+                    <li>That the Next.js-to-static/web-components migration "has not started" is an inference from the absence of web-components tooling and the <code>standalone</code> build mode, not a statement anyone on the team made about current plans.</li>
+                    <li>Nothing in this document was verified against a running app, an actual network request, or an actual feature-flag value in any environment — all tracing here is static (reading source), not runtime observation.</li>
+                </ul>
+            </section>
+
+            <div class="hr"></div>
+
+            <footer style="margin-top: var(--spacing-xl); padding-top: var(--spacing-lg); border-top: 1px solid var(--color-border); font-size: 0.9rem; color: var(--color-text-muted);">
+                <p><strong>Next steps:</strong> Use Section 6 as your reference map. Open the relevant files listed there as you explore. For questions on connectors-specific architecture (like the backend routing or the adapter's field loss), refer to the related research docs linked in this walkthrough.</p>
+                <p style="margin-top: var(--spacing-sm);">Questions? Start with the team's onboarding buddy.</p>
+            </footer>
+        </main>
+    </div>
+
+    <script>
+        mermaid.initialize({ startOnLoad: true, theme: 'default' });
+
+        // Auto-load dark theme if system prefers it
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+        }
+
+        // Navigation highlighting
+        document.querySelectorAll('nav a').forEach(link => {
+            if (link.getAttribute('href') === '#section' + window.location.hash.slice(1)) {
+                link.classList.add('active');
+            }
+        });
+
+        // Smooth scrolling
+        document.querySelectorAll('nav a').forEach(link => {
+            link.addEventListener('click', (e) => {
+                document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+                link.classList.add('active');
+            });
+        });
+    </script>
+</body>
+</html>

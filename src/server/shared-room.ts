@@ -1,10 +1,30 @@
 import type { AgentRun, SharedMessage } from '../shared/contracts.js';
-import { runAgentCommandWithFallback } from './agent-runner.js';
+import { judgeExecutionProfile, modelFor, runAgentCommandWithFallback } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
+import { contextForPrompt } from './connection-broker.js';
 
 const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
 export const isSharedReplyActive = (id: string) => activeReplies.has(id);
+
+function connectionSearchQuery(message: string): string {
+  return message.replace(/https?:\/\/\S+/g, ' ').replace(/\b(?:linear|search|find|look|show|check|issues?|tasks?|tickets?|for|in|on|the|a|an|me|please)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+}
+
+export const connectionContextForPrompt = contextForPrompt;
+
+export function linearContextForPrompt(repository: WorkItemRepository, message: string): string {
+  if (!/\blinear\b|linear\.app/i.test(message)) return '';
+  const query = connectionSearchQuery(message);
+  const items = repository.searchLinear(query, 10);
+  if (!items.length) return `Workbench Linear context: the synced Linear catalog has no matches for ${query ? `“${query}”` : 'this request'}. Do not direct Jeffrey to a dialog; explain that no synced match was found.`;
+  return `Workbench Linear context (synced catalog; use this directly and do not ask Jeffrey to open a dialog):\n${items.map((item) => [
+    `- ${item.sourceIdentifier ?? 'Linear'}: ${item.title}`,
+    `  Project: ${item.projectName ?? 'none'}; status: ${item.status}`,
+    item.sourceUrl ? `  URL: ${item.sourceUrl}` : '',
+    item.description ? `  Description: ${item.description.slice(0, 2_000)}` : '',
+  ].filter(Boolean).join('\n')).join('\n')}`;
+}
 
 export function dispatchNextSharedTurn(repository: WorkItemRepository, conversationId: string): SharedMessage[] {
   if (repository.listSharedMessages(1_000, conversationId).some((message) => message.status === 'running')) return [];
@@ -62,29 +82,37 @@ export async function runSharedBackgroundJob(
 export async function replyInSharedRoom(repository: WorkItemRepository, agent: AgentRun['agent'], messageId: string, runId?: string): Promise<void> {
   const target = repository.listSharedMessages(1_000).find((message) => message.id === messageId);
   if (!target) return;
-  const thread = repository.listSharedMessages(100, target.conversationId).filter((message) => message.id !== messageId);
   const controller = new AbortController();
   activeReplies.set(messageId, controller);
   if (runId) {
     replyRunIds.set(messageId, runId);
     repository.updateRun(runId, { status: 'running', startedAt: new Date().toISOString() });
   }
-  const prompt = `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.
+  try {
+    const thread = repository.listSharedMessages(100, target.conversationId).filter((message) => message.id !== messageId);
+    const latestUserMessage = [...thread].reverse().find((message) => message.author === 'jeffrey')?.body ?? '';
+    const connectionContext = await connectionContextForPrompt(repository, latestUserMessage);
+    const prompt = `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.
 
 ${repository.getSharedContext(target.conversationId)}
+
+${connectionContext}
 
 Current conversation:
 ${thread.slice(-12).map((message) => `${message.author}: ${message.body.slice(0, 4_000)}${message.attachments.length ? `\nAttached files:\n${message.attachments.map((file) => `- ${file.name}: ${file.path}`).join('\n')}` : ''}`).join('\n\n')}
 
-Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. Call out a durable lesson explicitly when something should be pinned for future work.`;
-  try {
+Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential.`;
+    repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
+    const profile = await judgeExecutionProfile(latestUserMessage || prompt, process.cwd(), controller.signal);
+    repository.updateSharedMessage(messageId, { model: modelFor(agent, profile), executionProfile: profile });
+    if (runId) repository.updateRun(runId, { model: modelFor(agent, profile), executionProfile: profile });
     const result = await runAgentCommandWithFallback(agent, process.cwd(), prompt, (partial) => {
       repository.updateSharedMessage(messageId, { body: partial });
       if (runId) repository.updateRun(runId, { output: partial });
     }, controller.signal, (fallback) => {
-      repository.updateSharedMessage(messageId, { author: fallback });
-      if (runId) repository.updateRun(runId, { agent: fallback });
-    });
+      repository.updateSharedMessage(messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile });
+      if (runId) repository.updateRun(runId, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile });
+    }, profile);
     repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'completed' });
     if (runId) repository.updateRun(runId, { agent: result.agent, output: result.output, status: 'completed', completedAt: new Date().toISOString() });
   } catch (error) {

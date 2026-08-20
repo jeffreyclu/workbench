@@ -82,7 +82,7 @@ export interface ProviderWorkItem {
 export class WorkItemRepository {
   constructor(private readonly database: WorkbenchDatabase) {}
 
-  listConversations(): SharedConversation[] {
+  listConversations(view: 'active' | 'archive' | 'all' = 'active'): SharedConversation[] {
     return (this.database.prepare(`
       SELECT shared_conversations.*,
         EXISTS (
@@ -91,15 +91,15 @@ export class WorkItemRepository {
             AND shared_messages.status = 'running'
         ) AS is_active
       FROM shared_conversations
-      WHERE archived_at IS NULL
+      WHERE (? = 'all' OR (? = 'active' AND archived_at IS NULL) OR (? = 'archive' AND archived_at IS NOT NULL))
       ORDER BY updated_at DESC
-    `).all() as Array<Record<string, string | number | null>>).map((row) => ({
+    `).all(view, view, view) as Array<Record<string, string | number | null>>).map((row) => ({
       id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
-      archivedAt: row.archived_at ? String(row.archived_at) : null, createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
+      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
     }));
   }
 
-  listConversationPage(limit: number, cursor: string | null): ConversationPage {
+  listConversationPage(limit: number, cursor: string | null, view: 'active' | 'archive' = 'active'): ConversationPage {
     const safeLimit = Math.max(1, Math.min(100, limit));
     let cursorValues: { updatedAt: string; id: string } | null = null;
     if (cursor) {
@@ -111,23 +111,55 @@ export class WorkItemRepository {
       SELECT shared_conversations.*,
         EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.status = 'running') AS is_active
       FROM shared_conversations
-      WHERE archived_at IS NULL AND (? IS NULL OR updated_at < ? OR (updated_at = ? AND id < ?))
+      WHERE ((? = 'active' AND archived_at IS NULL) OR (? = 'archive' AND archived_at IS NOT NULL))
+        AND (? IS NULL OR updated_at < ? OR (updated_at = ? AND id < ?))
       ORDER BY updated_at DESC, id DESC LIMIT ?
-    `).all(cursorValues?.id ?? null, cursorValues?.updatedAt ?? null, cursorValues?.updatedAt ?? null, cursorValues?.id ?? null, safeLimit + 1) as Array<Record<string, string | number | null>>;
+    `).all(view, view, cursorValues?.id ?? null, cursorValues?.updatedAt ?? null, cursorValues?.updatedAt ?? null, cursorValues?.id ?? null, safeLimit + 1) as Array<Record<string, string | number | null>>;
     const hasMore = rows.length > safeLimit;
     const conversations = rows.slice(0, safeLimit).map((row) => ({
       id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
-      archivedAt: row.archived_at ? String(row.archived_at) : null, createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
+      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
     }));
     const last = conversations.at(-1);
     return { conversations, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null,
-      totalCount: Number((this.database.prepare('SELECT COUNT(*) AS count FROM shared_conversations WHERE archived_at IS NULL').get() as { count: number }).count) };
+      totalCount: Number((this.database.prepare(`SELECT COUNT(*) AS count FROM shared_conversations WHERE (${view === 'active' ? 'archived_at IS NULL' : 'archived_at IS NOT NULL'})`).get() as { count: number }).count) };
   }
 
   createConversation(title = 'New conversation', workItemId: string | null = null): SharedConversation {
     const id = randomUUID(); const now = new Date().toISOString();
     this.database.prepare('INSERT INTO shared_conversations (id, title, work_item_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, title, workItemId, now, now);
-    return { id, title, workItemId, archivedAt: null, createdAt: now, updatedAt: now, isActive: false };
+    return { id, title, workItemId, forkedFromConversationId: null, archivedAt: null, createdAt: now, updatedAt: now, isActive: false };
+  }
+
+  setConversationArchived(id: string, archived: boolean): SharedConversation | null {
+    const now = new Date().toISOString();
+    const memory = archived ? this.buildConversationMemory(id) : null;
+    this.database.exec('BEGIN IMMEDIATE');
+    let changed = false;
+    try {
+      changed = Number(this.database.prepare('UPDATE shared_conversations SET archived_at = ?, updated_at = ? WHERE id = ?').run(archived ? now : null, now, id).changes) > 0;
+      if (changed && memory) this.database.prepare("INSERT INTO shared_memories (id, kind, body, created_at) VALUES (?, 'conversation_archive', ?, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body, created_at = excluded.created_at").run(`conversation:${id}`, memory, now);
+      this.database.exec('COMMIT');
+    } catch (error) { this.database.exec('ROLLBACK'); throw error; }
+    return changed ? this.listConversations('all').find((conversation) => conversation.id === id) ?? null : null;
+  }
+
+  private buildConversationMemory(id: string): string | null {
+    const conversation = this.listConversations('all').find((entry) => entry.id === id);
+    if (!conversation) return null;
+    const messages = this.listSharedMessages(1_000, id).filter((message) => message.status === 'completed' && message.body.trim()).slice(-8);
+    if (!messages.length) return null;
+    return [`Archived conversation: ${conversation.title}`, ...messages.map((message) => `${message.author}: ${message.body.trim().slice(0, 1_500)}`)].join('\n\n').slice(0, 12_000);
+  }
+
+  forkConversation(id: string): SharedConversation | null {
+    const source = this.listConversations('all').find((conversation) => conversation.id === id);
+    if (!source) return null;
+    const fork = this.createConversation(`${source.title} · fork`, source.workItemId);
+    this.database.prepare('UPDATE shared_conversations SET forked_from_conversation_id = ? WHERE id = ?').run(source.id, fork.id);
+    const messages = this.listSharedMessages(1_000, source.id);
+    for (const message of messages) this.createSharedMessage(message.author, message.body, message.status === 'running' || message.status === 'queued' ? 'completed' : message.status, fork.id, message.attachments, 'none');
+    return this.listConversations('all').find((conversation) => conversation.id === fork.id) ?? null;
   }
 
   getOrCreateWorkConversation(workItemId: string, title: string): SharedConversation {
@@ -187,14 +219,16 @@ export class WorkItemRepository {
       id: String(row.id), conversationId: String(row.conversation_id ?? ''), author: row.author as SharedMessage['author'], body: String(row.body),
       pinned: row.pinned === 1, status: row.status as SharedMessage['status'], error: String(row.error),
       createdAt: String(row.created_at), attachments: JSON.parse(String(row.attachments_json ?? '[]')) as SharedAttachment[],
+      model: row.model ? String(row.model) : null,
+      executionProfile: row.execution_profile as SharedMessage['executionProfile'] ?? null,
     }));
   }
 
   createSharedMessage(author: SharedMessage['author'], body: string, status: SharedMessage['status'] = 'completed', conversationId?: string, attachments: SharedAttachment[] = [], dispatchTarget = 'none'): SharedMessage {
-    const conversation = conversationId ? this.listConversations().find((item) => item.id === conversationId) : this.ensureDefaultConversation();
+    const conversation = conversationId ? this.listConversations('all').find((item) => item.id === conversationId) : this.ensureDefaultConversation();
     if (!conversation) throw new Error('Conversation not found.');
     const message: SharedMessage = {
-      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), attachments,
+      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), attachments, model: null, executionProfile: null,
     };
     this.database.prepare(`
       INSERT INTO shared_messages (id, conversation_id, author, body, pinned, status, error, attachments_json, dispatch_target, created_at)
@@ -214,10 +248,10 @@ export class WorkItemRepository {
     return message ? { message, dispatchTarget: row.dispatch_target as 'auto' | 'codex' | 'claude' | 'both' } : null;
   }
 
-  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author'] }): SharedMessage | null {
+  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; executionProfile?: SharedMessage['executionProfile'] }): SharedMessage | null {
     const entries = Object.entries({
       pinned: changes.pinned === undefined ? undefined : Number(changes.pinned),
-      body: changes.body, status: changes.status, error: changes.error, author: changes.author,
+      body: changes.body, status: changes.status, error: changes.error, author: changes.author, model: changes.model, execution_profile: changes.executionProfile,
     }).filter((entry): entry is [string, string | number] => entry[1] !== undefined);
     if (entries.length) this.database.prepare(`UPDATE shared_messages SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE id = ?`)
       .run(...entries.map(([, value]) => value), id);
@@ -226,11 +260,11 @@ export class WorkItemRepository {
 
   getSharedContext(excludeConversationId?: string): string {
     const messages = this.listSharedMessages(120).filter((message) => message.conversationId !== excludeConversationId);
-    const pinned = messages.filter((message) => message.pinned && message.body).slice(-20);
-    const recent = messages.filter((message) => !message.pinned && message.status === 'completed' && message.body).slice(-8);
+    const archived = this.database.prepare("SELECT body FROM shared_memories WHERE kind IN ('task_archive', 'conversation_archive') ORDER BY created_at DESC LIMIT 20").all() as Array<{ body: string }>;
+    const recent = messages.filter((message) => message.status === 'completed' && message.body).slice(-8);
     const format = (message: SharedMessage) => `${message.author}: ${message.body.slice(0, 2_000)}`;
     return [
-      'Durable lessons:', pinned.length ? pinned.map(format).join('\n') : 'None pinned yet.',
+      'Durable context from archived work:', archived.length ? archived.map(({ body }) => `archive: ${body.slice(0, 2_000)}`).join('\n') : 'No archived context yet.',
       '', 'Recent shared room:', recent.length ? recent.map(format).join('\n') : 'No recent conversation.',
     ].join('\n');
   }
@@ -321,11 +355,12 @@ export class WorkItemRepository {
       .prepare(`
         SELECT * FROM work_items
         WHERE source = 'linear'
-          AND (title LIKE ? COLLATE NOCASE OR source_identifier LIKE ? COLLATE NOCASE OR source_url LIKE ? COLLATE NOCASE)
+          AND (title LIKE ? COLLATE NOCASE OR description LIKE ? COLLATE NOCASE OR project_name LIKE ? COLLATE NOCASE
+            OR source_identifier LIKE ? COLLATE NOCASE OR source_url LIKE ? COLLATE NOCASE)
         ORDER BY is_queued DESC, priority ASC, provider_updated_at DESC
         LIMIT ?
       `)
-      .all(needle, needle, needle, limit) as unknown as WorkItemRow[];
+      .all(needle, needle, needle, needle, needle, limit) as unknown as WorkItemRow[];
     return rows.map(mapWorkItem);
   }
 
@@ -458,6 +493,7 @@ export class WorkItemRepository {
       const children = selectedTasks.map((task) => this.create({
         title: task.title, description: task.description, priority: 2, status: 'ready',
         projectName: parent.projectName, workspacePath: task.workspacePath ?? parent.workspacePath, dueDate: null,
+        parentWorkItemId: parent.id,
       }));
       const current = this.list();
       const childIds = children.map((item) => item.id);
@@ -565,12 +601,16 @@ export class WorkItemRepository {
       `Strategy: ${item.strategy || 'none'}`,
       runs.length ? `Agent outcomes:\n${runs.map((run) => `${run.agent}/${run.kind}: ${run.output}`).join('\n\n')}` : 'Agent outcomes: none',
     ].join('\n');
+    const conversationRows = this.database.prepare(`SELECT id FROM shared_conversations WHERE work_item_id = ? OR id IN (SELECT conversation_id FROM agent_runs WHERE work_item_id = ? AND conversation_id IS NOT NULL)`).all(id, id) as Array<{ id: string }>;
+    const conversationMemories = conversationRows.flatMap(({ id: conversationId }) => { const body = this.buildConversationMemory(conversationId); return body ? [{ id: conversationId, body }] : []; });
     this.database.exec('BEGIN IMMEDIATE');
     try {
       this.database.prepare('UPDATE work_items SET archived_at = ?, completed_at = ?, status = ?, updated_at = ? WHERE id = ?')
         .run(now, completed ? now : null, completed ? 'done' : item.status, now, id);
-      const message = this.createSharedMessage('system', memory);
-      this.updateSharedMessage(message.id, { pinned: true });
+      this.database.prepare("INSERT INTO shared_memories (id, kind, body, created_at) VALUES (?, 'task_archive', ?, ?)")
+        .run(randomUUID(), memory, now);
+      for (const conversationMemory of conversationMemories) this.database.prepare("INSERT INTO shared_memories (id, kind, body, created_at) VALUES (?, 'conversation_archive', ?, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body, created_at = excluded.created_at")
+        .run(`conversation:${conversationMemory.id}`, conversationMemory.body, now);
       this.database.prepare(`UPDATE shared_conversations SET archived_at = ?, updated_at = ?
         WHERE archived_at IS NULL AND (work_item_id = ? OR id IN (SELECT conversation_id FROM agent_runs WHERE work_item_id = ? AND conversation_id IS NOT NULL))`).run(now, now, id, id);
       this.database.exec('COMMIT');
@@ -578,6 +618,28 @@ export class WorkItemRepository {
       this.database.exec('ROLLBACK');
       throw error;
     }
+    return this.get(id);
+  }
+
+  restore(id: string): WorkItem | null {
+    const item = this.get(id);
+    if (!item) return null;
+    if (!item.archivedAt) return item;
+    const now = new Date().toISOString();
+    const status = item.status === 'done' || item.status === 'canceled' ? 'ready' : item.status;
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      this.database.prepare('UPDATE work_items SET archived_at = NULL, completed_at = NULL, status = ?, is_queued = 1, updated_at = ? WHERE id = ?')
+        .run(status, now, id);
+      this.database.prepare(`UPDATE shared_conversations SET archived_at = NULL, updated_at = ?
+        WHERE work_item_id = ? OR id IN (SELECT conversation_id FROM agent_runs WHERE work_item_id = ? AND conversation_id IS NOT NULL)`).run(now, id, id);
+      this.database.exec('COMMIT');
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+    this.reorder([id, ...this.list().map((entry) => entry.id).filter((entryId) => entryId !== id)]);
+    this.addActivity(id, 'system', 'restored', 'Restored from the archive.');
     return this.get(id);
   }
 
@@ -670,6 +732,7 @@ export class WorkItemRepository {
           status: row.status as AgentRun['status'], instructions: row.instructions!, output: row.output!, error: row.error!,
           startedAt: row.started_at, completedAt: row.completed_at, createdAt: row.created_at!,
           conversationId: row.conversation_id, messageId: row.message_id,
+          model: row.model, executionProfile: row.execution_profile as AgentRun['executionProfile'],
         };
       });
   }
@@ -721,9 +784,9 @@ export class WorkItemRepository {
     return load.codex < load.claude ? 'codex' : 'claude';
   }
 
-  updateRun(id: string, changes: { agent?: AgentRun['agent']; status?: AgentRun['status']; output?: string; error?: string; startedAt?: string; completedAt?: string }): void {
+  updateRun(id: string, changes: { agent?: AgentRun['agent']; status?: AgentRun['status']; output?: string; error?: string; startedAt?: string; completedAt?: string; model?: string; executionProfile?: NonNullable<AgentRun['executionProfile']> }): void {
     const columns = new Map<string, string | undefined>([
-      ['agent', changes.agent], ['status', changes.status], ['output', changes.output], ['error', changes.error],
+      ['agent', changes.agent], ['status', changes.status], ['output', changes.output], ['error', changes.error], ['model', changes.model], ['execution_profile', changes.executionProfile],
       ['started_at', changes.startedAt], ['completed_at', changes.completedAt],
     ]);
     const entries = [...columns].filter((entry): entry is [string, string] => entry[1] !== undefined);

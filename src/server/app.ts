@@ -1,6 +1,6 @@
 import express, { type ErrorRequestHandler } from 'express';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { basename, extname, isAbsolute, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
 import {
@@ -13,7 +13,7 @@ import {
   createSharedConversationSchema,
   reorderQueueSchema,
   resolveSourceUrlSchema,
-  sourceConnectionInputSchema,
+  searchSourcesSchema,
   sourceProviderSchema,
   updateSharedMessageSchema,
   updateWorkItemSchema,
@@ -22,19 +22,18 @@ import { z } from 'zod';
 import type { WorkbenchDatabase } from './database.js';
 import { LinearProvider } from './providers/linear.js';
 import { WorkItemRepository } from './repository.js';
-import { cancelAgentRun, classifyExecution, executeAgentRun, isAgentRunActive, resolveAgents, runAgentCommandWithFallback } from './agent-runner.js';
+import { cancelAgentRun, classifyExecution, executeAgentRun, isAgentRunActive, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback } from './agent-runner.js';
 import { cancelSharedReply, dispatchNextSharedTurn, isSharedReplyActive, runSharedBackgroundJob } from './shared-room.js';
-import { resolveSourceUrl } from './source-resolver.js';
-import { scanSlackWithCodex } from './slack-codex.js';
-import { scanConnectedSources, scanSource } from './source-scanner.js';
-import { createAgentDailyProposal } from './daily-planner.js';
-import { createSlackAuthorizationUrl, exchangeSlackAuthorization, slackOAuthConfigured } from './slack-mcp.js';
 import { createAuthGate } from './auth.js';
 import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMessage } from './slack-notify.js';
+import { finishRemoteMcpOAuth, startRemoteMcpOAuth } from './remote-mcp.js';
+import { listBrokerConnections, resolveBrokerUrl, searchBrokerSources } from './connection-broker.js';
+import { artifactContentHash, CloudflarePagesPublisher, createArtifactId } from './artifact-publisher.js';
 
 export function createApp(database: WorkbenchDatabase) {
   const app = express();
   const repository = new WorkItemRepository(database);
+  const artifactPublisher = new CloudflarePagesPublisher();
   app.use(createAuthGate(undefined));
   app.use(express.json({ limit: '1mb' }));
 
@@ -42,11 +41,130 @@ export function createApp(database: WorkbenchDatabase) {
     response.json({ ok: true });
   });
 
+  app.get('/api/artifacts/open', (request, response) => {
+    const input = z.object({
+      path: z.string().min(1).max(8_000),
+      conversationId: z.string().uuid().optional(),
+      workItemId: z.string().uuid().optional(),
+    }).parse(request.query);
+    const conversation = input.conversationId
+      ? repository.listConversations('all').find((entry) => entry.id === input.conversationId)
+      : null;
+    const item = repository.get(input.workItemId ?? conversation?.workItemId ?? '');
+    const workspace = realpathSync(item ? resolveWorkingDirectory(item) : process.cwd());
+    let requestedPath = input.path.replace(/^file:\/\//, '');
+    let candidate = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(workspace, requestedPath);
+    if (!existsSync(candidate)) {
+      requestedPath = requestedPath.replace(/:(\d+)(?::\d+)?$/, '');
+      candidate = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(workspace, requestedPath);
+    }
+    if (!existsSync(candidate) || !statSync(candidate).isFile()) return response.status(404).json({ error: 'Artifact file not found.' });
+    const realCandidate = realpathSync(candidate);
+    const outsideWorkspace = relative(workspace, realCandidate).startsWith('..') || isAbsolute(relative(workspace, realCandidate));
+    if (outsideWorkspace) return response.status(403).json({ error: 'Artifact is outside the task workspace.' });
+    if (['.html', '.htm'].includes(extname(realCandidate).toLowerCase())) {
+      const rawQuery = new URLSearchParams({ path: input.path });
+      if (input.conversationId) rawQuery.set('conversationId', input.conversationId);
+      if (input.workItemId) rawQuery.set('workItemId', input.workItemId);
+      const publishInput = JSON.stringify({ path: input.path, conversationId: input.conversationId, workItemId: input.workItemId, title: basename(realCandidate).replace(/\.[^.]+$/, '') }).replace(/</g, '\\u003c');
+      response.setHeader('Content-Type', 'text/html; charset=utf-8');
+      response.setHeader('Content-Security-Policy', "default-src 'none'; frame-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'");
+      return response.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${basename(realCandidate).replace(/[&<>"']/g, '')}</title><style>*{box-sizing:border-box}html,body{height:100%;margin:0;background:#0e0e0d;color:#e8e7df;font-family:ui-sans-serif,system-ui,sans-serif}body{display:grid;grid-template-rows:52px minmax(0,1fr)}header{display:flex;align-items:center;gap:10px;padding:8px 14px;background:#151513;border-bottom:1px solid #32322e}strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}button,a{padding:8px 12px;border-radius:7px;font-weight:700;text-decoration:none;cursor:pointer}button{margin-left:auto;color:#111;background:#c6f432;border:0}button:disabled{color:#777;background:#2b2b28;cursor:wait}a{display:none;color:#d7d6cf;background:#282824;border:1px solid #41413b}#revoke{display:none;margin-left:0;color:#ef8888;background:transparent;border:1px solid #5b3535}span{color:#aaa;font-size:12px}iframe{width:100%;height:100%;border:0;background:#fff}@media(max-width:520px){strong{font-size:11px}header{gap:7px;padding-inline:9px}button,a{padding:7px 9px;font-size:11px}#status{display:none}}</style></head><body><header><strong>${basename(realCandidate).replace(/[&<>"']/g, '')}</strong><span id="status">Checking publication…</span><button id="share" type="button" disabled>Share</button><a id="published" target="_blank" rel="noreferrer">Open shared page</a><button id="revoke" type="button">Revoke</button></header><iframe title="Artifact preview" sandbox="allow-scripts allow-same-origin" src="/api/artifacts/raw?${rawQuery.toString()}"></iframe><script>const input=${publishInput};const query=new URLSearchParams(Object.entries(input).filter(([,value])=>value));const button=document.querySelector('#share');const status=document.querySelector('#status');const link=document.querySelector('#published');const revoke=document.querySelector('#revoke');let artifact=null;let changed=false;function show(state){artifact=state.artifact;changed=state.changed;button.disabled=false;if(!artifact){button.textContent='Share';status.textContent='Private preview';link.style.display='none';revoke.style.display='none';return}link.href=artifact.url;link.style.display='inline-block';revoke.style.display='inline-block';button.textContent=changed?'Republish':'Copy link';status.textContent=changed?'Local changes not published':'Published'}async function inspect(){try{const response=await fetch('/api/artifacts/status?'+query);const result=await response.json();if(!response.ok)throw new Error(result.error||'Status failed');show(result)}catch(error){button.disabled=false;button.textContent='Share';status.textContent=error instanceof Error?error.message:'Status failed'}}button.onclick=async()=>{if(artifact&&!changed){await navigator.clipboard.writeText(artifact.url);button.textContent='Copied';setTimeout(()=>button.textContent='Copy link',1200);return}button.disabled=true;button.textContent=changed?'Republishing…':'Publishing…';status.textContent='Deploying read-only snapshot';try{const response=await fetch('/api/artifacts/publish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(input)});const result=await response.json();if(!response.ok)throw new Error(result.error||'Publish failed');await navigator.clipboard.writeText(result.artifact.url);show({artifact:result.artifact,changed:false});button.textContent='Link copied';setTimeout(()=>button.textContent='Copy link',1200)}catch(error){button.disabled=false;button.textContent=changed?'Try republish again':'Try again';status.textContent=error instanceof Error?error.message:'Publish failed'}};revoke.onclick=async()=>{if(!artifact||!confirm('Revoke this shared artifact?'))return;revoke.disabled=true;status.textContent='Revoking…';try{const response=await fetch('/api/artifacts/'+artifact.id,{method:'DELETE'});if(!response.ok){const result=await response.json();throw new Error(result.error||'Revoke failed')}show({artifact:null,changed:false})}catch(error){revoke.disabled=false;status.textContent=error instanceof Error?error.message:'Revoke failed'}};void inspect();</script></body></html>`);
+    }
+    response.setHeader('Content-Disposition', `inline; filename="${basename(realCandidate).replace(/["\\]/g, '_')}"`);
+    response.sendFile(realCandidate);
+  });
+
+  app.get('/api/artifacts/raw', (request, response) => {
+    const input = z.object({ path: z.string().min(1).max(8_000), conversationId: z.string().uuid().optional(), workItemId: z.string().uuid().optional() }).parse(request.query);
+    const conversation = input.conversationId ? repository.listConversations('all').find((entry) => entry.id === input.conversationId) : null;
+    const item = repository.get(input.workItemId ?? conversation?.workItemId ?? '');
+    const workspace = realpathSync(item ? resolveWorkingDirectory(item) : process.cwd());
+    let requestedPath = input.path.replace(/^file:\/\//, '');
+    let candidate = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(workspace, requestedPath);
+    if (!existsSync(candidate)) {
+      requestedPath = requestedPath.replace(/:(\d+)(?::\d+)?$/, '');
+      candidate = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(workspace, requestedPath);
+    }
+    if (!existsSync(candidate) || !statSync(candidate).isFile()) return response.status(404).json({ error: 'Artifact file not found.' });
+    const realCandidate = realpathSync(candidate);
+    const outsideWorkspace = relative(workspace, realCandidate).startsWith('..') || isAbsolute(relative(workspace, realCandidate));
+    if (outsideWorkspace) return response.status(403).json({ error: 'Artifact is outside the task workspace.' });
+    response.setHeader('Content-Security-Policy', "sandbox allow-scripts allow-same-origin; default-src 'self' data: https:; script-src 'self' 'unsafe-inline' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; font-src 'self' data: https:; connect-src 'none'; base-uri 'none'; form-action 'none'");
+    response.setHeader('Content-Disposition', `inline; filename="${basename(realCandidate).replace(/["\\]/g, '_')}"`);
+    response.sendFile(realCandidate);
+  });
+
+  app.post('/api/artifacts/publish', async (request, response) => {
+    try {
+      const input = z.object({
+        path: z.string().min(1).max(8_000),
+        title: z.string().trim().min(1).max(300).optional(),
+        conversationId: z.string().uuid().optional(),
+        workItemId: z.string().uuid().optional(),
+      }).parse(request.body);
+      const conversation = input.conversationId ? repository.listConversations('all').find((entry) => entry.id === input.conversationId) : null;
+      const item = repository.get(input.workItemId ?? conversation?.workItemId ?? '');
+      const workspace = realpathSync(item ? resolveWorkingDirectory(item) : process.cwd());
+      const requestedPath = input.path.replace(/^file:\/\//, '').replace(/:(\d+)(?::\d+)?$/, '');
+      const candidate = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(workspace, requestedPath);
+      if (!existsSync(candidate) || !statSync(candidate).isFile()) return response.status(404).json({ error: 'Artifact file not found.' });
+      const realCandidate = realpathSync(candidate);
+      const outsideWorkspace = relative(workspace, realCandidate).startsWith('..') || isAbsolute(relative(workspace, realCandidate));
+      if (outsideWorkspace) return response.status(403).json({ error: 'Artifact is outside the task workspace.' });
+      const title = input.title ?? basename(realCandidate).replace(/\.[^.]+$/, '');
+      const contentHash = artifactContentHash(realCandidate, title);
+      const existing = database.prepare('SELECT id, public_url, content_hash FROM published_artifacts WHERE source_path = ? AND revoked_at IS NULL ORDER BY published_at DESC').all(realCandidate) as Array<{ id: string; public_url: string; content_hash: string | null }>;
+      const canonical = existing[0];
+      if (canonical?.content_hash === contentHash) return response.json({ artifact: { id: canonical.id, title, url: canonical.public_url }, changed: false, published: false });
+      const id = canonical?.id ?? createArtifactId();
+      for (const duplicate of existing.slice(1)) artifactPublisher.removeLocal(duplicate.id);
+      const artifact = await artifactPublisher.publish({ id, title, sourcePath: realCandidate });
+      const now = new Date().toISOString();
+      if (canonical) database.prepare('UPDATE published_artifacts SET title = ?, public_url = ?, content_hash = ?, published_at = ? WHERE id = ?').run(title, artifact.url, contentHash, now, id);
+      else database.prepare('INSERT INTO published_artifacts (id, source_path, work_item_id, conversation_id, title, public_url, content_hash, published_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, realCandidate, item?.id ?? null, input.conversationId ?? null, title, artifact.url, contentHash, now);
+      if (existing.length > 1) database.prepare(`UPDATE published_artifacts SET revoked_at = ? WHERE id IN (${existing.slice(1).map(() => '?').join(',')})`).run(now, ...existing.slice(1).map((entry) => entry.id));
+      response.status(canonical ? 200 : 201).json({ artifact, changed: Boolean(canonical), published: true });
+    } catch (error) {
+      response.status(error instanceof ZodError ? 400 : 500).json({ error: error instanceof Error ? error.message : 'Could not publish artifact.' });
+    }
+  });
+
+  app.get('/api/artifacts/status', (request, response) => {
+    try {
+      const input = z.object({ path: z.string().min(1).max(8_000), conversationId: z.string().uuid().optional(), workItemId: z.string().uuid().optional() }).parse(request.query);
+      const conversation = input.conversationId ? repository.listConversations('all').find((entry) => entry.id === input.conversationId) : null;
+      const item = repository.get(input.workItemId ?? conversation?.workItemId ?? '');
+      const workspace = realpathSync(item ? resolveWorkingDirectory(item) : process.cwd());
+      const requestedPath = input.path.replace(/^file:\/\//, '').replace(/:(\d+)(?::\d+)?$/, '');
+      const candidate = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(workspace, requestedPath);
+      if (!existsSync(candidate) || !statSync(candidate).isFile()) return response.status(404).json({ error: 'Artifact file not found.' });
+      const realCandidate = realpathSync(candidate);
+      const outsideWorkspace = relative(workspace, realCandidate).startsWith('..') || isAbsolute(relative(workspace, realCandidate));
+      if (outsideWorkspace) return response.status(403).json({ error: 'Artifact is outside the task workspace.' });
+      const row = database.prepare('SELECT id, title, public_url, content_hash FROM published_artifacts WHERE source_path = ? AND revoked_at IS NULL ORDER BY published_at DESC LIMIT 1').get(realCandidate) as { id: string; title: string; public_url: string; content_hash: string | null } | undefined;
+      if (!row) return response.json({ artifact: null, changed: false });
+      response.json({ artifact: { id: row.id, title: row.title, url: row.public_url }, changed: row.content_hash !== artifactContentHash(realCandidate, row.title) });
+    } catch (error) { response.status(error instanceof ZodError ? 400 : 500).json({ error: error instanceof Error ? error.message : 'Could not inspect artifact.' }); }
+  });
+
+  app.delete('/api/artifacts/:id', async (request, response) => {
+    try {
+      const row = database.prepare('SELECT id FROM published_artifacts WHERE id = ? AND revoked_at IS NULL').get(request.params.id);
+      if (!row) return response.status(404).json({ error: 'Published artifact not found.' });
+      await artifactPublisher.revoke(request.params.id);
+      database.prepare('UPDATE published_artifacts SET revoked_at = ? WHERE id = ?').run(new Date().toISOString(), request.params.id);
+      response.status(204).end();
+    } catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : 'Could not revoke artifact.' }); }
+  });
+
   app.get('/api/shared/conversations', (request, response) => {
     repository.ensureDefaultConversation();
     const limit = z.coerce.number().int().min(1).max(100).default(30).parse(request.query.limit);
     const cursor = z.string().optional().parse(request.query.cursor) ?? null;
-    response.json(repository.listConversationPage(limit, cursor));
+    const view = request.query.view === 'archive' ? 'archive' : 'active';
+    response.json(repository.listConversationPage(limit, cursor, view));
   });
 
   app.post('/api/shared/conversations', (request, response) => {
@@ -60,12 +178,35 @@ export function createApp(database: WorkbenchDatabase) {
     response.status(204).end();
   });
 
+  app.post('/api/shared/conversations/:id/archive', (request, response) => {
+    const conversation = repository.setConversationArchived(request.params.id, true);
+    if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
+    response.json({ conversation });
+  });
+
+  app.post('/api/shared/conversations/:id/restore', (request, response) => {
+    const conversation = repository.setConversationArchived(request.params.id, false);
+    if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
+    response.json({ conversation });
+  });
+
+  app.post('/api/shared/conversations/:id/fork', (request, response) => {
+    const conversation = repository.forkConversation(request.params.id);
+    if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
+    response.status(201).json({ conversation });
+  });
+
   app.get('/api/shared/messages', (request, response) => {
     const conversationId = z.string().uuid().optional().parse(request.query.conversationId);
     for (const message of repository.listSharedMessages(1_000, conversationId).filter((item) => item.status === 'running')) {
       const run = repository.getRunByMessage(message.id);
       if (run && !isAgentRunActive(run.id) && !isSharedReplyActive(message.id)) cancelAgentRun(repository, run.id);
       else if (!run && !isSharedReplyActive(message.id)) cancelSharedReply(repository, message.id);
+    }
+    if (conversationId) dispatchNextSharedTurn(repository, conversationId);
+    else {
+      const queuedConversationIds = new Set(repository.listSharedMessages(1_000).filter((message) => message.status === 'queued').map((message) => message.conversationId));
+      for (const queuedConversationId of queuedConversationIds) dispatchNextSharedTurn(repository, queuedConversationId);
     }
     response.json({ messages: repository.listSharedMessages(100, conversationId) });
   });
@@ -103,7 +244,7 @@ export function createApp(database: WorkbenchDatabase) {
   app.post('/api/shared/messages/:id/create-tasks', (request, response) => {
     try {
       const message = repository.listSharedMessages(1_000).find((item) => item.id === request.params.id);
-      const conversation = message && repository.listConversations().find((item) => item.id === message.conversationId);
+      const conversation = message && repository.listConversations('all').find((item) => item.id === message.conversationId);
       if (!message || !conversation?.workItemId) return response.status(400).json({ error: 'This report is not linked to a task execution.' });
       const item = repository.get(conversation.workItemId);
       if (!item) return response.status(404).json({ error: 'Linked task not found.' });
@@ -149,29 +290,10 @@ export function createApp(database: WorkbenchDatabase) {
     response.status(201).json({ proposal: repository.createProposal(input.orderedItemIds, input.rationale) });
   });
 
-  app.post('/api/queue/plan', async (_request, response, next) => {
+  app.post('/api/queue/plan', (_request, response, next) => {
     try {
-      const config = repository.getLinearConfig();
-      if (process.env.LINEAR_API_KEY && config.teamIds.length) {
-        const provider = new LinearProvider(process.env.LINEAR_API_KEY, config.teamIds, config.projectIds);
-        for (const issue of await provider.fetchOpenIssues()) repository.upsertLinearItem(issue);
-      }
-      const scan = await scanConnectedSources(repository);
-      if (!repository.listSourceConnections().some((connection) => connection.provider === 'slack')) {
-        try {
-          scan.signals.push(...await scanSlackWithCodex());
-        } catch (error) {
-          scan.errors.push(`slack: ${error instanceof Error ? error.message : 'Codex-hosted scan failed.'}`);
-        }
-      }
-      const linearSignals = repository.list().filter((item) => item.source === 'linear').map((item) => ({
-        provider: 'linear', title: `${item.sourceIdentifier}: ${item.title}`,
-        summary: `Status: ${item.status}; due: ${item.dueDate ?? 'none'}\n${item.description}`,
-        url: item.sourceUrl, occurredAt: item.providerUpdatedAt,
-      }));
-      const signals = [...linearSignals, ...scan.signals];
-      const proposal = await createAgentDailyProposal(repository, signals, scan.errors);
-      response.status(201).json({ proposal, items: repository.list(), scan: { ...scan, signals } });
+      const proposal = repository.buildDailyProposal();
+      response.status(201).json({ proposal, items: repository.list() });
     } catch (error) {
       next(error);
     }
@@ -198,38 +320,28 @@ export function createApp(database: WorkbenchDatabase) {
   });
 
   app.get('/api/source-connections', (_request, response) => {
-    response.json({ connections: repository.listSourceConnections(), slackOAuthConfigured: slackOAuthConfigured() });
+    response.json({ connections: listBrokerConnections(repository) });
   });
 
-  app.get('/api/source-connections/slack/oauth/start', (_request, response, next) => {
-    try { response.json({ url: createSlackAuthorizationUrl() }); } catch (error) { next(error); }
-  });
-
-  app.get('/api/source-connections/slack/oauth/callback', async (request, response) => {
+  app.post('/api/source-connections/:provider/mcp/oauth/start', async (request, response, next) => {
     try {
-      const error = z.string().optional().parse(request.query.error);
-      if (error) throw new Error(`Slack authorization failed: ${error}`);
+      const provider = z.literal('confluence').parse(request.params.provider);
+      const defaultUrl = 'https://mcp.atlassian.com/v1/mcp/authv2';
+      const serverUrl = z.string().url().parse(request.body?.serverUrl || defaultUrl);
+      const callbackBase = process.env.APP_API_ORIGIN ?? `http://localhost:${process.env.PORT ?? 4317}/api/source-connections`;
+      response.json({ url: await startRemoteMcpOAuth(provider, serverUrl, callbackBase) });
+    } catch (error) { next(error); }
+  });
+
+  app.get('/api/source-connections/:provider/mcp/oauth/callback', async (request, response) => {
+    try {
+      const provider = z.literal('confluence').parse(request.params.provider);
       const code = z.string().min(1).parse(request.query.code);
       const state = z.string().min(1).parse(request.query.state);
-      const auth = await exchangeSlackAuthorization(code, state);
-      repository.setSourceConnection('slack', auth.label, { accessToken: auth.accessToken, query: 'to:me' });
-      const appOrigin = process.env.APP_ORIGIN ?? 'http://localhost:5173';
-      response.type('html').send(`<!doctype html><title>Slack connected</title><script>window.opener?.postMessage({type:'workbench:slack-connected'},${JSON.stringify(appOrigin)});window.close()</script><p>Slack is connected. You can close this window.</p>`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Slack authorization failed.';
-      response.status(400).type('html').send(`<p>Slack connection failed: ${message.replace(/[<>&]/g, '')}</p>`);
-    }
-  });
-
-  app.put('/api/source-connections/:provider', async (request, response, next) => {
-    try {
-      const provider = sourceProviderSchema.parse(request.params.provider);
-      const input = sourceConnectionInputSchema.parse({ ...request.body, provider });
-      const signals = await scanSource(provider, input.settings);
-      const connection = repository.setSourceConnection(provider, input.label, input.settings);
-      repository.updateSourceScan(provider, null);
-      response.json({ connection: { ...connection, lastScannedAt: new Date().toISOString() }, sampleCount: signals.length });
-    } catch (error) { next(error); }
+      const settings = await finishRemoteMcpOAuth(provider, code, state);
+      repository.setSourceConnection(provider, 'Atlassian MCP', settings as unknown as Record<string, string>);
+      response.type('html').send(`<!doctype html><title>MCP connected</title><script>window.opener?.postMessage({type:'workbench:mcp-connected'},'*');window.close()</script><p>MCP connected. You can close this window.</p>`);
+    } catch (error) { response.status(400).type('html').send(`<p>MCP connection failed: ${(error instanceof Error ? error.message : 'Unknown error').replace(/[<>&]/g, '')}</p>`); }
   });
 
   app.delete('/api/source-connections/:provider', (request, response) => {
@@ -282,8 +394,18 @@ export function createApp(database: WorkbenchDatabase) {
   app.post('/api/sources/resolve', async (request, response, next) => {
     try {
       const input = resolveSourceUrlSchema.parse(request.body);
-      response.json({ draft: await resolveSourceUrl(input.url) });
+      response.json({ draft: await resolveBrokerUrl(repository, input.url) });
     } catch (error) { next(error); }
+  });
+
+  app.post('/api/sources/search', async (request, response, next) => {
+    const controller = new AbortController();
+    request.once('aborted', () => controller.abort());
+    response.once('close', () => { if (!response.writableEnded) controller.abort(); });
+    try {
+      const input = searchSourcesSchema.parse(request.body);
+      response.json(await searchBrokerSources(repository, input.query, input.sources, controller.signal));
+    } catch (error) { if (!controller.signal.aborted) next(error); }
   });
 
   app.patch('/api/work-items/:id', (request, response) => {
@@ -295,6 +417,12 @@ export function createApp(database: WorkbenchDatabase) {
 
   app.post('/api/work-items/:id/archive', (request, response) => {
     const item = repository.archive(request.params.id, false);
+    if (!item) return response.status(404).json({ error: 'Work item not found.' });
+    response.json({ item });
+  });
+
+  app.post('/api/work-items/:id/restore', (request, response) => {
+    const item = repository.restore(request.params.id);
     if (!item) return response.status(404).json({ error: 'Work item not found.' });
     response.json({ item });
   });

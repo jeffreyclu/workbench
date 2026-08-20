@@ -8,14 +8,16 @@ import type {
   LinearProviderConfig,
   QueueProposal,
   ResolvedSourceDraft,
-  SourceConnection,
-  SourceProvider,
+  BrokerConnection,
+  BrokerSearchResponse,
+  BrokerSourceId,
   SharedMessage,
   SharedConversation,
   ConversationPage,
   WorkItem,
   WorkItemDetail,
   WorkItemPage,
+  PublishedArtifact,
 } from '../shared/contracts';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -30,6 +32,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  publishArtifact: (input: { path: string; title?: string; conversationId?: string; workItemId?: string }) =>
+    request<{ artifact: PublishedArtifact }>('/api/artifacts/publish', { method: 'POST', body: JSON.stringify(input) }),
+  revokeArtifact: (id: string) => request<void>(`/api/artifacts/${id}`, { method: 'DELETE' }),
   listWorkItems: (view: 'active' | 'archive', query: string, cursor?: string) => {
     const params = new URLSearchParams({ view, limit: '50' });
     if (query) params.set('query', query);
@@ -49,9 +54,11 @@ export const api = {
   createFollowUp: (id: string, title: string, description: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/follow-ups`, { method: 'POST', body: JSON.stringify({ title, description }) }),
   generateTaskDraft: (prompt: string) => request<{ draft: GeneratedTaskDraft }>('/api/work-items/generate-draft', { method: 'POST', body: JSON.stringify({ prompt }) }),
   resolveSourceUrl: (url: string) => request<{ draft: ResolvedSourceDraft }>('/api/sources/resolve', { method: 'POST', body: JSON.stringify({ url }) }),
+  searchSources: (query: string, sources: BrokerSourceId[], signal?: AbortSignal) => request<BrokerSearchResponse>('/api/sources/search', { method: 'POST', body: JSON.stringify({ query, sources }), signal }),
   updateWorkItem: (id: string, input: Partial<WorkItem>) =>
     request<{ item: WorkItem }>(`/api/work-items/${id}`, { method: 'PATCH', body: JSON.stringify(input) }),
   archiveWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/archive`, { method: 'POST' }),
+  restoreWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/restore`, { method: 'POST' }),
   completeWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/complete`, { method: 'POST' }),
   deleteWorkItem: (id: string) => request<void>(`/api/work-items/${id}`, { method: 'DELETE' }),
   addActivity: (id: string, input: Pick<Activity, 'actor' | 'kind' | 'body'>) =>
@@ -88,18 +95,19 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(config),
     }),
-  listSourceConnections: () => request<{ connections: SourceConnection[]; slackOAuthConfigured: boolean }>('/api/source-connections'),
-  startSlackOAuth: () => request<{ url: string }>('/api/source-connections/slack/oauth/start'),
-  connectSource: (provider: SourceProvider, label: string, settings: Record<string, string>) =>
-    request<{ connection: SourceConnection; sampleCount: number }>(`/api/source-connections/${provider}`, { method: 'PUT', body: JSON.stringify({ label, settings }) }),
-  disconnectSource: (provider: SourceProvider) => request<void>(`/api/source-connections/${provider}`, { method: 'DELETE' }),
-  listSharedConversations: (cursor?: string) => {
-    const params = new URLSearchParams({ limit: '30' });
+  listSourceConnections: () => request<{ connections: BrokerConnection[] }>('/api/source-connections'),
+  startMcpOAuth: (provider: 'confluence', serverUrl?: string) => request<{ url: string }>(`/api/source-connections/${provider}/mcp/oauth/start`, { method: 'POST', body: JSON.stringify({ serverUrl }) }),
+  disconnectSource: (provider: 'confluence' | 'github') => request<void>(`/api/source-connections/${provider}`, { method: 'DELETE' }),
+  listSharedConversations: (view: 'active' | 'archive', cursor?: string) => {
+    const params = new URLSearchParams({ limit: '30', view });
     if (cursor) params.set('cursor', cursor);
     return request<ConversationPage>(`/api/shared/conversations?${params}`);
   },
   getWorkItemCounts: () => request<{ active: number; archive: number }>('/api/work-item-counts'),
   createSharedConversation: (title = 'New conversation') => request<{ conversation: SharedConversation }>('/api/shared/conversations', { method: 'POST', body: JSON.stringify({ title }) }),
+  archiveSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/archive`, { method: 'POST' }),
+  restoreSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/restore`, { method: 'POST' }),
+  forkSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/fork`, { method: 'POST' }),
   deleteSharedConversation: (id: string) => request<void>(`/api/shared/conversations/${id}`, { method: 'DELETE' }),
   listSharedMessages: (conversationId?: string) => request<{ messages: SharedMessage[] }>(conversationId ? `/api/shared/messages?conversationId=${encodeURIComponent(conversationId)}` : '/api/shared/messages'),
   createSharedMessage: (conversationId: string, body: string, dispatchTo: 'auto' | 'both' | 'codex' | 'claude' | 'none', attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }>) =>

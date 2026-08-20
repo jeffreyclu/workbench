@@ -79,6 +79,29 @@ Rotate by deleting `WORKBENCH_TOKEN` from `.env` and re-running `npm run share`.
 - `npm run dev:lan` still exists for same-Wi-Fi access on an unmanaged machine, but it
   depends on the inbound firewall being open.
 
+## Publish artifacts for coworkers
+
+Artifact links in agent responses have a **Share** action. It creates a sanitized,
+read-only snapshot, deploys the snapshot collection to Cloudflare Pages, and copies a
+stable URL. Shared pages contain no Workbench navigation, task data, API access, or
+local filesystem paths.
+
+Create a Pages project with a neutral custom domain, then configure:
+
+```dotenv
+ARTIFACT_PAGES_PROJECT=workbench-artifacts
+ARTIFACT_PUBLIC_BASE_URL=https://artifacts.example.com
+# Optional for unattended/server deployments. Local development can use `npx wrangler login`.
+CLOUDFLARE_ACCOUNT_ID=...
+CLOUDFLARE_API_TOKEN=...
+```
+
+For local development, authenticate once with `npx wrangler login`. For unattended
+deployments, configure an API token with Pages deployment access plus the account ID.
+Publishing is intentionally unavailable until the project and public URL are configured. The publisher lives behind an adapter so it can
+be replaced with Writer-managed hosting later. The current snapshotter supports
+standalone Markdown, HTML, and text files; scripts and active content are removed.
+
 ## Configure Linear
 
 Create a Linear personal API key and add it to `.env`:

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Writer Connectors — Frontend onboarding</title>
+  <style>
+    :root{--ink:#252525;--muted:#68707d;--paper:#fbfaf8;--card:#fff;--line:#e6e2dc;--blue:#3857d6;--blue-soft:#eef1ff;--gold:#b87918;--gold-soft:#fff5df;--green:#177245;--green-soft:#e9f7ef;--shadow:0 12px 35px #29251d0d}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1120px;margin:auto;padding:28px 24px 80px}h1,h2,h3{line-height:1.15;letter-spacing:-.03em}h1{font-size:clamp(2.5rem,6vw,5.2rem);max-width:850px;margin:22px 0 18px}h2{font-size:2rem;margin:0 0 14px}h3{font-size:1.15rem;margin:0 0 8px}.eyebrow{font-size:.78rem;text-transform:uppercase;letter-spacing:.14em;color:var(--blue);font-weight:800}.lede{font-size:1.2rem;max-width:760px;color:#535b68}.note{display:inline-block;padding:5px 10px;border-radius:99px;background:var(--gold-soft);color:#80530c;font-size:.8rem;font-weight:700}.section{margin-top:76px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.grid.two{grid-template-columns:repeat(2,1fr)}.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;box-shadow:var(--shadow)}.card p{margin:7px 0 0;color:var(--muted)}.path{font:700 .88rem/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;background:#f3f1ed;border-radius:8px;padding:7px 9px;display:block;overflow-wrap:anywhere}.flow{display:flex;align-items:stretch;gap:10px;overflow:auto;padding:12px 0 20px}.flow .step{min-width:170px;flex:1}.arrow{align-self:center;color:var(--blue);font-size:1.5rem}.diagram{border:1px solid var(--line);border-radius:20px;padding:22px;background:linear-gradient(135deg,#fff,#f6f7ff)}.node{border:1px solid #cfd6ff;background:#fff;border-radius:13px;padding:13px;text-align:center;min-width:160px}.node strong{display:block}.node small{color:var(--muted)}.branch{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:22px}.branch>div{border-top:4px solid var(--blue);padding-top:13px}.branch>div:last-child{border-color:var(--gold)}.table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:15px;overflow:hidden}.table th,.table td{text-align:left;vertical-align:top;padding:13px 15px;border-bottom:1px solid var(--line)}.table th{font-size:.8rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);background:#f5f3ef}.table tr:last-child td{border:0}.tag{font-size:.72rem;font-weight:800;border-radius:99px;padding:3px 8px;white-space:nowrap}.go{background:var(--green-soft);color:var(--green)}.conditional{background:var(--gold-soft);color:#80530c}.no{background:#ffeceb;color:#a23b32}.callout{border-left:5px solid var(--blue);background:var(--blue-soft);padding:16px 18px;border-radius:0 14px 14px 0}.callout strong{display:block}.small{font-size:.9rem;color:var(--muted)}ul{padding-left:1.2rem}li+li{margin-top:7px}.footer{border-top:1px solid var(--line);margin-top:76px;padding-top:20px;color:var(--muted);font-size:.88rem}@media(max-width:760px){main{padding:20px 16px 56px}.grid,.grid.two,.branch{grid-template-columns:1fr}.flow{display:grid}.arrow{transform:rotate(90deg);justify-self:center}.section{margin-top:52px}.table{font-size:.9rem;display:block;overflow:auto;white-space:normal}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Writer Agent · frontend onboarding</div>
+    <h1>Connectors, without the maze.</h1>
+    <p class="lede">A visual tour of where the Connectors page lives, how a connector becomes a row, and which files to open when something looks wrong.</p>
+    <span class="note">Static code map · runtime flows not verified</span>
+  </header>
+
+  <section class="section">
+    <h2>The one-minute picture</h2>
+    <div class="grid">
+      <article class="card"><h3>What you are changing</h3><p>A frontend page for configuring connectors used by a Writer Agent. It owns the screen, not the backend services.</p></article>
+      <article class="card"><h3>Where it starts</h3><span class="path">/organization/[organizationId]/team/[teamId]/writer-agent/customize/connectors</span><p>The two convenience URLs redirect here when Customize navigation is available.</p></article>
+      <article class="card"><h3>What makes it tricky</h3><p>One screen can be fed by two differently shaped backend paths. The feature flag decides which path is active.</p></article>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Follow one connector</h2>
+    <div class="diagram">
+      <div class="flow">
+        <div class="step node"><strong>1 · Route</strong><small>Customize page</small></div><div class="arrow">→</div>
+        <div class="step node"><strong>2 · Shell</strong><small>CustomizePageShell</small></div><div class="arrow">→</div>
+        <div class="step node"><strong>3 · Page</strong><small>ConnectorsTab</small></div><div class="arrow">→</div>
+        <div class="step node"><strong>4 · Query</strong><small>TanStack Query hooks</small></div><div class="arrow">→</div>
+        <div class="step node"><strong>5 · Row</strong><small>icon · status · actions</small></div>
+      </div>
+      <div class="branch"><div><strong>connector-gateway ON</strong><p class="small">CG V1 responses are adapted into the older page contract before the UI sees them.</p></div><div><strong>connector-gateway OFF</strong><p class="small">The legacy mcp-gateway / agent-config path supplies the page contract directly.</p></div></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Screen map</h2>
+    <div class="grid two">
+      <article class="card"><h3>Manage / table</h3><p>Search, sort, connector rows, status, default badges, pagination, loading and error banners.</p><span class="path">frontend/src/components/agents/manage-tabs/connectors-tab.tsx</span></article>
+      <article class="card"><h3>Explore</h3><p>Browse the connector library in a modal, then choose a connector card to preview or connect.</p><span class="path">.../explore-connectors-modal.tsx</span></article>
+      <article class="card"><h3>Preview</h3><p>Shows connector identity and tool rows, with toggles and provider attribution.</p><span class="path">.../preview-connector-modal.tsx</span></article>
+      <article class="card"><h3>Connect</h3><p>OAuth, API-key and consent dialogs complete the connection flow.</p><span class="path">.../connect-connector-modal.tsx<br/>.../connect-api-key-modal.tsx<br/>.../allow-connectors-modal.tsx</span></article>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Where the data changes shape</h2>
+    <div class="callout"><strong>Think of the adapter as a translation desk.</strong> It lets old UI code speak to the newer gateway, but translation is not lossless. A field visible in a CG response may be gone by the time it reaches the page.</div>
+    <table class="table" style="margin-top:18px"><thead><tr><th>Design question</th><th>Current answer</th><th>Confidence</th></tr></thead><tbody>
+      <tr><td>Can the UI show identity, name, description and logo?</td><td>Yes; these are preserved, with fallbacks.</td><td><span class="tag go">GO</span></td></tr>
+      <tr><td>Can it show provider / builder attribution?</td><td>Yes, narrowly; the current Preview logic uses it for partner-built tools.</td><td><span class="tag go">GO · narrow</span></td></tr>
+      <tr><td>Can it show the real enabled state or real tool count?</td><td>No. Enabled is defaulted and the count can be an ambiguous allowed-tools length.</td><td><span class="tag no">NO-GO</span></td></tr>
+      <tr><td>Can Preview show tool parameter / response schemas?</td><td>No. The adapter replaces those fields with null.</td><td><span class="tag no">NO-GO</span></td></tr>
+      <tr><td>Can it preserve selected tools and “all tools”?</td><td>Usually, but empty has a special meaning and names are re-encoded.</td><td><span class="tag conditional">CONDITIONAL</span></td></tr>
+    </tbody></table>
+    <p class="small">Full field-by-field ledger: <span class="path">docs/initiatives/connectors/connector-gateway-adapter-field-loss.md</span></p>
+  </section>
+
+  <section class="section">
+    <h2>The files to open first</h2>
+    <div class="grid">
+      <article class="card"><h3>1. Page behavior</h3><span class="path">frontend/src/components/agents/manage-tabs/connectors-tab.tsx</span><p>Start here for state, feature flags, list behavior, modals and mutations. It is the main concentration point.</p></article>
+      <article class="card"><h3>2. Data boundary</h3><span class="path">frontend/src/hooks/react-query/mcp-gateway/connector-gateway-adapter.ts</span><p>Check whether the field you want survives the CG translation.</p></article>
+      <article class="card"><h3>3. Query behavior</h3><span class="path">frontend/src/hooks/react-query/mcp-gateway/use-gateway.ts</span><p>Look for the two flag paths, query keys, invalidation and tool loading.</p></article>
+      <article class="card"><h3>4. Visual ownership</h3><span class="path">connector-table-row.tsx<br/>connector-icon.tsx<br/>preview-connector-modal.tsx</span><p>Rows, shared icons and Preview have different blast radii. ConnectorIcon is shared widely.</p></article>
+      <article class="card"><h3>5. Design language</h3><span class="path">@writercolab/fe.wds</span><p>Use WDS components. Remaining app-local primitives are documented in the migration strategy.</p></article>
+      <article class="card"><h3>6. Research before coding</h3><span class="path">docs/features/connectors/*.md</span><p>The research set covers design comparison, decomposition, icons, pagination, WDS gaps and duplicate Preview fetches.</p></article>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Team map</h2>
+    <div class="grid two">
+      <article class="card"><h3>Start with Kapil</h3><p>Kapil Duraphe is Jeffrey’s onboarding buddy and the default first ping for friction.</p></article>
+      <article class="card"><h3>Frontend / product / QA</h3><p>David Chen · frontend-leaning<br/>Ashley Brooks · product<br/>Rabe Alsilwadi · connectors QA</p></article>
+      <article class="card"><h3>Backend questions</h3><p>Colin McNeil, Vinh Vu and Kapil Duraphe own the backend side of gateway behavior.</p></article>
+      <article class="card"><h3>When to involve QA</h3><p>Any change touching both feature-flag paths, connection status, Salesforce behavior, or Preview tool rows.</p></article>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Rules of thumb</h2>
+    <div class="grid two">
+      <article class="card"><h3>Ask “which path?”</h3><p>Every data or loading change must work with connector-gateway on and off.</p></article>
+      <article class="card"><h3>Do not trust compatibility defaults</h3><p>A value such as <code>enabled: true</code> may exist only to satisfy an older UI contract.</p></article>
+      <article class="card"><h3>Keep local fields local</h3><p>Manual configuration and agent-owned state must not be overwritten during provider sync.</p></article>
+      <article class="card"><h3>Prefer small ownership boundaries</h3><p>ConnectorsTab is large. Extract orchestration before making a broad visual rewrite.</p></article>
+    </div>
+  </section>
+
+  <footer class="footer">Prepared from the connectors research documents and shared knowledge base on 2026-08-19. Static source reading only; runtime behavior, network requests and live Figma state remain unverified.</footer>
+</main>
+</body>
+</html>

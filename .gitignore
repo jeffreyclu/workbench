@@ -3,6 +3,7 @@ dist/
 data/*.db
 data/*.db-*
 data/attachments/
+data/published/
 .env
 .DS_Store
 coverage/

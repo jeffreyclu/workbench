@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
-import { buildPrompt, classifyExecution, isAgentCapacityError, readableAgentEvent, resolveAgents, resolveWorkingDirectory } from './agent-runner.js';
+import { buildPrompt, classifyExecution, isAgentCapacityError, readableAgentEvent, resolveAgents, resolveWorkingDirectory, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 
 const item = (title: string, description = ''): WorkItem => ({
   id: 'item', title, description, status: 'ready', priority: 2, queuePosition: 1,
@@ -13,6 +13,14 @@ const item = (title: string, description = ''): WorkItem => ({
 });
 
 describe('classifyExecution', () => {
+  it('scales execution effort with task complexity and risk', () => {
+    expect(selectExecutionProfile(item('Summarize these notes'), { kind: 'analysis', instructions: '' })).toBe('economy');
+    expect(selectExecutionProfile(item('Implement the task card'), { kind: 'execute', instructions: '' })).toBe('standard');
+    expect(selectExecutionProfile(item('Migrate authentication across systems'), { kind: 'execute', instructions: '' })).toBe('deep');
+    expect(selectPromptExecutionProfile('thanks, what changed?')).toBe('economy');
+    expect(selectPromptExecutionProfile('debug and test the React component')).toBe('standard');
+    expect(selectPromptExecutionProfile('design a cross-system authentication migration')).toBe('deep');
+  });
   it('recognizes provider quota failures that should trigger agent fallback', () => {
     expect(isAgentCapacityError(new Error("You've hit your usage limit; resets at 1am"))).toBe(true);
     expect(isAgentCapacityError(new Error("You've hit your session limit · resets 12am (America/New_York)"))).toBe(true);
@@ -94,6 +102,7 @@ describe('classifyExecution', () => {
     const run = { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun;
     expect(buildPrompt(item('Build it'), run, 'jeffrey: Prefer small React components.'))
       .toContain('Shared context available to every agent:\njeffrey: Prefer small React components.');
+    expect(buildPrompt(item('Build it'), run)).toContain('Never ask Jeffrey to grant a filesystem permission');
   });
 
   it('turns Codex and Claude JSON events into readable live progress', () => {

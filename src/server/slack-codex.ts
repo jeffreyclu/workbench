@@ -42,3 +42,16 @@ Return exactly one block and no other text:
     return [{ provider: 'slack', title: signal.title.slice(0, 240), summary: signal.summary.slice(0, 12_000), url: typeof signal.url === 'string' ? signal.url : null, occurredAt: typeof signal.occurredAt === 'string' ? signal.occurredAt : null }];
   });
 }
+
+export async function searchSlackWithCodex(query: string, run?: CodexRunner, signal?: AbortSignal): Promise<SourceSignal[]> {
+  const execute = run ?? ((prompt: string) => runAgentCommand('codex', process.cwd(), prompt, undefined, signal));
+  const output = await execute(`Use the authenticated Slack connector to search Slack for this exact request: ${JSON.stringify(query)}
+
+Return the most relevant messages and threads, not merely recent activity. Preserve enough surrounding context to make each result useful. Return at most 20 results. Do not use web search or invent results.
+
+Return exactly one block and no other text:
+<slack-result>{"signals":[{"title":"concise result title","summary":"standalone context with author and relevant thread details","url":"Slack permalink or null","occurredAt":"ISO timestamp or null"}]}</slack-result>`);
+  const result = parseResult<{ signals?: Array<Partial<SourceSignal>> }>(output);
+  if (!Array.isArray(result.signals)) throw new Error('Slack connector returned malformed search results.');
+  return result.signals.slice(0, 20).flatMap((signal) => typeof signal.title === 'string' && typeof signal.summary === 'string' ? [{ provider: 'slack', title: signal.title.slice(0, 240), summary: signal.summary.slice(0, 12_000), url: typeof signal.url === 'string' ? signal.url : null, occurredAt: typeof signal.occurredAt === 'string' ? signal.occurredAt : null }] : []);
+}

@@ -1,6 +1,7 @@
 import type { SourceProvider } from '../shared/contracts.js';
 import { WorkItemRepository } from './repository.js';
 import { scanSlackMcp } from './slack-mcp.js';
+import { scanRemoteMcp } from './remote-mcp.js';
 
 export interface SourceSignal { provider: string; title: string; summary: string; url: string | null; occurredAt: string | null; }
 
@@ -11,12 +12,15 @@ async function requestJson<T>(url: string, headers: Record<string, string>): Pro
 }
 
 async function scanGitHub(settings: Record<string, string>): Promise<SourceSignal[]> {
-  const query = settings.query || 'is:open involves:@me';
-  const data = await requestJson<{ items: Array<{ title: string; body: string | null; html_url: string; updated_at: string; repository_url: string }> }>(
-    `https://api.github.com/search/issues?q=${encodeURIComponent(query)}&sort=updated&order=desc&per_page=30`,
-    { Accept: 'application/vnd.github+json', Authorization: `Bearer ${settings.token}`, 'User-Agent': 'workbench-local' },
-  );
-  return data.items.map((item) => ({ provider: 'github', title: item.title, summary: item.body?.slice(0, 1_000) || item.repository_url, url: item.html_url, occurredAt: item.updated_at }));
+  const query = (settings.query || 'is:open involves:@me').replace(/\b(?:org|user):(?:"[^"]+"|\S+)/gi, '').trim();
+  const organizations = ['writer', 'WriterInternal', 'WriterColab'];
+  const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${settings.token}`, 'User-Agent': 'workbench-local' };
+  const responses = await Promise.all(organizations.map((organization) => requestJson<{ items: Array<{ title: string; body: string | null; html_url: string; updated_at: string; repository_url: string }> }>(
+    `https://api.github.com/search/issues?q=${encodeURIComponent(`${query} org:${organization}`)}&sort=updated&order=desc&per_page=15`, headers,
+  )));
+  const unique = new Map(responses.flatMap((response) => response.items).map((item) => [item.html_url, item]));
+  return [...unique.values()].sort((left, right) => right.updated_at.localeCompare(left.updated_at)).slice(0, 30)
+    .map((item) => ({ provider: 'github', title: item.title, summary: item.body?.slice(0, 1_000) || item.repository_url, url: item.html_url, occurredAt: item.updated_at }));
 }
 
 async function scanConfluence(settings: Record<string, string>): Promise<SourceSignal[]> {
@@ -50,6 +54,7 @@ async function scanGmail(settings: Record<string, string>): Promise<SourceSignal
 const scanners: Record<SourceProvider, (settings: Record<string, string>) => Promise<SourceSignal[]>> = { github: scanGitHub, slack: scanSlackMcp, confluence: scanConfluence, gmail: scanGmail };
 
 export function scanSource(provider: SourceProvider, settings: Record<string, string>): Promise<SourceSignal[]> {
+  if ((provider === 'slack' || provider === 'confluence' || provider === 'gmail') && settings.serverUrl) return scanRemoteMcp(provider, settings);
   return scanners[provider](settings);
 }
 

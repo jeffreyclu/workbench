@@ -47,9 +47,11 @@ function announce(url: string) {
   console.log(`\n  ${url}\n\n  First visit on a new device: open ${url}/?token=${token} once — it sets a\n  one-year cookie, then the bare URL works. Anyone with that link has full\n  read/write Workbench. Ctrl-C to take it down.\n`);
 }
 
-const tunnel = spawn(plan.command, plan.args, { stdio: ['ignore', plan.url ? 'ignore' : 'inherit', 'pipe'] });
+const tunnelCommand = process.platform === 'darwin' ? 'caffeinate' : plan.command;
+const tunnelArgs = process.platform === 'darwin' ? ['-i', '--', plan.command, ...plan.args] : plan.args;
+const tunnel = spawn(tunnelCommand, tunnelArgs, { stdio: ['ignore', plan.url ? 'ignore' : 'inherit', 'pipe'] });
 tunnel.on('error', (error: NodeJS.ErrnoException) => {
-  console.error(error.code === 'ENOENT' ? `${plan.command} is not installed. Run: ${plan.install}` : String(error));
+  console.error(error.code === 'ENOENT' ? `${tunnelCommand} is not installed.${tunnelCommand === plan.command ? ` Run: ${plan.install}` : ''}` : String(error));
   process.exit(1);
 });
 

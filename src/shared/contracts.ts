@@ -76,6 +76,34 @@ export interface ResolvedSourceDraft { source: string; sourceUrl: string; title:
 export const sourceProviderSchema = z.enum(['github', 'slack', 'confluence', 'gmail']);
 export type SourceProvider = z.infer<typeof sourceProviderSchema>;
 export interface SourceConnection { provider: SourceProvider; connected: boolean; label: string; lastScannedAt: string | null; lastError: string | null; }
+export type BrokerSourceId = 'slack' | 'figma' | 'linear' | 'atlassian' | 'github' | 'google';
+export type BrokerConnectionState = 'connected' | 'needs_auth' | 'disabled' | 'error';
+export interface BrokerConnection {
+  id: BrokerSourceId;
+  name: string;
+  state: BrokerConnectionState;
+  host: 'workbench' | 'managed_connector';
+  capabilities: Array<'resolve_links' | 'search' | 'sync'>;
+  detail: string;
+  configurable: boolean;
+  lastError: string | null;
+}
+export const brokerSourceIdSchema = z.enum(['slack', 'figma', 'linear', 'atlassian', 'github', 'google']);
+export const searchSourcesSchema = z.object({
+  query: z.string().trim().min(2).max(2_000),
+  sources: z.array(brokerSourceIdSchema).min(1).max(6),
+});
+export interface BrokerSearchResult {
+  source: BrokerSourceId;
+  title: string;
+  summary: string;
+  url: string | null;
+  occurredAt: string | null;
+}
+export interface BrokerSearchResponse {
+  results: BrokerSearchResult[];
+  errors: Partial<Record<BrokerSourceId, string>>;
+}
 export const sourceConnectionInputSchema = z.object({
   provider: sourceProviderSchema,
   label: z.string().trim().max(200).default(''),
@@ -163,6 +191,8 @@ export interface AgentRun {
   createdAt: string;
   conversationId: string | null;
   messageId: string | null;
+  model: string | null;
+  executionProfile: 'economy' | 'standard' | 'deep' | null;
 }
 
 export interface LinearSyncResult {
@@ -226,10 +256,13 @@ export interface SharedMessage {
   error: string;
   createdAt: string;
   attachments: SharedAttachment[];
+  model: string | null;
+  executionProfile: 'routing' | 'economy' | 'standard' | 'deep' | null;
 }
 
 export interface SharedAttachment { name: string; path: string; mimeType: string; size: number; }
-export interface SharedConversation { id: string; title: string; workItemId: string | null; archivedAt?: string | null; createdAt: string; updatedAt: string; isActive?: boolean; }
+export interface PublishedArtifact { id: string; url: string; title: string; }
+export interface SharedConversation { id: string; title: string; workItemId: string | null; forkedFromConversationId: string | null; archivedAt: string | null; createdAt: string; updatedAt: string; isActive?: boolean; }
 
 export const createSharedMessageSchema = z.object({
   conversationId: z.string().uuid(),

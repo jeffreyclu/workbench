@@ -32,6 +32,18 @@ describe('WorkItemRepository', () => {
     expect(repository.listActivity(item.id)).toHaveLength(1);
   });
 
+  it('never archives a task when editing its title and can restore archived tasks', () => {
+    const item = repository.create({ title: 'Old title', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const renamed = repository.update(item.id, { title: 'New title' })!;
+    expect(renamed.title).toBe('New title');
+    expect(renamed.archivedAt).toBeNull();
+
+    expect(repository.archive(item.id, true)).toEqual(expect.objectContaining({ archivedAt: expect.any(String), completionStatus: 'completed' }));
+    const restored = repository.restore(item.id)!;
+    expect(restored).toEqual(expect.objectContaining({ archivedAt: null, completedAt: null, completionStatus: 'incomplete', status: 'ready', isQueued: true }));
+    expect(repository.listConversations().find((conversation) => conversation.workItemId === item.id)?.archivedAt).toBeUndefined();
+  });
+
   it('preserves local strategy, assignment, and priority during Linear sync', () => {
     const providerItem = {
       sourceIdentifier: 'ENG-42',
@@ -74,17 +86,36 @@ describe('WorkItemRepository', () => {
     expect(repository.list().map((item) => item.id)).toEqual([second.id, first.id]);
   });
 
-  it('shares recent room context and pinned durable lessons with agents', () => {
-    const thought = repository.createSharedMessage('jeffrey', 'The queue order is the priority.');
-    repository.updateSharedMessage(thought.id, { pinned: true });
-    repository.createSharedMessage('claude', 'Preserve yesterday’s order unless context changes.');
-    repository.createSharedMessage('codex', '', 'running');
+  it('shares recent room context and automatically preserves archived conversations', () => {
+    const conversation = repository.createConversation('Queue operating model');
+    repository.createSharedMessage('jeffrey', 'The queue order is the priority.', 'completed', conversation.id);
+    repository.createSharedMessage('claude', 'Preserve yesterday’s order unless context changes.', 'completed', conversation.id);
+    repository.createSharedMessage('codex', '', 'running', conversation.id);
 
     expect(repository.listSharedMessages()).toHaveLength(3);
+    repository.setConversationArchived(conversation.id, true);
     const context = repository.getSharedContext();
-    expect(context).toContain('Durable lessons:\njeffrey: The queue order is the priority.');
+    expect(context).toContain('Durable context from archived work:');
+    expect(context).toContain('Archived conversation: Queue operating model');
+    expect(context).toContain('jeffrey: The queue order is the priority.');
     expect(context).toContain('claude: Preserve yesterday’s order unless context changes.');
     expect(context).not.toContain('codex: ');
+  });
+
+  it('archives, restores, and forks conversations with their thread and task link', () => {
+    const task = repository.create({ title: 'Conversation task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Original thread', task.id);
+    repository.createSharedMessage('jeffrey', 'Investigate this', 'completed', conversation.id);
+    repository.createSharedMessage('codex', 'Here are the findings', 'completed', conversation.id);
+
+    expect(repository.setConversationArchived(conversation.id, true)?.archivedAt).toEqual(expect.any(String));
+    expect(repository.listConversationPage(30, null, 'archive').conversations.map((item) => item.id)).toContain(conversation.id);
+    expect(repository.listConversationPage(30, null, 'active').conversations.map((item) => item.id)).not.toContain(conversation.id);
+
+    const fork = repository.forkConversation(conversation.id)!;
+    expect(fork).toEqual(expect.objectContaining({ workItemId: task.id, forkedFromConversationId: conversation.id, archivedAt: null }));
+    expect(repository.listSharedMessages(100, fork.id).map((message) => message.body)).toEqual(['Investigate this', 'Here are the findings']);
+    expect(repository.setConversationArchived(conversation.id, false)?.archivedAt).toBeNull();
   });
 
   it('turns only selected execution-plan items into ordered queue tasks', () => {
@@ -98,6 +129,7 @@ describe('WorkItemRepository', () => {
     expect(repository.get(parent.id)?.status).toBe('done');
     expect(repository.list().map((item) => item.title)).toEqual(['Implement migration']);
     expect(repository.list()[0].workspacePath).toBe('/tmp/project');
+    expect(repository.list()[0].parentWorkItemId).toBe(parent.id);
   });
 
   it('preserves relative order when daily context does not justify a move', () => {
@@ -130,11 +162,9 @@ describe('WorkItemRepository', () => {
     expect(repository.get(completed.id)?.status).toBe('done');
     expect(repository.listConversations().some((conversation) => conversation.id === archivedConversation.id)).toBe(false);
     expect(repository.listSharedMessages(100, archivedConversation.id)).toEqual(expect.arrayContaining([expect.objectContaining({ body: 'Useful archived report' })]));
-    const memories = repository.listSharedMessages().filter((message) => message.pinned);
-    expect(memories.map((message) => message.body)).toEqual(expect.arrayContaining([
-      expect.stringContaining('Archived task (incomplete): Paused work'),
-      expect.stringContaining('Archived task (completed): Shipped work'),
-    ]));
+    expect(repository.listSharedMessages().filter((message) => message.pinned)).toEqual([]);
+    expect(repository.getSharedContext()).toContain('Archived task (incomplete): Paused work');
+    expect(repository.getSharedContext()).toContain('Archived task (completed): Shipped work');
   });
 
   it('moves agent-owned work down and attention-ready work to the top', () => {

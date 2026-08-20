@@ -119,6 +119,9 @@ ${run.instructions || 'Use your judgment and return a concise, actionable result
 Shared context available to every agent:
 ${sharedContext || 'No shared context yet.'}
 
+Non-interactive Workbench environment:
+Use available tools directly. Never ask Jeffrey to grant a filesystem permission, approve a terminal prompt, or look at a dialog: those controls are not exposed in Workbench. If required access is unavailable, state the exact missing integration or credential and continue with everything that can be done without it.
+
 Live progress protocol:
 During execution, emit brief user-facing updates before and after meaningful steps. Explain what you are checking, why it matters, what you learned, and what comes next. Keep these updates concise. Provide reasoning summaries and decisions, not private chain-of-thought.
 
@@ -174,19 +177,57 @@ export function resolveWorkingDirectory(item: WorkItem): string {
   return workspaceRoot;
 }
 
-function commandFor(agent: AgentRun['agent'], cwd: string): { command: string; args: string[] } {
+export type ExecutionProfile = 'economy' | 'standard' | 'deep';
+
+export function selectExecutionProfile(item: WorkItem, run: Pick<AgentRun, 'kind' | 'instructions'>): ExecutionProfile {
+  const text = `${item.title}\n${item.description}\n${run.instructions}`.toLowerCase();
+  const highRisk = /\b(architecture|re-architect|migration|security|authentication|authorization|payments?|production incident|data loss|multi[- ]repo|cross[- ]system|breaking change)\b/.test(text);
+  const decomposing = run.instructions.includes('WORKBENCH_DECOMPOSITION');
+  if (decomposing || highRisk || (text.length > 8_000 && (run.kind === 'execute' || run.kind === 'review'))) return 'deep';
+  if (run.kind === 'execute' || run.kind === 'review' || text.length > 2_500) return 'standard';
+  return 'economy';
+}
+
+export function selectPromptExecutionProfile(prompt: string): ExecutionProfile {
+  const text = prompt.toLowerCase();
+  if (/\b(architecture|migration|security|authentication|authorization|production incident|data loss|multi[- ]repo|cross[- ]system)\b/.test(text) || text.length > 8_000) return 'deep';
+  if (/\b(implement|build|refactor|debug|review|investigate|technical spec|test)\b/.test(text) || text.length > 2_000) return 'standard';
+  return 'economy';
+}
+
+function commandFor(agent: AgentRun['agent'], cwd: string, profile: ExecutionProfile): { command: string; args: string[] } {
+  const effort = profile === 'economy' ? 'low' : profile === 'standard' ? 'medium' : 'high';
   if (agent === 'codex') {
-    const model = process.env.WORKBENCH_CODEX_MODEL?.trim();
+    const model = modelFor(agent, profile);
     return {
       command: 'codex',
-      args: ['exec', '--ephemeral', '--approve-for-me', '--skip-git-repo-check', '--json', '-c', 'model_reasoning_effort="low"', ...(model ? ['--model', model] : []), '-C', cwd, '-'],
+      args: ['exec', '--ephemeral', '--approve-for-me', '--skip-git-repo-check', '--json', '-c', `model_reasoning_effort="${effort}"`, '--model', model, '-C', cwd, '-'],
     };
   }
-  const model = process.env.WORKBENCH_CLAUDE_MODEL?.trim() || 'sonnet';
+  const model = modelFor(agent, profile);
   return {
     command: 'claude',
-    args: ['-p', '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose', '--effort', 'low', '--model', model, '--no-session-persistence', '--disable-slash-commands', '--add-dir', cwd],
+    args: ['-p', '--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--output-format', 'stream-json', '--verbose', '--effort', effort, '--model', model, '--no-session-persistence', '--disable-slash-commands', '--add-dir', cwd],
   };
+}
+
+export function modelFor(agent: AgentRun['agent'], profile: ExecutionProfile): string {
+  return process.env[`WORKBENCH_${agent.toUpperCase()}_MODEL_${profile.toUpperCase()}`]?.trim()
+    || process.env[`WORKBENCH_${agent.toUpperCase()}_MODEL`]?.trim()
+    || (agent === 'codex'
+      ? { economy: 'gpt-5.6-luna', standard: 'gpt-5.6-terra', deep: 'gpt-5.6-sol' }[profile]
+      : { economy: 'haiku', standard: 'sonnet', deep: 'opus' }[profile]);
+}
+
+export async function judgeExecutionProfile(prompt: string, cwd: string, signal?: AbortSignal): Promise<ExecutionProfile> {
+  const fallback = selectPromptExecutionProfile(prompt);
+  try {
+    const verdict = await runAgentCommand('codex', cwd, `Classify the minimum model capability needed for this request. Reply with exactly one word: economy, standard, or deep. Economy: simple conversation, lookup, summary, or small edit. Standard: implementation, debugging, review, or multi-step analysis. Deep: genuinely complex architecture, security, migration, or high-risk cross-system work. Prefer the cheaper tier when sufficient.\n\nREQUEST:\n${prompt.slice(-6_000)}`, undefined, signal, 'economy');
+    const match = verdict.toLowerCase().match(/\b(economy|standard|deep)\b/);
+    return match?.[1] as ExecutionProfile ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export function readableAgentEvent(agent: AgentRun['agent'], line: string): { progress: string; final: string | null } {
@@ -237,8 +278,8 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string): { pr
   }
 }
 
-export async function runAgentCommand(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal): Promise<string> {
-  const { command, args } = commandFor(agent, cwd);
+export async function runAgentCommand(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy'): Promise<string> {
+  const { command, args } = commandFor(agent, cwd, profile);
   return new Promise<string>((resolveOutput, reject) => {
     const child = spawn(command, args, { cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
     const cancel = () => {
@@ -302,9 +343,10 @@ export function isAgentCapacityError(value: unknown): boolean {
 export async function runAgentCommandWithFallback(
   primary: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void,
   signal?: AbortSignal, onFallback?: (agent: AgentRun['agent'], reason: string) => void,
+  profile: ExecutionProfile = 'economy',
 ): Promise<{ output: string; agent: AgentRun['agent'] }> {
   try {
-    const output = await runAgentCommand(primary, cwd, prompt, onProgress, signal);
+    const output = await runAgentCommand(primary, cwd, prompt, onProgress, signal, profile);
     if (output.length < 1_000 && isAgentCapacityError(output)) throw new Error(output);
     return { output, agent: primary };
   } catch (error) {
@@ -314,7 +356,7 @@ export async function runAgentCommandWithFallback(
     onFallback?.(fallback, reason);
     const prefix = `${primary} is unavailable due to its usage limit. Continuing with ${fallback}.`;
     onProgress?.(prefix);
-    const output = await runAgentCommand(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal);
+    const output = await runAgentCommand(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile);
     return { output, agent: fallback };
   }
 }
@@ -333,15 +375,20 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   try {
     const cwd = resolveWorkingDirectory(item);
     const prompt = buildPrompt(item, run, repository.getSharedContext());
+    repository.updateRun(run.id, { model: modelFor('codex', 'economy'), executionProfile: 'economy' });
+    if (run.messageId) repository.updateSharedMessage(run.messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
+    const profile = await judgeExecutionProfile(prompt, cwd, controller.signal);
+    repository.updateRun(run.id, { model: modelFor(run.agent, profile), executionProfile: profile });
+    if (run.messageId) repository.updateSharedMessage(run.messageId, { model: modelFor(run.agent, profile), executionProfile: profile });
     const result = await runAgentCommandWithFallback(run.agent, cwd, prompt, (partialOutput) => {
       repository.updateRun(run.id, { output: partialOutput });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
     }, controller.signal, (fallback, reason) => {
-      repository.updateRun(run.id, { agent: fallback });
-      if (run.messageId) repository.updateSharedMessage(run.messageId, { author: fallback });
+      repository.updateRun(run.id, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile });
+      if (run.messageId) repository.updateSharedMessage(run.messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile });
       if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [fallback]);
       repository.addActivity(item.id, 'system', 'agent_fallback', `${run.agent} was unavailable (${reason.slice(0, 240)}); continued with ${fallback}.`);
-    });
+    }, profile);
     const { output } = result;
     repository.updateRun(run.id, { agent: result.agent, status: 'completed', output, completedAt: new Date().toISOString() });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { body: output, status: 'completed' });
