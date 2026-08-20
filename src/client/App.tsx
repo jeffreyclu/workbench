@@ -258,6 +258,7 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const provider = connection.id;
+  const reconnecting = connection.state === 'error';
   const disconnect = useMutation({
     mutationFn: () => api.disconnectSource(provider === 'atlassian' ? 'confluence' : 'github'),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['source-connections'] }),
@@ -267,7 +268,10 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
       const popup = window.open('about:blank', `workbench-${provider}-oauth`, 'popup,width=720,height=760');
       if (!popup) throw new Error('Popup blocked. Allow popups for Workbench and try again.');
       popup.document.write('<title>Connecting MCP</title><body style="margin:0;background:#10100f;color:#ddd;font:16px system-ui;display:grid;place-items:center;min-height:100vh">Preparing secure MCP authorization…</body>');
-      try { const { url } = await api.startMcpOAuth('confluence'); popup.location.replace(url); } catch (error) {
+      try {
+        if (reconnecting) await api.disconnectSource('confluence');
+        const { url } = await api.startMcpOAuth('confluence'); popup.location.replace(url);
+      } catch (error) {
         const message = error instanceof Error ? error.message : 'Could not start MCP authorization.';
         popup.document.body.textContent = `Connection failed: ${message}`;
         throw error;
@@ -289,7 +293,7 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
   const canAuthorize = provider === 'atlassian';
   return <div className={`connection-card ${connected ? 'connected' : ''} ${disabled ? 'unavailable' : ''}`}>
     <div className="connection-summary"><span><strong>{connection.name}</strong><small>{connection.detail}</small></span>
-      {canAuthorize && connected ? <button className="button secondary compact" onClick={() => disconnect.mutate()}>Disconnect</button> : canAuthorize ? <button className="button secondary compact" onClick={() => setOpen((value) => !value)}>{open ? 'Cancel' : 'Connect MCP'}</button> : <span className="mcp-required">{disabled ? 'Awaiting IT approval' : connected ? 'Connected' : 'Not connected'}</span>}
+      {canAuthorize && connected ? <button className="button secondary compact" onClick={() => disconnect.mutate()}>Disconnect</button> : canAuthorize ? <button className="button secondary compact" onClick={() => setOpen((value) => !value)}>{open ? 'Cancel' : reconnecting ? 'Reconnect MCP' : 'Connect MCP'}</button> : <span className="mcp-required">{disabled ? 'Awaiting IT approval' : connected ? 'Connected' : 'Not connected'}</span>}
     </div>
     <div className="connection-meta">{connection.host === 'workbench' ? 'Workbench' : 'Managed connector'}<span>·</span>{connection.capabilities.map((capability) => capability.replace('_', ' ')).join(' · ') || 'Unavailable'}</div>
     {connection.lastError && <p className="error-message">{connection.lastError}</p>}

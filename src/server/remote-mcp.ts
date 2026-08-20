@@ -25,6 +25,11 @@ class WorkbenchOAuthProvider implements OAuthClientProvider {
 interface PendingMcp { provider: Exclude<SourceProvider, 'github'>; oauth: WorkbenchOAuthProvider; transport: StreamableHTTPClientTransport; client: Client; createdAt: number }
 const pending = new Map<string, PendingMcp>();
 
+export function isMcpReauthenticationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /refresh[_ ]token.*invalid|invalid[_ ]grant|token.*(?:expired|revoked)|unauthori[sz]ed|authentication required/i.test(message);
+}
+
 export async function startRemoteMcpOAuth(provider: PendingMcp['provider'], serverUrl: string, callbackBase: string): Promise<string> {
   const state = randomUUID();
   const stored: StoredOAuth = { serverUrl };
