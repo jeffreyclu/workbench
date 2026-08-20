@@ -11,20 +11,39 @@ Workbench is a focused personal TODO list. It combines manually created tasks wi
 
 ## Run locally
 
+For daily use, run the promoted snapshot. Agents can then edit this checkout without
+hot-reloading partial changes into the Workbench that is controlling them:
+
 ```bash
 cp .env.example .env
 npm install
-npm run dev
+npm run runtime:promote
+npm run runtime:start
 ```
 
-Open [http://localhost:5173](http://localhost:5173). The API runs on port `4317` and Vite proxies `/api` requests to it.
+Open [http://localhost:5173](http://localhost:5173). The stable gateway serves the API
+and last-known-good client. It health-checks promoted releases and switches to them
+without changing the public port or tunnel.
+
+To inspect agent changes without touching the live control plane, run:
+
+```bash
+npm run preview
+```
+
+Open [http://localhost:5174](http://localhost:5174). This is a live Vite UI backed by
+the stable API and the same SQLite data, so it shows the real queue and conversations.
+When the preview is approved, tell Codex or Claude `approve the Workbench preview` in
+any conversation. Workbench waits for active agents, builds the release, health-checks
+it, and switches `5173` to that immutable release. `npm run dev` remains
+available for isolated API development, but it is not the daily control plane.
 
 ## Open Workbench on your phone
 
 Two commands, every day:
 
 ```bash
-npm run dev      # localhost only, as usual
+npm run runtime:start # stable localhost control plane
 npm run share    # publishes it and prints the link
 ```
 
@@ -174,12 +193,19 @@ Workbench owns:
 
 The SQLite database is stored at `data/workbench.db` by default and is ignored by Git.
 
+Artifact links may resolve files from any sibling repository under the directory that
+contains Workbench. Add other trusted directories as a comma-separated
+`WORKBENCH_ARTIFACT_ROOTS` value; files elsewhere remain blocked.
+
 ## Commands
 
 ```bash
 npm run dev
 npm run dev:lan
 npm run share
+npm run runtime:promote
+npm run runtime:start
+npm run preview
 npm run typecheck
 npm test
 npm run lint

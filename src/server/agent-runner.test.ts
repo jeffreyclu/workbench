@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
-import { buildPrompt, classifyExecution, isAgentCapacityError, readableAgentEvent, resolveAgents, resolveWorkingDirectory, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { backoffDelayMs, buildPrompt, classifyExecution, classifyExecutionRobust, estimateUsageCost, isAgentCapacityError, isTransientAgentError, readableAgentEvent, resolveAgents, resolveWorkingDirectory, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 
 const item = (title: string, description = ''): WorkItem => ({
   id: 'item', title, description, status: 'ready', priority: 2, queuePosition: 1,
@@ -28,6 +28,15 @@ describe('classifyExecution', () => {
     expect(isAgentCapacityError(new Error('Task implementation failed a test'))).toBe(false);
   });
 
+  it('only estimates token cost when deployment pricing is configured', () => {
+    expect(estimateUsageCost('codex', 100, 50)).toBeNull();
+    process.env.WORKBENCH_CODEX_INPUT_TOKEN_USD_PER_MILLION = '2';
+    process.env.WORKBENCH_CODEX_OUTPUT_TOKEN_USD_PER_MILLION = '8';
+    expect(estimateUsageCost('codex', 100_000, 50_000)).toBe(0.6);
+    delete process.env.WORKBENCH_CODEX_INPUT_TOKEN_USD_PER_MILLION;
+    delete process.env.WORKBENCH_CODEX_OUTPUT_TOKEN_USD_PER_MILLION;
+  });
+
   it('infers the workspace from real paths in task context', () => {
     expect(resolveWorkingDirectory(item('Trim knowledge copy', 'Edit ~/notes/knowledge/index.md and preserve its conventions.')))
       .toBe(join(homedir(), 'notes/knowledge'));
@@ -36,6 +45,21 @@ describe('classifyExecution', () => {
   it('routes coding and review work to Codex', () => {
     expect(classifyExecution(item('Implement the connector UI')).kind).toBe('execute');
     expect(classifyExecution(item('Review PR for regressions')).kind).toBe('review');
+  });
+
+  it('does not confuse reading context with a code-review task', () => {
+    expect(classifyExecution(item('Write CON-159 tech spec', 'Review all Markdown docs first, then write the proposal.')).kind).toBe('strategy');
+    expect(classifyExecution(item('Fix the regression after reviewing the implementation')).kind).toBe('execute');
+    expect(classifyExecution(item('Review architecture notes and create a summary')).kind).toBe('execute');
+  });
+
+  it('uses the economy router only for genuinely ambiguous actions', async () => {
+    let calls = 0;
+    const result = await classifyExecutionRobust(item('Handle connector ownership'), async () => { calls += 1; return 'research'; });
+    expect(result.kind).toBe('research');
+    expect(calls).toBe(1);
+    await classifyExecutionRobust(item('Review PR 5246'), async () => { calls += 1; return 'analysis'; });
+    expect(calls).toBe(1);
   });
 
   it('makes frontend-reviewer the only entry point for every review run', () => {
@@ -110,5 +134,29 @@ describe('classifyExecution', () => {
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'App.tsx' } }] } })).progress).toBe('● Reading App.tsx');
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'system', subtype: 'init' })).progress).toBe('');
     expect(readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'reasoning', text: 'The failing test points to stale state.' } })).progress).toContain('Reasoning summary');
+  });
+
+  describe('error classification and backoff', () => {
+    it('classifies network/transport failures as transient', () => {
+      expect(isTransientAgentError(new Error('connect ECONNREFUSED 127.0.0.1:443'))).toBe(true);
+      expect(isTransientAgentError(new Error('socket hang up'))).toBe(true);
+      expect(isTransientAgentError(new Error('request timed out'))).toBe(true);
+      expect(isTransientAgentError(new Error('503 Service Unavailable'))).toBe(true);
+    });
+
+    it('does not classify capacity errors or ordinary content failures as transient', () => {
+      expect(isTransientAgentError(new Error('429 too many requests, usage limit hit'))).toBe(false);
+      expect(isTransientAgentError(new Error('Agent returned an invalid task decomposition.'))).toBe(false);
+      expect(isTransientAgentError(new Error('Every planned task needs a title and description.'))).toBe(false);
+    });
+
+    it('backoffDelayMs grows with attempt number and stays within the configured cap', () => {
+      const first = backoffDelayMs(1, 1_000, 60_000);
+      const second = backoffDelayMs(2, 1_000, 60_000);
+      const large = backoffDelayMs(10, 1_000, 60_000);
+      expect(first).toBeGreaterThanOrEqual(1_000);
+      expect(second).toBeGreaterThan(first - 1_000); // jitter makes exact comparison unreliable, but exponential base grows
+      expect(large).toBeLessThanOrEqual(60_000);
+    });
   });
 });

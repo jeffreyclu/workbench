@@ -178,6 +178,31 @@ export function resolveWorkingDirectory(item: WorkItem): string {
 }
 
 export type ExecutionProfile = 'economy' | 'standard' | 'deep';
+export interface AgentUsage { inputTokens: number | null; outputTokens: number | null; estimatedCostUsd: number | null; }
+interface AgentCommandResult { output: string; usage: AgentUsage; }
+
+function usageFromEvent(event: unknown): Omit<AgentUsage, 'estimatedCostUsd'> | null {
+  if (!event || typeof event !== 'object') return null;
+  const record = event as Record<string, unknown>;
+  const input = record.input_tokens ?? record.inputTokens;
+  const output = record.output_tokens ?? record.outputTokens;
+  if (typeof input === 'number' || typeof output === 'number') return { inputTokens: typeof input === 'number' ? input : null, outputTokens: typeof output === 'number' ? output : null };
+  for (const value of Object.values(record)) {
+    const nested = usageFromEvent(value);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+/** Pricing is deployment configuration, never guessed from a model name. Values are USD per million tokens. */
+export function estimateUsageCost(agent: AgentRun['agent'], inputTokens: number | null, outputTokens: number | null): number | null {
+  if (inputTokens === null && outputTokens === null) return null;
+  const prefix = `WORKBENCH_${agent.toUpperCase()}_`;
+  const inputRate = Number(process.env[`${prefix}INPUT_TOKEN_USD_PER_MILLION`]);
+  const outputRate = Number(process.env[`${prefix}OUTPUT_TOKEN_USD_PER_MILLION`]);
+  if (!Number.isFinite(inputRate) || !Number.isFinite(outputRate)) return null;
+  return Number((((inputTokens ?? 0) * inputRate + (outputTokens ?? 0) * outputRate) / 1_000_000).toFixed(6));
+}
 
 export function selectExecutionProfile(item: WorkItem, run: Pick<AgentRun, 'kind' | 'instructions'>): ExecutionProfile {
   const text = `${item.title}\n${item.description}\n${run.instructions}`.toLowerCase();
@@ -220,14 +245,11 @@ export function modelFor(agent: AgentRun['agent'], profile: ExecutionProfile): s
 }
 
 export async function judgeExecutionProfile(prompt: string, cwd: string, signal?: AbortSignal): Promise<ExecutionProfile> {
-  const fallback = selectPromptExecutionProfile(prompt);
-  try {
-    const verdict = await runAgentCommand('codex', cwd, `Classify the minimum model capability needed for this request. Reply with exactly one word: economy, standard, or deep. Economy: simple conversation, lookup, summary, or small edit. Standard: implementation, debugging, review, or multi-step analysis. Deep: genuinely complex architecture, security, migration, or high-risk cross-system work. Prefer the cheaper tier when sufficient.\n\nREQUEST:\n${prompt.slice(-6_000)}`, undefined, signal, 'economy');
-    const match = verdict.toLowerCase().match(/\b(economy|standard|deep)\b/);
-    return match?.[1] as ExecutionProfile ?? fallback;
-  } catch {
-    return fallback;
-  }
+  // Routing must not consume a second agent turn. The deterministic policy is explainable,
+  // cheap, and keeps the requested agent's response as the only billable execution.
+  void cwd;
+  void signal;
+  return selectPromptExecutionProfile(prompt);
 }
 
 export function readableAgentEvent(agent: AgentRun['agent'], line: string): { progress: string; final: string | null } {
@@ -278,9 +300,9 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string): { pr
   }
 }
 
-export async function runAgentCommand(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy'): Promise<string> {
+async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy'): Promise<AgentCommandResult> {
   const { command, args } = commandFor(agent, cwd, profile);
-  return new Promise<string>((resolveOutput, reject) => {
+  return new Promise<AgentCommandResult>((resolveOutput, reject) => {
     const child = spawn(command, args, { cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
     const cancel = () => {
       child.kill('SIGTERM');
@@ -295,6 +317,7 @@ export async function runAgentCommand(agent: AgentRun['agent'], cwd: string, pro
     let progress = '';
     let finalOutput = '';
     let lastProgressEvent = '';
+    let reportedUsage: Omit<AgentUsage, 'estimatedCostUsd'> = { inputTokens: null, outputTokens: null };
     const timeout = setTimeout(() => {
       child.kill('SIGTERM');
       reject(new Error('Agent run timed out after 30 minutes.'));
@@ -305,6 +328,7 @@ export async function runAgentCommand(agent: AgentRun['agent'], cwd: string, pro
       const lines = buffered.split('\n');
       buffered = lines.pop() ?? '';
       for (const line of lines.filter(Boolean)) {
+        try { const usage = usageFromEvent(JSON.parse(line)); if (usage) reportedUsage = usage; } catch { /* non-JSON provider output has no structured usage */ }
         const event = readableAgentEvent(agent, line);
         if (event.progress && event.progress !== lastProgressEvent) {
           progress += `${progress ? '\n\n' : ''}${event.progress}`;
@@ -326,13 +350,20 @@ export async function runAgentCommand(agent: AgentRun['agent'], cwd: string, pro
         if (event.progress && event.progress !== lastProgressEvent) progress += `${progress ? '\n\n' : ''}${event.progress}`;
         if (event.final) finalOutput = event.final;
       }
-      if (code === 0) resolveOutput(finalOutput.trim() || progress.trim() || stdout.trim());
+      if (code === 0) {
+        const output = finalOutput.trim() || progress.trim() || stdout.trim();
+        resolveOutput({ output, usage: { ...reportedUsage, estimatedCostUsd: estimateUsageCost(agent, reportedUsage.inputTokens, reportedUsage.outputTokens) } });
+      }
       else {
         const providerDiagnostic = stderr.trim() || finalOutput.trim() || stdout.trim();
         reject(new Error(providerDiagnostic || `${command} exited with code ${code}.`));
       }
     });
   });
+}
+
+export async function runAgentCommand(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy'): Promise<string> {
+  return (await runAgentCommandWithUsage(agent, cwd, prompt, onProgress, signal, profile)).output;
 }
 
 export function isAgentCapacityError(value: unknown): boolean {
@@ -344,11 +375,11 @@ export async function runAgentCommandWithFallback(
   primary: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void,
   signal?: AbortSignal, onFallback?: (agent: AgentRun['agent'], reason: string) => void,
   profile: ExecutionProfile = 'economy',
-): Promise<{ output: string; agent: AgentRun['agent'] }> {
+): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null }> {
   try {
-    const output = await runAgentCommand(primary, cwd, prompt, onProgress, signal, profile);
-    if (output.length < 1_000 && isAgentCapacityError(output)) throw new Error(output);
-    return { output, agent: primary };
+    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile);
+    if (result.output.length < 1_000 && isAgentCapacityError(result.output)) throw new Error(result.output);
+    return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
   } catch (error) {
     if (signal?.aborted || !isAgentCapacityError(error)) throw error;
     const fallback = primary === 'claude' ? 'codex' : 'claude';
@@ -356,12 +387,36 @@ export async function runAgentCommandWithFallback(
     onFallback?.(fallback, reason);
     const prefix = `${primary} is unavailable due to its usage limit. Continuing with ${fallback}.`;
     onProgress?.(prefix);
-    const output = await runAgentCommand(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile);
-    return { output, agent: fallback };
+    const result = await runAgentCommandWithUsage(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile);
+    return { ...result, agent: fallback, fallbackFrom: primary, fallbackReason: reason.slice(0, 500) };
   }
 }
 
-export async function executeAgentRun(repository: WorkItemRepository, run: AgentRun): Promise<void> {
+/**
+ * True for failures worth retrying automatically: transport/process-level hiccups
+ * that say nothing about whether the work itself is doomed. Deliberately excludes
+ * capacity errors (handled separately via `isAgentCapacityError`/fallback) and
+ * anything that looks like a real content/validation failure, which retrying
+ * would just repeat.
+ */
+export function isTransientAgentError(value: unknown): boolean {
+  if (isAgentCapacityError(value)) return false;
+  const message = value instanceof Error ? value.message : String(value);
+  return /(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|socket hang up|network|timed out|timeout|5\d\d\b|temporarily unavailable|service unavailable)/i.test(message);
+}
+
+/** Exponential backoff with jitter, capped, keyed by the (1-based) attempt number about to run. */
+export function backoffDelayMs(attempt: number, baseMs = 5_000, capMs = 5 * 60_000): number {
+  const exponential = baseMs * 2 ** Math.max(0, attempt - 1);
+  const jitter = Math.random() * baseMs;
+  return Math.min(capMs, exponential + jitter);
+}
+
+/** Run kinds safe to silently retry: they only read/produce text, no filesystem edits to redo. `execute` is excluded because it performs non-idempotent filesystem edits. */
+const RETRYABLE_KINDS = new Set<string>(['analysis', 'research', 'review', 'strategy']);
+
+export async function executeAgentRun(repository: WorkItemRepository, run: AgentRun, ownerId?: string, leaseMs?: number, externalContext = ''): Promise<void> {
+  if (ownerId && leaseMs && !repository.claimRun(run.id, ownerId, leaseMs)) return;
   const item = repository.get(run.workItemId);
   if (!item) return;
   const startedAt = new Date().toISOString();
@@ -374,7 +429,11 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
 
   try {
     const cwd = resolveWorkingDirectory(item);
-    const prompt = buildPrompt(item, run, repository.getSharedContext());
+    const selfHostingGuard = resolve(cwd) === resolve(process.cwd())
+      ? `\n\nWorkbench self-hosting safety:\nYou are editing the source checkout used by the preview, while the live control plane runs from a promoted snapshot. Do not start, stop, restart, or kill Workbench, Vite, ngrok, or their ports. Do not run runtime:promote. You may run the repository's normal typecheck, tests, and build; those do not deploy your changes. Report that runtime approval is required after verification.`
+      : '';
+    const sharedContext = [repository.getSharedContext(), externalContext].filter(Boolean).join('\n\n');
+    const prompt = buildPrompt(item, run, sharedContext) + selfHostingGuard;
     repository.updateRun(run.id, { model: modelFor('codex', 'economy'), executionProfile: 'economy' });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
     const profile = await judgeExecutionProfile(prompt, cwd, controller.signal);
@@ -384,14 +443,15 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.updateRun(run.id, { output: partialOutput });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
     }, controller.signal, (fallback, reason) => {
-      repository.updateRun(run.id, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile });
-      if (run.messageId) repository.updateSharedMessage(run.messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile });
+      repository.updateRun(run.id, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: reason.slice(0, 500) });
+      if (run.messageId) repository.updateSharedMessage(run.messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: reason.slice(0, 500) });
       if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [fallback]);
       repository.addActivity(item.id, 'system', 'agent_fallback', `${run.agent} was unavailable (${reason.slice(0, 240)}); continued with ${fallback}.`);
     }, profile);
     const { output } = result;
-    repository.updateRun(run.id, { agent: result.agent, status: 'completed', output, completedAt: new Date().toISOString() });
-    if (run.messageId) repository.updateSharedMessage(run.messageId, { body: output, status: 'completed' });
+    const telemetry = { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, estimatedCostUsd: result.usage.estimatedCostUsd, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
+    repository.updateRun(run.id, { agent: result.agent, status: 'completed', output, completedAt: new Date().toISOString(), ...telemetry });
+    if (run.messageId) repository.updateSharedMessage(run.messageId, { body: output, status: 'completed', ...telemetry });
     if (run.instructions.includes('WORKBENCH_DECOMPOSITION')) {
       const match = output.match(/<workbench-plan>([\s\S]*?)<\/workbench-plan>/);
       if (!match) throw new Error('Strategy completed without a valid Workbench task decomposition.');
@@ -408,6 +468,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     notifyAgentRunFinished(item, { agent: result.agent, kind: run.kind }, 'completed', output);
   } catch (error) {
     if (controller.signal.aborted) {
+      if (repository.getRun(run.id)?.status === 'canceled') return;
       repository.updateRun(run.id, { status: 'canceled', completedAt: new Date().toISOString() });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'canceled' });
       repository.update(item.id, { status: 'ready' });
@@ -416,6 +477,12 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       return;
     }
     const message = error instanceof Error ? error.message : 'Agent run failed.';
+    if (RETRYABLE_KINDS.has(run.kind) && isTransientAgentError(error) && repository.scheduleRunRetry(run.id, backoffDelayMs((repository.getRun(run.id)?.attempt ?? 0) + 1))) {
+      repository.addActivity(item.id, run.agent, 'progress', `${run.kind} hit a transient error and was scheduled for retry: ${message.slice(0, 240)}`);
+      // Do not call notifyAgentRunFinished here: a retry is not a final outcome, and
+      // notifying on every attempt would spam Slack for something Jeffrey doesn't need to see yet.
+      return;
+    }
     repository.updateRun(run.id, { status: 'failed', error: message, completedAt: new Date().toISOString() });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'failed', error: message });
     repository.update(item.id, { status: 'blocked' });
@@ -430,15 +497,15 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
 export function cancelAgentRun(repository: WorkItemRepository, id: string): AgentRun | null {
   const run = repository.getRun(id);
   if (!run || !['queued', 'running'].includes(run.status)) return null;
+  const completedAt = new Date().toISOString();
+  repository.updateRun(id, { status: 'canceled', completedAt });
+  if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'canceled' });
+  repository.update(run.workItemId, { status: 'ready' });
+  repository.moveForAttention(run.workItemId, 'top', `${run.agent} execution was canceled.`);
+  repository.addActivity(run.workItemId, run.agent, 'progress', `Canceled ${run.kind}.`);
   const controller = activeRunControllers.get(id);
   if (controller) controller.abort();
-  else {
-    repository.updateRun(id, { status: 'canceled', completedAt: new Date().toISOString() });
-    if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'canceled' });
-    repository.update(run.workItemId, { status: 'ready' });
-    repository.moveForAttention(run.workItemId, 'top', `${run.agent} execution was canceled.`);
-  }
-  return { ...run, status: 'canceled', completedAt: new Date().toISOString() };
+  return { ...run, status: 'canceled', completedAt };
 }
 
 export function resolveAgents(kind: AgentRun['kind'], target: AgentRun['requestedTarget']): AgentRun['agent'][] {
@@ -453,9 +520,16 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
   const complex = /\b(migrate|redesign|re-architect|rebuild|epic|cross[- ]team|multi[- ]phase)\b/.test(text);
   let kind: AgentRun['kind'] = 'analysis';
   let agent: AgentRun['agent'] = 'claude';
-  if (/\b(review|pull request|\bpr\b|regression)\b/.test(text)) { kind = 'review'; agent = 'codex'; }
-  else if (/\b(implement|build|code|fix|bug|refactor|test|edit|update|reduce|trim|rewrite|remove|add|change)\b/.test(text)) { kind = 'execute'; agent = 'codex'; }
-  else if (/\b(spec|rfc|technical document|design doc|proposal)\b/.test(text)) { kind = 'strategy'; agent = 'claude'; }
+  const title = item.title.toLowerCase();
+  const explicitCodeReview = /\bcode review\b/.test(title)
+    || /\breview\b[^\n.!?]{0,80}\b(?:pr|pull request|diff|patch|code changes?|implementation)\b/.test(title)
+    || /\b(?:pr|pull request|diff|patch)\b[^\n.!?]{0,40}\breview\b/.test(title)
+    || (/(?:github\.com\/[^/]+\/[^/]+\/pull\/\d+)/.test(item.sourceUrl ?? '') && /\b(review|feedback|approve|regression)\b/.test(text));
+  const implementation = /\b(implement|build|code|fix|debug|refactor|test|edit|update|reduce|trim|rewrite|remove|add|change|create|write)\b/.test(text);
+  const documentStrategy = /\b(spec|rfc|technical document|design doc|proposal)\b/.test(text);
+  if (explicitCodeReview && !implementation) { kind = 'review'; agent = 'codex'; }
+  else if (documentStrategy) { kind = 'strategy'; agent = 'claude'; }
+  else if (implementation) { kind = 'execute'; agent = 'codex'; }
   else if (/\b(research|investigate|explore|compare|evaluate)\b/.test(text)) { kind = 'research'; agent = 'claude'; }
 
   if (kind === 'execute' && isDocumentWork(item)) agent = 'claude';
@@ -476,4 +550,23 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
         ? 'Execute this self-contained backend task through the authoritative backend-engineer persona. Make authorized changes and return observed evidence and verification.'
         : `Execute this self-contained ${kind} task end to end. Use the appropriate tools, make necessary changes when authorized, and return evidence and verification.`,
   };
+}
+
+export async function classifyExecutionRobust(
+  item: WorkItem,
+  route: (prompt: string) => Promise<string> = async (prompt) => (await runAgentCommandWithFallback('codex', process.cwd(), prompt, undefined, undefined, undefined, 'economy')).output,
+): Promise<ReturnType<typeof classifyExecution>> {
+  const deterministic = classifyExecution(item);
+  const text = `${item.title}\n${item.description}`;
+  if (deterministic.kind !== 'analysis' || /\b(summarize|explain|discuss|organize|prepare|understand|grok)\b/i.test(text)) return deterministic;
+  try {
+    const output = await route(`Classify this Workbench task by the action Jeffrey expects. Reply with exactly one word: research, analysis, strategy, execute, or review. Review means a read-only code review of a PR, pull request, diff, patch, or implementation—not reading context before another task. Execute means making an authorized code, document, or configuration change. Strategy means producing a plan, RFC, spec, or proposal. Research means investigating unknowns. Analysis means explaining, summarizing, or advising without changes.\n\nTITLE: ${item.title}\nDESCRIPTION: ${item.description.slice(0, 6_000)}`);
+    const kind = output.toLowerCase().match(/\b(research|analysis|strategy|execute|review)\b/)?.[1] as AgentRun['kind'] | undefined;
+    if (!kind) return deterministic;
+    const routedItem = { ...item, title: kind === 'review' ? `Code review: ${item.title}` : item.title };
+    const classified = classifyExecution(routedItem);
+    return kind === 'analysis' ? deterministic : { ...classified, kind, agent: kind === 'review' || kind === 'execute' ? 'codex' : 'claude' };
+  } catch {
+    return deterministic;
+  }
 }

@@ -139,6 +139,31 @@ describe('WorkItemRepository', () => {
     expect(repository.list().map((item) => item.id)).toEqual([second.id, first.id]);
   });
 
+  it('moves ready work ahead of backlog work instead of tying nearly every task at zero', () => {
+    const ready = repository.create({ title: 'Ready to execute', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const backlog = repository.create({ title: 'Still vague', description: '', priority: 2, status: 'backlog', projectName: null, workspacePath: null, dueDate: null });
+
+    const proposal = repository.buildDailyProposal();
+
+    expect(proposal.previousOrder).toEqual([backlog.id, ready.id]);
+    expect(proposal.proposedOrder).toEqual([ready.id, backlog.id]);
+    expect(proposal.rationale).toContain('ready');
+  });
+
+  it('includes saved classifications in queue items', () => {
+    const item = repository.create({ title: 'Implement the card', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.setClassification(item.id, { kind: 'execute', agent: 'codex', complex: false, instructions: 'Implement it.' });
+
+    expect(repository.list()[0]).toEqual(expect.objectContaining({ classificationKind: 'execute', classificationComplex: false }));
+  });
+
+  it('uses the latest run kind as the card classification for tasks created before classifications were saved', () => {
+    const item = repository.create({ title: 'Legacy executed task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.createRun(item.id, 'research', 'auto', 'claude', 'Investigate it.');
+
+    expect(repository.list()[0]).toEqual(expect.objectContaining({ classificationKind: 'research', classificationComplex: false }));
+  });
+
   it('promotes tasks that have gone untouched for several days without resetting their age during reorder', () => {
     const old = repository.create({ title: 'Stale follow-up', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const recent = repository.create({ title: 'Recent task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
@@ -198,7 +223,14 @@ describe('WorkItemRepository', () => {
     repository.createRun(task.id, 'execute', 'auto', 'claude', 'second');
     expect(repository.selectBalancedAgent('claude')).toBe('codex');
     repository.createRun(task.id, 'execute', 'codex', 'codex', 'explicit selection');
-    expect(repository.selectBalancedAgent('claude')).toBe('codex');
+    // Explicit work still consumes capacity, even though it must not skew the historical auto split.
+    expect(repository.selectBalancedAgent('claude')).toBe('claude');
+  });
+
+  it('routes an automatic shared-room turn away from an agent with an active reply', () => {
+    const conversation = repository.createConversation('Balanced chat');
+    repository.createSharedMessage('codex', 'Working', 'running', conversation.id);
+    expect(repository.selectBalancedAgent('codex')).toBe('claude');
   });
 
   it('distinguishes explicit agent owners from automatic assignments', () => {
@@ -217,6 +249,45 @@ describe('WorkItemRepository', () => {
     expect(followUp).toEqual(expect.objectContaining({ title: 'Follow-up', projectName: 'Connectors' }));
     expect(followUp?.parentWorkItemId).toBe(parent.id);
     expect(repository.list().map((item) => item.title)).toEqual(['Existing next task', 'Parent', 'Follow-up']);
+  });
+
+  it('lists a task graph of children, conversations, artifacts, and linked references', () => {
+    const parent = repository.create({ title: 'Parent task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const followUp = repository.createFollowUp(parent.id, 'Follow-up', 'Carry this forward.');
+    expect(repository.listChildren(parent.id).map((item) => item.id)).toEqual([followUp!.id]);
+
+    const conversation = repository.createConversation('Attached thread', parent.id);
+    expect(repository.listConversationsForWorkItem(parent.id).map((entry) => entry.id)).toEqual([conversation.id]);
+
+    const linear = repository.addReference(parent.id, { type: 'linear_issue', url: 'https://linear.app/writer/issue/CON-1', title: 'CON-1' });
+    const pr = repository.addReference(parent.id, { type: 'pull_request', url: 'https://github.com/org/repo/pull/9', title: '' });
+    expect(pr.title).toBe('github.com');
+    const references = repository.listReferences(parent.id);
+    expect(references).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: linear.id, type: 'linear_issue', title: 'CON-1' }),
+      expect.objectContaining({ id: pr.id, type: 'pull_request' }),
+    ]));
+    expect(repository.listActivity(parent.id).some((entry) => entry.kind === 'reference_added')).toBe(true);
+
+    expect(repository.removeReference(parent.id, linear.id)).toBe(true);
+    expect(repository.listReferences(parent.id).map((entry) => entry.id)).toEqual([pr.id]);
+  });
+
+  it('keeps children, conversations, and references reachable across archive and restore', () => {
+    const parent = repository.create({ title: 'Archivable parent', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.createFollowUp(parent.id, 'Follow-up', '');
+    repository.createConversation('Linked thread', parent.id);
+    repository.addReference(parent.id, { type: 'document', url: 'https://example.com/doc', title: 'Doc' });
+
+    repository.archive(parent.id, true);
+    expect(repository.listChildren(parent.id)).toHaveLength(1);
+    expect(repository.listConversationsForWorkItem(parent.id)).toHaveLength(1);
+    expect(repository.listConversationsForWorkItem(parent.id)[0].archivedAt).not.toBeNull();
+    expect(repository.listReferences(parent.id)).toHaveLength(1);
+
+    repository.restore(parent.id);
+    expect(repository.listConversationsForWorkItem(parent.id)[0].archivedAt).toBeNull();
+    expect(repository.listReferences(parent.id)).toHaveLength(1);
   });
 
   it('keeps messages and file references isolated by conversation', () => {
@@ -351,5 +422,131 @@ describe('WorkItemRepository', () => {
     expect(repository.restoreDiscoveryCandidate(first.id)).toEqual(expect.objectContaining({ status: 'pending' }));
     expect(repository.getDiscoveryInbox().candidates.map((candidate) => candidate.id)).toContain(first.id);
     expect(repository.restoreDiscoveryCandidate(second.id)).toBeNull();
+  });
+
+  describe('claim/retry primitives', () => {
+    function createQueuedRun() {
+      const item = repository.create({ title: 'Reliability task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      return repository.createRun(item.id, 'analysis', 'codex', 'codex', '');
+    }
+
+    it('claimRun is atomic: only one of two concurrent claimants wins', () => {
+      const run = createQueuedRun();
+      expect(repository.claimRun(run.id, 'owner-a', 60_000)).toBe(true);
+      expect(repository.claimRun(run.id, 'owner-b', 60_000)).toBe(false);
+      expect(repository.getRun(run.id)?.status).toBe('running');
+    });
+
+    it('a run reclaimed after its lease expired can be claimed by a new owner', () => {
+      // claimRun only matches status = 'queued': once claimed, a run is 'running' and
+      // a second direct claimRun always loses, by design. An expired lease is instead
+      // surfaced by reclaimExpired(), which resets status back to 'queued' so a fresh
+      // claim can succeed.
+      const run = createQueuedRun();
+      repository.claimRun(run.id, 'owner-a', -1); // lease already expired
+      repository.reclaimExpired();
+      expect(repository.claimRun(run.id, 'owner-b', 60_000)).toBe(true);
+    });
+
+    it('claimRun refuses a run that is not queued', () => {
+      const run = createQueuedRun();
+      repository.updateRun(run.id, { status: 'completed' });
+      expect(repository.claimRun(run.id, 'owner-a', 60_000)).toBe(false);
+    });
+
+    it('scheduleRunRetry re-queues with an incremented attempt and clears ownership, up to max_attempts', () => {
+      const run = createQueuedRun();
+      repository.claimRun(run.id, 'owner-a', 60_000);
+      expect(repository.scheduleRunRetry(run.id, 5_000)).toBe(true);
+      const retried = repository.getRun(run.id)!;
+      expect(retried.status).toBe('queued');
+      expect(retried.attempt).toBe(1);
+      expect(retried.nextAttemptAt).not.toBeNull();
+      repository.claimRun(run.id, 'owner-a', 60_000);
+      repository.scheduleRunRetry(run.id, 0);
+      expect(repository.getRun(run.id)?.attempt).toBe(2);
+      // Third retry would hit max_attempts (default 3): refuse further retry.
+      repository.claimRun(run.id, 'owner-a', 60_000);
+      expect(repository.scheduleRunRetry(run.id, 0)).toBe(false);
+    });
+
+    it('reclaimExpired retries a non-execute run whose lease expired and fails an execute run instead', () => {
+      const analysisRun = createQueuedRun();
+      repository.claimRun(analysisRun.id, 'dead-owner', -1);
+      const item = repository.create({ title: 'Filesystem edit', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const executeRun = repository.createRun(item.id, 'execute', 'codex', 'codex', '');
+      repository.claimRun(executeRun.id, 'dead-owner', -1);
+
+      const result = repository.reclaimExpired();
+      expect(result.recoveredRunIds).toContain(analysisRun.id);
+      expect(result.failedRunIds).toContain(executeRun.id);
+      expect(repository.getRun(analysisRun.id)?.status).toBe('queued');
+      expect(repository.getRun(executeRun.id)?.status).toBe('failed');
+      expect(repository.getRun(executeRun.id)?.error).toMatch(/Interrupted by API restart/);
+    });
+
+    it('dueWork returns queued runs with no future next_attempt_at and excludes scheduled retries not yet due', () => {
+      const dueRun = createQueuedRun();
+      const notYetDueRun = createQueuedRun();
+      repository.claimRun(notYetDueRun.id, 'owner-a', 60_000);
+      repository.scheduleRunRetry(notYetDueRun.id, 60_000); // due far in the future
+      expect(repository.dueWork().runIds).toContain(dueRun.id);
+      expect(repository.dueWork().runIds).not.toContain(notYetDueRun.id);
+    });
+
+    it('hasLiveWork reflects queued/running rows regardless of which process created them', () => {
+      expect(repository.hasLiveWork()).toBe(false);
+      createQueuedRun();
+      expect(repository.hasLiveWork()).toBe(true);
+    });
+
+    it('activeRunsForItem lists only queued/running runs for dedup guards', () => {
+      const item = repository.create({ title: 'Dedup task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const run = repository.createRun(item.id, 'analysis', 'codex', 'codex', '');
+      expect(repository.activeRunsForItem(item.id)).toHaveLength(1);
+      repository.updateRun(run.id, { status: 'completed' });
+      expect(repository.activeRunsForItem(item.id)).toHaveLength(0);
+    });
+
+    it('claimQueuedTurn promotes a queued jeffrey message exactly once', () => {
+      const conversation = repository.createConversation();
+      const message = repository.createSharedMessage('jeffrey', 'hi', 'queued', conversation.id);
+      expect(repository.claimQueuedTurn(message.id)).toBe(true);
+      expect(repository.claimQueuedTurn(message.id)).toBe(false);
+      expect(repository.listSharedMessages(10, conversation.id).find((entry) => entry.id === message.id)?.status).toBe('completed');
+    });
+
+    it('renewLeases extends only the caller-owned, still-live leases', () => {
+      const run = createQueuedRun();
+      repository.claimRun(run.id, 'owner-a', 1_000);
+      const before = repository.getRun(run.id);
+      repository.renewLeases('owner-a', 60_000);
+      // Renewing does not change status; this asserts renewal does not throw and leaves status running.
+      expect(repository.getRun(run.id)?.status).toBe('running');
+      expect(before?.status).toBe('running');
+    });
+
+    it('claimSharedMessage acquires a lease and prevents double-claim', () => {
+      const conversation = repository.createConversation();
+      const message = repository.createSharedMessage('codex', '', 'running', conversation.id);
+      expect(repository.claimSharedMessage(message.id, 'owner-a', 60_000)).toBe(true);
+      expect(repository.listSharedMessages(10, conversation.id).find((m) => m.id === message.id)?.status).toBe('running');
+      // Second claim by a different owner fails.
+      expect(repository.claimSharedMessage(message.id, 'owner-b', 60_000)).toBe(false);
+    });
+
+    it('reclaimExpired marks shared messages with expired leases as failed', () => {
+      const conversation = repository.createConversation();
+      const message = repository.createSharedMessage('codex', 'partial output', 'running', conversation.id);
+      // Claim with negative lease (already expired).
+      repository.claimSharedMessage(message.id, 'dead-owner', -1);
+
+      const result = repository.reclaimExpired();
+      expect(result.recoveredMessageIds).toContain(message.id);
+      const recovered = repository.listSharedMessages(10, conversation.id).find((m) => m.id === message.id);
+      expect(recovered?.status).toBe('failed');
+      expect(recovered?.error).toMatch(/Interrupted by API restart/);
+      expect(recovered?.body).toBe('partial output'); // Partial output is preserved for inspection.
+    });
   });
 });

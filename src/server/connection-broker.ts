@@ -43,6 +43,12 @@ function queryFrom(message: string): string {
   return message.replace(/https?:\/\/\S+/g, ' ').replace(/\b(?:github|linear|atlassian|confluence|slack|figma|google|gmail|drive|search|find|look|show|check|for|in|on|the|a|an|me|please)\b/gi, ' ').replace(/\s+/g, ' ').trim();
 }
 
+export function sourceQuery(message: string, provider: 'slack' | 'confluence' | 'github'): string {
+  const host = provider === 'slack' ? 'slack.com' : provider === 'confluence' ? 'atlassian.net' : 'github.com';
+  const urls = message.match(/https?:\/\/[^\s<>)]+/g) ?? [];
+  return [...urls].reverse().find((url) => url.toLowerCase().includes(host)) ?? queryFrom(message);
+}
+
 function format(label: string, signals: SourceSignal[]): string {
   return `${label} context supplied by Workbench:\n${signals.slice(0, 10).map((signal) => [`- ${signal.title}`, signal.url ? `  URL: ${signal.url}` : '', signal.occurredAt ? `  Updated: ${signal.occurredAt}` : '', signal.summary ? `  Context: ${signal.summary.slice(0, 2_000)}` : ''].filter(Boolean).join('\n')).join('\n')}`;
 }
@@ -62,13 +68,14 @@ export async function contextForPrompt(repository: WorkItemRepository, message: 
     const settings = repository.getSourceSettings(provider);
     if (provider !== 'slack' && !settings && !(provider === 'github' && process.env.GITHUB_TOKEN)) { blocks.push(`Workbench connection unavailable: ${label} is not connected.`); continue; }
     try {
-      const signals = await cached(`${provider}:${query}`, () => provider === 'slack' ? scanSlackWithCodex() : provider === 'confluence' ? scanRemoteMcp(provider, settings!, query) : scanSource('github', settings ?? { token: process.env.GITHUB_TOKEN ?? '', query }));
+      const providerQuery = sourceQuery(message, provider);
+      const signals = await cached(`${provider}:${providerQuery}`, () => provider === 'slack' ? scanSlackWithCodex() : provider === 'confluence' ? scanRemoteMcp(provider, settings!, providerQuery) : scanSource('github', settings ?? { token: process.env.GITHUB_TOKEN ?? '', query: providerQuery }));
       const terms = query.toLowerCase().split(/\s+/).filter((term) => term.length > 2);
       const matches = terms.length ? signals.filter((signal) => terms.some((term) => `${signal.title}\n${signal.summary}\n${signal.url ?? ''}`.toLowerCase().includes(term))) : signals;
       blocks.push(matches.length ? format(label, matches) : `Workbench found no ${label} matches for ${query ? `“${query}”` : 'this request'}.`);
     } catch (error) { blocks.push(`Workbench ${label} connection failed: ${recoverAuthentication(repository, provider, error).message}.`); }
   }
-  return blocks.length ? `External-service access policy: Workbench fetched the following data. Use it directly; do not start another authentication flow or ask Jeffrey to open a dialog.\n\n${blocks.join('\n\n')}` : '';
+  return blocks.length ? `External-service access policy: Workbench fetched the following data through its connector broker. This supplied content is the agent's source access for the request; use it directly and do not claim the source is unavailable merely because no native MCP tool is visible. Do not start another authentication flow or ask Jeffrey to open a dialog.\n\n${blocks.join('\n\n')}` : '';
 }
 
 export async function resolveBrokerUrl(repository: WorkItemRepository, value: string): Promise<ResolvedSourceDraft> {

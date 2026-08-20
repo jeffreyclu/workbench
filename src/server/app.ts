@@ -7,6 +7,7 @@ import {
   createActivitySchema,
   bulkDiscoveryActionSchema,
   createAgentRunSchema,
+  createWorkItemReferenceSchema,
   createWorkItemSchema,
   generateTaskDraftSchema,
   createQueueProposalSchema,
@@ -25,15 +26,17 @@ import { z } from 'zod';
 import type { WorkbenchDatabase } from './database.js';
 import { LinearProvider } from './providers/linear.js';
 import { WorkItemRepository } from './repository.js';
-import { cancelAgentRun, classifyExecution, executeAgentRun, isAgentRunActive, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback } from './agent-runner.js';
-import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, isSharedReplyActive, runSharedBackgroundJob } from './shared-room.js';
+import { cancelAgentRun, classifyExecutionRobust, executeAgentRun, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback } from './agent-runner.js';
+import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, runSharedBackgroundJob } from './shared-room.js';
 import { createAuthGate } from './auth.js';
 import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMessage } from './slack-notify.js';
 import { finishRemoteMcpOAuth, startRemoteMcpOAuth } from './remote-mcp.js';
-import { listBrokerConnections, resolveBrokerUrl, searchBrokerSources } from './connection-broker.js';
+import { contextForPrompt, listBrokerConnections, resolveBrokerUrl, searchBrokerSources } from './connection-broker.js';
 import { artifactContentHash, CloudflarePagesPublisher, createArtifactId } from './artifact-publisher.js';
 import { runDiscovery, shouldRunDiscoveryCatchUp } from './discovery.js';
 import { isRuntimeApproval, promoteRuntime } from './runtime-promotion.js';
+import { isArtifactAllowed } from './artifact-access.js';
+import { LEASE_MS, OWNER_ID } from './scheduler.js';
 
 export function createApp(database: WorkbenchDatabase) {
   const app = express();
@@ -106,8 +109,7 @@ export function createApp(database: WorkbenchDatabase) {
     }
     if (!existsSync(candidate) || !statSync(candidate).isFile()) return response.status(404).json({ error: 'Artifact file not found.' });
     const realCandidate = realpathSync(candidate);
-    const outsideWorkspace = relative(workspace, realCandidate).startsWith('..') || isAbsolute(relative(workspace, realCandidate));
-    if (outsideWorkspace) return response.status(403).json({ error: 'Artifact is outside the task workspace.' });
+    if (!isArtifactAllowed(realCandidate, workspace)) return response.status(403).json({ error: 'Artifact is outside the allowed development roots.' });
     if (['.html', '.htm'].includes(extname(realCandidate).toLowerCase())) {
       const rawQuery = new URLSearchParams({ path: input.path });
       if (input.conversationId) rawQuery.set('conversationId', input.conversationId);
@@ -134,8 +136,7 @@ export function createApp(database: WorkbenchDatabase) {
     }
     if (!existsSync(candidate) || !statSync(candidate).isFile()) return response.status(404).json({ error: 'Artifact file not found.' });
     const realCandidate = realpathSync(candidate);
-    const outsideWorkspace = relative(workspace, realCandidate).startsWith('..') || isAbsolute(relative(workspace, realCandidate));
-    if (outsideWorkspace) return response.status(403).json({ error: 'Artifact is outside the task workspace.' });
+    if (!isArtifactAllowed(realCandidate, workspace)) return response.status(403).json({ error: 'Artifact is outside the allowed development roots.' });
     response.setHeader('Content-Security-Policy', "sandbox allow-scripts allow-same-origin; default-src 'self' data: https:; script-src 'self' 'unsafe-inline' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; font-src 'self' data: https:; connect-src 'none'; base-uri 'none'; form-action 'none'");
     response.setHeader('Content-Disposition', `inline; filename="${basename(realCandidate).replace(/["\\]/g, '_')}"`);
     response.sendFile(realCandidate);
@@ -156,8 +157,7 @@ export function createApp(database: WorkbenchDatabase) {
       const candidate = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(workspace, requestedPath);
       if (!existsSync(candidate) || !statSync(candidate).isFile()) return response.status(404).json({ error: 'Artifact file not found.' });
       const realCandidate = realpathSync(candidate);
-      const outsideWorkspace = relative(workspace, realCandidate).startsWith('..') || isAbsolute(relative(workspace, realCandidate));
-      if (outsideWorkspace) return response.status(403).json({ error: 'Artifact is outside the task workspace.' });
+      if (!isArtifactAllowed(realCandidate, workspace)) return response.status(403).json({ error: 'Artifact is outside the allowed development roots.' });
       const title = input.title ?? basename(realCandidate).replace(/\.[^.]+$/, '');
       const contentHash = artifactContentHash(realCandidate, title);
       const existing = database.prepare('SELECT id, public_url, content_hash FROM published_artifacts WHERE source_path = ? AND revoked_at IS NULL ORDER BY published_at DESC').all(realCandidate) as Array<{ id: string; public_url: string; content_hash: string | null }>;
@@ -187,8 +187,7 @@ export function createApp(database: WorkbenchDatabase) {
       const candidate = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(workspace, requestedPath);
       if (!existsSync(candidate) || !statSync(candidate).isFile()) return response.status(404).json({ error: 'Artifact file not found.' });
       const realCandidate = realpathSync(candidate);
-      const outsideWorkspace = relative(workspace, realCandidate).startsWith('..') || isAbsolute(relative(workspace, realCandidate));
-      if (outsideWorkspace) return response.status(403).json({ error: 'Artifact is outside the task workspace.' });
+      if (!isArtifactAllowed(realCandidate, workspace)) return response.status(403).json({ error: 'Artifact is outside the allowed development roots.' });
       const row = database.prepare('SELECT id, title, public_url, content_hash FROM published_artifacts WHERE source_path = ? AND revoked_at IS NULL ORDER BY published_at DESC LIMIT 1').get(realCandidate) as { id: string; title: string; public_url: string; content_hash: string | null } | undefined;
       if (!row) return response.json({ artifact: null, changed: false });
       response.json({ artifact: { id: row.id, title: row.title, url: row.public_url }, changed: row.content_hash !== artifactContentHash(realCandidate, row.title) });
@@ -244,11 +243,11 @@ export function createApp(database: WorkbenchDatabase) {
 
   app.get('/api/shared/messages', (request, response) => {
     const conversationId = z.string().uuid().optional().parse(request.query.conversationId);
-    for (const message of repository.listSharedMessages(1_000, conversationId).filter((item) => item.status === 'running')) {
-      const run = repository.getRunByMessage(message.id);
-      if (run && !isAgentRunActive(run.id) && !isSharedReplyActive(message.id)) cancelAgentRun(repository, run.id);
-      else if (!run && !isSharedReplyActive(message.id)) cancelSharedReply(repository, message.id);
-    }
+    // Recovery of runs whose owner process died is the scheduler's job (lease
+    // expiry + reclaimExpired), not this request handler's: canceling anything
+    // this process doesn't recognize as "active" would wrongly kill legitimate
+    // work owned by another instance, and would fire on every request right
+    // after a restart before the scheduler gets a chance to reclaim it properly.
     if (conversationId) dispatchNextSharedTurn(repository, conversationId);
     else {
       const queuedConversationIds = new Set(repository.listSharedMessages(1_000).filter((message) => message.status === 'queued').map((message) => message.conversationId));
@@ -270,7 +269,9 @@ export function createApp(database: WorkbenchDatabase) {
     if (isRuntimeApproval(input.body)) {
       const message = repository.createSharedMessage('jeffrey', input.body, 'completed', input.conversationId, attachments, 'none');
       const reply = repository.createSharedMessage('system', 'Approval received. Preparing the Workbench preview for promotion…', 'running', input.conversationId);
-      void runSharedBackgroundJob(repository, reply.id, (signal, onProgress) => promoteRuntime(database, signal, onProgress));
+      // DB-backed rather than process-local: queued/running rows are the source of
+      // truth for "is there live work," including work owned by another process.
+      void runSharedBackgroundJob(repository, reply.id, (signal, onProgress) => promoteRuntime(database, signal, onProgress, () => repository.hasLiveWork()));
       response.status(202).json({ message, replies: [reply] });
       return;
     }
@@ -419,7 +420,41 @@ export function createApp(database: WorkbenchDatabase) {
   app.get('/api/work-items/:id', (request, response) => {
     const item = repository.get(request.params.id);
     if (!item) return response.status(404).json({ error: 'Work item not found.' });
-    response.json({ item, parentItem: item.parentWorkItemId ? repository.get(item.parentWorkItemId) : null, activity: repository.listActivity(item.id), runs: repository.listRuns(item.id), executionPlan: repository.getPendingExecutionPlan(item.id) });
+    response.json({
+      item,
+      parentItem: item.parentWorkItemId ? repository.get(item.parentWorkItemId) : null,
+      children: repository.listChildren(item.id),
+      activity: repository.listActivity(item.id),
+      runs: repository.listRuns(item.id),
+      executionPlan: repository.getPendingExecutionPlan(item.id),
+      classification: repository.getClassification(item.id),
+      conversations: repository.listConversationsForWorkItem(item.id),
+      artifacts: repository.listArtifactsForWorkItem(item.id),
+      references: repository.listReferences(item.id),
+    });
+  });
+
+  app.post('/api/work-items/:id/references', (request, response) => {
+    const input = createWorkItemReferenceSchema.parse(request.body);
+    try {
+      response.status(201).json({ reference: repository.addReference(request.params.id, input) });
+    } catch (error) {
+      response.status(404).json({ error: error instanceof Error ? error.message : 'Task not found.' });
+    }
+  });
+
+  app.delete('/api/work-items/:id/references/:referenceId', (request, response) => {
+    const removed = repository.removeReference(request.params.id, request.params.referenceId);
+    if (!removed) return response.status(404).json({ error: 'Reference not found.' });
+    response.status(204).end();
+  });
+
+  app.post('/api/work-items/:id/classify', async (request, response) => {
+    const item = repository.get(request.params.id);
+    if (!item) return response.status(404).json({ error: 'Work item not found.' });
+    const classification = repository.setClassification(item.id, await classifyExecutionRobust(item));
+    repository.addActivity(item.id, 'system', 'classification', `Classified as ${classification.kind}${classification.complex ? ' (requires decomposition)' : ''}.`);
+    response.json({ classification });
   });
 
   app.post('/api/work-items', (request, response) => {
@@ -505,9 +540,13 @@ export function createApp(database: WorkbenchDatabase) {
     response.status(201).json({ activity: repository.addActivity(request.params.id, input.actor, input.kind, input.body) });
   });
 
-  app.post('/api/work-items/:id/runs', (request, response) => {
+  app.post('/api/work-items/:id/runs', async (request, response) => {
     const item = repository.get(request.params.id);
     if (!item) return response.status(404).json({ error: 'Work item not found.' });
+    // Reject a duplicate request (client retry, double click) rather than starting a
+    // second concurrent agent run against the same task: two agents editing the same
+    // workspace concurrently is a correctness hazard, not just wasted work.
+    if (repository.activeRunsForItem(item.id).length) return response.status(409).json({ error: 'This task already has an active agent run.' });
     const input = createAgentRunSchema.parse(request.body);
     const conversation = repository.getOrCreateWorkConversation(item.id, item.title);
     repository.createSharedMessage('system', `Requested ${input.kind}: ${input.instructions || item.description}`, 'completed', conversation.id);
@@ -516,7 +555,8 @@ export function createApp(database: WorkbenchDatabase) {
     const runs = agents.map((agent) =>
       repository.createRun(item.id, input.kind, input.target, agent, input.instructions, conversation.id, repository.createSharedMessage(agent, '', 'running', conversation.id).id),
     );
-    for (const run of runs) void executeAgentRun(repository, run);
+    const sourceContext = await contextForPrompt(repository, [item.title, item.description, item.sourceUrl, ...repository.listReferences(item.id).map((reference) => reference.url)].filter(Boolean).join('\n'));
+    for (const run of runs) void executeAgentRun(repository, run, OWNER_ID, LEASE_MS, sourceContext);
     response.status(202).json({ runs });
   });
 
@@ -526,10 +566,11 @@ export function createApp(database: WorkbenchDatabase) {
     response.json({ run });
   });
 
-  app.post('/api/work-items/:id/execute', (request, response) => {
+  app.post('/api/work-items/:id/execute', async (request, response) => {
     const item = repository.get(request.params.id);
     if (!item) return response.status(404).json({ error: 'Work item not found.' });
-    const classified = classifyExecution(item);
+    if (repository.activeRunsForItem(item.id).length) return response.status(409).json({ error: 'This task already has an active agent run.' });
+    const classified = repository.getClassification(item.id) ?? repository.setClassification(item.id, await classifyExecutionRobust(item));
     const explicitlyAssigned = repository.getExplicitAgentAssignees(item.id);
     const agents = explicitlyAssigned.length ? explicitlyAssigned : [repository.selectBalancedAgent(classified.agent)];
     const classification = { ...classified, agent: agents[0] };
@@ -540,8 +581,15 @@ export function createApp(database: WorkbenchDatabase) {
       const reply = repository.createSharedMessage(agent, '', 'running', conversation.id);
       return repository.createRun(item.id, classification.kind, explicitlyAssigned.length ? agent : 'auto', agent, classification.instructions, conversation.id, reply.id);
     });
-    for (const run of runs) void executeAgentRun(repository, run);
-    response.status(202).json({ run: runs[0], runs, classification, conversation });
+    const activity = repository.addActivity(
+      item.id,
+      'system',
+      'execution_started',
+      `Started ${classification.kind} execution with ${agents.join(' + ')}.`,
+    );
+    const sourceContext = await contextForPrompt(repository, [item.title, item.description, item.sourceUrl, ...repository.listReferences(item.id).map((reference) => reference.url)].filter(Boolean).join('\n'));
+    for (const run of runs) void executeAgentRun(repository, run, OWNER_ID, LEASE_MS, sourceContext);
+    response.status(202).json({ run: runs[0], runs, classification, conversation, activity });
   });
 
   app.post('/api/execution-plans/:id/:resolution', (request, response) => {

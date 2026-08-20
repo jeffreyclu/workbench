@@ -12,11 +12,15 @@ import {
   Archive,
   Cloud,
   Command,
+  FileText,
+  GitPullRequest,
   LoaderCircle,
   Menu,
   MessageCircle,
+  MessageSquare,
   MessageSquarePlus,
   GripVertical,
+  Link2,
   Paperclip,
   Plus,
   RefreshCw,
@@ -31,9 +35,17 @@ import {
 import { type CSSProperties, type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { Assignee, BrokerConnection, BrokerSourceId, DiscoveryCandidate, ExecutionPlan, WorkItem, WorkItemDetail } from '../shared/contracts';
+import type { AgentRun, Assignee, BrokerConnection, BrokerSourceId, DiscoveryCandidate, ExecutionPlan, SharedMessage, WorkItem, WorkItemDetail, WorkItemReferenceType } from '../shared/contracts';
 import { api } from './api';
 import { hideWorkbenchControlBlocks, humanizeRunOutput } from './run-output';
+
+function ReferenceTypeIcon({ type }: { type: WorkItemReferenceType }) {
+  if (type === 'linear_issue') return <Cloud size={13} />;
+  if (type === 'pull_request') return <GitPullRequest size={13} />;
+  if (type === 'slack_thread') return <MessageSquare size={13} />;
+  if (type === 'document') return <FileText size={13} />;
+  return <Link2 size={13} />;
+}
 
 function sourceLinkLabel(sourceUrl: string): string {
   try {
@@ -51,6 +63,16 @@ function selectBalancedVisibleAgent(messages: Array<{ author: string }>): 'codex
   const codexCount = messages.filter((message) => message.author === 'codex').length;
   const claudeCount = messages.filter((message) => message.author === 'claude').length;
   return codexCount <= claudeCount ? 'codex' : 'claude';
+}
+
+function formatRunTelemetry(entry: Pick<AgentRun | SharedMessage, 'executionProfile' | 'inputTokens' | 'outputTokens' | 'estimatedCostUsd' | 'fallbackFrom' | 'fallbackReason' | 'createdAt' | 'completedAt'> & { startedAt?: string | null }): string {
+  const started = entry.startedAt ?? entry.createdAt;
+  const duration = entry.completedAt ? Math.max(0, new Date(entry.completedAt).getTime() - new Date(started).getTime()) : null;
+  const tokenText = entry.inputTokens === null && entry.outputTokens === null ? 'tokens not reported' : `${entry.inputTokens?.toLocaleString() ?? '—'} in · ${entry.outputTokens?.toLocaleString() ?? '—'} out`;
+  const costText = entry.estimatedCostUsd === null ? 'cost not configured' : `$${entry.estimatedCostUsd.toFixed(4)}`;
+  const durationText = duration === null ? '' : ` · ${(duration / 1_000).toFixed(duration < 10_000 ? 1 : 0)}s`;
+  const fallbackText = entry.fallbackFrom ? ` · fallback from ${entry.fallbackFrom}${entry.fallbackReason ? ` (${entry.fallbackReason})` : ''}` : '';
+  return `${entry.executionProfile ?? 'unrouted'} · ${tokenText} · ${costText}${durationText}${fallbackText}`;
 }
 
 function AssigneeIcon({ assignee }: { assignee: Assignee }) {
@@ -83,6 +105,7 @@ function SortableQueueItem({ item, index, selected, draggable, onSelect }: { ite
     <span className="item-copy">
       <strong>{item.title}</strong>
       <span className="item-meta"><span>{item.sourceIdentifier ? `${item.sourceIdentifier} · ` : ''}{item.projectName ?? 'Personal'}</span><span className="source-tags">{item.sourceTags.map((source) => <span key={source} className={`source-tag source-${source.toLowerCase()}`}>{source}</span>)}</span></span>
+      {item.classificationKind && <span className="card-classification"><Bot size={10} /> {item.classificationKind}{item.classificationComplex ? ' · staged' : ''}</span>}
       {isHumanOnly && <span className="human-only-marker"><User size={11} /> Your task</span>}
       {item.agentOutcome && <span className={`agent-outcome agent-outcome-${item.agentOutcome}`}>
         {item.agentOutcome === 'needs_attention' ? <AlertTriangle size={11} /> : item.agentOutcome === 'follow_ups' ? <Sparkles size={11} /> : <Check size={11} />}
@@ -531,7 +554,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
             <article className={`shared-message shared-${message.author}`} key={message.id}>
               <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                 {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
-                {message.model && <span className="model-badge">{message.executionProfile === 'routing' ? 'routing' : message.model}</span>}
+                {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{message.executionProfile === 'routing' ? 'routing' : message.model} · {formatRunTelemetry(message)}</span>}
                 {message.status === 'running' && <button onClick={() => cancelReply.mutate(message.id)} title="Cancel response"><X size={12} /></button>}
               </header>
               {message.status === 'running' && <p className="thinking"><LoaderCircle className="spin" size={13} /> Live · {message.body ? 'receiving activity' : 'starting agent'}</p>}
@@ -589,6 +612,10 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
   const [editProjectName, setEditProjectName] = useState('');
   const [followUpTitle, setFollowUpTitle] = useState('');
   const [followUpDescription, setFollowUpDescription] = useState('');
+  const [showAddReference, setShowAddReference] = useState(false);
+  const [referenceType, setReferenceType] = useState<WorkItemReferenceType>('other');
+  const [referenceUrl, setReferenceUrl] = useState('');
+  const [referenceTitle, setReferenceTitle] = useState('');
   const [selectedExecutionTaskIndexes, setSelectedExecutionTaskIndexes] = useState<Set<number>>(new Set());
   const initializedExecutionPlanSelectionId = useRef<string | null>(null);
   const update = useMutation({
@@ -602,13 +629,23 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
   });
   const execute = useMutation({
     mutationFn: () => api.executeWorkItem(id),
-    onSuccess: async ({ conversation }) => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
-        queryClient.invalidateQueries({ queryKey: ['work-items'] }),
-      ]);
+    onSuccess: ({ conversation, runs, classification, activity }) => {
+      queryClient.setQueryData<WorkItemDetail>(['work-item', id], (current) => current && {
+        ...current,
+        runs: [...runs, ...current.runs.filter((run) => !runs.some((created) => created.id === run.id))],
+        classification,
+        conversations: current.conversations.some((entry) => entry.id === conversation.id) ? current.conversations : [conversation, ...current.conversations],
+        activity: [activity, ...current.activity],
+      });
       onOpenConversation(conversation.id);
+      void queryClient.invalidateQueries({ queryKey: ['work-item', id] });
+      void queryClient.invalidateQueries({ queryKey: ['work-items'] });
+      void queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
     },
+  });
+  const reclassify = useMutation({
+    mutationFn: () => api.classifyWorkItem(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
   });
   const cancelRun = useMutation({
     mutationFn: api.cancelAgentRun,
@@ -653,6 +690,17 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
       setFollowUpTitle(''); setFollowUpDescription(''); setShowFollowUp(false);
       await Promise.all([queryClient.invalidateQueries({ queryKey: ['work-items'] }), queryClient.invalidateQueries({ queryKey: ['work-item', id] })]);
     },
+  });
+  const addReference = useMutation({
+    mutationFn: () => api.addWorkItemReference(id, { type: referenceType, url: referenceUrl.trim(), title: referenceTitle.trim() }),
+    onSuccess: async () => {
+      setReferenceUrl(''); setReferenceTitle(''); setReferenceType('other'); setShowAddReference(false);
+      await queryClient.invalidateQueries({ queryKey: ['work-item', id] });
+    },
+  });
+  const removeReference = useMutation({
+    mutationFn: (referenceId: string) => api.removeWorkItemReference(id, referenceId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
   });
 
   useEffect(() => {
@@ -744,9 +792,15 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
       <div className="detail-section execution-section">
         <div className="section-heading">
           <span className="section-label">Agent execution</span>
-          <Bot size={14} />
+          <div className="classification-control">
+            {detail.data.classification && <span className="classification-badge">{detail.data.classification.kind}{detail.data.classification.complex ? ' · staged' : ''}</span>}
+            <button type="button" className="button secondary compact" onClick={() => reclassify.mutate()} disabled={!detail.data.classification || reclassify.isPending || detail.data.runs.some((run) => run.status === 'queued' || run.status === 'running')}>
+              {reclassify.isPending ? <LoaderCircle className="spin" size={12} /> : <RefreshCw size={12} />} Reclassify
+            </button>
+          </div>
         </div>
         <p className="execution-copy">Workbench will classify the task, choose the right agent, and either execute it directly or return an approval-ready decomposition for complex work.</p>
+        {reclassify.error && <p className="error-message">Could not classify task: {reclassify.error.message}</p>}
         {execute.error && <p className="error-message">{execute.error.message}</p>}
         <button className="button primary execute-button" onClick={() => execute.mutate()} disabled={execute.isPending || detail.data.runs.some((run) => run.status === 'queued' || run.status === 'running')}>
           {execute.isPending ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
@@ -760,7 +814,7 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
           {detail.data.runs.map((run) => (
             <article className="run-card" key={run.id}>
               <header>
-                <span className={`run-status run-${run.status}`}>{run.status === 'running' && <LoaderCircle className="spin" size={11} />}{run.status}</span>
+                <span className={`run-status run-${run.status}`}>{run.status === 'running' && <LoaderCircle className="spin" size={11} />}{run.status === 'queued' && run.attempt > 0 ? `Retrying (attempt ${run.attempt + 1} of ${run.maxAttempts})…` : run.status}</span>
                 <strong>{run.agent} · {run.kind}</strong>
                 <time>{new Date(run.createdAt).toLocaleString()}</time>
                 {(run.status === 'queued' || run.status === 'running') && <button className="cancel-run" onClick={() => cancelRun.mutate(run.id)}><X size={11} /> Cancel</button>}
@@ -768,7 +822,7 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
               {run.instructions && <p className="run-prompt">{run.instructions}</p>}
               {run.status === 'running' && !run.conversationId && <div className="live-output-label"><span /> Live activity & reasoning summaries</div>}
               {run.output && run.status !== 'completed' && !run.conversationId && <pre aria-live="polite">{humanizeRunOutput(run.output)}</pre>}
-              {run.model && <span className="model-badge">{run.model} · {run.executionProfile}</span>}
+              {run.model && <span className="model-badge" title={formatRunTelemetry(run)}>{run.model} · {formatRunTelemetry(run)}</span>}
               {run.status === 'completed' && run.output && <div className="run-summary"><span className="section-label">Agent summary</span><AgentMessageBody body={run.output} running={false} workItemId={item.id} /></div>}
               {run.error && <p className="error-message">{run.error}</p>}
               {run.conversationId && <button className="open-run-chat" onClick={() => onOpenConversation(run.conversationId!)}><MessageCircle size={13} /> Open execution chat</button>}
@@ -790,6 +844,74 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
           </div>
         </div>
       )}
+
+      <div className="detail-section relationships-section">
+        <span className="section-label">Relationships & history</span>
+        {detail.data.children.length > 0 && (
+          <div className="relationship-group">
+            <span className="relationship-group-label">Follow-ups</span>
+            {detail.data.children.map((child) => (
+              <button key={child.id} className="relationship-item" onClick={() => onOpenTask(child.id)}>
+                <span>{child.title}</span>
+                {child.archivedAt && <em className="relationship-tag">archived</em>}
+              </button>
+            ))}
+          </div>
+        )}
+        {detail.data.conversations.length > 0 && (
+          <div className="relationship-group">
+            <span className="relationship-group-label">Conversations</span>
+            {detail.data.conversations.map((conversation) => (
+              <button key={conversation.id} className="relationship-item" onClick={() => onOpenConversation(conversation.id)}>
+                <MessageCircle size={13} />
+                <span>{conversation.title}</span>
+                {conversation.forkedFromConversationId && <em className="relationship-tag">fork</em>}
+                {conversation.archivedAt && <em className="relationship-tag">archived</em>}
+              </button>
+            ))}
+          </div>
+        )}
+        {detail.data.artifacts.length > 0 && (
+          <div className="relationship-group">
+            <span className="relationship-group-label">Documents & artifacts</span>
+            {detail.data.artifacts.map((artifact) => (
+              <a key={artifact.id} className="relationship-item" href={artifact.url} target="_blank" rel="noreferrer">
+                <FileText size={13} />
+                <span>{artifact.title}</span>
+                <ArrowUpRight size={12} />
+              </a>
+            ))}
+          </div>
+        )}
+        <div className="relationship-group">
+          <span className="relationship-group-label">Linked references</span>
+          {detail.data.references.length === 0 && !showAddReference && <p className="muted">No Linear issues, pull requests, Slack threads, or documents linked yet.</p>}
+          {detail.data.references.map((reference) => (
+            <div className="relationship-item reference-item" key={reference.id}>
+              <ReferenceTypeIcon type={reference.type} />
+              <a href={reference.url} target="_blank" rel="noreferrer">{reference.title}</a>
+              <button type="button" className="icon-button" aria-label="Remove reference" onClick={() => removeReference.mutate(reference.id)}><X size={12} /></button>
+            </div>
+          ))}
+          {showAddReference ? (
+            <form className="reference-form" onSubmit={(event) => { event.preventDefault(); if (referenceUrl.trim()) addReference.mutate(); }}>
+              <select value={referenceType} onChange={(event) => setReferenceType(event.target.value as WorkItemReferenceType)}>
+                <option value="linear_issue">Linear issue</option>
+                <option value="pull_request">Pull request</option>
+                <option value="slack_thread">Slack thread</option>
+                <option value="document">Document</option>
+                <option value="other">Other</option>
+              </select>
+              <input autoFocus value={referenceUrl} onChange={(event) => setReferenceUrl(event.target.value)} placeholder="https://…" type="url" />
+              <input value={referenceTitle} onChange={(event) => setReferenceTitle(event.target.value)} placeholder="Title (optional)" />
+              {addReference.error && <p className="error-message">{addReference.error.message}</p>}
+              <div><button type="button" className="button secondary compact" onClick={() => setShowAddReference(false)}>Cancel</button><button className="button primary compact" disabled={!referenceUrl.trim() || addReference.isPending}>{addReference.isPending ? <LoaderCircle className="spin" size={13} /> : <Plus size={13} />} Link</button></div>
+            </form>
+          ) : (
+            <button type="button" className="button secondary compact" onClick={() => setShowAddReference(true)}><Link2 size={13} /> Link Linear, PR, Slack, or a document</button>
+          )}
+        </div>
+      </div>
 
       <div className="detail-section activity-section">
         <span className="section-label">Activity</span>

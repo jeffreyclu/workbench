@@ -113,3 +113,36 @@ describe('agent activity stream', () => {
     expect(hideWorkbenchControlBlocks(output)).toBe('Readable findings.');
   });
 });
+
+describe('task execution', () => {
+  it('replaces an active run with the canceled response immediately', async () => {
+    const taskId = '00000000-0000-4000-8000-000000000010';
+    const runId = '00000000-0000-4000-8000-000000000020';
+    const item = {
+      id: taskId, title: 'Fix canceled run controls', description: '', status: 'in_progress', priority: 2, queuePosition: 0,
+      source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete',
+      agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: 'Workbench', workspacePath: null,
+      strategy: '', assignees: ['codex'], labels: [], dueDate: null, providerUpdatedAt: null,
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', lastTouchedAt: '2026-01-01T00:00:00Z',
+    };
+    const runningRun = {
+      id: runId, workItemId: taskId, kind: 'execute', requestedTarget: 'codex', agent: 'codex', status: 'running', instructions: '', output: '', error: '',
+      startedAt: '2026-01-01T00:00:00Z', completedAt: null, createdAt: '2026-01-01T00:00:00Z', conversationId: null, messageId: null, model: null, executionProfile: null,
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/agent-runs/${runId}/cancel`) return new Response(JSON.stringify({ run: { ...runningRun, status: 'canceled', completedAt: '2026-01-01T00:01:00Z' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes(`/api/work-items/${taskId}`)) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [runningRun], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [item], nextCursor: null, totalCount: 1, proposal: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/work-item-counts') return new Response(JSON.stringify({ active: 1, workbench: 0, archive: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+
+    expect(await screen.findByText('canceled')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+  });
+});

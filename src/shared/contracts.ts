@@ -26,6 +26,8 @@ export const workItemSchema = z.object({
   parentWorkItemId: z.string().nullable(),
   completionStatus: z.enum(['incomplete', 'completed']),
   agentOutcome: z.enum(['finished', 'follow_ups', 'needs_attention']).nullable(),
+  classificationKind: z.string().nullable().optional(),
+  classificationComplex: z.boolean().optional(),
   sourceIdentifier: z.string().nullable(),
   sourceUrl: z.string().nullable(),
   sourceTags: z.array(z.string()),
@@ -183,12 +185,43 @@ export const createActivitySchema = z.object({
   body: z.string().trim().min(1).max(50_000),
 });
 
+export const workItemReferenceTypeSchema = z.enum(['linear_issue', 'pull_request', 'slack_thread', 'document', 'other']);
+export type WorkItemReferenceType = z.infer<typeof workItemReferenceTypeSchema>;
+
+export interface WorkItemReference {
+  id: string;
+  workItemId: string;
+  type: WorkItemReferenceType;
+  url: string;
+  title: string;
+  createdAt: string;
+}
+
+export const createWorkItemReferenceSchema = z.object({
+  type: workItemReferenceTypeSchema.default('other'),
+  url: z.string().trim().url().max(2_000),
+  title: z.string().trim().max(300).default(''),
+});
+
 export interface WorkItemDetail {
   item: WorkItem;
   parentItem: WorkItem | null;
+  children: WorkItem[];
   activity: Activity[];
   runs: AgentRun[];
   executionPlan: ExecutionPlan | null;
+  classification: TaskClassification | null;
+  conversations: SharedConversation[];
+  artifacts: PublishedArtifact[];
+  references: WorkItemReference[];
+}
+
+export interface TaskClassification {
+  kind: AgentRun['kind'];
+  agent: AgentRun['agent'];
+  complex: boolean;
+  instructions: string;
+  classifiedAt: string;
 }
 
 export const taskLifecycleActionSchema = z.enum(['archive', 'complete']);
@@ -236,6 +269,14 @@ export interface AgentRun {
   messageId: string | null;
   model: string | null;
   executionProfile: 'economy' | 'standard' | 'deep' | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  estimatedCostUsd: number | null;
+  fallbackFrom: 'codex' | 'claude' | null;
+  fallbackReason: string | null;
+  attempt: number;
+  maxAttempts: number;
+  nextAttemptAt: string | null;
 }
 
 export interface LinearSyncResult {
@@ -298,10 +339,19 @@ export interface SharedMessage {
   status: z.infer<typeof sharedMessageStatusSchema>;
   error: string;
   createdAt: string;
+  completedAt: string | null;
   attachments: SharedAttachment[];
   model: string | null;
   executionProfile: 'routing' | 'economy' | 'standard' | 'deep' | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  estimatedCostUsd: number | null;
+  fallbackFrom: 'codex' | 'claude' | null;
+  fallbackReason: string | null;
   dispatchTarget: 'auto' | 'both' | 'codex' | 'claude' | 'none';
+  attempt: number;
+  maxAttempts: number;
+  nextAttemptAt: string | null;
 }
 
 export interface SharedAttachment { name: string; path: string; mimeType: string; size: number; }

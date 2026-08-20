@@ -19,6 +19,8 @@ import type {
   WorkItemPage,
   PublishedArtifact,
   DiscoveryInbox,
+  WorkItemReference,
+  WorkItemReferenceType,
 } from '../shared/contracts';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -50,6 +52,7 @@ export const api = {
     return request<WorkItemPage>(`/api/work-items?${params}`);
   },
   getWorkItem: (id: string) => request<WorkItemDetail>(`/api/work-items/${id}`),
+  classifyWorkItem: (id: string) => request<{ classification: WorkItemDetail['classification'] }>(`/api/work-items/${id}/classify`, { method: 'POST' }),
   createWorkItem: (input: {
     title: string;
     description: string;
@@ -60,6 +63,10 @@ export const api = {
     workspacePath?: string | null;
   }) => request<{ item: WorkItem }>('/api/work-items', { method: 'POST', body: JSON.stringify(input) }),
   createFollowUp: (id: string, title: string, description: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/follow-ups`, { method: 'POST', body: JSON.stringify({ title, description }) }),
+  addWorkItemReference: (id: string, input: { type: WorkItemReferenceType; url: string; title?: string }) =>
+    request<{ reference: WorkItemReference }>(`/api/work-items/${id}/references`, { method: 'POST', body: JSON.stringify(input) }),
+  removeWorkItemReference: (id: string, referenceId: string) =>
+    request<void>(`/api/work-items/${id}/references/${referenceId}`, { method: 'DELETE' }),
   generateTaskDraft: (prompt: string) => request<{ draft: GeneratedTaskDraft }>('/api/work-items/generate-draft', { method: 'POST', body: JSON.stringify({ prompt }) }),
   resolveSourceUrl: (url: string) => request<{ draft: ResolvedSourceDraft }>('/api/sources/resolve', { method: 'POST', body: JSON.stringify({ url }) }),
   searchSources: (query: string, sources: BrokerSourceId[], signal?: AbortSignal) => request<BrokerSearchResponse>('/api/sources/search', { method: 'POST', body: JSON.stringify({ query, sources }), signal }),
@@ -81,7 +88,7 @@ export const api = {
     }),
   cancelAgentRun: (id: string) => request<{ run: AgentRun }>(`/api/agent-runs/${id}/cancel`, { method: 'POST' }),
   executeWorkItem: (id: string) =>
-    request<{ run: AgentRun; runs: AgentRun[]; classification: { kind: AgentRun['kind']; agent: AgentRun['agent']; complex: boolean }; conversation: SharedConversation }>(`/api/work-items/${id}/execute`, { method: 'POST' }),
+    request<{ run: AgentRun; runs: AgentRun[]; classification: WorkItemDetail['classification']; conversation: SharedConversation; activity: Activity }>(`/api/work-items/${id}/execute`, { method: 'POST' }),
   resolveExecutionPlan: (id: string, resolution: 'accepted' | 'rejected', selectedTaskIndexes?: number[]) =>
     request(`/api/execution-plans/${id}/${resolution}`, { method: 'POST', body: JSON.stringify({ selectedTaskIndexes }) }),
   reorderQueue: (input: { itemId: string; beforeId?: string; afterId?: string }) =>

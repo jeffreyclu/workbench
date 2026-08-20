@@ -1,7 +1,8 @@
 import type { AgentRun, SharedMessage } from '../shared/contracts.js';
-import { judgeExecutionProfile, modelFor, runAgentCommandWithFallback } from './agent-runner.js';
+import { judgeExecutionProfile, modelFor, runAgentCommandWithFallback, selectPromptExecutionProfile } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
+import { OWNER_ID, LEASE_MS } from './scheduler.js';
 
 const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
@@ -34,7 +35,10 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   );
   const queued = repository.nextQueuedSharedTurn(conversationId, busyAgents);
   if (!queued) return [];
-  repository.updateSharedMessage(queued.message.id, { status: 'completed' });
+  // Atomic conditional claim: guards against two concurrent callers (e.g. two
+  // GET /api/shared/messages requests racing) both promoting and dispatching
+  // the same queued turn.
+  if (!repository.claimQueuedTurn(queued.message.id)) return [];
   const agents = queued.dispatchTarget === 'both' ? ['codex', 'claude'] as const
     : queued.dispatchTarget === 'auto' ? [repository.selectBalancedAgent('codex')] : [queued.dispatchTarget];
   const conversation = repository.listConversations().find((item) => item.id === conversationId);
@@ -71,6 +75,9 @@ export async function runSharedBackgroundJob(
   messageId: string,
   job: (signal: AbortSignal, onProgress: (body: string) => void) => Promise<string>,
 ): Promise<void> {
+  // Claim a lease so the scheduler knows this process is actively working on this message.
+  if (!repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS)) return;
+
   const controller = new AbortController();
   activeReplies.set(messageId, controller);
   try {
@@ -86,6 +93,11 @@ export async function runSharedBackgroundJob(
 export async function replyInSharedRoom(repository: WorkItemRepository, agent: AgentRun['agent'], messageId: string, runId?: string): Promise<void> {
   const target = repository.listSharedMessages(1_000).find((message) => message.id === messageId);
   if (!target) return;
+
+  // Claim a lease so the scheduler knows this process is actively working on this message.
+  // On restart, expired leases trigger recovery (mark failed for messages without runs).
+  if (!repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS)) return;
+
   const controller = new AbortController();
   activeReplies.set(messageId, controller);
   if (runId) {
@@ -95,7 +107,8 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
   try {
     const thread = repository.listSharedMessages(100, target.conversationId).filter((message) => message.id !== messageId);
     const latestUserMessage = [...thread].reverse().find((message) => message.author === 'jeffrey')?.body ?? '';
-    const connectionContext = await connectionContextForPrompt(repository, latestUserMessage);
+    const recentSourceReferences = thread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body);
+    const connectionContext = await connectionContextForPrompt(repository, [latestUserMessage, ...recentSourceReferences].join('\n'));
     const prompt = `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.
 
 ${repository.getSharedContext(target.conversationId)}
@@ -106,19 +119,25 @@ Current conversation:
 ${thread.slice(-12).map((message) => `${message.author}: ${message.body.slice(0, 4_000)}${message.attachments.length ? `\nAttached files:\n${message.attachments.map((file) => `- ${file.name}: ${file.path}`).join('\n')}` : ''}`).join('\n\n')}
 
 Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential.`;
+    const selfHostingGuard = `
+
+Workbench self-hosting safety:
+This conversation is running inside the live Workbench control plane. Source edits appear in the preview at http://localhost:5174; the approved live release stays at http://localhost:5173. Never run runtime:promote, start, stop, restart, or kill Workbench, Vite, ngrok, or their ports from an agent response. Never claim either environment is down without an actual HTTP health check. If Jeffrey reports a preview bug, inspect and fix the source, verify it, and ask him to review the preview. Promotion happens only through Workbench's explicit preview-approval command after all agent work finishes.`;
     repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
-    const profile = await judgeExecutionProfile(latestUserMessage || prompt, process.cwd(), controller.signal);
+    const guardedPrompt = prompt + selfHostingGuard;
+    const profile = await judgeExecutionProfile(latestUserMessage || guardedPrompt, process.cwd(), controller.signal);
     repository.updateSharedMessage(messageId, { model: modelFor(agent, profile), executionProfile: profile });
     if (runId) repository.updateRun(runId, { model: modelFor(agent, profile), executionProfile: profile });
-    const result = await runAgentCommandWithFallback(agent, process.cwd(), prompt, (partial) => {
+    const result = await runAgentCommandWithFallback(agent, process.cwd(), guardedPrompt, (partial) => {
       repository.updateSharedMessage(messageId, { body: partial });
       if (runId) repository.updateRun(runId, { output: partial });
-    }, controller.signal, (fallback) => {
-      repository.updateSharedMessage(messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile });
-      if (runId) repository.updateRun(runId, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile });
+    }, controller.signal, (fallback, reason) => {
+      repository.updateSharedMessage(messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: agent, fallbackReason: reason.slice(0, 500) });
+      if (runId) repository.updateRun(runId, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: agent, fallbackReason: reason.slice(0, 500) });
     }, profile);
-    repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'completed' });
-    if (runId) repository.updateRun(runId, { agent: result.agent, output: result.output, status: 'completed', completedAt: new Date().toISOString() });
+    const telemetry = { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, estimatedCostUsd: result.usage.estimatedCostUsd, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
+    repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'completed', ...telemetry });
+    if (runId) repository.updateRun(runId, { agent: result.agent, output: result.output, status: 'completed', completedAt: new Date().toISOString(), ...telemetry });
   } catch (error) {
     if (controller.signal.aborted) {
       repository.updateSharedMessage(messageId, { status: 'canceled' });
@@ -133,8 +152,9 @@ Respond directly to Jeffrey's latest message. Be concise and useful. Build on th
   } finally {
     activeReplies.delete(messageId);
     replyRunIds.delete(messageId);
+    const synthesized = await synthesizeSharedTurn(repository, target.conversationId, target.createdAt);
     const dispatched = dispatchNextSharedTurn(repository, target.conversationId);
-    if (!dispatched.length) settleLinkedTask(repository, target.conversationId, `${agent} finished responding; review the conversation.`);
+    if (!synthesized && !dispatched.length) settleLinkedTask(repository, target.conversationId, `${agent} finished responding; review the conversation.`);
   }
 }
 
@@ -173,4 +193,38 @@ export function interjectQueuedSharedMessage(repository: WorkItemRepository, mes
   }
   repository.promoteQueuedSharedMessage(messageId);
   return dispatchNextSharedTurn(repository, message.conversationId);
+}
+
+function synthesisSource(repository: WorkItemRepository, conversationId: string, replyCreatedAt: string): { prompt: string; codex: SharedMessage; claude: SharedMessage } | null {
+  const messages = repository.listSharedMessages(1_000, conversationId);
+  const request = [...messages].reverse().find((message) => message.author === 'jeffrey' && message.dispatchTarget === 'both' && message.createdAt <= replyCreatedAt);
+  if (!request) return null;
+  const replies = messages.filter((message) => message.createdAt >= request.createdAt && (message.author === 'codex' || message.author === 'claude'));
+  const codex = [...replies].reverse().find((message) => message.author === 'codex');
+  const claude = [...replies].reverse().find((message) => message.author === 'claude');
+  if (!codex || !claude || codex.status !== 'completed' || claude.status !== 'completed') return null;
+  const alreadySynthesized = messages.some((message) => message.author === 'system' && message.createdAt >= request.createdAt && message.body.startsWith('Synthesis:'));
+  if (alreadySynthesized) return null;
+  return {
+    codex, claude,
+    prompt: `Synthesize these two independent agent responses to Jeffrey's request. Lead with the practical conclusion. Reconcile disagreements, retain concrete evidence, and say which points remain unverified. Do not mention that you are a synthesizer or repeat both reports. Keep it concise.\n\nJeffrey: ${request.body}\n\nCodex:\n${codex.body}\n\nClaude:\n${claude.body}`,
+  };
+}
+
+async function synthesizeSharedTurn(repository: WorkItemRepository, conversationId: string, replyCreatedAt: string): Promise<boolean> {
+  const source = synthesisSource(repository, conversationId, replyCreatedAt);
+  if (!source) return false;
+  const message = repository.createSharedMessage('system', 'Synthesis: combining Codex and Claude…', 'running', conversationId);
+  const agent = repository.selectBalancedAgent('claude');
+  const profile = selectPromptExecutionProfile(source.prompt);
+  repository.updateSharedMessage(message.id, { model: modelFor(agent, profile), executionProfile: profile });
+  await runSharedBackgroundJob(repository, message.id, async (signal, onProgress) => {
+    const result = await runAgentCommandWithFallback(agent, process.cwd(), source.prompt, onProgress, signal, undefined, profile);
+    repository.updateSharedMessage(message.id, {
+      model: modelFor(result.agent, profile), inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens,
+      estimatedCostUsd: result.usage.estimatedCostUsd, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason,
+    });
+    return `Synthesis:\n${result.output}`;
+  });
+  return true;
 }

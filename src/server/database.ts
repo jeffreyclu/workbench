@@ -72,10 +72,24 @@ const migrations = [
       message_id TEXT
       ,model TEXT
       ,execution_profile TEXT
+      ,input_tokens INTEGER
+      ,output_tokens INTEGER
+      ,estimated_cost_usd REAL
+      ,fallback_from TEXT
+      ,fallback_reason TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_agent_runs_item
       ON agent_runs(work_item_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS work_item_classifications (
+      work_item_id TEXT PRIMARY KEY REFERENCES work_items(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      agent TEXT NOT NULL,
+      complex INTEGER NOT NULL DEFAULT 0,
+      instructions TEXT NOT NULL DEFAULT '',
+      classified_at TEXT NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS queue_proposals (
       id TEXT PRIMARY KEY,
@@ -100,6 +114,12 @@ const migrations = [
       created_at TEXT NOT NULL
       ,model TEXT
       ,execution_profile TEXT
+      ,input_tokens INTEGER
+      ,output_tokens INTEGER
+      ,estimated_cost_usd REAL
+      ,fallback_from TEXT
+      ,fallback_reason TEXT
+      ,completed_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS shared_conversations (
@@ -182,6 +202,18 @@ const migrations = [
 
     CREATE INDEX IF NOT EXISTS idx_discovery_inbox
       ON discovery_candidates(status, snoozed_until, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS work_item_references (
+      id TEXT PRIMARY KEY,
+      work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+      type TEXT NOT NULL DEFAULT 'other',
+      url TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_work_item_references_item
+      ON work_item_references(work_item_id, created_at DESC);
   `,
 ];
 
@@ -249,6 +281,12 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
   if (!messageColumns.some((column) => column.name === 'dispatch_target')) database.exec("ALTER TABLE shared_messages ADD COLUMN dispatch_target TEXT NOT NULL DEFAULT 'none';");
   if (!messageColumns.some((column) => column.name === 'model')) database.exec('ALTER TABLE shared_messages ADD COLUMN model TEXT;');
   if (!messageColumns.some((column) => column.name === 'execution_profile')) database.exec('ALTER TABLE shared_messages ADD COLUMN execution_profile TEXT;');
+  if (!messageColumns.some((column) => column.name === 'input_tokens')) database.exec('ALTER TABLE shared_messages ADD COLUMN input_tokens INTEGER;');
+  if (!messageColumns.some((column) => column.name === 'output_tokens')) database.exec('ALTER TABLE shared_messages ADD COLUMN output_tokens INTEGER;');
+  if (!messageColumns.some((column) => column.name === 'estimated_cost_usd')) database.exec('ALTER TABLE shared_messages ADD COLUMN estimated_cost_usd REAL;');
+  if (!messageColumns.some((column) => column.name === 'fallback_from')) database.exec('ALTER TABLE shared_messages ADD COLUMN fallback_from TEXT;');
+  if (!messageColumns.some((column) => column.name === 'fallback_reason')) database.exec('ALTER TABLE shared_messages ADD COLUMN fallback_reason TEXT;');
+  if (!messageColumns.some((column) => column.name === 'completed_at')) database.exec('ALTER TABLE shared_messages ADD COLUMN completed_at TEXT;');
   const conversationColumns = database.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>;
   if (!conversationColumns.some((column) => column.name === 'work_item_id')) database.exec('ALTER TABLE shared_conversations ADD COLUMN work_item_id TEXT;');
   if (!conversationColumns.some((column) => column.name === 'archived_at')) database.exec('ALTER TABLE shared_conversations ADD COLUMN archived_at TEXT;');
@@ -257,12 +295,38 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
   if (!runColumns.some((column) => column.name === 'conversation_id')) database.exec('ALTER TABLE agent_runs ADD COLUMN conversation_id TEXT;');
   if (!runColumns.some((column) => column.name === 'message_id')) database.exec('ALTER TABLE agent_runs ADD COLUMN message_id TEXT;');
   if (!runColumns.some((column) => column.name === 'model')) database.exec('ALTER TABLE agent_runs ADD COLUMN model TEXT;');
+  if (!runColumns.some((column) => column.name === 'input_tokens')) database.exec('ALTER TABLE agent_runs ADD COLUMN input_tokens INTEGER;');
+  if (!runColumns.some((column) => column.name === 'output_tokens')) database.exec('ALTER TABLE agent_runs ADD COLUMN output_tokens INTEGER;');
+  if (!runColumns.some((column) => column.name === 'estimated_cost_usd')) database.exec('ALTER TABLE agent_runs ADD COLUMN estimated_cost_usd REAL;');
+  if (!runColumns.some((column) => column.name === 'fallback_from')) database.exec('ALTER TABLE agent_runs ADD COLUMN fallback_from TEXT;');
+  if (!runColumns.some((column) => column.name === 'fallback_reason')) database.exec('ALTER TABLE agent_runs ADD COLUMN fallback_reason TEXT;');
   if (!runColumns.some((column) => column.name === 'execution_profile')) database.exec('ALTER TABLE agent_runs ADD COLUMN execution_profile TEXT;');
   const artifactColumns = database.prepare('PRAGMA table_info(published_artifacts)').all() as Array<{ name: string }>;
   if (!artifactColumns.some((column) => column.name === 'content_hash')) database.exec('ALTER TABLE published_artifacts ADD COLUMN content_hash TEXT;');
   const discoveryColumns = database.prepare('PRAGMA table_info(discovery_candidates)').all() as Array<{ name: string }>;
   if (!discoveryColumns.some((column) => column.name === 'relevance')) database.exec('ALTER TABLE discovery_candidates ADD COLUMN relevance INTEGER NOT NULL DEFAULT 1;');
   if (!discoveryColumns.some((column) => column.name === 'suggested_work_item_id')) database.exec('ALTER TABLE discovery_candidates ADD COLUMN suggested_work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL;');
+
+  // Reliability: lease + retry bookkeeping so a restarted or crashed process
+  // can recover in-flight work instead of orphaning it. owner_id/lease_expires_at
+  // implement a claim lease (whoever holds a live lease owns the row); attempt/
+  // max_attempts/next_attempt_at implement bounded, scheduled retry.
+  if (!runColumns.some((column) => column.name === 'owner_id')) database.exec('ALTER TABLE agent_runs ADD COLUMN owner_id TEXT;');
+  if (!runColumns.some((column) => column.name === 'lease_expires_at')) database.exec('ALTER TABLE agent_runs ADD COLUMN lease_expires_at TEXT;');
+  if (!runColumns.some((column) => column.name === 'attempt')) database.exec('ALTER TABLE agent_runs ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0;');
+  if (!runColumns.some((column) => column.name === 'max_attempts')) database.exec('ALTER TABLE agent_runs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3;');
+  if (!runColumns.some((column) => column.name === 'next_attempt_at')) database.exec('ALTER TABLE agent_runs ADD COLUMN next_attempt_at TEXT;');
+  if (!messageColumns.some((column) => column.name === 'owner_id')) database.exec('ALTER TABLE shared_messages ADD COLUMN owner_id TEXT;');
+  if (!messageColumns.some((column) => column.name === 'lease_expires_at')) database.exec('ALTER TABLE shared_messages ADD COLUMN lease_expires_at TEXT;');
+  if (!messageColumns.some((column) => column.name === 'attempt')) database.exec('ALTER TABLE shared_messages ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0;');
+  if (!messageColumns.some((column) => column.name === 'max_attempts')) database.exec('ALTER TABLE shared_messages ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3;');
+  if (!messageColumns.some((column) => column.name === 'next_attempt_at')) database.exec('ALTER TABLE shared_messages ADD COLUMN next_attempt_at TEXT;');
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_scheduler ON agent_runs(status, next_attempt_at);
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_lease ON agent_runs(status, lease_expires_at);
+    CREATE INDEX IF NOT EXISTS idx_shared_messages_scheduler ON shared_messages(status, next_attempt_at);
+    CREATE INDEX IF NOT EXISTS idx_shared_messages_lease ON shared_messages(status, lease_expires_at);
+  `);
   return database;
 }
 
