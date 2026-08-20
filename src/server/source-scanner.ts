@@ -2,6 +2,7 @@ import type { SourceProvider } from '../shared/contracts.js';
 import { WorkItemRepository } from './repository.js';
 import { scanSlackMcp } from './slack-mcp.js';
 import { scanRemoteMcp } from './remote-mcp.js';
+import { scanSlackWithCodex } from './slack-codex.js';
 
 export interface SourceSignal { provider: string; title: string; summary: string; url: string | null; occurredAt: string | null; }
 
@@ -59,7 +60,8 @@ export function scanSource(provider: SourceProvider, settings: Record<string, st
 }
 
 export async function scanConnectedSources(repository: WorkItemRepository): Promise<{ signals: SourceSignal[]; errors: string[] }> {
-  const results = await Promise.all(repository.listSourceConnections().map(async ({ provider }) => {
+  const connections = repository.listSourceConnections();
+  const results = await Promise.all(connections.map(async ({ provider }) => {
     try {
       const signals = await scanSource(provider, repository.getSourceSettings(provider)!);
       repository.updateSourceScan(provider, null);
@@ -70,5 +72,9 @@ export async function scanConnectedSources(repository: WorkItemRepository): Prom
       return { signals: [] as SourceSignal[], error: `${provider}: ${message}` };
     }
   }));
+  if (!connections.some(({ provider }) => provider === 'slack')) {
+    try { results.push({ signals: await scanSlackWithCodex(), error: null }); }
+    catch (error) { results.push({ signals: [], error: `slack: ${error instanceof Error ? error.message : 'Scan failed.'}` }); }
+  }
   return { signals: results.flatMap((result) => result.signals), errors: results.flatMap((result) => result.error ? [result.error] : []) };
 }

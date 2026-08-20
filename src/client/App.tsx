@@ -30,7 +30,7 @@ import {
 import { type CSSProperties, type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { Assignee, BrokerConnection, BrokerSourceId, ExecutionPlan, WorkItem, WorkItemDetail } from '../shared/contracts';
+import type { Assignee, BrokerConnection, BrokerSourceId, DiscoveryCandidate, ExecutionPlan, WorkItem, WorkItemDetail } from '../shared/contracts';
 import { api } from './api';
 import { hideWorkbenchControlBlocks, humanizeRunOutput } from './run-output';
 
@@ -782,6 +782,54 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
   );
 }
 
+function DiscoveryNav({ active, onClick }: { active: boolean; onClick: () => void }) {
+  const inbox = useQuery({ queryKey: ['discovery'], queryFn: api.getDiscoveryInbox, refetchInterval: 5_000 });
+  return <button className={`nav-item ${active ? 'active' : ''}`} onClick={onClick}><Search size={16} /> Discoveries <span>{inbox.data?.pendingCount ?? '…'}</span></button>;
+}
+
+function DiscoveryInboxView() {
+  const queryClient = useQueryClient();
+  const inbox = useQuery({ queryKey: ['discovery'], queryFn: api.getDiscoveryInbox, refetchInterval: 2_000 });
+  const scan = useMutation({ mutationFn: api.scanDiscovery, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['discovery'] }) });
+  const resolveCandidate = useMutation({
+    mutationFn: ({ candidate, action }: { candidate: DiscoveryCandidate; action: 'convert' | 'dismiss' | 'snooze' }) => api.resolveDiscovery(candidate.id, action),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['discovery'] });
+      void queryClient.invalidateQueries({ queryKey: ['work-items'] });
+      void queryClient.invalidateQueries({ queryKey: ['work-item-counts'] });
+    },
+  });
+  const lastRun = inbox.data?.lastRun;
+  return <section className="discovery-workspace">
+    <header className="discovery-header">
+      <div><span className="eyebrow">Morning review</span><h2>Discovered overnight</h2><p>Nothing enters your stack until you approve it.</p></div>
+      <button className="button secondary compact" onClick={() => scan.mutate()} disabled={inbox.data?.running || scan.isPending}>
+        {inbox.data?.running ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} {inbox.data?.running ? 'Scanning sources…' : 'Scan now'}
+      </button>
+    </header>
+    <div className="discovery-status">
+      <strong>{inbox.data?.pendingCount ?? 0} to review</strong>
+      <span>{lastRun?.completedAt ? `Last scan ${new Date(lastRun.completedAt).toLocaleString()}` : 'No completed scan yet'}</span>
+      {lastRun?.errors.map((error) => <span className="error-message" key={error}>{error}</span>)}
+    </div>
+    <div className="discovery-list">
+      {inbox.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading discoveries…</div>}
+      {!inbox.isLoading && !inbox.data?.candidates.length && <div className="discovery-empty"><Search size={26} /><h3>Inbox clear</h3><p>The 5:00 AM scan will put new signals here for review.</p></div>}
+      {inbox.data?.candidates.map((candidate) => <article className="discovery-card" key={candidate.id}>
+        <div className="discovery-source"><span>{candidate.provider}</span><time>{new Date(candidate.occurredAt ?? candidate.discoveredAt).toLocaleString()}</time></div>
+        <h3>{candidate.title}</h3>
+        {candidate.description && <p>{candidate.description}</p>}
+        <div className="discovery-actions">
+          {candidate.sourceUrl && <a className="button secondary compact" href={candidate.sourceUrl} target="_blank" rel="noreferrer"><ArrowUpRight size={13} /> Source</a>}
+          <button className="button secondary compact" onClick={() => resolveCandidate.mutate({ candidate, action: 'snooze' })}>Tomorrow</button>
+          <button className="button secondary compact" onClick={() => resolveCandidate.mutate({ candidate, action: 'dismiss' })}>Dismiss</button>
+          <button className="button primary compact" onClick={() => resolveCandidate.mutate({ candidate, action: 'convert' })}>Add to stack</button>
+        </div>
+      </article>)}
+    </div>
+  </section>;
+}
+
 export function App() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -789,7 +837,7 @@ export function App() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [showSources, setShowSources] = useState(false);
-  const [view, setView] = useState<'active' | 'archive' | 'context'>('active');
+  const [view, setView] = useState<'active' | 'archive' | 'discovery' | 'context'>('active');
   const [agentConversationId, setAgentConversationId] = useState<string | null>(null);
   const [pendingTaskNavigation, setPendingTaskNavigation] = useState<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
@@ -804,7 +852,7 @@ export function App() {
     queryFn: ({ pageParam }) => api.listWorkItems(view === 'archive' ? 'archive' : 'active', debouncedSearch, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
-    enabled: view !== 'context',
+    enabled: view === 'active' || view === 'archive',
   });
   const workItemCounts = useQuery({ queryKey: ['work-item-counts'], queryFn: api.getWorkItemCounts, refetchInterval: 1_500 });
   const queueAgentActivity = useQuery({ queryKey: ['shared-message-activity'], queryFn: () => api.listSharedMessages(), refetchInterval: 1_000 });
@@ -849,7 +897,7 @@ export function App() {
     }
   }, [filtered]);
   useEffect(() => {
-    if (view === 'context' || !pendingTaskNavigation) return;
+    if (view === 'context' || view === 'discovery' || !pendingTaskNavigation) return;
     setSelectedId(pendingTaskNavigation);
     setPendingTaskNavigation(null);
   }, [pendingTaskNavigation, view]);
@@ -888,12 +936,13 @@ export function App() {
         <nav>
           <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={() => { setView('active'); setSelectedId(null); }}><Command size={16} /> Attention stack <span>{workItemCounts.data?.active ?? '…'}</span></button>
           <button className={`nav-item ${view === 'archive' ? 'active' : ''}`} onClick={() => { setView('archive'); setSelectedId(null); }}><Archive size={16} /> Archive <span>{workItemCounts.data?.archive ?? '…'}</span></button>
+          <DiscoveryNav active={view === 'discovery'} onClick={() => { setView('discovery'); setSelectedId(null); }} />
           <button className={`nav-item ${view === 'context' ? 'active' : ''}`} onClick={() => { setView('context'); setSelectedId(null); setAgentConversationId(null); }}><MessageCircle size={16} /> Agent console</button>
           <button className="nav-item" onClick={() => setShowSources(true)}><Cloud size={16} /> Sources</button>
         </nav>
       </aside>
 
-      {view === 'context' ? <SharedWorkspace initialConversationId={agentConversationId} onOpenTask={(taskId) => { void openTaskFromConversation(taskId); }} /> : <><main className="queue-panel">
+      {view === 'context' ? <SharedWorkspace initialConversationId={agentConversationId} onOpenTask={(taskId) => { void openTaskFromConversation(taskId); }} /> : view === 'discovery' ? <DiscoveryInboxView /> : <><main className="queue-panel">
         <header className="queue-header">
           <div><span className="eyebrow">{view === 'active' ? 'Focus' : 'History'}</span><h2>{view === 'active' ? 'Attention stack' : 'Archive'}</h2></div>
           <div className="header-actions">

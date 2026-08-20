@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Activity, AgentRun, Assignee, ConversationPage, ExecutionPlan, LinearProviderConfig, PlannedTask, QueueProposal, SharedAttachment, SharedConversation, SharedMessage, SourceConnection, SourceProvider, WorkItem, WorkItemPage } from '../shared/contracts.js';
+import type { Activity, AgentRun, Assignee, ConversationPage, DiscoveryCandidate, DiscoveryCandidateStatus, DiscoveryInbox, DiscoveryRun, ExecutionPlan, LinearProviderConfig, PlannedTask, QueueProposal, SharedAttachment, SharedConversation, SharedMessage, SourceConnection, SourceProvider, WorkItem, WorkItemPage } from '../shared/contracts.js';
 import type { WorkbenchDatabase } from './database.js';
 
 interface WorkItemRow {
@@ -81,6 +81,70 @@ export interface ProviderWorkItem {
 
 export class WorkItemRepository {
   constructor(private readonly database: WorkbenchDatabase) {}
+
+  getDiscoveryInbox(): DiscoveryInbox {
+    const now = new Date().toISOString();
+    this.database.prepare("UPDATE discovery_candidates SET status = 'pending', snoozed_until = NULL, updated_at = ? WHERE status = 'snoozed' AND snoozed_until <= ?").run(now, now);
+    const candidates = (this.database.prepare("SELECT * FROM discovery_candidates WHERE status = 'pending' ORDER BY COALESCE(occurred_at, discovered_at) DESC, updated_at DESC").all() as Array<Record<string, string | null>>).map((row) => this.mapDiscoveryCandidate(row));
+    const run = this.database.prepare('SELECT * FROM discovery_runs ORDER BY started_at DESC LIMIT 1').get() as Record<string, string | number | null> | undefined;
+    return { candidates, pendingCount: candidates.length, lastRun: run ? this.mapDiscoveryRun(run) : null, running: run?.status === 'running' };
+  }
+
+  startDiscoveryRun(): DiscoveryRun {
+    const running = this.database.prepare("SELECT * FROM discovery_runs WHERE status = 'running' ORDER BY started_at DESC LIMIT 1").get() as Record<string, string | number | null> | undefined;
+    if (running) return this.mapDiscoveryRun(running);
+    const id = randomUUID(); const now = new Date().toISOString();
+    this.database.prepare("INSERT INTO discovery_runs (id, status, started_at) VALUES (?, 'running', ?)").run(id, now);
+    return { id, status: 'running', startedAt: now, completedAt: null, candidateCount: 0, errors: [] };
+  }
+
+  finishDiscoveryRun(id: string, candidateCount: number, errors: string[], failed = false): void {
+    this.database.prepare('UPDATE discovery_runs SET status = ?, completed_at = ?, candidate_count = ?, errors_json = ? WHERE id = ?')
+      .run(failed ? 'failed' : 'completed', new Date().toISOString(), candidateCount, JSON.stringify(errors), id);
+  }
+
+  upsertDiscoveryCandidate(input: { fingerprint: string; provider: string; title: string; description: string; sourceUrl: string | null; occurredAt: string | null; runId: string }): boolean {
+    const now = new Date().toISOString();
+    const existing = this.database.prepare('SELECT status FROM discovery_candidates WHERE fingerprint = ?').get(input.fingerprint) as { status: DiscoveryCandidateStatus } | undefined;
+    if (existing) {
+      this.database.prepare(`UPDATE discovery_candidates SET title = ?, description = ?, source_url = ?, occurred_at = ?, updated_at = ?, run_id = ? WHERE fingerprint = ?`)
+        .run(input.title, input.description, input.sourceUrl, input.occurredAt, now, input.runId, input.fingerprint);
+      return false;
+    }
+    this.database.prepare(`INSERT INTO discovery_candidates (id, fingerprint, provider, title, description, source_url, occurred_at, status, discovered_at, updated_at, run_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`).run(randomUUID(), input.fingerprint, input.provider, input.title, input.description, input.sourceUrl, input.occurredAt, now, now, input.runId);
+    return true;
+  }
+
+  resolveDiscoveryCandidate(id: string, action: 'convert' | 'dismiss' | 'snooze' | 'merge', workItemId?: string): DiscoveryCandidate | null {
+    const row = this.database.prepare('SELECT * FROM discovery_candidates WHERE id = ?').get(id) as Record<string, string | null> | undefined;
+    if (!row) return null;
+    const candidate = this.mapDiscoveryCandidate(row); const now = new Date().toISOString();
+    let linkedId = workItemId ?? null;
+    if (action === 'convert') {
+      const item = this.create({ title: candidate.title, description: candidate.description, priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null, sourceUrl: candidate.sourceUrl });
+      linkedId = item.id;
+      this.addActivity(item.id, 'system', 'discovered', `Discovered overnight from ${candidate.provider}.`);
+    } else if (action === 'merge') {
+      const item = linkedId ? this.get(linkedId) : null;
+      if (!item) throw new Error('Choose an existing task to merge into.');
+      this.addActivity(item.id, 'system', 'discovered', `${candidate.provider}: ${candidate.title}${candidate.sourceUrl ? `\n${candidate.sourceUrl}` : ''}`);
+    }
+    const status = action === 'convert' ? 'converted' : action === 'merge' ? 'merged' : action === 'dismiss' ? 'dismissed' : 'snoozed';
+    const snoozedUntil = action === 'snooze' ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : null;
+    this.database.prepare('UPDATE discovery_candidates SET status = ?, work_item_id = ?, snoozed_until = ?, updated_at = ? WHERE id = ?').run(status, linkedId, snoozedUntil, now, id);
+    return this.mapDiscoveryCandidate(this.database.prepare('SELECT * FROM discovery_candidates WHERE id = ?').get(id) as Record<string, string | null>);
+  }
+
+  private mapDiscoveryCandidate(row: Record<string, string | null>): DiscoveryCandidate {
+    return { id: row.id!, provider: row.provider!, title: row.title!, description: row.description ?? '', sourceUrl: row.source_url, occurredAt: row.occurred_at,
+      status: row.status as DiscoveryCandidateStatus, discoveredAt: row.discovered_at!, updatedAt: row.updated_at!, snoozedUntil: row.snoozed_until, workItemId: row.work_item_id };
+  }
+
+  private mapDiscoveryRun(row: Record<string, string | number | null>): DiscoveryRun {
+    return { id: String(row.id), status: row.status as DiscoveryRun['status'], startedAt: String(row.started_at), completedAt: row.completed_at ? String(row.completed_at) : null,
+      candidateCount: Number(row.candidate_count ?? 0), errors: JSON.parse(String(row.errors_json ?? '[]')) as string[] };
+  }
 
   listConversations(view: 'active' | 'archive' | 'all' = 'active'): SharedConversation[] {
     return (this.database.prepare(`

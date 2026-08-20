@@ -4,6 +4,7 @@ data/*.db
 data/*.db-*
 data/attachments/
 data/published/
+data/logs/
 .env
 .DS_Store
 coverage/

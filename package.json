@@ -13,6 +13,8 @@
     "dev:lan": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web:lan\"",
     "dev:web:lan": "vite --host",
     "share": "tsx scripts/share.ts",
+    "discovery:scan": "tsx scripts/discover.ts --force",
+    "discovery:install": "zsh scripts/install-discovery-schedule.sh",
     "build": "tsc -b && vite build",
     "start": "tsx src/server/index.ts",
     "typecheck": "tsc -b --pretty false",

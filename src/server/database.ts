@@ -151,6 +151,34 @@ const migrations = [
       published_at TEXT NOT NULL,
       revoked_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS discovery_runs (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      candidate_count INTEGER NOT NULL DEFAULT 0,
+      errors_json TEXT NOT NULL DEFAULT '[]'
+    );
+
+    CREATE TABLE IF NOT EXISTS discovery_candidates (
+      id TEXT PRIMARY KEY,
+      fingerprint TEXT NOT NULL UNIQUE,
+      provider TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      source_url TEXT,
+      occurred_at TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      discovered_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      snoozed_until TEXT,
+      work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
+      run_id TEXT REFERENCES discovery_runs(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_discovery_inbox
+      ON discovery_candidates(status, snoozed_until, updated_at DESC);
   `,
 ];
 

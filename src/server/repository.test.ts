@@ -254,4 +254,17 @@ describe('WorkItemRepository', () => {
     repository.archive(archived.id, false);
     expect(repository.getWorkItemCounts()).toEqual({ active: 1, archive: 1 });
   });
+
+  it('deduplicates discoveries and only creates a task after approval', () => {
+    const run = repository.startDiscoveryRun();
+    expect(repository.upsertDiscoveryCandidate({ fingerprint: 'same', provider: 'slack', title: 'Review proposal', description: 'Jeffrey was mentioned.', sourceUrl: 'https://writer.slack.com/a', occurredAt: null, runId: run.id })).toBe(true);
+    expect(repository.upsertDiscoveryCandidate({ fingerprint: 'same', provider: 'slack', title: 'Review updated proposal', description: 'New context', sourceUrl: 'https://writer.slack.com/a', occurredAt: null, runId: run.id })).toBe(false);
+    repository.finishDiscoveryRun(run.id, 1, []);
+    const inbox = repository.getDiscoveryInbox();
+    expect(inbox.pendingCount).toBe(1);
+    expect(repository.list()).toHaveLength(0);
+    const resolved = repository.resolveDiscoveryCandidate(inbox.candidates[0].id, 'convert')!;
+    expect(resolved.status).toBe('converted');
+    expect(repository.list()).toEqual([expect.objectContaining({ title: 'Review updated proposal', sourceUrl: 'https://writer.slack.com/a' })]);
+  });
 });

@@ -18,6 +18,7 @@ import type {
   WorkItemDetail,
   WorkItemPage,
   PublishedArtifact,
+  DiscoveryInbox,
 } from '../shared/contracts';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -32,6 +33,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  getDiscoveryInbox: () => request<DiscoveryInbox>('/api/discovery'),
+  scanDiscovery: () => request<{ started: boolean }>('/api/discovery/scan', { method: 'POST' }),
+  resolveDiscovery: (id: string, action: 'convert' | 'dismiss' | 'snooze' | 'merge', workItemId?: string) =>
+    request(`/api/discovery/${id}/${action}`, { method: 'POST', body: JSON.stringify({ workItemId }) }),
   publishArtifact: (input: { path: string; title?: string; conversationId?: string; workItemId?: string }) =>
     request<{ artifact: PublishedArtifact }>('/api/artifacts/publish', { method: 'POST', body: JSON.stringify(input) }),
   revokeArtifact: (id: string) => request<void>(`/api/artifacts/${id}`, { method: 'DELETE' }),

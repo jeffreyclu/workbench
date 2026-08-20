@@ -29,6 +29,7 @@ import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMess
 import { finishRemoteMcpOAuth, startRemoteMcpOAuth } from './remote-mcp.js';
 import { listBrokerConnections, resolveBrokerUrl, searchBrokerSources } from './connection-broker.js';
 import { artifactContentHash, CloudflarePagesPublisher, createArtifactId } from './artifact-publisher.js';
+import { runDiscovery, shouldRunDiscoveryCatchUp } from './discovery.js';
 
 export function createApp(database: WorkbenchDatabase) {
   const app = express();
@@ -40,6 +41,27 @@ export function createApp(database: WorkbenchDatabase) {
   app.get('/api/health', (_request, response) => {
     response.json({ ok: true });
   });
+
+  app.get('/api/discovery', (_request, response) => response.json(repository.getDiscoveryInbox()));
+
+  app.post('/api/discovery/scan', (_request, response) => {
+    const inbox = repository.getDiscoveryInbox();
+    if (!inbox.running) void runDiscovery(repository).catch((error) => console.error('Discovery scan failed:', error));
+    response.status(202).json({ started: !inbox.running });
+  });
+
+  app.post('/api/discovery/:id/:action', (request, response) => {
+    const action = z.enum(['convert', 'dismiss', 'snooze', 'merge']).parse(request.params.action);
+    const body = z.object({ workItemId: z.string().uuid().optional() }).parse(request.body ?? {});
+    const candidate = repository.resolveDiscoveryCandidate(request.params.id, action, body.workItemId);
+    if (!candidate) return response.status(404).json({ error: 'Discovery candidate not found.' });
+    response.json({ candidate, item: candidate.workItemId ? repository.get(candidate.workItemId) : null });
+  });
+
+  setTimeout(() => {
+    const lastRun = repository.getDiscoveryInbox().lastRun?.completedAt ?? null;
+    if (shouldRunDiscoveryCatchUp(lastRun)) void runDiscovery(repository).catch((error) => console.error('Discovery catch-up failed:', error));
+  }, 1_500).unref();
 
   app.get('/api/artifacts/open', (request, response) => {
     const input = z.object({

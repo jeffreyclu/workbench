@@ -76,6 +76,34 @@ export interface ResolvedSourceDraft { source: string; sourceUrl: string; title:
 export const sourceProviderSchema = z.enum(['github', 'slack', 'confluence', 'gmail']);
 export type SourceProvider = z.infer<typeof sourceProviderSchema>;
 export interface SourceConnection { provider: SourceProvider; connected: boolean; label: string; lastScannedAt: string | null; lastError: string | null; }
+export type DiscoveryCandidateStatus = 'pending' | 'converted' | 'merged' | 'dismissed' | 'snoozed';
+export interface DiscoveryCandidate {
+  id: string;
+  provider: string;
+  title: string;
+  description: string;
+  sourceUrl: string | null;
+  occurredAt: string | null;
+  status: DiscoveryCandidateStatus;
+  discoveredAt: string;
+  updatedAt: string;
+  snoozedUntil: string | null;
+  workItemId: string | null;
+}
+export interface DiscoveryRun {
+  id: string;
+  status: 'running' | 'completed' | 'failed';
+  startedAt: string;
+  completedAt: string | null;
+  candidateCount: number;
+  errors: string[];
+}
+export interface DiscoveryInbox {
+  candidates: DiscoveryCandidate[];
+  pendingCount: number;
+  lastRun: DiscoveryRun | null;
+  running: boolean;
+}
 export type BrokerSourceId = 'slack' | 'figma' | 'linear' | 'atlassian' | 'github' | 'google';
 export type BrokerConnectionState = 'connected' | 'needs_auth' | 'disabled' | 'error';
 export interface BrokerConnection {
