@@ -32,6 +32,9 @@ This voice is stable, not frozen. Learn from Jeffrey's accepted edits and sample
 - Verify why a change exists before recording its rationale in a spec or durable note. Mark unverified rationale as such.
 - When multiple agents may edit one file, establish an explicit handoff before writing. Never silently overlap edits.
 - Never drop or incompatibly change database schema while an older live, preview, or worker runtime may still access it. During rolling or atomic release handoffs, first deploy code that stops using the schema, verify every serving runtime has switched, and only then remove the compatibility schema in a later migration.
+- Treat every database change as a new, forward-only migration. Never add a table, column, index, constraint, or data upgrade to an already-released migration or to the base schema alone: existing databases have already recorded those migrations and will skip it.
+- Every schema migration needs an upgrade test starting from a database that has already recorded the preceding migration set, plus assertions for the newly required tables, columns, and indexes. Fresh-database coverage alone is insufficient.
+- Before promoting a runtime, validate the candidate release against a copy of the current local database: apply its migrations and start its API health check. Refuse promotion on migration, schema, or startup failure; do not discover those failures through a user-facing task request.
 
 - Use TypeScript and React for product code.
 - Keep the core work-item model provider-neutral. Linear-specific fields belong in provider metadata or sync records.
