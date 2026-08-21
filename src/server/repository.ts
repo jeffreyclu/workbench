@@ -316,12 +316,17 @@ export class WorkItemRepository {
         EXISTS (
           SELECT 1 FROM shared_messages
           WHERE shared_messages.conversation_id = shared_conversations.id
+            AND shared_messages.status IN ('queued', 'running')
+        ) AS is_working,
+        EXISTS (
+          SELECT 1 FROM shared_messages
+          WHERE shared_messages.conversation_id = shared_conversations.id
             AND shared_messages.author IN ('codex', 'claude')
             AND shared_messages.created_at > COALESCE(shared_conversations.last_read_at, '')
         ) AS is_unread
       FROM shared_conversations
       WHERE deleted_at IS NULL AND (? = 'all' OR (? = 'active' AND archived_at IS NULL) OR (? = 'archive' AND archived_at IS NOT NULL))
-      ORDER BY updated_at DESC
+      ORDER BY is_working DESC, updated_at DESC
     `).all(view, view, view) as Array<Record<string, string | number | null>>).map((row) => this.withConversationState({
       id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
       forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
@@ -334,28 +339,32 @@ export class WorkItemRepository {
 
   listConversationPage(limit: number, cursor: string | null, view: 'active' | 'archive' = 'active'): ConversationPage {
     const safeLimit = Math.max(1, Math.min(100, limit));
-    let cursorValues: { updatedAt: string; id: string } | null = null;
+    let cursorValues: { isWorking: boolean; updatedAt: string; id: string } | null = null;
     if (cursor) {
-      try { cursorValues = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { updatedAt: string; id: string }; }
+      try { cursorValues = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { isWorking: boolean; updatedAt: string; id: string }; }
       catch { throw new Error('Invalid conversation cursor.'); }
-      if (!cursorValues?.updatedAt || !cursorValues.id) throw new Error('Invalid conversation cursor.');
+      if (!cursorValues?.updatedAt || !cursorValues.id || typeof cursorValues.isWorking !== 'boolean') throw new Error('Invalid conversation cursor.');
     }
     const rows = this.database.prepare(`
-      SELECT shared_conversations.*,
+      WITH conversations AS (
+        SELECT shared_conversations.*,
         EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.status = 'running') AS is_active,
+        EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.status IN ('queued', 'running')) AS is_working,
         EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.author IN ('codex', 'claude') AND shared_messages.created_at > COALESCE(shared_conversations.last_read_at, '')) AS is_unread
-      FROM shared_conversations
+        FROM shared_conversations
+      )
+      SELECT * FROM conversations
       WHERE deleted_at IS NULL AND ((? = 'active' AND archived_at IS NULL) OR (? = 'archive' AND archived_at IS NOT NULL))
-        AND (? IS NULL OR updated_at < ? OR (updated_at = ? AND id < ?))
-      ORDER BY updated_at DESC, id DESC LIMIT ?
-    `).all(view, view, cursorValues?.id ?? null, cursorValues?.updatedAt ?? null, cursorValues?.updatedAt ?? null, cursorValues?.id ?? null, safeLimit + 1) as Array<Record<string, string | number | null>>;
+        AND (? IS NULL OR is_working < ? OR (is_working = ? AND (updated_at < ? OR (updated_at = ? AND id < ?))))
+      ORDER BY is_working DESC, updated_at DESC, id DESC LIMIT ?
+    `).all(view, view, cursorValues?.id ?? null, Number(cursorValues?.isWorking ?? false), Number(cursorValues?.isWorking ?? false), cursorValues?.updatedAt ?? null, cursorValues?.updatedAt ?? null, cursorValues?.id ?? null, safeLimit + 1) as Array<Record<string, string | number | null>>;
     const hasMore = rows.length > safeLimit;
     const conversations = rows.slice(0, safeLimit).map((row) => this.withConversationState({
       id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
       forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
     }));
     const last = conversations.at(-1);
-    return { conversations, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null,
+    return { conversations, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ isWorking: last.state === 'working', updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null,
       totalCount: Number((this.database.prepare(`SELECT COUNT(*) AS count FROM shared_conversations WHERE deleted_at IS NULL AND (${view === 'active' ? 'archived_at IS NULL' : 'archived_at IS NOT NULL'})`).get() as { count: number }).count) };
   }
 

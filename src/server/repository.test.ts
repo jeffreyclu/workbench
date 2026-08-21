@@ -842,6 +842,14 @@ describe('WorkItemRepository', () => {
     expect(secondPage.nextCursor).toBeNull();
   });
 
+  it('puts queued and running conversations ahead of more recently updated idle conversations', () => {
+    const working = repository.createConversation('Working first');
+    repository.createSharedMessage('claude', 'On it.', 'queued', working.id);
+    const idle = repository.createConversation('Recent idle');
+
+    expect(repository.listConversationPage(30, null).conversations.map((conversation) => conversation.id)).toEqual([working.id, idle.id]);
+  });
+
   it('reports active and archive counts independently of pagination', () => {
     repository.create({ title: 'Active', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const archived = repository.create({ title: 'Archived', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });

@@ -69,7 +69,7 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
-    fireEvent.click(screen.getByRole('button', { name: /agent console/i }));
+    fireEvent.click(screen.getByRole('button', { name: /conversations/i }));
     expect((await screen.findByRole('main')).className).toContain('shared-workspace');
     expect(await screen.findByText('No messages yet. Ask Codex or Claude to get started.')).toBeTruthy();
   });
@@ -537,7 +537,7 @@ describe('stack navigation', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
-    fireEvent.click(await screen.findByRole('button', { name: /agent console/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /conversations/i }));
     fireEvent.click(await screen.findByRole('button', { name: 'Back to task' }));
 
     expect(await screen.findByRole('heading', { name: 'Attention stack' })).toBeTruthy();
