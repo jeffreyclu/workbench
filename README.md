@@ -1,186 +1,112 @@
 # Workbench
 
-A local-first priority queue and shared engineering control plane for Jeffrey, Codex, and Claude.
+Workbench is a local-first engineering work queue for one person working with Codex and Claude. It keeps the order you care about, agent conversations, source context, and task history together—without turning every Linear issue into a task.
 
-Workbench is a focused personal TODO list. It combines manually created tasks with Linear issues you explicitly add while keeping private strategy, priority overrides, assignments, and execution history local. The app is a TypeScript/React prototype backed by SQLite.
+It is a TypeScript + React app with an Express API and a local SQLite database.
+
+## What it does
+
+- **Attention stack.** The list order is the priority: the item at the top gets attention first. Workbench separates active agent work from the attention stack, archived work, and Workbench’s own roadmap.
+- **Deliberate task intake.** Add a manual task, paste a supported source URL, search connected sources, or describe work to AI. New tasks land at the top of the relevant stack.
+- **Agent execution.** Execute a task with Codex, Claude, or both. Workbench keeps the task, runs, conversation, streamed output, model selection, attachments, findings, retries, cancellations, and follow-ups linked together.
+- **Shared context.** The conversation workspace is shared by both agents. A task-created conversation always links back to its task; follow-ups retain their parent relationship.
+- **Nightly discovery.** A scheduled scan can collect potential work from connected sources. You review candidates and choose which ones become tasks; it never silently changes your queue.
+- **Source-aware work.** Linear, GitHub, Slack, Figma, and Atlassian can provide task context through the configured connections. Google Workspace remains unavailable until there is an approved Writer connector.
+- **Artifacts.** Agent-created Markdown, HTML, and text artifacts can be opened safely from approved development roots and published as sanitized, read-only snapshots for sharing.
+- **Insights.** The app derives operational signals from persisted run and activity history, including retry and agent-handoff activity. It does not present made-up cost data.
+
+## Screenshots
+
+The attention stack stays visible while you review task details and agent-run history.
+
+![Workbench attention stack and task detail](docs/screenshots/attention-stack-task-detail.png)
+
+## Architecture
+
+Workbench intentionally keeps the interface that controls agents separate from the checkout agents edit:
+
+```text
+source checkout (/dev/workbench) ── agent edits ──> preview (localhost:5174)
+        │                                            │
+        └──────── shared SQLite state ───────────────┘
+                                                     │
+                                      explicit promotion after review
+                                                     │
+                                                     ▼
+                                      immutable live runtime (localhost:5173)
+```
+
+- **Source checkout:** the editable repository. Workbench-targeted agents work here.
+- **Preview (`5174`):** Vite UI plus a preview API on `45175`. It uses the real local database but does not own the scheduler or agent processes.
+- **Live (`5173`):** a stable gateway serves an immutable, promoted snapshot. It keeps working while an agent edits the source checkout.
+- **State:** database, attachments, published artifact metadata, and logs live under `data/` by default and are not committed.
+
+Promotion builds the current checkout, snapshots the built client and server, then switches the gateway only after a health check. It deliberately refuses to promote while a Workbench agent is actively editing the source checkout, so a deployment cannot interrupt the run that produced it.
 
 ## Requirements
 
 - Node.js 22.19 or newer
 - npm 10 or newer
 
-## Run locally
+## Start Workbench
 
-For daily use, run the promoted snapshot. Agents can then edit this checkout without
-hot-reloading partial changes into the Workbench that is controlling them:
+Install dependencies, create an initial immutable release, then start the stable gateway:
 
 ```bash
-cp .env.example .env
 npm install
 npm run runtime:promote
 npm run runtime:start
 ```
 
-Open [http://localhost:5173](http://localhost:5173). The stable gateway serves the API
-and last-known-good client. It health-checks promoted releases and switches to them
-without changing the public port or tunnel.
+Open [http://localhost:5173](http://localhost:5173).
 
-To inspect agent changes without touching the live control plane, run:
+For development and review, start the preview in a separate terminal:
 
 ```bash
 npm run preview
 ```
 
-Open [http://localhost:5174](http://localhost:5174). This is a live Vite UI backed by
-the stable API and the same SQLite data, so it shows the real queue and conversations.
-When the preview is approved, tell Codex or Claude `approve the Workbench preview` in
-any conversation. Workbench waits for active agents, builds the release, health-checks
-it, and switches `5173` to that immutable release. `npm run dev` remains
-available for isolated API development, but it is not the daily control plane.
+Open [http://localhost:5174](http://localhost:5174). Preview reads and writes the same local Workbench state as live, so use it to verify UI and API changes against real tasks and conversations without replacing the control plane.
 
-## Open Workbench on your phone
-
-Two commands, every day:
+When the change is ready, ask an agent to **approve the Workbench preview** or run:
 
 ```bash
-npm run runtime:start # stable localhost control plane
-npm run share    # publishes it and prints the link
+npm run runtime:promote
 ```
 
-`share` opens an **outbound** tunnel, so the managed-Mac inbound firewall never sees it
-and nothing needs to be installed on the phone. The first visit on a new device needs
-the printed `?token=` link once; that sets a one-year cookie and the bare URL works
-afterwards. Ctrl-C takes the tunnel down.
+The same live URL (`5173`) switches after the new release passes its health check. `npm run dev` is for isolated API/client development; it is not the recommended daily control plane.
 
-### Give it a stable hostname (do this once)
-
-The auth cookie is scoped to the hostname, so with a random hostname you have to
-re-open the `?token=` link every single time. For daily use, pin one:
+### Health check
 
 ```bash
-brew install ngrok
-ngrok config add-authtoken <token>   # free account at dashboard.ngrok.com
+curl http://localhost:5173/api/health
 ```
 
-Claim the free static domain on the ngrok dashboard, then put it in `.env`:
+## Everyday workflow
 
-```dotenv
-NGROK_DOMAIN=your-name.ngrok-free.app
-```
+1. Start with the attention stack. Its order is your priority; drag tasks to reorder them.
+2. Add work through **New**: search a source, paste a URL, describe work to AI, or make a manual task.
+3. Review and edit the task’s title, description, project, owner, classification, and model before execution.
+4. Click **Execute**. The task moves optimistically to In progress; the task-executed toast links to its conversation without stealing focus.
+5. Steer the agent from the linked conversation. Messages written while an agent is responding are queued rather than canceling the current response.
+6. Review its report, create only the follow-up tasks you want, then complete or archive the task. Completing a task archives it; its conversation follows the same archival rule.
 
-`npm run share` picks it up automatically. Bookmark `https://your-name.ngrok-free.app`
-on the phone and it just works from then on.
+For complex work, the agent should first produce independently executable follow-up tasks instead of continuing to work ambiguously on one giant parent task.
 
-If you would rather stay on Cloudflare and own a domain there, set `TUNNEL_HOSTNAME`
-instead and create a named tunnel called `workbench`
-(`cloudflared tunnel create workbench` + `cloudflared tunnel route dns workbench <host>`).
-With neither variable set, `share` falls back to a Cloudflare quick tunnel with a
-random hostname — fine for one-off use.
+## Sources and MCP
 
-### Security
+Use **Sources** only to inspect connection state or start the appropriate authentication flow. Search happens while adding a task, not from a separate source browser.
 
-Every inbound request is gated by `WORKBENCH_TOKEN` (`src/server/auth.ts`), enforced on
-both the API and the Vite dev server. Requests from loopback are exempt so local work is
-unaffected. `/api/health` stays open so the tunnel can health-check.
+| Source | Intended use | Connection notes |
+| --- | --- | --- |
+| Linear | Search and resolve issues/projects; seed tasks from existing descriptions | Configure a personal API key in `.env`. Provider fields remain provider-owned. |
+| GitHub | Search Writer, Writer Internal, and WriterColab issues and pull requests; resolve pasted links | Uses the configured authenticated connector. |
+| Slack | Resolve pasted Slack links and search when creating a task | Uses the managed authenticated MCP connector; Workbench does **not** require a Slack app or Slack client secrets. |
+| Figma | Resolve pasted design links for agent work | Uses the managed Figma MCP connection. Starting Figma auth should open the provider’s authorization window once. |
+| Atlassian | Search and resolve Jira and Confluence links | Uses the configured remote MCP connection. Refresh the Sources view after authorization if the status is stale. |
+| Google Workspace | Planned Docs, Drive, and Gmail context | Disabled until Writer IT provides an approved connector. |
 
-The token is a full-access credential: anyone holding the `?token=` link gets read/write
-on the queue and strategy notes and can trigger agent runs. Treat it like a password.
-Rotate by deleting `WORKBENCH_TOKEN` from `.env` and re-running `npm run share`.
-
-## Shared MCP API
-
-Codex and Claude can use the same canonical Workbench state through the stateless
-Streamable HTTP endpoint at `http://localhost:5173/mcp` (or `/mcp` on the configured
-tunnel hostname). Non-loopback clients must send `Authorization: Bearer
-<WORKBENCH_TOKEN>`. The endpoint uses the same repository/service boundary as the REST
-API; it never reads SQLite directly.
-
-The MCP contract covers tasks, stack order, discoveries, conversations, execution
-plans, and immutable agent-run results. Mutations are deliberately narrow:
-
-- Manual tasks and locally owned task fields only; provider-owned fields cannot be set.
-- Codex/Claude activity and completed conversation messages only; assistants cannot
-  impersonate Jeffrey or `system`.
-- Execution-plan proposals only; approval and child-task creation remain in Workbench.
-- Discovery resolution and exact active-stack reordering.
-
-MCP does not expose provider credentials, provider sync, agent dispatch/cancel/retry,
-result rewriting, hard delete, or artifact publication. Connect each MCP client to the
-same URL and bearer token; `tools/list` is the authoritative machine-readable contract.
-
-### Notes
-
-- Outbound QUIC (UDP 7844) is blocked on the Writer network, so the Cloudflare paths are
-  pinned to `--protocol http2`. A tunnel that hangs on startup is usually this.
-- Firewall settings cannot be changed from the command line on the managed Mac, and
-  Tailscale is deliberately not used here — the phone is not on the Writer tailnet.
-- The Slack OAuth flow stays Mac-only: `SLACK_REDIRECT_URI` and `APP_ORIGIN` point at
-  `localhost`. Everything else works from the phone.
-- `npm run dev:lan` still exists for same-Wi-Fi access on an unmanaged machine, but it
-  depends on the inbound firewall being open.
-
-## Publish artifacts for coworkers
-
-Artifact links in agent responses have a **Share** action. It creates a sanitized,
-read-only snapshot, deploys the snapshot collection to Cloudflare Pages, and copies a
-stable URL. Shared pages contain no Workbench navigation, task data, API access, or
-local filesystem paths.
-
-Create a Pages project with a neutral custom domain, then configure:
-
-```dotenv
-ARTIFACT_PAGES_PROJECT=workbench-artifacts
-ARTIFACT_PUBLIC_BASE_URL=https://artifacts.example.com
-# Optional for unattended/server deployments. Local development can use `npx wrangler login`.
-CLOUDFLARE_ACCOUNT_ID=...
-CLOUDFLARE_API_TOKEN=...
-```
-
-For local development, authenticate once with `npx wrangler login`. For unattended
-deployments, configure an API token with Pages deployment access plus the account ID.
-Publishing is intentionally unavailable until the project and public URL are configured. The publisher lives behind an adapter so it can
-be replaced with Writer-managed hosting later. The current snapshotter supports
-standalone Markdown, HTML, and text files; scripts and active content are removed.
-
-### The artifact library
-
-**Artifacts** in the sidebar is the record of everything you have shared. Each entry
-keeps its own history:
-
-- **Versions.** Republishing a changed file appends a version. `/<id>/` always serves
-  the current one and `/<id>/v2/` keeps that exact snapshot alive, so a link a coworker
-  already has never silently changes under them. Older snapshots link forward to the
-  latest.
-- **History.** Published, republished, revoked, restored, and feedback events, in order.
-- **Relationships.** The task and conversation an artifact came from, and you can link
-  it to a task after the fact.
-- **Republish and revoke.** Republish re-renders from the original file; you do not need
-  the path. Revoke takes every version offline and keeps the history. Republishing a
-  revoked artifact restores it.
-
-Republishing an unchanged file costs nothing — the content hash is compared before
-anything is deployed.
-
-### Feedback from coworkers
-
-Shared pages can carry a small feedback box. It is off by default. Turn it on by
-pointing Workbench at its own public hostname:
-
-```dotenv
-WORKBENCH_PUBLIC_URL=https://your-name.ngrok-free.app
-```
-
-Feedback lands in the artifact library, where you resolve it. Know what you are turning
-on before you do:
-
-- `POST /api/artifacts/<id>/comments` answers **without a `WORKBENCH_TOKEN`** — coworkers
-  hold no token. Nothing else opens: reading feedback still requires the token, and the
-  endpoint accepts writes only for an artifact that exists and is not revoked.
-- Submissions are rate limited per artifact (20 per 10 minutes, in memory).
-- Both settings must be present. With `WORKBENCH_PUBLIC_URL` empty, published pages carry
-  no script and no network access at all, and the endpoint stays gated.
-
-## Configure Linear
+### Linear configuration
 
 Create a Linear personal API key and add it to `.env`:
 
@@ -188,91 +114,101 @@ Create a Linear personal API key and add it to `.env`:
 LINEAR_API_KEY=lin_api_...
 ```
 
-Use Sources in the sidebar to select a team and optionally narrow it to particular projects. The refresh button updates a hidden searchable catalog; it does not add issues to your queue. Use New → From Linear to search that catalog or paste a Linear issue URL, then explicitly add the issue to your TODO list. Linear synchronization is read-only in this prototype.
+Linear synchronization is read-only. Workbench owns queue order, local assignments, agent history, and manual task fields; Linear owns its title, description, workflow status, project, labels, URL, and due date.
 
-## Configure Slack
+### Shared Workbench MCP API
 
-Slack connects in two independent directions. Either can be used without the other.
+Codex and Claude can access the same canonical Workbench state through the Streamable HTTP endpoint:
 
-### Inbound: Slack → Workbench (read)
-
-Workbench connects to Slack's hosted MCP server through OAuth; you do not paste a Slack token into the browser. Create an internal Slack app, add `http://localhost:4317/api/source-connections/slack/oauth/callback` as an OAuth redirect URL, and grant the user-token scopes `search:read.public`, `search:read.private`, `search:read.mpim`, and `search:read.im`. Then add `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` to `.env`.
-
-Restart Workbench and choose Sources → Slack → Connect Slack. Slack currently requires workspace-admin approval for hosted MCP access. Plan my day will then search the last day of messages directed to you and feed that context into the queue proposal.
-
-### Outbound: Workbench → Slack (notifications)
-
-Workbench posts a Slack message when an agent run finishes or fails, so a long run does not
-need watching. This is off until configured, and uses outbound HTTPS only — no inbound
-callback, tunnel, or firewall change is involved.
-
-Pick one delivery mode in `.env`:
-
-```dotenv
-# Mode A — bot token. Scope chat:write, and invite the bot to the channel.
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_NOTIFY_CHANNEL=#workbench
-
-# Mode B — incoming webhook, bound to one channel by Slack.
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+```text
+http://localhost:5173/mcp
 ```
 
-A bot token plus `SLACK_NOTIFY_CHANNEL` takes precedence, because it is the only mode that can
-choose a destination at send time. `SLACK_BOT_TOKEN` is also used to expand pasted Slack
-permalinks into task drafts.
+For non-loopback use, authenticate with `Authorization: Bearer <WORKBENCH_TOKEN>`. The MCP API exposes tasks, stack ordering, discoveries, conversations, execution plans, and immutable agent-run results. It does not expose provider credentials or direct SQLite access.
 
-Check status and send a test message (add `Authorization: Bearer $WORKBENCH_TOKEN` if a token is set):
+## Nightly discovery
+
+Install the scheduled discovery job once:
 
 ```bash
-curl localhost:4317/api/integrations/slack
-curl -X POST localhost:4317/api/integrations/slack/test
+npm run discovery:install
 ```
 
-Delivery retries rate limits and transient server errors, honouring Slack's `Retry-After`. A
-Slack outage is never allowed to fail or delay the agent run that triggered the notification.
+Run a scan on demand with:
 
-Note: Slack blocks programmatic posting to some externally-shared channels. If a send is
-rejected with `channel_not_found` or similar, try a channel your workspace owns.
+```bash
+npm run discovery:scan
+```
 
-## Data ownership
+Discovery favors teammate code-review requests and Connectors-team signals, while retaining other relevant work. It proposes candidates and a suggested queue ordering; you can accept or reject the ordering and select exactly which candidates become tasks. Existing task order is preserved unless meaningful newer context—or neglected age—warrants a move.
 
-Provider sync owns:
+## Open Workbench on your phone
 
-- Linear title and description
-- Linear workflow status
-- Linear project, labels, URL, and due date
+Start the stable runtime, then create an outbound tunnel:
 
-Workbench owns:
+```bash
+npm run runtime:start
+npm run share
+```
 
-- Queue priority and ordering
-- Strategy
-- Codex, Claude, and Jeffrey assignments
-- Activity and handoff notes
-- All manual tasks
+`share` prints the link. The first visit on a device needs the `?token=` URL once; it sets a long-lived cookie so the bare URL works afterwards. The token grants full access to the queue and can trigger agent work, so treat it like a password.
 
-The SQLite database is stored at `data/workbench.db` by default and is ignored by Git.
+For a stable ngrok hostname, add the domain to `.env`:
 
-Artifact links may resolve files from any sibling repository under the directory that
-contains Workbench. Add other trusted directories as a comma-separated
-`WORKBENCH_ARTIFACT_ROOTS` value; files elsewhere remain blocked.
+```dotenv
+NGROK_DOMAIN=your-name.ngrok-free.app
+```
+
+If you instead have a Cloudflare hostname and named tunnel, configure `TUNNEL_HOSTNAME`. Cloudflare quick tunnels are suitable only for temporary sharing.
+
+## Publish artifacts for coworkers
+
+Artifact links are private previews by default. Use **Share** to publish a sanitized, read-only snapshot; it contains no Workbench navigation, task database, API access, or local filesystem path.
+
+Configure a Cloudflare Pages project and public base URL:
+
+```dotenv
+ARTIFACT_PAGES_PROJECT=workbench-artifacts
+ARTIFACT_PUBLIC_BASE_URL=https://artifacts.example.com
+# Optional for unattended deployment; local development can use `npx wrangler login`.
+CLOUDFLARE_ACCOUNT_ID=...
+CLOUDFLARE_API_TOKEN=...
+```
+
+Republishing a changed file creates a new version. A stable artifact URL always serves the current version; versioned URLs preserve prior snapshots. Unchanged files are skipped by content hash. Revoke takes all versions offline while retaining their history.
+
+To enable optional coworker feedback on a published artifact, configure the public Workbench URL:
+
+```dotenv
+WORKBENCH_PUBLIC_URL=https://your-name.ngrok-free.app
+```
+
+Only artifact-feedback submission is then reachable without a Workbench token; all Workbench data remains protected.
+
+## Security and data
+
+- `WORKBENCH_TOKEN` gates non-loopback access to the Workbench UI and API. `/api/health` stays open for health checks.
+- The tokenized share URL is a full-access credential. Rotate it by changing `WORKBENCH_TOKEN` and restarting the share tunnel.
+- SQLite defaults to `data/workbench.db`; it is ignored by Git.
+- Artifact previews are restricted to approved development roots. Add trusted sibling roots through a comma-separated `WORKBENCH_ARTIFACT_ROOTS` value.
+- Do not commit `.env`, database files, attachments, local logs, provider tokens, or tunnel credentials.
 
 ## Commands
 
 ```bash
-npm run dev
-npm run dev:lan
-npm run share
-npm run runtime:promote
-npm run runtime:start
-npm run preview
+npm run runtime:promote  # build and atomically promote a verified immutable release
+npm run runtime:start    # serve the stable runtime on localhost:5173
+npm run preview          # preview UI on 5174 plus preview API on 45175
+npm run dev              # isolated API + Vite development
+npm run share            # expose the stable runtime through a configured tunnel
+npm run discovery:scan   # run discovery now
+npm run discovery:install # install the nightly discovery schedule
 npm run typecheck
 npm test
 npm run lint
 npm run build
-npm start
 ```
 
-## Near-term roadmap
+## Product direction
 
-1. OAuth-based Linear connection and project selection
-2. Additional OAuth source adapters such as GitHub and Gmail
+Workbench is intentionally an execution cockpit, not a second Linear. The user controls the stack; agents handle research, planning, implementation, review, and decomposition. The next worthwhile work is making those loops more reliable: stronger source retrieval, durable agent execution, clear task/conversation lifecycle signals, and actionable insights grounded in persisted data.

@@ -57,6 +57,25 @@ function median(values: number[]): number | null {
   return percentile(values, 0.5);
 }
 
+/**
+ * Removes only the most exceptional values using Tukey's outer fences. This
+ * keeps a task that genuinely took longer in the data set while preventing a
+ * stale task completed long after it was created from defining the insight.
+ */
+function excludeExtremeOutliers(values: number[]): number[] {
+  if (values.length < 5) return values;
+
+  const sorted = [...values].sort((left, right) => left - right);
+  const lowerQuartile = percentile(sorted, 0.25);
+  const upperQuartile = percentile(sorted, 0.75);
+  if (lowerQuartile === null || upperQuartile === null) return values;
+
+  const interquartileRange = upperQuartile - lowerQuartile;
+  const lowerFence = lowerQuartile - 3 * interquartileRange;
+  const upperFence = upperQuartile + 3 * interquartileRange;
+  return values.filter((value) => value >= lowerFence && value <= upperFence);
+}
+
 interface SavedWorkItemFilterRow {
   id: string; name: string; view: SavedWorkItemFilterView; filter_json: string;
   sort_order: number; created_at: string; updated_at: string;
@@ -349,6 +368,12 @@ export class WorkItemRepository {
   markConversationRead(id: string): SharedConversation | null {
     const changed = this.database.prepare('UPDATE shared_conversations SET last_read_at = ? WHERE id = ?').run(new Date().toISOString(), id).changes;
     return changed ? this.getConversation(id) : null;
+  }
+
+  countActiveConversations(): number {
+    return Number((this.database.prepare(`
+      SELECT COUNT(*) AS count FROM shared_conversations WHERE archived_at IS NULL AND deleted_at IS NULL
+    `).get() as { count: number }).count);
   }
 
   countUnreadConversations(): number {
@@ -2268,10 +2293,17 @@ export class WorkItemRepository {
         SUM(CASE WHEN parent_work_item_id IS NOT NULL AND created_at >= ? THEN 1 ELSE 0 END) AS follow_ups
       FROM work_items
     `).get(since, since) as { completed_tasks: number | null; follow_ups: number | null };
-    const taskCycles = (this.database.prepare(`
-      SELECT CAST((julianday(completed_at) - julianday(created_at)) * 24 * 60 * 60 * 1000 AS INTEGER) AS duration_ms
-      FROM work_items WHERE completed_at IS NOT NULL AND completed_at >= ?
-    `).all(since) as Array<{ duration_ms: number | null }>).flatMap((row) => row.duration_ms === null ? [] : [row.duration_ms]);
+    // Active-work duration, not wall-clock cycle time: sum of each task's agent
+    // run spans (started_at -> completed_at), so idle time between runs (waiting
+    // on Jeffrey, sitting untouched) doesn't count as "task time".
+    const taskActiveDurations = (this.database.prepare(`
+      SELECT work_item_id,
+        SUM(CAST((julianday(completed_at) - julianday(started_at)) * 24 * 60 * 60 * 1000 AS INTEGER)) AS duration_ms
+      FROM agent_runs
+      WHERE work_item_id IN (SELECT id FROM work_items WHERE completed_at IS NOT NULL AND completed_at >= ?)
+        AND started_at IS NOT NULL AND completed_at IS NOT NULL
+      GROUP BY work_item_id
+    `).all(since) as Array<{ work_item_id: string; duration_ms: number | null }>).flatMap((row) => row.duration_ms === null ? [] : [row.duration_ms]);
     const cursing = summarizeCursing(this.database.prepare(`
       SELECT body, created_at FROM shared_messages
       WHERE author = 'jeffrey' AND created_at >= ?
@@ -2354,7 +2386,7 @@ export class WorkItemRepository {
       }),
       completedRuns: runs.filter((run) => run.status === 'completed').length,
       completedTasks: taskSummary.completed_tasks ?? 0,
-      medianTaskCycleMs: median(taskCycles),
+      medianTaskCycleMs: median(excludeExtremeOutliers(taskActiveDurations)),
       followUpsCreated: taskSummary.follow_ups ?? 0,
       cursing,
       agentFit: [...fitBuckets.values()].map((bucket) => ({

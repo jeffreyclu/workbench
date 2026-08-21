@@ -1754,7 +1754,7 @@ export function App() {
     enabled: view === 'active' || view === 'workbench' || view === 'archive',
   });
   const workItemCounts = useQuery({ queryKey: ['work-item-counts'], queryFn: api.getWorkItemCounts, refetchInterval: 1_500 });
-  const unreadConversationCount = useQuery({ queryKey: ['conversation-unread-count'], queryFn: api.getUnreadConversationCount, refetchInterval: 1_500 });
+  const totalConversationCount = useQuery({ queryKey: ['conversation-count'], queryFn: api.getConversationCount, refetchInterval: 1_500 });
   const notificationConversations = useQuery({ queryKey: ['notification-conversations'], queryFn: () => api.listSharedConversations('active'), refetchInterval: 1_000 });
   const previousConversationStates = useRef<Map<string, SharedConversation['state']> | null>(null);
   const syncedConversationId = useRef<string | null>(route.name === 'conversations' ? route.conversationId : null);
@@ -1989,7 +1989,7 @@ export function App() {
           <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={() => { navigate({ name: 'stack', stack: 'active' }); setMobileNavOpen(false); }}><Command size={16} /> Attention stack <span>{workItemCounts.data?.active ?? '…'}</span></button>
           <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={() => { navigate({ name: 'stack', stack: 'workbench' }); setMobileNavOpen(false); }}><Wrench size={16} /> Workbench <span>{workItemCounts.data?.workbench ?? '…'}</span></button>
           <DiscoveryNav active={view === 'discovery'} onClick={() => { navigate({ name: 'discovery' }); setMobileNavOpen(false); }} />
-          <button className={`nav-item ${view === 'context' ? 'active' : ''}`} onClick={() => { navigate({ name: 'conversations', conversationId: null }); setMobileNavOpen(false); }}><MessageCircle size={16} /> Agent console <span>{unreadConversationCount.data?.count ?? '…'}</span></button>
+          <button className={`nav-item ${view === 'context' ? 'active' : ''}`} onClick={() => { navigate({ name: 'conversations', conversationId: null }); setMobileNavOpen(false); }}><MessageCircle size={16} /> Conversations <span>{totalConversationCount.data?.count ?? '…'}</span></button>
           <div id="mobile-nav-more" className="mobile-nav-secondary" aria-label="More destinations">
             <button className={`nav-item ${view === 'archive' ? 'active' : ''}`} onClick={() => { navigate({ name: 'stack', stack: 'archive' }); setMobileNavOpen(false); }}><Archive size={16} /> Archive <span>{workItemCounts.data?.archive ?? '…'}</span></button>
             <ArtifactNav active={view === 'artifacts'} onClick={() => { navigate({ name: 'artifacts' }); setMobileNavOpen(false); }} />

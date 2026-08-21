@@ -174,6 +174,12 @@ export const api = {
     return request<ConversationPage>(`/api/shared/conversations?${params}`);
   },
   getUnreadConversationCount: () => request<{ count: number }>('/api/shared/conversations-unread-count'),
+  // Keep the navigation count on the long-established list endpoint. This
+  // avoids turning a failed auxiliary count request into an ellipsis in the UI.
+  getConversationCount: async () => {
+    const page = await request<ConversationPage>('/api/shared/conversations?view=active&limit=1');
+    return { count: page.totalCount };
+  },
   getWorkItemCounts: () => request<{ active: number; workbench: number; archive: number }>('/api/work-item-counts'),
   getRuntimePreviewStatus: () => request<{ pending: boolean; currentFingerprint: string; promotedFingerprint: string | null; promotedAt: string | null }>('/api/runtime/preview-status'),
   searchShared: (query: string, limit?: number) => {

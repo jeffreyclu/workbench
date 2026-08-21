@@ -402,6 +402,10 @@ export function createApp(database: WorkbenchDatabase) {
     response.json({ count: repository.countUnreadConversations() });
   });
 
+  app.get('/api/shared/conversations-count', (_request, response) => {
+    response.json({ count: repository.countActiveConversations() });
+  });
+
   app.post('/api/shared/conversations', (request, response) => {
     const input = createSharedConversationSchema.parse(request.body);
     response.status(201).json({ conversation: repository.createConversation(input.title) });

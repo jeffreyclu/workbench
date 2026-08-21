@@ -48,6 +48,44 @@ describe('WorkItemRepository', () => {
     });
   });
 
+  it('excludes extreme task-cycle outliers before calculating the median insight', () => {
+    const hour = 60 * 60 * 1_000;
+    const completedAt = new Date().toISOString();
+    const durations = [hour, 2 * hour, 3 * hour, 4 * hour, 5 * hour, 90 * 24 * hour];
+
+    for (const [index, duration] of durations.entries()) {
+      const item = repository.create({ title: `Cycle ${index}`, description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const startedAt = new Date(new Date(completedAt).getTime() - duration).toISOString();
+      const run = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Do it.');
+      repository.updateRun(run.id, { status: 'completed', startedAt, completedAt });
+      database.prepare('UPDATE work_items SET completed_at = ? WHERE id = ?').run(completedAt, item.id);
+    }
+
+    const medianTaskCycleMs = repository.getRunInsights().medianTaskCycleMs;
+    expect(medianTaskCycleMs).not.toBeNull();
+    expect(medianTaskCycleMs!).toBeGreaterThan(2.9 * hour);
+    expect(medianTaskCycleMs!).toBeLessThan(3.1 * hour);
+  });
+
+  it('keeps every task-cycle value when there is not enough history to identify an outlier', () => {
+    const hour = 60 * 60 * 1_000;
+    const completedAt = new Date().toISOString();
+    const durations = [hour, 2 * hour, 3 * hour, 90 * 24 * hour];
+
+    for (const [index, duration] of durations.entries()) {
+      const item = repository.create({ title: `Small sample ${index}`, description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const startedAt = new Date(new Date(completedAt).getTime() - duration).toISOString();
+      const run = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Do it.');
+      repository.updateRun(run.id, { status: 'completed', startedAt, completedAt });
+      database.prepare('UPDATE work_items SET completed_at = ? WHERE id = ?').run(completedAt, item.id);
+    }
+
+    const medianTaskCycleMs = repository.getRunInsights().medianTaskCycleMs;
+    expect(medianTaskCycleMs).not.toBeNull();
+    expect(medianTaskCycleMs!).toBeGreaterThan(2.9 * hour);
+    expect(medianTaskCycleMs!).toBeLessThan(3.1 * hour);
+  });
+
   it('creates and updates a manual work item', () => {
     const item = repository.create({
       title: 'Ship the queue',
