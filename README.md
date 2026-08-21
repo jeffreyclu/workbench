@@ -95,13 +95,12 @@ tunnel hostname). Non-loopback clients must send `Authorization: Bearer
 <WORKBENCH_TOKEN>`. The endpoint uses the same repository/service boundary as the REST
 API; it never reads SQLite directly.
 
-The MCP contract covers tasks, stack order, discoveries, conversations, durable
-memories, execution plans, and immutable agent-run results. Mutations are deliberately
-narrow:
+The MCP contract covers tasks, stack order, discoveries, conversations, execution
+plans, and immutable agent-run results. Mutations are deliberately narrow:
 
 - Manual tasks and locally owned task fields only; provider-owned fields cannot be set.
-- Codex/Claude activity, completed conversation messages, and attributed memories only;
-  assistants cannot impersonate Jeffrey or `system`.
+- Codex/Claude activity and completed conversation messages only; assistants cannot
+  impersonate Jeffrey or `system`.
 - Execution-plan proposals only; approval and child-task creation remain in Workbench.
 - Discovery resolution and exact active-stack reordering.
 

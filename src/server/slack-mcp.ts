@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { SourceSignal } from './source-scanner.js';
+import { recordAudit } from './audit-log.js';
 
 const slackMcpUrl = 'https://mcp.slack.com/mcp';
 const slackAuthorizationUrl = 'https://slack.com/oauth/v2_user/authorize';
@@ -50,6 +51,7 @@ export async function exchangeSlackAuthorization(code: string, state: string): P
     client_id: process.env.SLACK_CLIENT_ID!, client_secret: process.env.SLACK_CLIENT_SECRET!, code,
     redirect_uri: slackRedirectUri(), code_verifier: pending.verifier,
   });
+  recordAudit('outbound_call', 'slack', `POST ${slackTokenUrl} (oauth token exchange)`);
   const response = await fetch(slackTokenUrl, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body, signal: AbortSignal.timeout(20_000) });
   const result = await response.json() as { ok?: boolean; error?: string; authed_user?: { access_token?: string }; team?: { name?: string } };
   if (!response.ok || !result.ok || !result.authed_user?.access_token) throw new Error(result.error ?? 'Slack did not return a user access token.');
@@ -83,6 +85,7 @@ export async function scanSlackMcp(settings: Record<string, string>): Promise<So
     else if ('search_query' in properties) args.search_query = query;
     else throw new Error(`Slack MCP search tool ${tool.name} has an unsupported input schema.`);
     if ('limit' in properties) args.limit = 50;
+    recordAudit('outbound_call', 'slack', `MCP callTool ${tool.name} (${slackMcpUrl})`);
     const result = await client.callTool({ name: tool.name, arguments: args });
     const text = textFromResult(result);
     if (!text) return [];

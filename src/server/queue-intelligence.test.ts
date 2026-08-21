@@ -8,16 +8,17 @@ function item(overrides: Partial<WorkItem> & { id: string; title: string }): Wor
   return {
     description: '', status: 'ready', priority: 2, queuePosition: 1, source: 'manual', isQueued: true,
     archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete',
-    agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: null,
+    agentOutcome: null,
+    sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: null,
     workspacePath: null, strategy: '', assignees: [], labels: [], dueDate: null, providerUpdatedAt: null,
     createdAt: new Date(NOW).toISOString(), updatedAt: new Date(NOW).toISOString(),
-    lastTouchedAt: new Date(NOW).toISOString(), ...overrides,
+    lastTouchedAt: new Date(NOW).toISOString(), ...overrides, stack: overrides.stack ?? 'attention',
   };
 }
 
 function context(overrides: Partial<QueueContext> = {}): QueueContext {
   return {
-    now: NOW, openChildren: new Map(), activeRuns: new Map(), unresolvedBlockers: new Set(),
+    now: NOW, openChildren: new Map(), openDependents: new Map(), activeRuns: new Map(), unresolvedBlockers: new Set(),
     sourceChanges: new Map(), feedback: new Map(), ...overrides,
   };
 }
@@ -154,5 +155,13 @@ describe('queue intelligence', () => {
       planQueue([item({ id: `d${index}`, title: 'Due', status: 'backlog', dueDate })], context()).explanations[0].score);
 
     expect(bands).toEqual([8, 5, 0]);
+  });
+
+  it('treats a deadline as due today in the configured Workbench timezone', () => {
+    const now = Date.parse('2026-08-21T03:30:00.000Z'); // Aug 20, 23:30 in New York
+    const task = item({ id: 'today', title: 'Due today', status: 'backlog', dueDate: '2026-08-20' });
+    const plan = planQueue([task], context({ now, timeZone: 'America/New_York' }));
+
+    expect(plan.explanations[0].signals).toContainEqual({ key: 'deadline', delta: 8, detail: 'it is due today' });
   });
 });

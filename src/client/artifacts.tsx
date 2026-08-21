@@ -3,6 +3,8 @@ import { ArrowUpRight, Ban, Check, Copy, FileText, History, LoaderCircle, Messag
 import { useState, type FormEvent } from 'react';
 import { api } from './api';
 import { versionUrl } from './artifact-url';
+import { ConfirmationDialog } from './confirmation-dialog';
+import { toast, toastError } from './toast-store';
 import type { ArtifactComment, ArtifactEvent, ArtifactSummary, ArtifactVersion } from '../shared/contracts';
 
 type LibraryView = 'published' | 'revoked' | 'all';
@@ -145,13 +147,22 @@ function ArtifactCard({ artifact, onOpenTask, onOpenConversation }: {
 }) {
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState(false);
+  const [revokePromptOpen, setRevokePromptOpen] = useState(false);
   const invalidate = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ['artifacts'] }),
     queryClient.invalidateQueries({ queryKey: ['artifact', artifact.id] }),
     queryClient.invalidateQueries({ queryKey: ['work-item', artifact.workItemId ?? ''] }),
   ]);
-  const republish = useMutation({ mutationFn: () => api.republishArtifact(artifact.id), onSuccess: invalidate });
-  const revoke = useMutation({ mutationFn: () => api.revokeArtifact(artifact.id), onSuccess: invalidate });
+  const republish = useMutation({
+    mutationFn: () => api.republishArtifact(artifact.id),
+    onSuccess: async () => { toast.success(artifact.revokedAt ? 'Artifact restored.' : 'Artifact republished.'); await invalidate(); },
+    onError: (error) => toastError('Could not republish this artifact.', error),
+  });
+  const revoke = useMutation({
+    mutationFn: () => api.revokeArtifact(artifact.id),
+    onSuccess: async () => { setRevokePromptOpen(false); toast.success('Artifact revoked.'); await invalidate(); },
+    onError: (error) => toastError('Could not revoke this artifact.', error),
+  });
 
   return (
     <article className={`artifact-card ${artifact.revokedAt ? 'revoked' : ''}`}>
@@ -177,7 +188,7 @@ function ArtifactCard({ artifact, onOpenTask, onOpenConversation }: {
           {republish.isPending ? <LoaderCircle className="spin" size={13} /> : <RefreshCw size={13} />} {artifact.revokedAt ? 'Restore' : 'Republish'}
         </button>
         {!artifact.revokedAt && (
-          <button className="button secondary compact danger" disabled={revoke.isPending} onClick={() => { if (window.confirm('Revoke this shared artifact? The link stops working for everyone.')) revoke.mutate(); }}>
+          <button className="button secondary compact danger" disabled={revoke.isPending} onClick={() => setRevokePromptOpen(true)}>
             <Ban size={13} /> Revoke
           </button>
         )}
@@ -188,6 +199,7 @@ function ArtifactCard({ artifact, onOpenTask, onOpenConversation }: {
       {republish.error && <p className="error-message">{republish.error.message}</p>}
       {revoke.error && <p className="error-message">{revoke.error.message}</p>}
       {expanded && <ArtifactDetailPanel artifact={artifact} />}
+      {revokePromptOpen && <ConfirmationDialog title="Revoke this shared artifact?" description="The link stops working for everyone." confirmLabel="Revoke artifact" pending={revoke.isPending} onClose={() => setRevokePromptOpen(false)} onConfirm={() => revoke.mutate()} />}
     </article>
   );
 }

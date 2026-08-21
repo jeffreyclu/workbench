@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-const migrations = [
+const baseSchemaStatements = [
   `
     CREATE TABLE IF NOT EXISTS work_items (
       id TEXT PRIMARY KEY,
@@ -16,6 +16,7 @@ const migrations = [
       source_identifier TEXT,
       source_url TEXT,
       project_name TEXT,
+      stack TEXT NOT NULL DEFAULT 'attention' CHECK (stack IN ('attention', 'workbench')),
       workspace_path TEXT,
       strategy TEXT NOT NULL DEFAULT '',
       assignees_json TEXT NOT NULL DEFAULT '[]',
@@ -95,6 +96,7 @@ const migrations = [
 
     CREATE TABLE IF NOT EXISTS queue_proposals (
       id TEXT PRIMARY KEY,
+      stack TEXT NOT NULL DEFAULT 'attention',
       status TEXT NOT NULL DEFAULT 'pending',
       previous_order_json TEXT NOT NULL,
       proposed_order_json TEXT NOT NULL,
@@ -130,19 +132,14 @@ const migrations = [
       work_item_id TEXT,
       forked_from_conversation_id TEXT,
       archived_at TEXT,
+      preferred_execution_profile TEXT,
+      last_read_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_shared_messages_created
       ON shared_messages(created_at DESC);
-
-    CREATE TABLE IF NOT EXISTS shared_memories (
-      id TEXT PRIMARY KEY,
-      kind TEXT NOT NULL,
-      body TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
 
     CREATE TABLE IF NOT EXISTS execution_plans (
       id TEXT PRIMARY KEY,
@@ -217,6 +214,17 @@ const migrations = [
     CREATE INDEX IF NOT EXISTS idx_work_item_references_item
       ON work_item_references(work_item_id, created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS work_item_links (
+      work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+      linked_work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (work_item_id, linked_work_item_id),
+      CHECK (work_item_id < linked_work_item_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_work_item_links_linked
+      ON work_item_links(linked_work_item_id, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS artifact_versions (
       id TEXT PRIMARY KEY,
       artifact_id TEXT NOT NULL REFERENCES published_artifacts(id) ON DELETE CASCADE,
@@ -255,44 +263,6 @@ const migrations = [
     CREATE INDEX IF NOT EXISTS idx_artifact_comments_artifact
       ON artifact_comments(artifact_id, created_at DESC);
 
-    -- Structured, provenanced durable memory (Phase 1 of the memory strategy).
-    -- Coexists with the older shared_memories archive during the overlap phase;
-    -- both feed one prompt block (see WorkItemRepository.getSharedContext).
-    -- We do NOT migrate shared_memories rows here — that stays Phase 2 scope.
-    CREATE TABLE IF NOT EXISTS memories (
-      id TEXT PRIMARY KEY,
-      kind TEXT NOT NULL CHECK (kind IN ('constraint', 'preference', 'decision', 'convention', 'fact')),
-      scope TEXT NOT NULL CHECK (scope IN ('global', 'project', 'workspace', 'reference')),
-      project_name TEXT,
-      workspace_path TEXT,
-      body TEXT NOT NULL CHECK (length(body) <= 800),
-      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('proposed', 'active', 'superseded', 'rejected')),
-      -- supersedes_id intentionally has no REFERENCES/FK constraint: it links a
-      -- memory to the row it replaces, and a hard self-referencing FK would need
-      -- deferred enforcement to avoid ordering issues (the row it supersedes
-      -- must already exist) and can't ON DELETE CASCADE without risking a
-      -- supersession chain silently losing history. Validate the target exists
-      -- in application code (see supersedeMemory) instead.
-      supersedes_id TEXT,
-      -- source_task_id / source_conversation_id / source_message_id are also
-      -- unconstrained by FK on purpose (R5): deleting a conversation or task
-      -- must not cascade-delete the memories it produced. Provenance can go
-      -- stale; callers render it defensively (see contracts.Memory usage).
-      source_task_id TEXT,
-      source_conversation_id TEXT,
-      source_message_id TEXT,
-      source_quote TEXT,
-      created_by TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_memories_selection
-      ON memories(status, scope, project_name, workspace_path);
-    CREATE INDEX IF NOT EXISTS idx_memories_reference
-      ON memories(status, source_task_id, source_conversation_id);
-    CREATE INDEX IF NOT EXISTS idx_memories_created
-      ON memories(created_at DESC);
   `,
   `
     CREATE TABLE IF NOT EXISTS queue_order_history (
@@ -369,31 +339,55 @@ const migrations = [
       SELECT id, body FROM shared_messages
       WHERE NOT EXISTS (SELECT 1 FROM messages_fts WHERE messages_fts.id = shared_messages.id);
   `,
+  `
+    -- Diagnostics: structured logging for scheduler, retention, and agent events.
+    -- Self-prunes rows older than 30 days to keep the table bounded and queryable.
+    CREATE TABLE IF NOT EXISTS diagnostics (
+      id TEXT PRIMARY KEY,
+      event TEXT NOT NULL CHECK (event IN ('scheduler_tick', 'scheduler_error', 'retention_cleanup', 'message_prune', 'run_compact', 'run_recovery', 'agent_failure', 'lease_expired')),
+      subsystem TEXT NOT NULL CHECK (subsystem IN ('scheduler', 'retention', 'recovery', 'agent')),
+      outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
+      error_code TEXT,
+      detail TEXT NOT NULL,
+      duration_ms INTEGER,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_diagnostics_created
+      ON diagnostics(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_diagnostics_subsystem
+      ON diagnostics(subsystem, created_at DESC);
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS saved_work_item_filters (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      view TEXT NOT NULL CHECK (view IN ('active', 'workbench', 'archive')),
+      filter_json TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(view, name COLLATE NOCASE)
+    );
+    CREATE INDEX IF NOT EXISTS idx_saved_work_item_filters_view_order
+      ON saved_work_item_filters(view, sort_order, created_at, id);
+  `,
 ];
 
-export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workbench.db') {
-  const absolutePath = path === ':memory:' ? path : resolve(path);
-  if (absolutePath !== ':memory:') mkdirSync(dirname(absolutePath), { recursive: true });
-
-  const database = new DatabaseSync(absolutePath);
-  database.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
-  for (const migration of migrations) database.exec(migration);
+/**
+ * Brings pre-ledger databases up to the schema represented by
+ * `baseSchemaStatements`. This deliberately contains the old conditional
+ * upgrades intact: it runs once, as migration 002, rather than on every
+ * application start.
+ */
+function applyLegacyUpgrades(database: DatabaseSync) {
   database.exec(`
-    INSERT OR IGNORE INTO shared_memories (id, kind, body, created_at)
-      SELECT id, 'task_archive', body, created_at FROM shared_messages
-      WHERE pinned = 1 AND author = 'system' AND body LIKE 'Archived task (%';
     DELETE FROM shared_messages
       WHERE pinned = 1 AND author = 'system' AND body LIKE 'Archived task (%';
     DELETE FROM shared_conversations
       WHERE work_item_id IS NULL AND NOT EXISTS (
         SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id
       );
-  `);
-  database.exec(`
-    CREATE INDEX IF NOT EXISTS idx_work_items_active_page ON work_items(queue_position, id)
-      WHERE is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled');
-    CREATE INDEX IF NOT EXISTS idx_work_items_archive_page ON work_items(archived_at DESC, id DESC)
-      WHERE archived_at IS NOT NULL;
   `);
   const columns = database.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>;
   if (!columns.some((column) => column.name === 'is_queued')) {
@@ -459,6 +453,8 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
   if (!conversationColumns.some((column) => column.name === 'work_item_id')) database.exec('ALTER TABLE shared_conversations ADD COLUMN work_item_id TEXT;');
   if (!conversationColumns.some((column) => column.name === 'archived_at')) database.exec('ALTER TABLE shared_conversations ADD COLUMN archived_at TEXT;');
   if (!conversationColumns.some((column) => column.name === 'forked_from_conversation_id')) database.exec('ALTER TABLE shared_conversations ADD COLUMN forked_from_conversation_id TEXT;');
+  if (!conversationColumns.some((column) => column.name === 'preferred_execution_profile')) database.exec('ALTER TABLE shared_conversations ADD COLUMN preferred_execution_profile TEXT;');
+  if (!conversationColumns.some((column) => column.name === 'last_read_at')) database.exec('ALTER TABLE shared_conversations ADD COLUMN last_read_at TEXT;');
   const runColumns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
   if (!runColumns.some((column) => column.name === 'conversation_id')) database.exec('ALTER TABLE agent_runs ADD COLUMN conversation_id TEXT;');
   if (!runColumns.some((column) => column.name === 'message_id')) database.exec('ALTER TABLE agent_runs ADD COLUMN message_id TEXT;');
@@ -502,12 +498,246 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
   if (!messageColumns.some((column) => column.name === 'next_attempt_at')) database.exec('ALTER TABLE shared_messages ADD COLUMN next_attempt_at TEXT;');
   const proposalColumns = database.prepare('PRAGMA table_info(queue_proposals)').all() as Array<{ name: string }>;
   if (!proposalColumns.some((column) => column.name === 'explanations_json')) database.exec('ALTER TABLE queue_proposals ADD COLUMN explanations_json TEXT;');
+  if (!proposalColumns.some((column) => column.name === 'stack')) database.exec("ALTER TABLE queue_proposals ADD COLUMN stack TEXT NOT NULL DEFAULT 'attention';");
   database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_work_items_active_page ON work_items(queue_position, id)
+      WHERE is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled');
+    CREATE INDEX IF NOT EXISTS idx_work_items_archive_page ON work_items(archived_at DESC, id DESC)
+      WHERE archived_at IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_agent_runs_scheduler ON agent_runs(status, next_attempt_at);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_lease ON agent_runs(status, lease_expires_at);
     CREATE INDEX IF NOT EXISTS idx_shared_messages_scheduler ON shared_messages(status, next_attempt_at);
     CREATE INDEX IF NOT EXISTS idx_shared_messages_lease ON shared_messages(status, lease_expires_at);
   `);
+}
+
+type Migration = {
+  id: string;
+  apply: (database: DatabaseSync) => void;
+};
+
+const schemaMigrations: readonly Migration[] = [
+  {
+    id: '001_base_schema',
+    apply(database) {
+      for (const statement of baseSchemaStatements) database.exec(statement);
+    },
+  },
+  { id: '002_legacy_schema_upgrade', apply: applyLegacyUpgrades },
+  {
+    id: '003_audit_log',
+    apply(database) {
+      database.exec(`
+        -- Append-only audit trail for outbound calls to third parties (Linear,
+        -- Slack, Cloudflare, arbitrary source scans) and for agent file
+        -- reads/writes/tool use during a run. Never updated or deleted from
+        -- application code; work_item_id uses SET NULL so history survives a
+        -- deleted work item.
+        CREATE TABLE IF NOT EXISTS audit_log (
+          id TEXT PRIMARY KEY,
+          category TEXT NOT NULL CHECK (category IN ('outbound_call', 'agent_file_read', 'agent_file_write', 'agent_tool_use')),
+          source TEXT NOT NULL,
+          detail TEXT NOT NULL,
+          work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_audit_log_created
+          ON audit_log(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_category
+          ON audit_log(category, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_work_item
+          ON audit_log(work_item_id, created_at DESC);
+      `);
+    },
+  },
+  {
+    // Every step here is guarded so replaying this migration against a
+    // database that already has it applied (e.g. a legacy database whose
+    // schema_migrations ledger was reset) is a no-op rather than an error,
+    // matching 002_legacy_schema_upgrade's pattern.
+    id: '004_soft_delete_destructive_actions',
+    apply(database) {
+      // Destructive delete endpoints (work items, conversations, source
+      // connections) now soft-delete: the row stays for recovery via direct
+      // DB access and for audit history, but is filtered out of every
+      // list/get query by application code.
+      const workItemColumns = database.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>;
+      if (!workItemColumns.some((column) => column.name === 'deleted_at')) {
+        database.exec('ALTER TABLE work_items ADD COLUMN deleted_at TEXT;');
+      }
+      const conversationColumns = database.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>;
+      if (!conversationColumns.some((column) => column.name === 'deleted_at')) {
+        database.exec('ALTER TABLE shared_conversations ADD COLUMN deleted_at TEXT;');
+      }
+      const sourceConnectionColumns = database.prepare('PRAGMA table_info(source_connections)').all() as Array<{ name: string }>;
+      if (!sourceConnectionColumns.some((column) => column.name === 'deleted_at')) {
+        database.exec('ALTER TABLE source_connections ADD COLUMN deleted_at TEXT;');
+      }
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_work_items_deleted ON work_items(deleted_at)
+          WHERE deleted_at IS NOT NULL;
+      `);
+
+      // SQLite can't ALTER a CHECK constraint in place, so the audit_log
+      // table is rebuilt to add 'destructive_action' to the category enum.
+      const auditLogSchema = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'audit_log'").get() as { sql: string } | undefined;
+      if (auditLogSchema && !auditLogSchema.sql.includes('destructive_action')) {
+        database.exec(`
+          CREATE TABLE audit_log_new (
+            id TEXT PRIMARY KEY,
+            category TEXT NOT NULL CHECK (category IN ('outbound_call', 'agent_file_read', 'agent_file_write', 'agent_tool_use', 'destructive_action')),
+            source TEXT NOT NULL,
+            detail TEXT NOT NULL,
+            work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL
+          );
+          INSERT INTO audit_log_new SELECT id, category, source, detail, work_item_id, created_at FROM audit_log;
+          DROP TABLE audit_log;
+          ALTER TABLE audit_log_new RENAME TO audit_log;
+
+          CREATE INDEX IF NOT EXISTS idx_audit_log_created
+            ON audit_log(created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_audit_log_category
+            ON audit_log(category, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_audit_log_work_item
+            ON audit_log(work_item_id, created_at DESC);
+        `);
+      }
+    },
+  },
+  {
+    // Stack membership used to be derived at query time from
+    // `project_name = 'Workbench'`. That made a provider-owned, user-editable
+    // string load-bearing: renaming a project or bulk-reassigning one silently
+    // moved tasks between the attention and workbench stacks. `stack` is now an
+    // explicit, locally owned column that nothing but a deliberate stack change
+    // writes. Guarded so replaying it is a no-op, matching 002 and 004.
+    id: '005_work_item_stack',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'stack')) {
+        database.exec(`ALTER TABLE work_items ADD COLUMN stack TEXT NOT NULL DEFAULT 'attention'
+          CHECK (stack IN ('attention', 'workbench'));`);
+        // One-time backfill reproducing exactly what the old query-time
+        // predicate matched, so no task changes stack as a result of this
+        // migration. COLLATE NOCASE mirrors the predicate it replaces.
+        // Databases old enough to predate project_name have nothing that could
+        // ever have matched that predicate, so they correctly stay 'attention'.
+        if (columns.some((column) => column.name === 'project_name')) {
+          database.exec(`UPDATE work_items SET stack = 'workbench'
+            WHERE project_name = 'Workbench' COLLATE NOCASE;`);
+        }
+      }
+      database.exec(`CREATE INDEX IF NOT EXISTS idx_work_items_stack
+        ON work_items(stack, queue_position);`);
+    },
+  },
+  {
+    id: '006_work_item_dependencies',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS work_item_dependencies (
+          work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+          blocker_work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (work_item_id, blocker_work_item_id),
+          CHECK (work_item_id != blocker_work_item_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_work_item_dependencies_blocker
+          ON work_item_dependencies(blocker_work_item_id, work_item_id);
+      `);
+    },
+  },
+  {
+    // Historical tombstone. Existing databases recorded this migration before
+    // the agent-result review feature was removed; retaining the id keeps their
+    // migration ledger readable without recreating any review behavior.
+    id: '007_work_item_review',
+    apply() {},
+  },
+  {
+    id: '008_provider_sync_overrides',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS provider_work_item_snapshots (
+          work_item_id TEXT PRIMARY KEY REFERENCES work_items(id) ON DELETE CASCADE,
+          provider TEXT NOT NULL,
+          normalized_json TEXT NOT NULL,
+          raw_payload_json TEXT NOT NULL,
+          provider_updated_at TEXT,
+          synced_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_provider_work_item_snapshots_provider
+          ON provider_work_item_snapshots(provider, provider_updated_at);
+
+        CREATE TABLE IF NOT EXISTS provider_field_overrides (
+          work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+          field TEXT NOT NULL CHECK (field IN ('title', 'description', 'status', 'projectName', 'labels', 'dueDate')),
+          provider_baseline_json TEXT NOT NULL,
+          conflicted_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (work_item_id, field)
+        );
+        CREATE INDEX IF NOT EXISTS idx_provider_field_overrides_conflicts
+          ON provider_field_overrides(work_item_id, conflicted_at)
+          WHERE conflicted_at IS NOT NULL;
+      `);
+    },
+  },
+  {
+    id: '009_remove_memories',
+    apply(database) {
+      // Erase the retired feature's data without dropping tables underneath an
+      // older live runtime during an atomic release handoff. Fresh databases do
+      // not create either table; compatibility shells on upgraded databases can
+      // be dropped after every runtime is on this release.
+      const tables = new Set((database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('memories', 'shared_memories')").all() as Array<{ name: string }>).map(({ name }) => name));
+      if (tables.has('memories')) database.exec('DELETE FROM memories;');
+      if (tables.has('shared_memories')) database.exec('DELETE FROM shared_memories;');
+    },
+  },
+];
+
+function applyMigrations(database: DatabaseSync) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    );
+  `);
+
+  const applied = database.prepare('SELECT id FROM schema_migrations ORDER BY id').all() as Array<{ id: string }>;
+  const known = new Set(schemaMigrations.map((migration) => migration.id));
+  const unknown = applied.find(({ id }) => !known.has(id));
+  if (unknown) {
+    throw new Error(`Database migration ${unknown.id} is newer than this Workbench build.`);
+  }
+
+  const appliedIds = new Set(applied.map(({ id }) => id));
+  for (const migration of schemaMigrations) {
+    if (appliedIds.has(migration.id)) continue;
+    database.exec('BEGIN IMMEDIATE;');
+    try {
+      migration.apply(database);
+      database.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)')
+        .run(migration.id, new Date().toISOString());
+      database.exec('COMMIT;');
+    } catch (error) {
+      database.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+}
+
+export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workbench.db') {
+  const absolutePath = path === ':memory:' ? path : resolve(path);
+  if (absolutePath !== ':memory:') mkdirSync(dirname(absolutePath), { recursive: true });
+
+  const database = new DatabaseSync(absolutePath);
+  database.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+  applyMigrations(database);
   return database;
 }
 

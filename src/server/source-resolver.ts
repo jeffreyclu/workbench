@@ -56,7 +56,7 @@ function fallback(url: URL, source: string): ResolvedSourceDraft {
   return { source, sourceUrl: url.toString(), title: readable, description: `Context from ${source}: ${url.toString()}` };
 }
 
-export async function resolveSourceUrl(value: string, options: { confluenceSettings?: Record<string, string> | null; fetchImpl?: typeof fetch } = {}): Promise<ResolvedSourceDraft> {
+export async function resolveSourceUrl(value: string, options: { confluenceSettings?: Record<string, string> | null; githubSettings?: Record<string, string> | null; fetchImpl?: typeof fetch } = {}): Promise<ResolvedSourceDraft> {
   const url = new URL(value);
   const source = sourceFor(url.hostname);
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -71,9 +71,10 @@ export async function resolveSourceUrl(value: string, options: { confluenceSetti
     const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/(issues|pull)\/(\d+)/);
     if (match) {
       const endpoint = `https://api.github.com/repos/${match[1]}/${match[2]}/issues/${match[4]}`;
+      const githubToken = options.githubSettings?.token ?? process.env.GITHUB_TOKEN;
       const response = await fetchImpl(endpoint, { headers: {
         Accept: 'application/vnd.github+json', 'User-Agent': 'workbench-local',
-        ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
+        ...(githubToken ? { Authorization: `Bearer ${githubToken}` } : {}),
       } });
       if (response.ok) {
         const issue = await response.json() as { title: string; body: string | null; html_url: string };

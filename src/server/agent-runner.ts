@@ -3,6 +3,8 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
+import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
+import { agentSubprocessEnv } from './agent-security.js';
 import { WorkItemRepository } from './repository.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
 
@@ -101,23 +103,27 @@ export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = ''): 
       : `You are ${run.agent}, working on a Workbench task for Jeffrey.`;
   return `${persona}
 
-Task: ${item.title}
+Task: ${compactPromptSection(item.title, 500)}
 Source: ${item.sourceIdentifier ?? item.source}
 Project: ${item.projectName ?? 'none'}
 Status: ${item.status}
+Prerequisites:
+${(item.blockedBy ?? []).length
+    ? item.blockedBy!.map((dependency) => `- ${dependency.isOpen ? 'OPEN' : 'complete'}: ${dependency.title} (${dependency.status})`).join('\n')
+    : 'None.'}
 
 Context:
-${item.description || 'No additional context.'}
+${compactPromptSection(item.description || 'No additional context.', 8_000)}
 
 Existing strategy:
-${item.strategy || 'No strategy yet.'}
+${compactPromptSection(item.strategy || 'No strategy yet.', 4_000)}
 
 Requested capability: ${run.kind}
 Additional instructions:
-${run.instructions || 'Use your judgment and return a concise, actionable result.'}
+${compactPromptSection(run.instructions || 'Use your judgment and return a concise, actionable result.', 4_000)}
 
 Shared context available to every agent:
-${sharedContext || 'No shared context yet.'}
+${compactPromptSection(sharedContext || 'No shared context yet.', 6_000)}
 
 Non-interactive Workbench environment:
 Use available tools directly. Never ask Jeffrey to grant a filesystem permission, approve a terminal prompt, or look at a dialog: those controls are not exposed in Workbench. If required access is unavailable, state the exact missing integration or credential and continue with everything that can be done without it.
@@ -181,17 +187,45 @@ export type ExecutionProfile = 'economy' | 'standard' | 'deep';
 export interface AgentUsage { inputTokens: number | null; outputTokens: number | null; estimatedCostUsd: number | null; }
 interface AgentCommandResult { output: string; usage: AgentUsage; }
 
-function usageFromEvent(event: unknown): Omit<AgentUsage, 'estimatedCostUsd'> | null {
+function numberAt(record: Record<string, unknown>, ...keys: string[]): number | null {
+  const value = keys.map((key) => record[key]).find((candidate) => typeof candidate === 'number');
+  return typeof value === 'number' ? value : null;
+}
+
+/** Provider payloads contain all-session totals as well as per-turn usage. */
+function usageFromEvent(agent: AgentRun['agent'], event: unknown): Omit<AgentUsage, 'estimatedCostUsd'> | null {
   if (!event || typeof event !== 'object') return null;
   const record = event as Record<string, unknown>;
-  const input = record.input_tokens ?? record.inputTokens;
-  const output = record.output_tokens ?? record.outputTokens;
-  if (typeof input === 'number' || typeof output === 'number') return { inputTokens: typeof input === 'number' ? input : null, outputTokens: typeof output === 'number' ? output : null };
-  for (const value of Object.values(record)) {
-    const nested = usageFromEvent(value);
-    if (nested) return nested;
+  if (agent === 'codex') {
+    const usage = record.type === 'token_count'
+      ? ((record.info as Record<string, unknown> | undefined)?.last_token_usage as Record<string, unknown> | undefined)
+      : record.type === 'turn.completed' ? record.usage as Record<string, unknown> | undefined : undefined;
+    if (!usage) return null;
+    // Codex input_tokens already includes cached_input_tokens. Do not add the
+    // cached value again; and never use total_token_usage (all CLI sessions).
+    const inputTokens = numberAt(usage, 'input_tokens', 'inputTokens');
+    const outputTokens = numberAt(usage, 'output_tokens', 'outputTokens');
+    return inputTokens === null && outputTokens === null ? null : { inputTokens, outputTokens };
   }
-  return null;
+  const usage = record.type === 'assistant'
+    ? ((record.message as Record<string, unknown> | undefined)?.usage as Record<string, unknown> | undefined)
+    : undefined;
+  if (!usage) return null;
+  const input = numberAt(usage, 'input_tokens', 'inputTokens');
+  const outputTokens = numberAt(usage, 'output_tokens', 'outputTokens');
+  // Claude separates newly processed input from cache creation/read input.
+  const inputTokens = input === null ? null : input
+    + (numberAt(usage, 'cache_creation_input_tokens', 'cacheCreationInputTokens') ?? 0)
+    + (numberAt(usage, 'cache_read_input_tokens', 'cacheReadInputTokens') ?? 0);
+  return inputTokens === null && outputTokens === null ? null : { inputTokens, outputTokens };
+}
+
+export function compactPromptSection(value: string, budget: number): string {
+  if (value.length <= budget) return value;
+  const headLength = Math.floor(budget * 0.65);
+  const tailLength = Math.floor(budget * 0.25);
+  const omitted = Math.max(0, value.length - headLength - tailLength);
+  return `${value.slice(0, headLength)}\n\n[… ${omitted.toLocaleString()} characters compacted for this turn …]\n\n${value.slice(-tailLength)}`;
 }
 
 /** Pricing is deployment configuration, never guessed from a model name. Values are USD per million tokens. */
@@ -207,8 +241,10 @@ export function estimateUsageCost(agent: AgentRun['agent'], inputTokens: number 
 export function selectExecutionProfile(item: WorkItem, run: Pick<AgentRun, 'kind' | 'instructions'>): ExecutionProfile {
   const text = `${item.title}\n${item.description}\n${run.instructions}`.toLowerCase();
   const highRisk = /\b(architecture|re-architect|migration|security|authentication|authorization|payments?|production incident|data loss|multi[- ]repo|cross[- ]system|breaking change)\b/.test(text);
+  const broadImplementation = /\b(?:whole|entire|full|complete|end[- ]to[- ]end)\b(?:\s+\w+){0,2}\s+(?:ui|page|screen|feature|flow|dashboard|application)\b/.test(text)
+    || /\b(?:multiple|all)\s+(?:pages|screens|components|flows|features)\b/.test(text);
   const decomposing = run.instructions.includes('WORKBENCH_DECOMPOSITION');
-  if (decomposing || highRisk || (text.length > 8_000 && (run.kind === 'execute' || run.kind === 'review'))) return 'deep';
+  if (decomposing || highRisk || broadImplementation || (text.length > 8_000 && (run.kind === 'execute' || run.kind === 'review'))) return 'deep';
   if (run.kind === 'execute' || run.kind === 'review' || text.length > 2_500) return 'standard';
   return 'economy';
 }
@@ -216,12 +252,44 @@ export function selectExecutionProfile(item: WorkItem, run: Pick<AgentRun, 'kind
 export function selectPromptExecutionProfile(prompt: string): ExecutionProfile {
   const text = prompt.toLowerCase();
   if (/\b(architecture|migration|security|authentication|authorization|production incident|data loss|multi[- ]repo|cross[- ]system)\b/.test(text) || text.length > 8_000) return 'deep';
-  if (/\b(implement|build|refactor|debug|review|investigate|technical spec|test)\b/.test(text) || text.length > 2_000) return 'standard';
-  return 'economy';
+  if (/\b(add|change|configure|connect|create|debug|deploy|edit|fix|implement|integrate|investigate|move|optimi[sz]e|refactor|remove|rename|replace|review|test|update|upgrade|wire|write|build|technical spec)\b/.test(text)
+    || /\b(api|backend|client|component|css|database|endpoint|frontend|react|repository|schema|server|typescript|ui)\b/.test(text)
+    || text.length > 2_000) return 'standard';
+  // Auto is intentionally quality-biased. Economy is an explicit user choice;
+  // unqualified conversation turns default to the balanced tier.
+  return 'standard';
+}
+
+const executionProfileRank: Record<ExecutionProfile, number> = { economy: 0, standard: 1, deep: 2 };
+
+/**
+ * Auto routing may scale a task upward from the task and its requested instructions,
+ * never from generated agent scaffolding or shared context. The latter routinely contains
+ * words such as "security" and "architecture" that must not turn a scoped task into deep work.
+ */
+export function resolveExecutionProfileDecision(
+  item: WorkItem,
+  run: Pick<AgentRun, 'kind' | 'instructions'>,
+  requestedInstructions: string,
+): { profile: ExecutionProfile; source: ExecutionProfileSource } {
+  const taskProfile = selectExecutionProfile(item, run);
+  const promptProfile = selectPromptExecutionProfile(requestedInstructions);
+  return executionProfileRank[taskProfile] >= executionProfileRank[promptProfile]
+    ? { profile: taskProfile, source: 'task' }
+    : { profile: promptProfile, source: 'prompt' };
+}
+
+export function selectAutoExecutionProfile(item: WorkItem, run: Pick<AgentRun, 'kind' | 'instructions'>, requestedInstructions: string): ExecutionProfile {
+  return resolveExecutionProfileDecision(item, run, requestedInstructions).profile;
 }
 
 function commandFor(agent: AgentRun['agent'], cwd: string, profile: ExecutionProfile): { command: string; args: string[] } {
-  const effort = profile === 'economy' ? 'low' : profile === 'standard' ? 'medium' : 'high';
+  // Claude consumes its separate session allowance aggressively during long
+  // autonomous tool loops. Keep the chosen model tier intact while reserving
+  // higher reasoning effort for genuinely deep work.
+  const effort = agent === 'claude'
+    ? profile === 'deep' ? 'medium' : 'low'
+    : profile === 'economy' ? 'low' : profile === 'standard' ? 'medium' : 'high';
   if (agent === 'codex') {
     const model = modelFor(agent, profile);
     return {
@@ -252,13 +320,33 @@ export async function judgeExecutionProfile(prompt: string, cwd: string, signal?
   return selectPromptExecutionProfile(prompt);
 }
 
-export function readableAgentEvent(agent: AgentRun['agent'], line: string): { progress: string; final: string | null } {
+export interface AgentAuditCandidate { category: 'agent_file_read' | 'agent_file_write' | 'agent_tool_use'; detail: string }
+
+/**
+ * Coding CLIs launch shell commands of their own. Killing only the CLI leaves
+ * those descendants alive (and they can keep editing after Workbench says
+ * "Canceled"). Each CLI gets its own process group; cancellation signals the
+ * entire group and escalates if it does not exit promptly.
+ */
+function terminateAgentProcessTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
+  if (child.pid && process.platform !== 'win32') {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The group may have already exited; fall through to the direct child.
+    }
+  }
+  try { child.kill(signal); } catch { /* already stopped */ }
+}
+
+export function readableAgentEvent(agent: AgentRun['agent'], line: string): { progress: string; final: string | null; audit: AgentAuditCandidate[] } {
   try {
     const event = JSON.parse(line) as Record<string, unknown>;
     if (agent === 'codex') {
       const item = event.item as Record<string, unknown> | undefined;
-      if (item?.type === 'agent_message' && typeof item.text === 'string') return { progress: item.text, final: item.text };
-      if (item?.type === 'reasoning' && typeof item.text === 'string') return { progress: `Reasoning summary: ${item.text}`, final: null };
+      if (item?.type === 'agent_message' && typeof item.text === 'string') return { progress: item.text, final: item.text, audit: [] };
+      if (item?.type === 'reasoning' && typeof item.text === 'string') return { progress: `Reasoning summary: ${item.text}`, final: null, audit: [] };
       if (item?.type === 'command_execution') {
         const command = typeof item.command === 'string' ? item.command : 'command';
         const label = /(?:npm|pnpm|yarn) (?:test|run test)|vitest/.test(command) ? 'Running tests'
@@ -267,20 +355,33 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string): { pr
           : /(?:rg|grep|find) /.test(command) ? 'Searching the codebase'
           : /(?:cat|sed|head|tail) /.test(command) ? 'Reading project files'
           : `Running a workspace command: ${command.slice(0, 100)}`;
-        return { progress: event.type === 'item.started' ? `● ${label}` : '', final: null };
+        const audit: AgentAuditCandidate[] = event.type === 'item.started' ? [{ category: 'agent_tool_use', detail: `command_execution: ${command.slice(0, 500)}` }] : [];
+        return { progress: event.type === 'item.started' ? `● ${label}` : '', final: null, audit };
       }
-      if (item?.type === 'file_change') return { progress: '● Updating project files', final: null };
-      if (event.type === 'turn.started') return { progress: '● Analyzing the task', final: null };
-      return { progress: '', final: null };
+      if (item?.type === 'file_change') {
+        const changes = item.changes as Array<{ path?: string; kind?: string }> | undefined;
+        const audit: AgentAuditCandidate[] = (changes ?? [{}]).map((change) => ({
+          category: 'agent_file_write',
+          detail: change.path ? `${change.kind ?? 'update'}: ${change.path}` : 'file_change',
+        }));
+        return { progress: '● Updating project files', final: null, audit };
+      }
+      if (event.type === 'turn.started') return { progress: '● Analyzing the task', final: null, audit: [] };
+      return { progress: '', final: null, audit: [] };
     }
     if (event.type === 'assistant') {
       const message = event.message as { content?: Array<Record<string, unknown>> } | undefined;
+      const audit: AgentAuditCandidate[] = [];
       const parts = (message?.content ?? []).flatMap((content) => {
         if (content.type === 'text' && typeof content.text === 'string') return [content.text];
         if (content.type === 'tool_use') {
           const name = String(content.name ?? 'tool');
           const input = (content.input ?? {}) as Record<string, unknown>;
           const description = typeof input.description === 'string' ? input.description : '';
+          const filePath = String(input.file_path ?? input.file ?? '');
+          if (name === 'Read') audit.push({ category: 'agent_file_read', detail: filePath || 'unknown file' });
+          else if (name === 'Edit' || name === 'Write') audit.push({ category: 'agent_file_write', detail: filePath || 'unknown file' });
+          else audit.push({ category: 'agent_tool_use', detail: description ? `${name}: ${description}` : name });
           if (description) return [`● ${description.charAt(0).toUpperCase()}${description.slice(1)}`];
           if (name === 'Read') return [`● Reading ${String(input.file_path ?? input.file ?? 'a project file')}`];
           if (name === 'Edit' || name === 'Write') return [`● Editing ${String(input.file_path ?? input.file ?? 'project files')}`];
@@ -290,27 +391,44 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string): { pr
         }
         return [];
       });
-      return { progress: parts.join('\n'), final: parts.filter((part) => !part.startsWith('● ')).at(-1) ?? null };
+      return { progress: parts.join('\n'), final: parts.filter((part) => !part.startsWith('● ')).at(-1) ?? null, audit };
     }
-    if (event.type === 'result' && typeof event.result === 'string') return { progress: '', final: event.result };
-    if (event.type === 'system') return { progress: '', final: null };
-    return { progress: '', final: null };
+    if (event.type === 'result' && typeof event.result === 'string') return { progress: '', final: event.result, audit: [] };
+    if (event.type === 'system') return { progress: '', final: null, audit: [] };
+    return { progress: '', final: null, audit: [] };
   } catch {
-    return { progress: line, final: null };
+    return { progress: line, final: null, audit: [] };
   }
 }
 
-async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void): Promise<AgentCommandResult> {
+async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[]) => void): Promise<AgentCommandResult> {
   const { command, args } = commandFor(agent, cwd, profile);
   return new Promise<AgentCommandResult>((resolveOutput, reject) => {
-    const child = spawn(command, args, { cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(command, args, {
+      cwd,
+      env: agentSubprocessEnv(),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      // On Unix this makes child.pid the process-group leader, allowing Stop
+      // to kill Codex/Claude and every shell/tool process it created.
+      detached: process.platform !== 'win32',
+    });
+    let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
+    const stopProcessTree = () => {
+      terminateAgentProcessTree(child, 'SIGTERM');
+      forceKillTimer = setTimeout(() => terminateAgentProcessTree(child, 'SIGKILL'), 3_000);
+      forceKillTimer.unref();
+    };
     const cancel = () => {
-      child.kill('SIGTERM');
+      stopProcessTree();
       reject(new Error('Agent run canceled.'));
     };
     if (signal?.aborted) return cancel();
     signal?.addEventListener('abort', cancel, { once: true });
-    child.stdin.end(prompt);
+    const efficientPrompt = agent === 'claude' ? `${prompt}
+
+Claude execution budget:
+Use the shortest tool path that can complete the requested work correctly. Do not spawn subagents unless the task explicitly requires independent parallel work. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result.` : prompt;
+    child.stdin.end(efficientPrompt);
     let stdout = '';
     let stderr = '';
     let buffered = '';
@@ -318,16 +436,24 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     let finalOutput = '';
     let lastProgressEvent = '';
     let reportedUsage: Omit<AgentUsage, 'estimatedCostUsd'> = { inputTokens: null, outputTokens: null };
+    let estimatedOutputTokens = 0;
     let lastReportedUsage = '';
-    const reportUsage = (usage: Omit<AgentUsage, 'estimatedCostUsd'>) => {
-      reportedUsage = usage;
-      const signature = `${usage.inputTokens ?? ''}:${usage.outputTokens ?? ''}`;
+    const emitLiveUsage = () => {
+      const liveUsage = {
+        inputTokens: reportedUsage.inputTokens,
+        outputTokens: Math.max(reportedUsage.outputTokens ?? 0, estimatedOutputTokens) || null,
+      };
+      const signature = `${liveUsage.inputTokens ?? ''}:${liveUsage.outputTokens ?? ''}`;
       if (signature === lastReportedUsage) return;
       lastReportedUsage = signature;
-      onUsage?.({ ...usage, estimatedCostUsd: estimateUsageCost(agent, usage.inputTokens, usage.outputTokens) }, agent);
+      onUsage?.({ ...liveUsage, estimatedCostUsd: estimateUsageCost(agent, liveUsage.inputTokens, liveUsage.outputTokens) }, agent);
+    };
+    const reportUsage = (usage: Omit<AgentUsage, 'estimatedCostUsd'>) => {
+      reportedUsage = usage;
+      emitLiveUsage();
     };
     const timeout = setTimeout(() => {
-      child.kill('SIGTERM');
+      stopProcessTree();
       reject(new Error('Agent run timed out after 30 minutes.'));
     }, 30 * 60 * 1000);
     child.stdout.on('data', (chunk: Buffer) => {
@@ -336,15 +462,24 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
       const lines = buffered.split('\n');
       buffered = lines.pop() ?? '';
       for (const line of lines.filter(Boolean)) {
-        try { const usage = usageFromEvent(JSON.parse(line)); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
+        try { const usage = usageFromEvent(agent, JSON.parse(line)); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
         const event = readableAgentEvent(agent, line);
         if (event.progress && event.progress !== lastProgressEvent) {
           progress += `${progress ? '\n\n' : ''}${event.progress}`;
           lastProgressEvent = event.progress;
         }
         if (event.final) finalOutput = event.final;
+        if (event.audit.length) onAudit?.(event.audit);
       }
-      if (progress) onProgress?.(progress.slice(-MAX_OUTPUT_BYTES));
+      if (progress) {
+        const visibleProgress = progress.slice(-MAX_OUTPUT_BYTES);
+        onProgress?.(visibleProgress);
+        // Codex does not provide authoritative totals until turn.completed.
+        // A conservative character-based estimate keeps the live counter moving;
+        // the terminal provider event replaces it with the real total.
+        estimatedOutputTokens = Math.max(estimatedOutputTokens, Math.ceil(visibleProgress.length / 4));
+        emitLiveUsage();
+      }
     });
     child.stderr.on('data', (chunk: Buffer) => {
       if (stderr.length < MAX_OUTPUT_BYTES) stderr += chunk.toString();
@@ -352,16 +487,19 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     child.on('error', reject);
     child.on('close', (code) => {
       clearTimeout(timeout);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
       signal?.removeEventListener('abort', cancel);
       if (buffered.trim()) {
-        try { const usage = usageFromEvent(JSON.parse(buffered.trim())); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
+        try { const usage = usageFromEvent(agent, JSON.parse(buffered.trim())); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
         const event = readableAgentEvent(agent, buffered.trim());
         if (event.progress && event.progress !== lastProgressEvent) progress += `${progress ? '\n\n' : ''}${event.progress}`;
         if (event.final) finalOutput = event.final;
+        if (event.audit.length) onAudit?.(event.audit);
       }
       if (code === 0) {
         const output = finalOutput.trim() || progress.trim() || stdout.trim();
-        resolveOutput({ output, usage: { ...reportedUsage, estimatedCostUsd: estimateUsageCost(agent, reportedUsage.inputTokens, reportedUsage.outputTokens) } });
+        const outputTokens = reportedUsage.outputTokens ?? (estimatedOutputTokens || null);
+        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, outputTokens, estimatedCostUsd: estimateUsageCost(agent, reportedUsage.inputTokens, outputTokens) } });
       }
       else {
         const providerDiagnostic = stderr.trim() || finalOutput.trim() || stdout.trim();
@@ -385,9 +523,10 @@ export async function runAgentCommandWithFallback(
   signal?: AbortSignal, onFallback?: (agent: AgentRun['agent'], reason: string) => void,
   profile: ExecutionProfile = 'economy',
   onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void,
+  onAudit?: (entries: AgentAuditCandidate[]) => void,
 ): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null }> {
   try {
-    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage);
+    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit);
     if (result.output.length < 1_000 && isAgentCapacityError(result.output)) throw new Error(result.output);
     return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
   } catch (error) {
@@ -397,7 +536,7 @@ export async function runAgentCommandWithFallback(
     onFallback?.(fallback, reason);
     const prefix = `${primary} is unavailable due to its usage limit. Continuing with ${fallback}.`;
     onProgress?.(prefix);
-    const result = await runAgentCommandWithUsage(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile, onUsage);
+    const result = await runAgentCommandWithUsage(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile, onUsage, onAudit);
     return { ...result, agent: fallback, fallbackFrom: primary, fallbackReason: reason.slice(0, 500) };
   }
 }
@@ -429,6 +568,13 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   if (ownerId && leaseMs && !repository.claimRun(run.id, ownerId, leaseMs)) return;
   const item = repository.get(run.workItemId);
   if (!item) return;
+  // Requests can originate from the preview API, which intentionally has no
+  // scheduler. Keep this run's lease alive locally instead of relying on a
+  // process-wide scheduler that may not exist in the dispatching process.
+  const leaseHeartbeat = ownerId && leaseMs
+    ? setInterval(() => repository.renewRunLease(run.id, ownerId, leaseMs), Math.max(1_000, Math.floor(leaseMs / 3)))
+    : null;
+  leaseHeartbeat?.unref();
   const startedAt = new Date().toISOString();
   repository.updateRun(run.id, { status: 'running', startedAt });
   repository.update(item.id, { status: 'in_progress' });
@@ -439,16 +585,26 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
 
   try {
     const cwd = resolveWorkingDirectory(item);
+    // The agent runs with its own permission sandbox bypassed (see commandFor), so this is the
+    // only place the resolved workspace boundary is surfaced instead of silently picked.
+    repository.addActivity(item.id, 'system', 'progress', `Workspace resolved to ${cwd}.`);
     const selfHostingGuard = resolve(cwd) === resolve(process.cwd())
       ? `\n\nWorkbench self-hosting safety:\nYou are editing the source checkout used by the preview, while the live control plane runs from a promoted snapshot. Do not start, stop, restart, or kill Workbench, Vite, ngrok, or their ports. Do not run runtime:promote. You may run the repository's normal typecheck, tests, and build; those do not deploy your changes. Report that runtime approval is required after verification.`
       : '';
     const sharedContext = [repository.getSharedContext(undefined, { workItemId: item.id }), externalContext].filter(Boolean).join('\n\n');
     const prompt = buildPrompt(item, run, sharedContext) + selfHostingGuard;
-    repository.updateRun(run.id, { model: modelFor('codex', 'economy'), executionProfile: 'economy' });
-    if (run.messageId) repository.updateSharedMessage(run.messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
-    const profile = run.executionProfile ?? await judgeExecutionProfile(prompt, cwd, controller.signal);
-    repository.updateRun(run.id, { model: modelFor(run.agent, profile), executionProfile: profile });
-    if (run.messageId) repository.updateSharedMessage(run.messageId, { model: modelFor(run.agent, profile), executionProfile: profile });
+    if (run.messageId) repository.updateSharedMessage(run.messageId, { executionProfile: 'routing' });
+    const decision: { profile: ExecutionProfile; source: ExecutionProfileSource } = run.executionProfile
+      ? { profile: run.executionProfile, source: 'requested' }
+      : resolveExecutionProfileDecision(item, run, `${item.title}\n${item.description}\n${run.instructions}`);
+    const profile = decision.profile;
+    const model = modelFor(run.agent, profile);
+    repository.updateRun(run.id, { model, executionProfile: profile });
+    if (run.messageId) repository.updateSharedMessage(run.messageId, { model, executionProfile: profile });
+    if (run.conversationId) repository.setConversationExecutionProfile(run.conversationId, profile);
+    // The model and effort tier are picked for Jeffrey, not by him. Record the
+    // choice and its reason so the activity log explains what actually ran.
+    repository.addActivity(item.id, 'system', 'model_selected', describeModelSelection({ agent: run.agent, kind: run.kind, model, profile, source: decision.source }));
     const result = await runAgentCommandWithFallback(run.agent, cwd, prompt, (partialOutput) => {
       repository.updateRun(run.id, { output: partialOutput });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
@@ -456,11 +612,13 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.updateRun(run.id, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: reason.slice(0, 500) });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: reason.slice(0, 500) });
       if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [fallback]);
-      repository.addActivity(item.id, 'system', 'agent_fallback', `${run.agent} was unavailable (${reason.slice(0, 240)}); continued with ${fallback}.`);
+      repository.addActivity(item.id, 'system', 'agent_fallback', describeAgentFallback({ from: run.agent, to: fallback, model: modelFor(fallback, profile), reason }));
     }, profile, (usage) => {
       const telemetry = { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd };
       repository.updateRun(run.id, telemetry);
       if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
+    }, (entries) => {
+      for (const entry of entries) repository.addAuditEntry(entry.category, run.agent, entry.detail, item.id);
     });
     const { output } = result;
     const telemetry = { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, estimatedCostUsd: result.usage.estimatedCostUsd, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
@@ -516,6 +674,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     repository.addActivity(item.id, run.agent, 'blocker', `${run.kind} failed: ${message}`);
     notifyAgentRunFinished(item, run, 'failed', message);
   } finally {
+    if (leaseHeartbeat) clearInterval(leaseHeartbeat);
     activeRunControllers.delete(run.id);
   }
 }
@@ -554,7 +713,7 @@ function explicitDeliverableKind(title: string): AgentRun['kind'] | null {
   return null;
 }
 
-export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; agent: AgentRun['agent']; complex: boolean; instructions: string } {
+export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; agent: AgentRun['agent']; complex: boolean; instructions: string; reason: string } {
   const text = `${item.title}\n${item.description}`.toLowerCase();
   const complex = /\b(migrate|redesign|re-architect|rebuild|epic|cross[- ]team|multi[- ]phase)\b/.test(text);
   let kind: AgentRun['kind'] = 'analysis';
@@ -569,11 +728,12 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
   const implementationTitle = /\b(implement|build|code|fix|debug|refactor|test|edit|update|reduce|trim|rewrite|remove|add|change)\b/.test(title);
   const documentStrategy = /\b(spec|rfc|technical document|design doc|proposal)\b/.test(title)
     && /\b(plan|draft|write|create|produce|author|revise|define|spec|rfc|proposal)\b/.test(title);
-  if (explicitKind) { kind = explicitKind; agent = explicitKind === 'execute' || explicitKind === 'review' ? 'codex' : 'claude'; }
-  else if (explicitCodeReview && !implementation) { kind = 'review'; agent = 'codex'; }
-  else if (documentStrategy && !implementationTitle) { kind = 'strategy'; agent = 'claude'; }
-  else if (implementation) { kind = 'execute'; agent = 'codex'; }
-  else if (/\b(research|investigate|explore|compare|evaluate)\b/.test(text)) { kind = 'research'; agent = 'claude'; }
+  let reason = 'keyword rules: no explicit deliverable verb matched, so it defaults to analysis';
+  if (explicitKind) { kind = explicitKind; agent = explicitKind === 'execute' || explicitKind === 'review' ? 'codex' : 'claude'; reason = `keyword rules: the title starts with an explicit ${explicitKind} verb`; }
+  else if (explicitCodeReview && !implementation) { kind = 'review'; agent = 'codex'; reason = 'keyword rules: the title asks for a code review'; }
+  else if (documentStrategy && !implementationTitle) { kind = 'strategy'; agent = 'claude'; reason = 'keyword rules: the title asks for a written spec or plan'; }
+  else if (implementation) { kind = 'execute'; agent = 'codex'; reason = 'keyword rules: the task describes implementation work'; }
+  else if (/\b(research|investigate|explore|compare|evaluate)\b/.test(text)) { kind = 'research'; agent = 'claude'; reason = 'keyword rules: the task asks for investigation'; }
 
   if (kind === 'execute' && isDocumentWork(item)) agent = 'claude';
   const assignedAgent = item.assignees.find((assignee): assignee is AgentRun['agent'] => assignee === 'codex' || assignee === 'claude');
@@ -582,11 +742,12 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
   if (complex && kind !== 'review') {
     return {
       kind: 'strategy', agent: 'claude', complex: true,
+      reason: 'keyword rules: the task spans multiple phases or systems, so it is decomposed first',
       instructions: `WORKBENCH_DECOMPOSITION: This appears complex. Research the relevant context, then produce an approval-ready strategy. Do not implement yet. Propose at least two independently executable follow-up tasks. End with exactly one machine-readable block in this form: <workbench-plan>{"summary":"approval-ready strategy","tasks":[{"title":"first independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null},{"title":"second independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null}]}</workbench-plan>. Tasks must be self-contained and ordered by recommended attention.`,
     };
   }
   return {
-    kind, agent, complex: false,
+    kind, agent, complex: false, reason,
     instructions: kind === 'review'
       ? 'Perform the authoritative frontend-reviewer first pass. Review only; do not modify code or execute tests.'
       : kind === 'execute' && isBackendImplementation(item)
@@ -601,7 +762,7 @@ export function classificationForKind(item: WorkItem, kind: AgentRun['kind']): R
   const assignedAgent = item.assignees.find((assignee): assignee is AgentRun['agent'] => assignee === 'codex' || assignee === 'claude');
   if (assignedAgent && kind !== 'review') agent = assignedAgent;
   return {
-    kind, agent, complex: false,
+    kind, agent, complex: false, reason: 'you picked this task type by hand',
     instructions: kind === 'review'
       ? 'Perform the authoritative frontend-reviewer first pass. Review only; do not modify code or execute tests.'
       : kind === 'execute' && isBackendImplementation(item)
@@ -637,15 +798,20 @@ ${item.description.slice(0, 12_000)}
 PROJECT: ${item.projectName ?? 'none'}
 SOURCE: ${item.sourceUrl ?? item.sourceIdentifier ?? item.source}`);
     const structured = output.match(/<classification>([\s\S]*?)<\/classification>/)?.[1];
-    const parsed = structured ? JSON.parse(structured) as { kind?: unknown; complex?: unknown } : null;
+    const parsed = structured ? JSON.parse(structured) as { kind?: unknown; complex?: unknown; reason?: unknown } : null;
     const kind = ((typeof parsed?.kind === 'string' ? parsed.kind.toLowerCase().match(/^(research|analysis|strategy|execute|review)$/)?.[1] : undefined)
       ?? output.toLowerCase().match(/\b(research|analysis|strategy|execute|review)\b/)?.[1]) as AgentRun['kind'] | undefined;
     if (!kind) return deterministic;
     const resolvedKind = explicitKind ?? kind;
     const complex = typeof parsed?.complex === 'boolean' ? parsed.complex : deterministic.complex;
+    const explanation = typeof parsed?.reason === 'string' && parsed.reason.trim() ? parsed.reason.trim().slice(0, 240) : `it chose ${resolvedKind}`;
+    const reason = explicitKind && explicitKind !== kind
+      ? `keyword rules: the title starts with an explicit ${explicitKind} verb, overriding the AI classifier`
+      : `AI classifier: ${explanation}`;
     if (complex && resolvedKind !== 'review') {
       return {
         kind: 'strategy', agent: 'claude', complex: true,
+        reason: `AI classifier: ${explanation} It is complex enough to decompose first.`,
         instructions: `WORKBENCH_DECOMPOSITION: This appears complex. Research the relevant context, then produce an approval-ready strategy. Do not implement yet. Propose at least two independently executable follow-up tasks. End with exactly one machine-readable block in this form: <workbench-plan>{"summary":"approval-ready strategy","tasks":[{"title":"first independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null},{"title":"second independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null}]}</workbench-plan>. Tasks must be self-contained and ordered by recommended attention.`,
       };
     }
@@ -654,7 +820,7 @@ SOURCE: ${item.sourceUrl ?? item.sourceIdentifier ?? item.source}`);
     const assignedAgent = item.assignees.find((assignee): assignee is AgentRun['agent'] => assignee === 'codex' || assignee === 'claude');
     if (assignedAgent && kind !== 'review') agent = assignedAgent;
     return {
-      kind: resolvedKind, agent, complex: false,
+      kind: resolvedKind, agent, complex: false, reason,
       instructions: resolvedKind === 'review'
         ? 'Perform the authoritative frontend-reviewer first pass. Review only; do not modify code or execute tests.'
         : resolvedKind === 'execute' && isBackendImplementation(item)

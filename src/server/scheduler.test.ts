@@ -25,7 +25,7 @@ describe('scheduler recovery semantics (integration-level, exercised via reposit
     repository.claimRun(run.id, 'crashed-process', -1);
     expect(repository.getRun(run.id)?.status).toBe('running');
 
-    const { recoveredRunIds } = repository.reclaimExpired();
+    const { recoveredRunIds } = repository.reclaimExpired(0);
     expect(recoveredRunIds).toContain(run.id);
     const recovered = repository.getRun(run.id)!;
     expect(recovered.status).toBe('queued');
@@ -39,11 +39,11 @@ describe('scheduler recovery semantics (integration-level, exercised via reposit
     const run = repository.createRun(item.id, 'execute', 'codex', 'codex', '');
     repository.claimRun(run.id, 'crashed-process', -1);
 
-    const { failedRunIds, recoveredRunIds } = repository.reclaimExpired();
+    const { failedRunIds, recoveredRunIds } = repository.reclaimExpired(0);
     expect(failedRunIds).toContain(run.id);
     expect(recoveredRunIds).not.toContain(run.id);
     expect(repository.getRun(run.id)?.status).toBe('failed');
-    expect(repository.getRun(run.id)?.error).toMatch(/Interrupted by API restart/);
+    expect(repository.getRun(run.id)?.error).toMatch(/stopped reporting progress/);
   });
 
   it('dedup: a second concurrent claim on the same run is refused so it cannot run twice', () => {
@@ -74,9 +74,31 @@ describe('scheduler recovery semantics (integration-level, exercised via reposit
     // Jeffrey cancels while the lease looks stale.
     repository.updateRun(run.id, { status: 'canceled', completedAt: new Date().toISOString() });
 
-    const { recoveredRunIds, failedRunIds } = repository.reclaimExpired();
+    const { recoveredRunIds, failedRunIds } = repository.reclaimExpired(0);
     expect(recoveredRunIds).not.toContain(run.id);
     expect(failedRunIds).not.toContain(run.id);
     expect(repository.getRun(run.id)?.status).toBe('canceled');
+  });
+
+  it('leaves an interrupted runtime promotion reclaimable instead of failing it', () => {
+    const conversation = repository.ensureDefaultConversation();
+    const promotion = repository.createSharedMessage('system', 'Approval received.', 'running', conversation.id, [], 'promotion');
+    expect(repository.claimSharedMessage(promotion.id, 'crashed-process', -1)).toBe(true);
+
+    repository.reclaimExpired(0);
+
+    expect(repository.getSharedMessageById(promotion.id)?.status).toBe('running');
+    expect(repository.claimSharedMessage(promotion.id, 'new-process', 60_000)).toBe(true);
+  });
+
+  it('fails a running run with no owner lease so it cannot block a manual retry forever', () => {
+    const item = createItem();
+    const run = repository.createRun(item.id, 'execute', 'codex', 'codex', '');
+    repository.updateRun(run.id, { status: 'running' });
+
+    expect(repository.surfaceStrandedRuns(0)).toContain(run.id);
+
+    expect(repository.getRun(run.id)?.status).toBe('failed');
+    expect(repository.activeRunsForItem(item.id)).toHaveLength(0);
   });
 });

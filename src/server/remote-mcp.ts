@@ -76,7 +76,7 @@ export async function scanRemoteMcp(provider: PendingMcp['provider'], settings: 
     if (!tool) throw new Error('The MCP server did not expose a searchable tool.');
     const properties = (tool.inputSchema as { properties?: Record<string, unknown> }).properties ?? {};
     const args: Record<string, string | number> = {};
-    const query = requestedQuery || (provider === 'confluence' ? 'recent Jira and Confluence work relevant to me' : provider === 'slack' ? 'recent messages requiring my attention' : 'recent messages and files requiring my attention');
+    const query = requestedQuery || (provider === 'confluence' ? 'recent Jira and Confluence work relevant to me' : provider === 'slack' ? 'recent messages requiring my attention' : provider === 'figma' ? 'recent Figma files relevant to me' : 'recent messages and files requiring my attention');
     for (const key of ['query', 'search_query', 'text', 'cql']) if (key in properties) { args[key] = query; break; }
     if ('limit' in properties) args.limit = 30;
     const result = await client.callTool({ name: tool.name, arguments: args });
@@ -105,6 +105,6 @@ export async function scanRemoteMcp(provider: PendingMcp['provider'], settings: 
         }
       } catch { throw new Error('Atlassian returned malformed search results.'); }
     }
-    return text ? [{ provider, title: `${provider === 'confluence' ? 'Atlassian' : provider === 'slack' ? 'Slack' : 'Google Workspace'} activity`, summary: text.slice(0, 12_000), url: null, occurredAt: new Date().toISOString() }] : [];
+    return text ? [{ provider, title: `${provider === 'confluence' ? 'Atlassian' : provider === 'slack' ? 'Slack' : provider === 'figma' ? 'Figma' : 'Google Workspace'} activity`, summary: text.slice(0, 12_000), url: null, occurredAt: new Date().toISOString() }] : [];
   } finally { await client.close().catch(() => undefined); }
 }

@@ -19,36 +19,54 @@ import type { WorkItemRepository } from './repository.js';
  * a process only ever renews leases on work it itself claimed.
  */
 export const OWNER_ID = randomUUID();
-export const LEASE_MS = 60_000;
+export const LEASE_MS = 120_000;
 export const HEARTBEAT_MS = 20_000;
 export const TICK_MS = 5_000;
+export const RETENTION_MS = 24 * 60 * 60 * 1000;
 
 export function startScheduler(repository: WorkItemRepository): { stop: () => void } {
   const heartbeat = setInterval(() => {
     try { repository.renewLeases(OWNER_ID, LEASE_MS); }
-    catch (error) { console.error('Scheduler heartbeat failed:', error); }
+    catch (error) {
+      repository.logDiagnostic('scheduler_error', 'scheduler', 'failure', `Heartbeat failed: ${String(error)}`, undefined, 'heartbeat_error');
+    }
   }, HEARTBEAT_MS);
   heartbeat.unref();
 
   const tick = setInterval(() => {
+    const start = Date.now();
     try {
       const { recoveredRunIds, failedRunIds } = repository.reclaimExpired();
       if (recoveredRunIds.length || failedRunIds.length) {
-        console.log(`Scheduler reclaimed ${recoveredRunIds.length} run(s) for retry and marked ${failedRunIds.length} failed after interruption.`);
+        repository.logDiagnostic(
+          'scheduler_tick',
+          'scheduler',
+          'success',
+          `Reclaimed ${recoveredRunIds.length} run(s) for retry and marked ${failedRunIds.length} failed after interruption.`,
+          Date.now() - start,
+        );
       }
+      repository.surfaceStrandedRuns();
       const { runIds } = repository.dueWork();
       for (const runId of runIds) {
         const run = repository.getRun(runId);
         if (!run) continue;
-        void executeAgentRun(repository, run, OWNER_ID, LEASE_MS).catch((error) => console.error(`Scheduler dispatch failed for run ${runId}:`, error));
+        void executeAgentRun(repository, run, OWNER_ID, LEASE_MS).catch((error) => {
+          repository.logDiagnostic('scheduler_error', 'scheduler', 'failure', `Dispatch failed for run ${runId}: ${String(error)}`, undefined, 'dispatch_error');
+        });
       }
     } catch (error) {
-      console.error('Scheduler tick failed:', error);
+      repository.logDiagnostic('scheduler_error', 'scheduler', 'failure', `Tick failed: ${String(error)}`, Date.now() - start, 'tick_error');
     }
   }, TICK_MS);
   tick.unref();
 
+  const retention = setInterval(() => {
+    repository.runRetentionCleanup();
+  }, RETENTION_MS);
+  retention.unref();
+
   return {
-    stop: () => { clearInterval(heartbeat); clearInterval(tick); },
+    stop: () => { clearInterval(heartbeat); clearInterval(tick); clearInterval(retention); },
   };
 }

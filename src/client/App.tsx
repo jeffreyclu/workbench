@@ -1,8 +1,7 @@
-import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
-import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import {
   ArrowUpRight,
   ArrowLeft,
@@ -19,10 +18,9 @@ import {
   MessageCircle,
   MessageSquare,
   MessageSquarePlus,
-  GripVertical,
+  MoreHorizontal,
   Link2,
   Paperclip,
-  Pin,
   Plus,
   RefreshCw,
   Search,
@@ -33,15 +31,22 @@ import {
   X,
   Wrench,
 } from 'lucide-react';
-import { type CSSProperties, type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { AgentRun, Assignee, BrokerConnection, BrokerSourceId, DiscoveryCandidate, ExecutionPlan, QueueItemExplanation, SharedMessage, WorkItem, WorkItemDetail, WorkItemReferenceType } from '../shared/contracts';
+import { MarkdownComposer } from './markdown-composer.js';
+import { isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAGE, SELF_ASSIGNED_OWNER_MESSAGE } from '../shared/contracts';
+import type { AgentRun, Assignee, BrokerConnection, BrokerSourceId, DiscoveryCandidate, ExecutionPlan, ProviderSyncConflict, QueueItemExplanation, SharedConversation, SharedMessage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../shared/contracts';
 import { api } from './api';
 import { ArtifactLibraryView, ArtifactNav } from './artifacts';
-import { MemoriesView, MemoriesNav } from './memories';
+import { ConfirmationDialog } from './confirmation-dialog';
+import { InsightsView, InsightsNav } from './insights';
 import { hideWorkbenchControlBlocks, humanizeRunOutput } from './run-output';
+import { navigate, useRoute, type StackName } from './router';
 import { parseSnippet } from './search-snippet';
+import { Toaster } from './toast';
+import { toast, toastError } from './toast-store';
+import { SortableQueueItem as TaskQueueItem, TaskClassificationSelect } from './task-queue';
 
 function ReferenceTypeIcon({ type }: { type: WorkItemReferenceType }) {
   if (type === 'linear_issue') return <Cloud size={13} />;
@@ -49,6 +54,17 @@ function ReferenceTypeIcon({ type }: { type: WorkItemReferenceType }) {
   if (type === 'slack_thread') return <MessageSquare size={13} />;
   if (type === 'document') return <FileText size={13} />;
   return <Link2 size={13} />;
+}
+
+function ConversationOriginBadge({ workItemId }: Pick<SharedConversation, 'workItemId'>) {
+  const isTaskLinked = Boolean(workItemId);
+  return <span
+    className={`conversation-origin conversation-origin-${isTaskLinked ? 'task' : 'manual'}`}
+    title={isTaskLinked ? 'Created automatically for a task' : 'Created manually'}
+  >
+    {isTaskLinked ? <Bot size={10} aria-hidden="true" /> : <User size={10} aria-hidden="true" />}
+    {isTaskLinked ? 'Task-linked' : 'Manual'}
+  </span>;
 }
 
 function sourceLinkLabel(sourceUrl: string): string {
@@ -63,10 +79,58 @@ function sourceLinkLabel(sourceUrl: string): string {
   return 'Open source';
 }
 
+function sourceReferenceType(sourceUrl: string): WorkItemReferenceType {
+  try {
+    const host = new URL(sourceUrl).hostname.toLowerCase();
+    if (host.includes('slack.com')) return 'slack_thread';
+    if (host.includes('github.com') && /\/pull\/\d+(?:\/|$)/.test(sourceUrl)) return 'pull_request';
+    if (host.includes('linear.app')) return 'linear_issue';
+    if (host.includes('atlassian.net') || host.includes('confluence')) return 'document';
+  } catch { /* The normal source link still supports legacy malformed URLs. */ }
+  return 'other';
+}
+
+function sourceReferenceTitle(sourceUrl: string): string {
+  try {
+    return new URL(sourceUrl).hostname;
+  } catch {
+    return sourceUrl;
+  }
+}
+
 function formatFileSize(bytes: number): string {
   if (bytes < 1_024) return `${bytes} B`;
   if (bytes < 1_024 * 1_024) return `${(bytes / 1_024).toFixed(1)} KB`;
   return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`;
+}
+
+/**
+ * The activity log mixes Workbench's own routing decisions with Jeffrey's edits.
+ * Labelling each entry keeps both scannable without opening a run.
+ */
+const activityKindLabels: Record<string, string> = {
+  agent_fallback: 'fallback',
+  archived: 'archive',
+  chat_completed: 'chat',
+  chat_started: 'chat',
+  classification: 'task type',
+  completed: 'done',
+  edited: 'edit',
+  execution_retried: 'retry',
+  execution_started: 'routing',
+  model_selected: 'model',
+  model_preference: 'model pref',
+  provider_conflict_resolved: 'sync',
+  queue_moved: 'queue',
+  reference_added: 'link',
+  restored: 'restore',
+  stack_changed: 'stack',
+};
+
+const agentDecisionKinds = new Set(['agent_fallback', 'classification', 'execution_retried', 'execution_started', 'model_selected']);
+
+function activityKindLabel(kind: string): string {
+  return activityKindLabels[kind] ?? kind.replace(/_/g, ' ');
 }
 
 function selectBalancedVisibleAgent(messages: Array<{ author: string }>): 'codex' | 'claude' {
@@ -78,10 +142,25 @@ function selectBalancedVisibleAgent(messages: Array<{ author: string }>): 'codex
 function formatRunTelemetry(entry: Pick<AgentRun | SharedMessage, 'executionProfile' | 'inputTokens' | 'outputTokens' | 'fallbackFrom' | 'fallbackReason' | 'createdAt' | 'completedAt'> & { startedAt?: string | null }): string {
   const started = entry.startedAt ?? entry.createdAt;
   const duration = entry.completedAt ? Math.max(0, new Date(entry.completedAt).getTime() - new Date(started).getTime()) : null;
-  const tokenText = entry.inputTokens === null && entry.outputTokens === null ? 'tokens not reported' : `${entry.inputTokens?.toLocaleString() ?? '—'} in · ${entry.outputTokens?.toLocaleString() ?? '—'} out`;
+  const running = !entry.completedAt;
+  const tokenText = running
+    ? entry.outputTokens === null ? 'counting tokens…' : `~${entry.outputTokens.toLocaleString()} out · live estimate`
+    : entry.inputTokens === null && entry.outputTokens === null ? 'tokens not reported' : `${entry.inputTokens?.toLocaleString() ?? '—'} in · ${entry.outputTokens?.toLocaleString() ?? '—'} out`;
   const durationText = duration === null ? '' : ` · ${(duration / 1_000).toFixed(duration < 10_000 ? 1 : 0)}s`;
   const fallbackText = entry.fallbackFrom ? ` · fallback from ${entry.fallbackFrom}${entry.fallbackReason ? ` (${entry.fallbackReason})` : ''}` : '';
   return `${entry.executionProfile ?? 'unrouted'} · ${tokenText}${durationText}${fallbackText}`;
+}
+
+function compactTokenCount(value: number): string {
+  return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+}
+
+function formatRunBadge(entry: Pick<AgentRun | SharedMessage, 'inputTokens' | 'outputTokens' | 'completedAt'>): string {
+  if (!entry.completedAt) return entry.outputTokens && entry.outputTokens > 0 ? `~${compactTokenCount(entry.outputTokens)} out` : 'counting…';
+  if (entry.inputTokens === null && entry.outputTokens === null) return 'usage unavailable';
+  const input = entry.inputTokens === null ? '—' : compactTokenCount(entry.inputTokens);
+  const output = entry.outputTokens === null ? '—' : compactTokenCount(entry.outputTokens);
+  return `${input} in · ${output} out`;
 }
 
 function ModelProfileSelect({ value, onChange, className = '' }: { value: AgentRun['executionProfile']; onChange: (value: AgentRun['executionProfile']) => void; className?: string }) {
@@ -94,7 +173,23 @@ function ModelProfileSelect({ value, onChange, className = '' }: { value: AgentR
 }
 
 const conversationModelStorageKey = 'workbench:conversation-model-profiles';
+const taskModelStorageKey = 'workbench:task-model-profiles';
 const conversationDraftStorageKey = 'workbench:conversation-drafts';
+function readTaskModelProfiles(): Record<string, NonNullable<AgentRun['executionProfile']>> {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(taskModelStorageKey) ?? '{}') as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, NonNullable<AgentRun['executionProfile']>] => ['economy', 'standard', 'deep'].includes(String(entry[1]))));
+  } catch {
+    return {};
+  }
+}
+
+function writeTaskModelProfile(taskId: string, profile: AgentRun['executionProfile']): void {
+  const profiles = readTaskModelProfiles();
+  if (profile) profiles[taskId] = profile;
+  else delete profiles[taskId];
+  window.localStorage.setItem(taskModelStorageKey, JSON.stringify(profiles));
+}
 
 function readConversationDrafts(): Record<string, string> {
   try {
@@ -128,15 +223,6 @@ function readConversationModelProfiles(): Record<string, NonNullable<AgentRun['e
   }
 }
 
-function AssigneeIcon({ assignee }: { assignee: Assignee }) {
-  const Icon = assignee === 'jeffrey' ? User : Bot;
-  return (
-    <span className={`assignee-chip assignee-${assignee}`} title={assignee}>
-      <Icon size={12} /> {assignee}
-    </span>
-  );
-}
-
 function AgentMessageBody({ body, running, conversationId, workItemId }: { body: string; running: boolean; conversationId?: string; workItemId?: string }) {
   const visibleBody = hideWorkbenchControlBlocks(running ? humanizeRunOutput(body) : body);
   if (!visibleBody) return null;
@@ -157,8 +243,8 @@ function QueueExplanationList({ explanations }: { explanations: QueueItemExplana
       const moved = explanation.proposedPosition - explanation.previousPosition;
       return <li key={explanation.itemId} className="queue-explanation">
         <div className="queue-explanation-head">
+          <span className="queue-explanation-rank">{String(explanation.proposedPosition + 1).padStart(2, '0')}</span>
           <strong>{explanation.title}</strong>
-          <span className="queue-explanation-score">score {explanation.score}</span>
           {moved !== 0 && <span className={`queue-explanation-move ${moved < 0 ? 'up' : 'down'}`}>{moved < 0 ? `↑ ${Math.abs(moved)}` : `↓ ${moved}`}</span>}
         </div>
         {explanation.signals.length > 0 && <ul className="queue-signal-list">
@@ -171,38 +257,7 @@ function QueueExplanationList({ explanations }: { explanations: QueueItemExplana
   </ol>;
 }
 
-function SortableQueueItem({ item, index, selected, draggable, onSelect }: { item: WorkItem; index: number; selected: boolean; draggable: boolean; onSelect: () => void }) {
-  const queryClient = useQueryClient();
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id, disabled: !draggable });
-  const style: CSSProperties = { transform: CSS.Transform.toString(transform), transition };
-  const isHumanOnly = !item.agentOutcome && item.assignees.length === 1 && item.assignees[0] === 'jeffrey';
-  const setClassification = useMutation({
-    mutationFn: (kind: AgentRun['kind']) => api.classifyWorkItem(item.id, kind),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['work-items'] }),
-        queryClient.invalidateQueries({ queryKey: ['work-item', item.id] }),
-      ]);
-    },
-  });
-  return <div ref={setNodeRef} data-work-item-id={item.id} style={style} role="listitem" tabIndex={0} className={`queue-item ${item.agentOutcome ? `outcome-${item.agentOutcome}` : ''} ${isHumanOnly ? 'human-only' : ''} ${selected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}`} onClick={onSelect} onKeyDown={(event) => event.key === 'Enter' && onSelect()}>
-    {draggable ? <button className="drag-handle" onClick={(event) => event.stopPropagation()} aria-label={`Reorder ${item.title}`} {...attributes} {...listeners}><GripVertical size={15} /></button> : <span className="rank">{String(index + 1).padStart(2, '0')}</span>}
-    <span className="item-copy">
-      <strong>{item.title}</strong>
-      <span className="item-meta"><span>{item.sourceIdentifier ? `${item.sourceIdentifier} · ` : ''}{item.projectName ?? 'Personal'}</span><span className="source-tags">{item.sourceTags.map((source) => <span key={source} className={`source-tag source-${source.toLowerCase()}`}>{source}</span>)}</span></span>
-      {item.classificationKind && <span className="card-classification-control" onClick={(event) => event.stopPropagation()}><span className="card-classification"><Bot size={10} /> Task type</span><select className="card-classification-select" aria-label={`Task type for ${item.title}`} value={item.classificationKind} onChange={(event) => setClassification.mutate(event.target.value as AgentRun['kind'])} disabled={setClassification.isPending}><option value="research">Research</option><option value="analysis">Analysis</option><option value="strategy">Strategy</option><option value="execute">Execute</option><option value="review">Review</option></select>{setClassification.isPending && <LoaderCircle className="spin card-classification-spinner" size={10} />}</span>}
-      {isHumanOnly && <span className="human-only-marker"><User size={11} /> Your task</span>}
-      {item.agentOutcome && <span className={`agent-outcome agent-outcome-${item.agentOutcome}`}>
-        {item.agentOutcome === 'needs_attention' ? <AlertTriangle size={11} /> : item.agentOutcome === 'follow_ups' ? <Sparkles size={11} /> : <Check size={11} />}
-        {item.agentOutcome === 'needs_attention' ? 'Needs attention' : item.agentOutcome === 'follow_ups' ? 'Follow-ups recommended' : 'Finished'}
-      </span>}
-      {item.archivedAt && <span className={`archive-meta ${item.completionStatus}`}>{item.completionStatus === 'completed' ? 'Completed' : 'Incomplete'} · {new Date(item.archivedAt).toLocaleDateString()}</span>}
-      {item.assignees.length > 0 && <span className="assignees">{item.assignees.map((assignee) => <AssigneeIcon key={assignee} assignee={assignee} />)}</span>}
-    </span>
-  </div>;
-}
-
-function CreateTask({ onClose, defaultProjectName = '' }: { onClose: () => void; defaultProjectName?: string }) {
+function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { onClose: () => void; onCreated: (item: WorkItem) => void; defaultProjectName?: string }) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<'search' | 'link' | 'ai' | 'manual'>('search');
   const [sourceQuery, setSourceQuery] = useState('');
@@ -215,8 +270,9 @@ function CreateTask({ onClose, defaultProjectName = '' }: { onClose: () => void;
   const [projectName, setProjectName] = useState(defaultProjectName);
   const createManual = useMutation({
     mutationFn: api.createWorkItem,
-    onSuccess: async () => {
+    onSuccess: async ({ item }) => {
       await queryClient.invalidateQueries({ queryKey: ['work-items'] });
+      onCreated(item);
       onClose();
     },
   });
@@ -243,8 +299,9 @@ function CreateTask({ onClose, defaultProjectName = '' }: { onClose: () => void;
   }
   const addSearchResult = useMutation({
     mutationFn: (result: { title: string; summary: string; url: string | null }) => api.createWorkItem({ title: result.title.replace(/^[^·]+ · /, ''), description: result.summary, projectName: defaultProjectName || null, status: 'backlog', dueDate: null, sourceUrl: result.url, workspacePath: null }),
-    onSuccess: async () => {
+    onSuccess: async ({ item }) => {
       await queryClient.invalidateQueries({ queryKey: ['work-items'] });
+      onCreated(item);
       onClose();
     },
   });
@@ -366,19 +423,31 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const provider = connection.id;
-  const reconnecting = connection.state === 'error';
+  const reconnecting = connection.state === 'error' || connection.state === 'reauth_required';
   const disconnect = useMutation({
-    mutationFn: () => api.disconnectSource(provider === 'atlassian' ? 'confluence' : 'github'),
+    mutationFn: () => api.disconnectSource(provider === 'atlassian' ? 'confluence' : provider === 'slack' || provider === 'figma' ? provider : 'github'),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['source-connections'] }),
   });
   const mcpConnect = useMutation({
     mutationFn: async () => {
+      // `codex mcp login figma` opens the provider's browser window itself.
+      // Opening a Workbench popup as well duplicates the authorization window.
+      if (provider === 'figma') {
+        await api.startManagedFigmaOAuth();
+        return;
+      }
       const popup = window.open('about:blank', `workbench-${provider}-oauth`, 'popup,width=720,height=760');
       if (!popup) throw new Error('Popup blocked. Allow popups for Workbench and try again.');
       popup.document.write('<title>Connecting MCP</title><body style="margin:0;background:#10100f;color:#ddd;font:16px system-ui;display:grid;place-items:center;min-height:100vh">Preparing secure MCP authorization…</body>');
       try {
-        if (reconnecting) await api.disconnectSource('confluence');
-        const { url } = await api.startMcpOAuth('confluence'); popup.location.replace(url);
+        if (provider === 'slack') {
+          popup.location.replace('https://chatgpt.com/#settings/Connectors');
+          return;
+        }
+        const oauthProvider = provider === 'atlassian' ? 'confluence' : null;
+        if (!oauthProvider) throw new Error(`${connection.name} does not support MCP authorization here.`);
+        if (reconnecting) await api.disconnectSource(oauthProvider);
+        const { url } = await api.startMcpOAuth(oauthProvider); popup.location.replace(url);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Could not start MCP authorization.';
         popup.document.body.textContent = `Connection failed: ${message}`;
@@ -397,23 +466,27 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
     return () => window.removeEventListener('message', receiveOAuth);
   }, [queryClient]);
   const connected = connection.state === 'connected';
+  useEffect(() => {
+    if (provider === 'figma' && connected) setOpen(false);
+  }, [connected, provider]);
   const disabled = connection.state === 'disabled';
-  const canAuthorize = provider === 'atlassian';
+  const canAuthorize = provider === 'atlassian' || provider === 'slack' || provider === 'figma';
   return <div className={`connection-card ${connected ? 'connected' : ''} ${disabled ? 'unavailable' : ''}`}>
     <div className="connection-summary"><span><strong>{connection.name}</strong><small>{connection.detail}</small></span>
-      {canAuthorize && connected ? <button className="button secondary compact" onClick={() => disconnect.mutate()}>Disconnect</button> : canAuthorize ? <button className="button secondary compact" onClick={() => setOpen((value) => !value)}>{open ? 'Cancel' : reconnecting ? 'Reconnect MCP' : 'Connect MCP'}</button> : <span className="mcp-required">{disabled ? 'Awaiting IT approval' : connected ? 'Connected' : 'Not connected'}</span>}
+      {canAuthorize && connected && provider !== 'slack' ? <button className="button secondary compact" onClick={() => disconnect.mutate()}>Disconnect</button> : canAuthorize ? <button className="button secondary compact" onClick={() => setOpen((value) => !value)}>{open ? 'Cancel' : provider === 'slack' ? 'Manage connection' : reconnecting ? 'Reconnect MCP' : 'Connect MCP'}</button> : <span className="mcp-required">{disabled ? 'Awaiting IT approval' : connected ? 'Connected' : 'Not connected'}</span>}
     </div>
     <div className="connection-meta">{connection.host === 'workbench' ? 'Workbench' : 'Managed connector'}<span>·</span>{connection.capabilities.map((capability) => capability.replace('_', ' ')).join(' · ') || 'Unavailable'}</div>
     {connection.lastError && <p className="error-message">{connection.lastError}</p>}
     {open && canAuthorize && <div className="connection-form mcp-connection-form">
-      <button className="button primary" onClick={() => mcpConnect.mutate()} disabled={mcpConnect.isPending}>{mcpConnect.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />} Authorize MCP</button>
+      <button className="button primary" onClick={() => mcpConnect.mutate()} disabled={mcpConnect.isPending}>{mcpConnect.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />} {provider === 'slack' ? 'Open ChatGPT connections' : 'Authorize MCP'}</button>
+      {provider === 'figma' && mcpConnect.isSuccess && <p className="muted">Complete authorization in the Figma window that just opened.</p>}
       {mcpConnect.error && <p className="error-message">Connection failed: {mcpConnect.error.message}</p>}
     </div>}
   </div>;
 }
 
 function SourcesDialog({ onClose }: { onClose: () => void }) {
-  const connections = useQuery({ queryKey: ['source-connections'], queryFn: api.listSourceConnections });
+  const connections = useQuery({ queryKey: ['source-connections'], queryFn: api.listSourceConnections, refetchInterval: 2_000 });
   const linearConnection = connections.data?.connections.find((connection) => connection.id === 'linear');
   const linearConfigured = linearConnection?.state === 'connected';
 
@@ -438,36 +511,68 @@ function SourcesDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function SharedWorkspace({ initialConversationId, onOpenTask }: { initialConversationId?: string | null; onOpenTask?: (taskId: string) => void }) {
+function FollowUpArchiveDialog({ count, onChoose, onClose, pending }: { count: number; onChoose: (archiveParent: boolean) => void; onClose: () => void; pending: boolean }) {
+  return <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+    <section className="dialog follow-up-archive-dialog" role="dialog" aria-modal="true" aria-labelledby="follow-up-archive-title" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="dialog-header"><div><span className="eyebrow">Create follow-ups</span><h2 id="follow-up-archive-title">What should happen to the original?</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={17} /></button></div>
+      <p className="dialog-description">Create {count} selected follow-up task{count === 1 ? '' : 's'}, then choose whether the original task and conversation stay active.</p>
+      <div className="follow-up-archive-actions">
+        <button type="button" className="button primary" disabled={pending} onClick={() => onChoose(false)}>Create and keep open</button>
+        <button type="button" className="button secondary" disabled={pending} onClick={() => onChoose(true)}><Archive size={14} /> Create and archive original</button>
+      </div>
+    </section>
+  </div>;
+}
+
+export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectConversation }: { initialConversationId?: string | null; onOpenTask?: (taskId: string) => void; onSelectConversation?: (conversationId: string | null) => void }) {
   const queryClient = useQueryClient();
   const [body, setBody] = useState(() => initialConversationId ? readConversationDrafts()[initialConversationId] ?? '' : '');
   const [dispatchTo, setDispatchTo] = useState<'both' | 'codex' | 'claude'>('codex');
   const [conversationModelProfiles, setConversationModelProfiles] = useState(readConversationModelProfiles);
   const dispatchInitializedConversationId = useRef<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(initialConversationId ?? null);
+  const [locallyReadConversationIds, setLocallyReadConversationIds] = useState<Set<string>>(new Set());
   const conversationIdRef = useRef(conversationId);
   const sentDraftRef = useRef<{ conversationId: string; body: string } | null>(null);
+  const updateConversationPreferences = useMutation({
+    mutationFn: ({ conversationId, profile }: { conversationId: string; profile: AgentRun['executionProfile'] }) => api.updateSharedConversationPreferences(conversationId, profile),
+    onSuccess: async ({ conversation }) => {
+      setConversationModelProfiles((current) => ({ ...current, ...(conversation.preferredExecutionProfile ? { [conversation.id]: conversation.preferredExecutionProfile } : {}) }));
+      await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
+    },
+    onError: (error) => toastError('Could not save the model choice.', error),
+  });
+  const selectConversationRef = useRef(onSelectConversation);
+  useEffect(() => { selectConversationRef.current = onSelectConversation; });
   useEffect(() => {
     conversationIdRef.current = conversationId;
     setBody(conversationId ? readConversationDrafts()[conversationId] ?? '' : '');
+  }, [conversationId]);
+  useEffect(() => {
+    // The rail keeps owning the live selection; the address bar just follows it,
+    // so an open conversation can be reloaded, shared, and stepped back out of.
+    selectConversationRef.current?.(conversationId);
   }, [conversationId]);
   function updateBody(nextBody: string) {
     setBody(nextBody);
     if (conversationId) writeConversationDraft(conversationId, nextBody);
   }
-  const executionProfile = conversationId ? conversationModelProfiles[conversationId] ?? null : null;
   function setExecutionProfile(profile: AgentRun['executionProfile']) {
     if (!conversationId) return;
+    const targetConversationId = conversationId;
     setConversationModelProfiles((current) => {
       const next = { ...current };
-      if (profile) next[conversationId] = profile;
-      else delete next[conversationId];
+      if (profile) next[targetConversationId] = profile;
+      else delete next[targetConversationId];
       window.localStorage.setItem(conversationModelStorageKey, JSON.stringify(next));
       return next;
     });
+    updateConversationPreferences.mutate({ conversationId: targetConversationId, profile });
   }
   const [conversationView, setConversationView] = useState<'active' | 'archive'>('active');
+  const [deleteConversationPromptOpen, setDeleteConversationPromptOpen] = useState(false);
   const [conversationSearch, setConversationSearch] = useState('');
+  const [dismissedCompletionPromptPromotionId, setDismissedCompletionPromptPromotionId] = useState<string | null>(null);
   const [debouncedConversationSearch, setDebouncedConversationSearch] = useState('');
   useEffect(() => {
     const timeout = window.setTimeout(() => setDebouncedConversationSearch(conversationSearch.trim()), 300);
@@ -479,13 +584,13 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
     enabled: debouncedConversationSearch.length > 0,
   });
   const [pendingSelectedConversation, setPendingSelectedConversation] = useState<{ id: string; title: string } | null>(null);
-  const [pinnedOnly, setPinnedOnly] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [railOpen, setRailOpen] = useState(false);
   const railToggleRef = useRef<HTMLButtonElement>(null);
   const [proposedPlan, setProposedPlan] = useState<ExecutionPlan | null>(null);
   const [proposedPlanConversationId, setProposedPlanConversationId] = useState<string | null>(null);
   const [selectedPlanTaskIndexes, setSelectedPlanTaskIndexes] = useState<Set<number>>(new Set());
+  const [planArchivePromptOpen, setPlanArchivePromptOpen] = useState(false);
   const initializedPlanSelectionId = useRef<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -504,12 +609,38 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
   }, [conversationList.length, conversationRows, conversations]);
   const conversationActivity = useQuery({ queryKey: ['shared-message-activity'], queryFn: () => api.listSharedMessages(), refetchInterval: 1_000 });
   const activeConversationIds = new Set(conversationActivity.data?.messages.filter((message) => message.status === 'running').map((message) => message.conversationId) ?? []);
+  const fallbackConversationStates = useMemo(() => {
+    const states = new Map<string, SharedConversation['state']>();
+    for (const message of conversationActivity.data?.messages ?? []) {
+      if (message.author !== 'codex' && message.author !== 'claude') continue;
+      states.set(message.conversationId, message.status === 'running' || message.status === 'queued' ? 'working'
+        : message.status === 'failed' || message.status === 'canceled' ? 'needs_attention'
+          : message.status === 'completed' ? 'finished' : null);
+    }
+    return states;
+  }, [conversationActivity.data?.messages]);
   const selectedConversation = conversationList.find((conversation) => conversation.id === conversationId);
+  const executionProfile = conversationId ? conversationModelProfiles[conversationId] ?? selectedConversation?.preferredExecutionProfile ?? null : null;
+  useEffect(() => {
+    if (!selectedConversation?.preferredExecutionProfile) return;
+    const profile = selectedConversation.preferredExecutionProfile;
+    setConversationModelProfiles((current) => {
+      if (current[selectedConversation.id] === profile) return current;
+      const next = { ...current, [selectedConversation.id]: profile };
+      window.localStorage.setItem(conversationModelStorageKey, JSON.stringify(next));
+      return next;
+    });
+  }, [selectedConversation?.id, selectedConversation?.preferredExecutionProfile]);
   const linkedWorkItemId = selectedConversation?.workItemId ?? null;
   const linkedWorkItem = useQuery({ queryKey: ['work-item', linkedWorkItemId], queryFn: () => api.getWorkItem(linkedWorkItemId!), enabled: Boolean(linkedWorkItemId), refetchInterval: 1_000 });
-  useEffect(() => {
-    if (initialConversationId) setConversationId(initialConversationId);
-  }, [initialConversationId]);
+  const linkedTaskCompleted = linkedWorkItem.data?.item.completionStatus === 'completed';
+  // A task Jeffrey has claimed keeps its owner: chatting here must not hand it to an agent.
+  const linkedTaskIsSelfAssigned = isSelfAssigned(linkedWorkItem.data?.item.assignees ?? []);
+  // initialConversationId is navigation input, not a controlled selection.
+  // Applying later prop changes here allowed a delayed Execute response to
+  // steal focus after Jeffrey had already selected another conversation.
+  // The workspace is remounted when it is opened from another view, so the
+  // useState initializer above is the only synchronization we need.
   useEffect(() => {
     if (!conversationId && conversationList[0]) setConversationId(conversationList[0].id);
   }, [conversationId, conversationList]);
@@ -572,12 +703,14 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] }),
         queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
+        queryClient.invalidateQueries({ queryKey: ['insights'] }),
         queryClient.invalidateQueries({ queryKey: ['work-items'] }),
         linkedWorkItemId ? queryClient.invalidateQueries({ queryKey: ['work-item', linkedWorkItemId] }) : Promise.resolve(),
       ]);
     },
-    onError: (_error, _variables, context) => {
+    onError: (error, _variables, context) => {
       if (linkedWorkItemId && context?.previous) queryClient.setQueryData(['work-item', linkedWorkItemId], context.previous);
+      toastError('Could not send that message.', error);
     },
   });
   const approvePreview = useMutation({
@@ -586,6 +719,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] }),
         queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
+        queryClient.invalidateQueries({ queryKey: ['runtime-preview-status'] }),
       ]);
     },
   });
@@ -595,51 +729,99 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
   });
   const deleteConversation = useMutation({
     mutationFn: api.deleteSharedConversation,
-    onSuccess: async () => { setConversationId(null); await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }); },
+    onSuccess: async () => {
+      setDeleteConversationPromptOpen(false);
+      setConversationId(null);
+      toast.success('Conversation deleted.');
+      await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
+    },
+    onError: (error) => toastError('Could not delete the conversation.', error),
   });
   const archiveConversation = useMutation({
     mutationFn: api.archiveSharedConversation,
-    onSuccess: async () => { setConversationId(null); await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }); },
+    onSuccess: async ({ conversation }) => {
+      setConversationView('archive');
+      setConversationId(conversation.id);
+      setPendingSelectedConversation({ id: conversation.id, title: conversation.title });
+      toast.success(linkedWorkItemId ? 'Conversation and related task archived.' : 'Conversation archived.');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
+        queryClient.invalidateQueries({ queryKey: ['work-items'] }),
+        queryClient.invalidateQueries({ queryKey: ['work-item-counts'] }),
+        linkedWorkItemId ? queryClient.invalidateQueries({ queryKey: ['work-item', linkedWorkItemId] }) : Promise.resolve(),
+      ]);
+    },
+    onError: (error) => toastError('Could not archive the conversation.', error),
   });
   const restoreConversation = useMutation({
     mutationFn: api.restoreSharedConversation,
-    onSuccess: async () => { setConversationId(null); await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }); },
+    onSuccess: async ({ conversation }) => {
+      setConversationView('active');
+      setConversationId(conversation.id);
+      setPendingSelectedConversation({ id: conversation.id, title: conversation.title });
+      toast.success('Conversation restored.');
+      await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
+    },
+    onError: (error) => toastError('Could not restore the conversation.', error),
+  });
+  const completeLinkedTask = useMutation({
+    mutationFn: () => api.completeWorkItem(linkedWorkItemId!),
+    onSuccess: async ({ item }) => {
+      queryClient.setQueryData<WorkItemDetail>(['work-item', item.id], (current) => current && ({ ...current, item }));
+      if (conversationId && selectedConversation) {
+        setConversationView('archive');
+        setPendingSelectedConversation({ id: conversationId, title: selectedConversation.title });
+      }
+      toast.success('Task completed.', { description: item.title });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['work-items'] }),
+        queryClient.invalidateQueries({ queryKey: ['archived-work-items'] }),
+        queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
+        queryClient.invalidateQueries({ queryKey: ['work-item-counts'] }),
+        queryClient.invalidateQueries({ queryKey: ['work-item', item.id] }),
+      ]);
+    },
+    onError: (error) => toastError('Could not complete the task.', error),
   });
   const forkConversation = useMutation({
     mutationFn: api.forkSharedConversation,
-    onSuccess: async ({ conversation }) => { setConversationView('active'); setConversationId(conversation.id); await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }); },
+    onSuccess: async ({ conversation }) => {
+      setConversationView('active');
+      setConversationId(conversation.id);
+      toast.success('Conversation forked.');
+      await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
+    },
+    onError: (error) => toastError('Could not fork the conversation.', error),
   });
   const cancelReply = useMutation({
     mutationFn: api.cancelSharedReply,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] }),
+    onError: (error) => toastError('Could not cancel the response.', error),
+  });
+  const retryReply = useMutation<unknown, Error, SharedMessage>({
+    mutationFn: async (message: SharedMessage) => {
+      const linkedRun = linkedWorkItem.data?.runs.find((run) => run.messageId === message.id);
+      return linkedRun ? await api.retryAgentRun(linkedRun.id) : await api.retrySharedMessage(message.id);
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] }),
+        queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
+        queryClient.invalidateQueries({ queryKey: ['work-item', linkedWorkItemId] }),
+        queryClient.invalidateQueries({ queryKey: ['work-items'] }),
+      ]);
+    },
+    onError: (error) => toastError('Could not retry the response.', error),
   });
   const interjectMessage = useMutation({
     mutationFn: api.interjectSharedMessage,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] }),
-  });
-  const togglePin = useMutation({
-    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) => api.updateSharedMessage(id, pinned),
-    onMutate: async ({ id, pinned }) => {
-      await queryClient.cancelQueries({ queryKey: ['shared-messages', conversationId] });
-      const previous = queryClient.getQueryData<{ messages: SharedMessage[] }>(['shared-messages', conversationId]);
-      if (previous) {
-        queryClient.setQueryData(['shared-messages', conversationId], {
-          ...previous,
-          messages: previous.messages.map((message) => message.id === id ? { ...message, pinned } : message),
-        });
-      }
-      return { previous };
-    },
-    onError: (_error, _variables, context) => {
-      if (context?.previous) queryClient.setQueryData(['shared-messages', conversationId], context.previous);
-    },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] }),
+    onError: (error) => toastError('Could not interject that message.', error),
   });
   const updateConversationOwner = useMutation({
     mutationFn: (target: 'both' | 'codex' | 'claude') => {
-      const keepJeffrey = linkedWorkItem.data?.item.assignees.includes('jeffrey') ? ['jeffrey' as const] : [];
       const agents = target === 'both' ? ['codex' as const, 'claude' as const] : [target];
-      return api.updateWorkItem(linkedWorkItemId!, { assignees: [...keepJeffrey, ...agents] });
+      return api.updateWorkItem(linkedWorkItemId!, { assignees: agents });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['work-item', linkedWorkItemId] }),
   });
@@ -654,10 +836,37 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
     },
   });
   const resolvePlan = useMutation({
-    mutationFn: (resolution: 'accepted' | 'rejected') => api.resolveExecutionPlan(proposedPlan!.id, resolution, resolution === 'accepted' ? [...selectedPlanTaskIndexes] : undefined),
-    onSuccess: async () => { setProposedPlan(null); setProposedPlanConversationId(null); await Promise.all([queryClient.invalidateQueries({ queryKey: ['work-items'] }), queryClient.invalidateQueries({ queryKey: ['work-item', linkedWorkItemId] })]); },
+    mutationFn: ({ resolution, archiveParent = false }: { resolution: 'accepted' | 'rejected'; archiveParent?: boolean }) =>
+      api.resolveExecutionPlan(proposedPlan!.id, resolution, resolution === 'accepted' ? [...selectedPlanTaskIndexes] : undefined, archiveParent),
+    onSuccess: async (result, { resolution }) => {
+      // Accepting a decomposition archives the historical parent task and its
+      // conversation. Keep that originating thread selected in the Archive
+      // view instead of rendering its cached messages under "New conversation".
+      if (resolution === 'accepted' && result.parentArchived && conversationId) {
+        setConversationView('archive');
+        setPendingSelectedConversation({ id: conversationId, title: selectedConversation?.title ?? 'Conversation' });
+      }
+      setProposedPlan(null);
+      setProposedPlanConversationId(null);
+      setPlanArchivePromptOpen(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
+        queryClient.invalidateQueries({ queryKey: ['work-items'] }),
+        queryClient.invalidateQueries({ queryKey: ['work-item', linkedWorkItemId] }),
+      ]);
+    },
   });
   const latestMessageLength = messages.data?.messages.at(-1)?.body.length ?? 0;
+  useEffect(() => {
+    if (!conversationId) return;
+    setLocallyReadConversationIds((current) => current.has(conversationId) ? current : new Set(current).add(conversationId));
+    void api.markSharedConversationRead(conversationId)
+      .then(() => Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
+        queryClient.invalidateQueries({ queryKey: ['conversation-unread-count'] }),
+      ]))
+      .catch(() => undefined);
+  }, [conversationId, latestMessageLength, queryClient]);
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ behavior: 'smooth' });
   }, [messages.data?.messages.length, latestMessageLength, proposedPlan]);
@@ -690,18 +899,32 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
   }
 
   const conversationMessages = messages.data?.messages ?? [];
-  const latestCompletedAgentIndex = conversationMessages.reduce((latest, message, index) =>
-    (message.author === 'codex' || message.author === 'claude') && message.status === 'completed' ? index : latest, -1);
-  const latestCompletedPromotionIndex = conversationMessages.reduce((latest, message, index) =>
-    message.author === 'system' && message.status === 'completed' && /preview approved and promoted/i.test(message.body) ? index : latest, -1);
+  const latestAgentMessageId = [...conversationMessages].reverse().find((message) => message.author === 'codex' || message.author === 'claude')?.id ?? null;
+  const previewStatus = useQuery({ queryKey: ['runtime-preview-status'], queryFn: api.getRuntimePreviewStatus, refetchInterval: 2_000 });
   const promotionInFlight = conversationMessages.some((message) =>
     message.author === 'system' && message.status === 'running' && /approval received|promot/i.test(message.body));
   const agentWorkInFlight = conversationMessages.some((message) =>
     (message.author === 'codex' || message.author === 'claude') && (message.status === 'queued' || message.status === 'running'));
-  const previewApprovalMessageId = linkedWorkItem.data?.item.projectName?.toLowerCase() === 'workbench'
-    && latestCompletedAgentIndex > latestCompletedPromotionIndex && !promotionInFlight && !agentWorkInFlight
-    ? conversationMessages[latestCompletedAgentIndex]?.id ?? null
-    : null;
+  const latestCompletedAgentIndex = conversationMessages.reduce((latest, message, index) =>
+    (message.author === 'codex' || message.author === 'claude') && message.status === 'completed' ? index : latest, -1);
+  const latestPreviewApprovalRequestIndex = conversationMessages.reduce((latest, message, index) =>
+    message.author === 'jeffrey' && /^\s*approve(?:\s+(?:the\s+)?)?(?:workbench\s+)?preview[.!]?\s*$/i.test(message.body) ? index : latest, -1);
+  const latestPreviewPromotionIndex = conversationMessages.reduce((latest, message, index) =>
+    message.author === 'system' && message.status === 'completed' && /preview approved and promoted/i.test(message.body) ? index : latest, -1);
+  const latestSuccessfulPromotion = latestPreviewPromotionIndex >= 0 ? conversationMessages[latestPreviewPromotionIndex] : null;
+  const completionPromptAvailable = Boolean(
+    latestSuccessfulPromotion
+    && linkedWorkItem.data?.item
+    && !linkedTaskCompleted
+    && dismissedCompletionPromptPromotionId !== latestSuccessfulPromotion.id,
+  );
+  const approvalRequestOutstanding = latestPreviewApprovalRequestIndex > Math.max(latestCompletedAgentIndex, latestPreviewPromotionIndex);
+  const taskHasSuccessfulAgentOutcome = linkedWorkItem.data?.item.agentOutcome === 'finished' || linkedWorkItem.data?.item.agentOutcome === 'follow_ups';
+  const conversationNeedsPreviewApproval = taskHasSuccessfulAgentOutcome && latestCompletedAgentIndex > latestPreviewPromotionIndex;
+  const previewApprovalAvailable = linkedWorkItem.data?.item.stack === 'workbench'
+    && taskHasSuccessfulAgentOutcome
+    && !approvalRequestOutstanding
+    && (previewStatus.data?.pending || conversationNeedsPreviewApproval) && !promotionInFlight && !agentWorkInFlight;
 
   return (
     <main className={`shared-workspace ${railOpen ? 'rail-open' : ''}`}>
@@ -742,7 +965,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
             <div className="conversation-view-tabs"><button className={conversationView === 'active' ? 'active' : ''} onClick={() => { setConversationView('active'); setConversationId(null); }}>Active</button><button className={conversationView === 'archive' ? 'active' : ''} onClick={() => { setConversationView('archive'); setConversationId(null); }}>Archive</button></div>
             <div ref={conversationScrollRef} className="conversation-tabs">
               <div className="virtual-list" style={{ height: conversationVirtualizer.getTotalSize() }}>
-                {displayedConversationRows.map((row) => { const conversation = conversationList[row.index]; const isActive = conversation.isActive || activeConversationIds.has(conversation.id); return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={row.index} className="virtual-row" style={{ transform: `translateY(${row.start}px)` }}><button className={conversation.id === conversationId ? 'active' : ''} onClick={() => { setConversationId(conversation.id); setRailOpen(false); }}><span className="conversation-tab-title"><strong>{conversation.title}</strong>{isActive && <LoaderCircle className="spin conversation-tab-spinner" size={12} aria-label="Agent working" />}</span><small>{isActive ? 'Agent working…' : new Date(conversation.updatedAt).toLocaleDateString()}</small></button></div>; })}
+                {displayedConversationRows.map((row) => { const conversation = conversationList[row.index]; const isActive = conversation.isActive || activeConversationIds.has(conversation.id); const isUnread = Boolean(conversation.isUnread && !locallyReadConversationIds.has(conversation.id) && conversation.id !== conversationId); const state = isActive ? 'working' : conversation.state ?? fallbackConversationStates.get(conversation.id) ?? null; const stateLabel = state === 'working' ? 'Working' : state === 'needs_attention' ? 'Failed or canceled' : state === 'waiting_approval' ? 'Review follow-ups' : state === 'finished' ? 'Finished' : null; return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={row.index} className="virtual-row" style={{ transform: `translateY(${row.start}px)` }}><button className={`${conversation.id === conversationId ? 'active' : ''} ${isUnread ? 'conversation-unread' : 'conversation-read'} ${state ? `conversation-${state}` : ''}`} onClick={() => { setConversationId(conversation.id); setRailOpen(false); }}><span className="conversation-tab-title"><strong>{conversation.title}</strong>{isUnread && <span className="conversation-unread-marker">New</span>}{stateLabel && <span className={`conversation-state conversation-state-${state}`}>{state === 'working' && <LoaderCircle className="spin" size={10} />}{stateLabel}</span>}</span><small className="conversation-tab-meta"><ConversationOriginBadge workItemId={conversation.workItemId} /><span>{state === 'working' ? 'Agent working…' : new Date(conversation.updatedAt).toLocaleDateString()}</span></small></button></div>; })}
               </div>
               {!conversations.isLoading && conversationList.length === 0 && <div className="page-state">No {conversationView} conversations.</div>}
               {conversations.isFetchingNextPage && <div className="page-state"><LoaderCircle className="spin" size={12} /> Loading more…</div>}
@@ -751,23 +974,17 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
         )}
       </aside>
       <section className="agent-console" aria-label="Shared agent workspace">
-        <header className="agent-console-header"><button ref={railToggleRef} type="button" className="rail-toggle icon-button" aria-label="Show conversations" aria-controls="conversation-rail" aria-expanded={railOpen} onClick={() => setRailOpen(true)}><Menu size={16} /></button><div className="agent-console-title"><span className="eyebrow">Shared context</span><h2>{selectedConversation?.title ?? (pendingSelectedConversation?.id === conversationId ? pendingSelectedConversation.title : 'New conversation')}</h2>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={12} /> Back to task</button>}</div>{conversationId && selectedConversation && <div className="conversation-window-actions"><button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<button className="icon-button delete-conversation-button" onClick={() => window.confirm('Permanently delete this conversation?') && deleteConversation.mutate(conversationId)} aria-label="Delete conversation" title="Delete permanently"><Trash2 size={14} /></button></div>}</header>
-        <div className="thread-filter-bar">
-          <button type="button" className={`pin-filter-toggle ${pinnedOnly ? 'active' : ''}`} onClick={() => setPinnedOnly((value) => !value)} aria-pressed={pinnedOnly}>
-            <Pin size={11} /> {pinnedOnly ? 'Showing pinned only' : 'Show pinned only'}
-          </button>
-        </div>
+        <header className="agent-console-header"><button ref={railToggleRef} type="button" className="rail-toggle icon-button" aria-label="Show conversations" aria-controls="conversation-rail" aria-expanded={railOpen} onClick={() => setRailOpen(true)}><Menu size={16} /></button><div className="agent-console-title">{selectedConversation ? <ConversationOriginBadge workItemId={selectedConversation.workItemId} /> : <span className="eyebrow">Shared context</span>}<h2>{selectedConversation?.title ?? (pendingSelectedConversation?.id === conversationId ? pendingSelectedConversation.title : 'New conversation')}</h2>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={12} /> Back to task</button>}</div>{conversationId && selectedConversation && <div className="conversation-window-actions">{linkedWorkItem.data?.item && <button type="button" className="complete-task-button" disabled={linkedTaskCompleted || completeLinkedTask.isPending} onClick={() => completeLinkedTask.mutate()} aria-label={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'}>{completeLinkedTask.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}<span>{completeLinkedTask.isPending ? 'Completing…' : linkedTaskCompleted ? 'Completed' : 'Complete task'}</span></button>}<button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<span className={`conversation-delete-control ${selectedConversation.workItemId ? 'is-disabled' : ''}`} tabIndex={selectedConversation.workItemId ? 0 : undefined}><button className="icon-button delete-conversation-button" disabled={Boolean(selectedConversation.workItemId)} onClick={() => setDeleteConversationPromptOpen(true)} aria-label="Delete conversation" aria-describedby={selectedConversation.workItemId ? 'linked-conversation-delete-help' : undefined} title={selectedConversation.workItemId ? undefined : 'Delete permanently'}><Trash2 size={14} /></button>{selectedConversation.workItemId && <span id="linked-conversation-delete-help" className="action-tooltip" role="tooltip">Delete the related task to delete this conversation.</span>}</span></div>}</header>
+        {linkedWorkItem.data?.item && <div className="thread-filter-bar"><TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} /></div>}
         <div className="shared-thread">
           {messages.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading room…</div>}
           {messages.error && <div className="list-state compact-state error-message">Could not load shared messages: {messages.error.message}</div>}
           {messages.data?.messages.length === 0 && <div className="list-state compact-state">No messages yet. Ask Codex or Claude to get started.</div>}
-          {messages.data && messages.data.messages.length > 0 && pinnedOnly && !conversationMessages.some((message) => message.pinned) && <div className="list-state compact-state">No pinned messages yet.</div>}
-          {(pinnedOnly ? conversationMessages.filter((message) => message.pinned) : conversationMessages).map((message) => (
+          {conversationMessages.map((message) => (
             <article className={`shared-message shared-${message.author}`} key={message.id}>
               <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                 {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
-                {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{message.executionProfile === 'routing' ? 'routing' : message.model} · {formatRunTelemetry(message)}</span>}
-                <button type="button" className={message.pinned ? 'pinned' : ''} onClick={() => togglePin.mutate({ id: message.id, pinned: !message.pinned })} disabled={togglePin.isPending && togglePin.variables?.id === message.id} aria-pressed={message.pinned} aria-label={message.pinned ? 'Unpin message' : 'Pin message'} title={message.pinned ? 'Unpin message' : 'Pin message'}><Pin size={12} /></button>
+                {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{message.executionProfile === 'routing' ? 'routing' : message.model} · {formatRunBadge(message)}</span>}
                 {message.status === 'running' && <button onClick={() => cancelReply.mutate(message.id)} title="Cancel response"><X size={12} /></button>}
               </header>
               {message.status === 'running' && <p className="thinking"><LoaderCircle className="spin" size={13} /> Live · {message.body ? 'receiving activity' : 'starting agent'}</p>}
@@ -780,8 +997,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
               )}
               {message.body && (message.author === 'codex' || message.author === 'claude'
                 ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} />
-                : <p>{message.body}</p>)}
+                : <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.body}</ReactMarkdown></div>)}
               {message.status === 'canceled' && <p className="muted">Response canceled.</p>}
+              {message.id === latestAgentMessageId && (message.status === 'failed' || message.status === 'canceled') && <div className="message-actions"><button onClick={() => retryReply.mutate(message)} disabled={retryReply.isPending}><RefreshCw size={12} /> Retry / continue</button></div>}
               {message.attachments.length > 0 && <div className="message-files">{message.attachments.map((file) => (
                 <a key={file.path} href={`/api/artifacts/raw?path=${encodeURIComponent(file.path)}&conversationId=${encodeURIComponent(message.conversationId)}`} target="_blank" rel="noreferrer" title={`${file.mimeType} · ${formatFileSize(file.size)}`}>
                   <Paperclip size={11} /> {file.name} <span className="message-file-meta">{formatFileSize(file.size)}</span>
@@ -789,24 +1007,30 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
               ))}</div>}
               {message.error && <p className="error-message">{message.error}</p>}
               {message.status === 'completed' && message.author !== 'jeffrey' && message.author !== 'system' && selectedConversation?.workItemId && <div className="message-actions"><button onClick={() => createTasks.mutate({ messageId: message.id, conversationId: conversationId! })} disabled={createTasks.isPending && createTasks.variables?.conversationId === conversationId}>{createTasks.isPending && createTasks.variables?.messageId === message.id && createTasks.variables.conversationId === conversationId ? <><LoaderCircle className="spin" size={12} /> Extracting findings…</> : <><Plus size={12} /> Turn findings into tasks</>}</button></div>}
-              {message.id === previewApprovalMessageId && <div className="preview-approval"><span><strong>Preview ready for your review</strong><small>Approve this verified Workbench change when it looks right.</small></span><button className="button primary compact" onClick={() => approvePreview.mutate()} disabled={approvePreview.isPending}>{approvePreview.isPending ? <LoaderCircle className="spin" size={12} /> : <Check size={12} />} {approvePreview.isPending ? 'Approving…' : 'Approve preview'}</button></div>}
-              {message.id === previewApprovalMessageId && approvePreview.error && <p className="error-message">Could not approve preview: {approvePreview.error.message}</p>}
             </article>
           ))}
-          {proposedPlan && proposedPlanConversationId === conversationId && <article className="chat-plan"><span className="eyebrow">Proposed follow-up tasks</span><h3>{proposedPlan.summary}</h3><ol>{proposedPlan.tasks.map((task, index) => <li key={`${task.title}-${index}`}><label><input type="checkbox" checked={selectedPlanTaskIndexes.has(index)} onChange={() => setSelectedPlanTaskIndexes((current) => { const next = new Set(current); if (next.has(index)) next.delete(index); else next.add(index); return next; })} /><span><strong>{task.title}</strong><p>{task.description}</p></span></label></li>)}</ol><div><button className="button secondary" onClick={() => resolvePlan.mutate('rejected')}>Reject</button><button className="button primary" disabled={selectedPlanTaskIndexes.size === 0 || resolvePlan.isPending} onClick={() => resolvePlan.mutate('accepted')}><Check size={14} /> Add {selectedPlanTaskIndexes.size} to queue</button></div></article>}
+          {completionPromptAvailable && <div className="completion-prompt" role="status"><span><strong>Preview approved successfully.</strong><small>Complete the linked task?</small></span><div><button type="button" className="button secondary compact" onClick={() => setDismissedCompletionPromptPromotionId(latestSuccessfulPromotion!.id)}>Not yet</button><button type="button" className="button primary compact" onClick={() => completeLinkedTask.mutate()} disabled={completeLinkedTask.isPending}>{completeLinkedTask.isPending ? <><LoaderCircle className="spin" size={12} /> Completing…</> : <><Check size={12} /> Complete task</>}</button></div></div>}
+          {previewApprovalAvailable && <div className="preview-approval"><span><strong>Workbench preview has unpublished changes</strong><small>Review them on port 5174, then promote this source snapshot to live.</small></span><button className="button primary compact" onClick={() => approvePreview.mutate()} disabled={approvePreview.isPending}>{approvePreview.isPending ? <LoaderCircle className="spin" size={12} /> : <Check size={12} />} {approvePreview.isPending ? 'Approving…' : 'Approve preview'}</button></div>}
+          {previewApprovalAvailable && approvePreview.error && <p className="error-message">Could not approve preview: {approvePreview.error.message}</p>}
+          {proposedPlan && proposedPlanConversationId === conversationId && <article className="chat-plan"><span className="eyebrow">Proposed follow-up tasks</span><h3>{proposedPlan.summary}</h3><ol>{proposedPlan.tasks.map((task, index) => <li key={`${task.title}-${index}`}><label><input type="checkbox" checked={selectedPlanTaskIndexes.has(index)} onChange={() => setSelectedPlanTaskIndexes((current) => { const next = new Set(current); if (next.has(index)) next.delete(index); else next.add(index); return next; })} /><span><strong>{task.title}</strong><p>{task.description}</p></span></label></li>)}</ol><div><button className="button secondary" onClick={() => resolvePlan.mutate({ resolution: 'rejected' })}>Reject</button><button className="button primary" disabled={selectedPlanTaskIndexes.size === 0 || resolvePlan.isPending} onClick={() => setPlanArchivePromptOpen(true)}><Check size={14} /> Add {selectedPlanTaskIndexes.size} to queue</button></div></article>}
           {createTasks.isPending && createTasks.variables?.conversationId === conversationId && <div className="finding-progress"><LoaderCircle className="spin" size={15} /><span><strong>Turning findings into tasks</strong><small>Reading the report and producing self-contained queue items…</small></span></div>}
           {createTasks.error && createTasks.variables?.conversationId === conversationId && <div className="finding-progress error-message"><X size={15} /><span><strong>Could not create tasks</strong><small>{createTasks.error.message}</small></span></div>}
           <div ref={endRef} />
         </div>
         {conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <form className="shared-composer" onSubmit={submit}>
           {files.length > 0 && <div className="pending-files">{files.map((file) => <button type="button" key={`${file.name}-${file.size}`} onClick={() => setFiles((current) => current.filter((item) => item !== file))}><Paperclip size={11} /> {file.name} <X size={10} /></button>)}</div>}
-          <textarea value={body} onChange={(event) => updateBody(event.target.value)} onKeyDown={submitOnEnter} placeholder="Message Codex or Claude…" rows={4} />
+          <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} onSubmit={() => {
+            if ((body.trim() || files.length) && conversationId && !send.isPending) {
+              sentDraftRef.current = { conversationId, body };
+              send.mutate();
+            }
+          }} disabled={send.isPending} />
           <div className="composer-toolbar">
             <input ref={fileRef} className="visually-hidden" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
             <button type="button" className="composer-tool attach-button" onClick={() => fileRef.current?.click()}><Paperclip size={14} /> Attach</button>
             <span className="composer-hint">Files, screenshots, or context</span>
             <ModelProfileSelect className="model-target" value={executionProfile} onChange={setExecutionProfile} />
-            <select className="agent-target" value={dispatchTo} onChange={(event) => { const target = event.target.value as typeof dispatchTo; setDispatchTo(target); if (linkedWorkItemId) updateConversationOwner.mutate(target); }} aria-label="Who should respond">
+            <select className="agent-target" value={dispatchTo} onChange={(event) => { const target = event.target.value as typeof dispatchTo; setDispatchTo(target); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond">
               <option value="codex">Ask Codex</option><option value="claude">Ask Claude</option><option value="both">Ask both</option>
             </select>
             <button className="composer-send" aria-label="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
@@ -814,11 +1038,13 @@ export function SharedWorkspace({ initialConversationId, onOpenTask }: { initial
           {send.error && <p className="error-message">{send.error.message}</p>}
         </form>}
       </section>
+      {planArchivePromptOpen && <FollowUpArchiveDialog count={selectedPlanTaskIndexes.size} pending={resolvePlan.isPending} onClose={() => setPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolvePlan.mutate({ resolution: 'accepted', archiveParent })} />}
+      {deleteConversationPromptOpen && conversationId && <ConfirmationDialog title="Delete this conversation?" description="This permanently deletes the conversation and cannot be undone." confirmLabel="Delete conversation" pending={deleteConversation.isPending} onClose={() => setDeleteConversationPromptOpen(false)} onConfirm={() => deleteConversation.mutate(conversationId)} />}
     </main>
   );
 }
 
-function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: string; onClose: () => void; onOpenConversation: (conversationId: string) => void; onOpenTask: (taskId: string) => void }) {
+export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCreated }: { id: string; onClose: () => void; onOpenConversation: (conversationId: string) => void; onOpenTask: (taskId: string) => void; onCreated: (item: WorkItem) => void }) {
   const queryClient = useQueryClient();
   const detail = useQuery({
     queryKey: ['work-item', id],
@@ -826,6 +1052,7 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
     refetchInterval: (query) => query.state.data?.runs.some((run) => run.status === 'queued' || run.status === 'running') ? 1_000 : false,
   });
   const [showFollowUp, setShowFollowUp] = useState(false);
+  const [deleteTaskPromptOpen, setDeleteTaskPromptOpen] = useState(false);
   const [editingField, setEditingField] = useState<'title' | 'project' | 'description' | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
@@ -836,12 +1063,25 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
   const [referenceType, setReferenceType] = useState<WorkItemReferenceType>('other');
   const [referenceUrl, setReferenceUrl] = useState('');
   const [referenceTitle, setReferenceTitle] = useState('');
+  const [showAddTaskLink, setShowAddTaskLink] = useState(false);
+  const [taskLinkQuery, setTaskLinkQuery] = useState('');
+  const [showAddArtifactLink, setShowAddArtifactLink] = useState(false);
+  const [artifactLinkQuery, setArtifactLinkQuery] = useState('');
+  const [dependencyQuery, setDependencyQuery] = useState('');
+  const normalizedDependencyQuery = dependencyQuery.trim();
+  const normalizedTaskLinkQuery = taskLinkQuery.trim();
+  const normalizedArtifactLinkQuery = artifactLinkQuery.trim();
   const [selectedExecutionTaskIndexes, setSelectedExecutionTaskIndexes] = useState<Set<number>>(new Set());
-  const [executionProfile, setExecutionProfile] = useState<AgentRun['executionProfile']>(null);
+  const [executionPlanArchivePromptOpen, setExecutionPlanArchivePromptOpen] = useState(false);
+  const [executionProfile, setExecutionProfileState] = useState<AgentRun['executionProfile']>(() => readTaskModelProfiles()[id] ?? null);
+  const setExecutionProfile = (profile: AgentRun['executionProfile']) => {
+    setExecutionProfileState(profile);
+    writeTaskModelProfile(id, profile);
+  };
 
   const initializedExecutionPlanSelectionId = useRef<string | null>(null);
   const update = useMutation({
-    mutationFn: (input: Partial<WorkItem>) => api.updateWorkItem(id, input),
+    mutationFn: (input: UpdateWorkItemInput) => api.updateWorkItem(id, input),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['work-items'] }),
@@ -849,8 +1089,43 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
       ]);
     },
   });
+  const resolveProviderConflict = useMutation({
+    mutationFn: ({ field, resolution }: { field: ProviderSyncConflict['field']; resolution: 'keep_local' | 'use_provider' }) => api.resolveProviderConflict(id, field, resolution),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['work-items'] }),
+        queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
+      ]);
+    },
+  });
+  const dependencyCandidates = useQuery({
+    queryKey: ['dependency-candidates', id, normalizedDependencyQuery],
+    queryFn: () => api.listDependencyCandidates(id, normalizedDependencyQuery),
+    enabled: detail.isSuccess && normalizedDependencyQuery.length > 0,
+  });
+  const taskLinkCandidateQuery = useQuery({
+    queryKey: ['task-link-candidates', id, normalizedTaskLinkQuery],
+    queryFn: () => api.listWorkItems('active', normalizedTaskLinkQuery),
+    enabled: showAddTaskLink && normalizedTaskLinkQuery.length > 0,
+  });
+  const artifactLinkCandidateQuery = useQuery({
+    queryKey: ['artifact-link-candidates'],
+    queryFn: () => api.listArtifacts('published'),
+    enabled: showAddArtifactLink,
+  });
   const execute = useMutation({
     mutationFn: () => api.executeWorkItem(id, executionProfile),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ['work-items'] });
+      const previousLists = queryClient.getQueriesData<InfiniteData<WorkItemPage>>({ queryKey: ['work-items'] });
+      const previousDetail = queryClient.getQueryData<WorkItemDetail>(['work-item', id]);
+      queryClient.setQueriesData<InfiniteData<WorkItemPage>>({ queryKey: ['work-items'] }, (current) => current && ({
+        ...current,
+        pages: current.pages.map((page) => ({ ...page, items: page.items.map((entry) => entry.id === id ? { ...entry, status: 'in_progress' } : entry) })),
+      }));
+      queryClient.setQueryData<WorkItemDetail>(['work-item', id], (current) => current && ({ ...current, item: { ...current.item, status: 'in_progress' } }));
+      return { previousLists, previousDetail };
+    },
     onSuccess: ({ conversation, runs, classification, activity }) => {
       queryClient.setQueryData<WorkItemDetail>(['work-item', id], (current) => current && {
         ...current,
@@ -859,11 +1134,22 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
         conversations: current.conversations.some((entry) => entry.id === conversation.id) ? current.conversations : [conversation, ...current.conversations],
         activity: [activity, ...current.activity],
       });
-      onOpenConversation(conversation.id);
+      toast.success('Task executed', {
+        description: detail.data?.item.title,
+        duration: 8_000,
+        action: () => onOpenConversation(conversation.id),
+        actionLabel: 'Open conversation',
+      });
       void queryClient.invalidateQueries({ queryKey: ['work-item', id] });
       void queryClient.invalidateQueries({ queryKey: ['work-items'] });
       void queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
     },
+    onError: (error, _variables, context) => {
+      for (const [key, value] of context?.previousLists ?? []) queryClient.setQueryData(key, value);
+      if (context?.previousDetail) queryClient.setQueryData(['work-item', id], context.previousDetail);
+      toastError('Could not start the run.', error);
+    },
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ['work-items'] }),
   });
   const cancelRun = useMutation({
     mutationFn: api.cancelAgentRun,
@@ -872,18 +1158,42 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
         ...current,
         runs: current.runs.map((currentRun) => currentRun.id === run.id ? run : currentRun),
       });
+      toast.success('Run canceled.');
       await queryClient.invalidateQueries({ queryKey: ['work-items'] });
     },
+    onError: (error) => toastError('Could not cancel the run.', error),
+  });
+  const retryRun = useMutation({
+    mutationFn: api.retryAgentRun,
+    onSuccess: async ({ run, conversation, activity }) => {
+      queryClient.setQueryData<WorkItemDetail>(['work-item', id], (current) => current && ({
+        ...current,
+        item: { ...current.item, status: 'in_progress' },
+        runs: current.runs.map((entry) => entry.id === run.id ? run : entry),
+        conversations: current.conversations.some((entry) => entry.id === conversation.id) ? current.conversations : [conversation, ...current.conversations],
+        activity: [activity, ...current.activity],
+      }));
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ['work-items'] }), queryClient.invalidateQueries({ queryKey: ['shared-conversations'] })]);
+    },
+    onError: (error) => toastError('Could not retry the run.', error),
   });
   const resolveExecutionPlan = useMutation({
-    mutationFn: (resolution: 'accepted' | 'rejected') => api.resolveExecutionPlan(detail.data!.executionPlan!.id, resolution, resolution === 'accepted' ? [...selectedExecutionTaskIndexes] : undefined),
+    mutationFn: ({ resolution, archiveParent = false }: { resolution: 'accepted' | 'rejected'; archiveParent?: boolean }) =>
+      api.resolveExecutionPlan(detail.data!.executionPlan!.id, resolution, resolution === 'accepted' ? [...selectedExecutionTaskIndexes] : undefined, archiveParent),
     onSuccess: async () => {
+      setExecutionPlanArchivePromptOpen(false);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['work-items'] }),
         queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
       ]);
     },
   });
+  const lifecycleSuccessMessage: Record<'archive' | 'restore' | 'complete' | 'delete', string> = {
+    archive: 'Task archived.', restore: 'Task restored.', complete: 'Task completed.', delete: 'Task deleted.',
+  };
+  const lifecycleErrorSummary: Record<'archive' | 'restore' | 'complete' | 'delete', string> = {
+    archive: 'Could not archive the task.', restore: 'Could not restore the task.', complete: 'Could not complete the task.', delete: 'Could not delete the task.',
+  };
   const lifecycle = useMutation({
     mutationFn: async (action: 'archive' | 'restore' | 'complete' | 'delete'): Promise<void> => {
       if (action === 'archive') await api.archiveWorkItem(id);
@@ -891,8 +1201,10 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
       else if (action === 'complete') await api.completeWorkItem(id);
       else await api.deleteWorkItem(id);
     },
-    onSuccess: async () => {
+    onSuccess: async (_data, action) => {
+      if (action === 'delete') setDeleteTaskPromptOpen(false);
       onClose();
+      toast.success(lifecycleSuccessMessage[action]);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['work-items'] }),
         queryClient.invalidateQueries({ queryKey: ['archived-work-items'] }),
@@ -901,12 +1213,14 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
         queryClient.invalidateQueries({ queryKey: ['work-item-counts'] }),
       ]);
     },
+    onError: (error, action) => toastError(lifecycleErrorSummary[action], error),
   });
   const createFollowUp = useMutation({
     mutationFn: () => api.createFollowUp(id, followUpTitle, followUpDescription),
-    onSuccess: async () => {
+    onSuccess: async ({ item }) => {
       setFollowUpTitle(''); setFollowUpDescription(''); setShowFollowUp(false);
       await Promise.all([queryClient.invalidateQueries({ queryKey: ['work-items'] }), queryClient.invalidateQueries({ queryKey: ['work-item', id] })]);
+      onCreated(item);
     },
   });
   const addReference = useMutation({
@@ -919,6 +1233,35 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
   const removeReference = useMutation({
     mutationFn: (referenceId: string) => api.removeWorkItemReference(id, referenceId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
+  });
+  const addTaskLink = useMutation({
+    mutationFn: (linkedWorkItemId: string) => api.addTaskLink(id, linkedWorkItemId),
+    onSuccess: async ({ item: linkedTask }) => {
+      setTaskLinkQuery(''); setShowAddTaskLink(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
+        queryClient.invalidateQueries({ queryKey: ['work-item', linkedTask.id] }),
+      ]);
+    },
+  });
+  const removeTaskLink = useMutation({
+    mutationFn: (linkedWorkItemId: string) => api.removeTaskLink(id, linkedWorkItemId),
+    onSuccess: async (_data, linkedWorkItemId) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
+        queryClient.invalidateQueries({ queryKey: ['work-item', linkedWorkItemId] }),
+      ]);
+    },
+  });
+  const addArtifactLink = useMutation({
+    mutationFn: (artifactId: string) => api.updateArtifact(artifactId, { workItemId: id }),
+    onSuccess: async () => {
+      setArtifactLinkQuery(''); setShowAddArtifactLink(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
+        queryClient.invalidateQueries({ queryKey: ['artifacts'] }),
+      ]);
+    },
   });
 
   useEffect(() => {
@@ -937,16 +1280,41 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
   if (detail.isLoading) return <div className="detail-empty"><LoaderCircle className="spin" /></div>;
   if (!detail.data) return <div className="detail-empty">Unable to load this item.</div>;
   const { item, activity } = detail.data;
+  const decisionCount = activity.filter((entry) => agentDecisionKinds.has(entry.kind)).length;
+  const dependencies = item.blockedBy ?? [];
+  const openDependencies = dependencies.filter((dependency) => dependency.isOpen);
+  const providerConflicts = detail.data.providerConflicts ?? [];
+  const hasBeenExecuted = detail.data.runs.length > 0;
+  // Jeffrey owning the task is exclusive: agents can neither be assigned nor dispatched.
+  const selfAssigned = isSelfAssigned(item.assignees);
+  // sourceUrl is task-owned provenance, not a removable user-created reference.
+  // Project it here so source-only tasks show their origin in the same history.
+  const references: Array<WorkItemReference & { source: boolean }> = item.sourceUrl && !detail.data.references.some((reference) => reference.url === item.sourceUrl)
+    ? [{ id: `source:${item.id}`, workItemId: item.id, type: sourceReferenceType(item.sourceUrl), url: item.sourceUrl, title: sourceReferenceTitle(item.sourceUrl), createdAt: item.createdAt, source: true }, ...detail.data.references.map((reference) => ({ ...reference, source: false }))]
+    : detail.data.references.map((reference) => ({ ...reference, source: false }));
+  const linkedTasks = detail.data.linkedTasks ?? [];
+  const linkedTaskIds = new Set(linkedTasks.map((linkedTask) => linkedTask.id));
+  const taskLinkCandidates = (taskLinkCandidateQuery.data?.items ?? []).filter((candidate) => candidate.id !== item.id && !linkedTaskIds.has(candidate.id));
+  const artifactLinkCandidates = (artifactLinkCandidateQuery.data?.artifacts ?? []).filter((artifact) =>
+    !artifact.workItemId && artifact.title.toLowerCase().includes(normalizedArtifactLinkQuery.toLowerCase()));
 
   function toggleAssignee(assignee: Assignee) {
+    // Claiming the task for Jeffrey drops any agent owners; while he holds it the
+    // agent buttons stay disabled instead of silently ignoring the click.
+    if (assignee === 'jeffrey') return update.mutate({ assignees: selfAssigned ? [] : ['jeffrey'] });
+    if (selfAssigned) return;
     const next = item.assignees.includes(assignee)
       ? item.assignees.filter((value) => value !== assignee)
       : [...item.assignees, assignee];
     update.mutate({ assignees: next });
   }
 
+  function setDependencies(blockedByIds: string[]) {
+    update.mutate({ blockedByIds });
+  }
+
   return (
-    <section className="detail-panel">
+    <section className={`detail-panel ${execute.isPending ? 'execution-starting' : ''}`} aria-busy={execute.isPending}>
       <div className="detail-topline">
         <div className="source-badge">
           {item.source === 'linear' ? <Cloud size={13} /> : <Command size={13} />}
@@ -957,13 +1325,26 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
           <button className="mobile-detail-close icon-button" onClick={onClose} aria-label="Close details"><X size={16} /></button>
         </div>
       </div>
+      {openDependencies.length > 0 && <div className="dependency-blocker-banner" role="status">
+        <AlertTriangle size={16} />
+        <span><strong>Execution blocked</strong><small>Complete {openDependencies.length === 1 ? 'this prerequisite' : 'these prerequisites'} before dispatching an agent: {openDependencies.map((dependency) => dependency.title).join(', ')}.</small></span>
+      </div>}
+      {providerConflicts.length > 0 && <section className="provider-conflicts" aria-label="Linear sync conflicts">
+        <div><strong>Linear changes need a decision</strong><small>{providerConflicts.length} field{providerConflicts.length === 1 ? '' : 's'} kept local after Linear changed too.</small></div>
+        {providerConflicts.map((conflict) => <div className="provider-conflict" key={conflict.field}>
+          <strong>{conflict.field === 'projectName' ? 'Project' : conflict.field === 'dueDate' ? 'Due date' : conflict.field}</strong>
+          <span><small>Local</small>{Array.isArray(conflict.localValue) ? conflict.localValue.join(', ') || 'None' : conflict.localValue || 'None'}</span>
+          <span><small>Linear</small>{Array.isArray(conflict.providerValue) ? conflict.providerValue.join(', ') || 'None' : conflict.providerValue || 'None'}</span>
+          <div className="provider-conflict-actions"><button className="button secondary compact" onClick={() => resolveProviderConflict.mutate({ field: conflict.field, resolution: 'keep_local' })}>Keep local</button><button className="button compact" onClick={() => resolveProviderConflict.mutate({ field: conflict.field, resolution: 'use_provider' })}>Use Linear</button></div>
+        </div>)}
+      </section>}
       <div className="task-lifecycle-actions">
         <button type="button" className="button secondary compact" onClick={() => setShowFollowUp((value) => !value)}><Plus size={14} /> Follow-up</button>
         {item.archivedAt ? <><span className={`archive-state ${item.completionStatus}`}>{item.completionStatus === 'completed' ? 'Completed & archived' : 'Archived incomplete'}</span><button type="button" className="button secondary compact" onClick={() => lifecycle.mutate('restore')} disabled={lifecycle.isPending}><Archive size={14} /> Restore</button></> : <>
-          <button type="button" className="button secondary compact" onClick={() => lifecycle.mutate('archive')}><Archive size={14} /> Archive</button>
-          <button type="button" className="button primary compact" onClick={() => lifecycle.mutate('complete')}><Check size={14} /> Complete</button>
+          <button type="button" className="button secondary compact" onClick={() => lifecycle.mutate('archive')} disabled={lifecycle.isPending}><Archive size={14} /> Archive</button>
+          <button type="button" className="button primary compact" onClick={() => lifecycle.mutate('complete')} disabled={lifecycle.isPending}><Check size={14} /> Complete</button>
         </>}
-        <button type="button" className="button danger compact" onClick={() => window.confirm(`Permanently delete “${item.title}”?`) && lifecycle.mutate('delete')}><Trash2 size={14} /> Delete</button>
+        <button type="button" className="button danger compact" onClick={() => setDeleteTaskPromptOpen(true)}><Trash2 size={14} /> Delete</button>
       </div>
       {showFollowUp && <form className="follow-up-form" onSubmit={(event) => { event.preventDefault(); if (followUpTitle.trim()) createFollowUp.mutate(); }}>
         <span className="section-label">New follow-up task</span>
@@ -972,6 +1353,9 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
         {createFollowUp.error && <p className="error-message">{createFollowUp.error.message}</p>}
         <div><button type="button" className="button secondary compact" onClick={() => setShowFollowUp(false)}>Cancel</button><button className="button primary compact" disabled={!followUpTitle.trim() || createFollowUp.isPending}>{createFollowUp.isPending ? <LoaderCircle className="spin" size={13} /> : <Plus size={13} />} Create follow-up</button></div>
       </form>}
+      <details className="task-collapsible task-overview" open={!hasBeenExecuted}>
+        <summary><span>Task details</span><small>Description, project, and ownership</small></summary>
+        <div className="task-collapsible-content">
       {editingField === 'title' ? <input className="inline-title-editor" autoFocus value={editTitle} onChange={(event) => setEditTitle(event.target.value)} maxLength={300}
         onBlur={() => { const title = editTitle.trim(); if (title && title !== item.title) update.mutate({ title }); else setEditTitle(item.title); setEditingField(null); }}
         onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { event.currentTarget.value = item.title; setEditTitle(item.title); event.currentTarget.blur(); } }} />
@@ -980,7 +1364,7 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
       <div className="detail-controls">{editingField === 'project' ? <input className="inline-project-editor" autoFocus value={editProjectName} onChange={(event) => setEditProjectName(event.target.value)} maxLength={200} placeholder="No project"
         onBlur={() => { const projectName = editProjectName.trim() || null; if (projectName !== item.projectName) update.mutate({ projectName }); setEditingField(null); }}
         onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { event.currentTarget.value = item.projectName ?? ''; setEditProjectName(item.projectName ?? ''); event.currentTarget.blur(); } }} />
-        : <button className={`project-pill inline-editable ${item.projectName ? '' : 'empty'}`} onClick={() => setEditingField('project')} title="Click to edit project">{item.projectName || 'Add project'}</button>}</div>
+        : <button className={`project-pill inline-editable ${item.projectName ? '' : 'empty'}`} onClick={() => setEditingField('project')} title="Click to edit project">{item.projectName || 'Add project'}</button>}<TaskClassificationSelect itemId={item.id} kind={item.classificationKind} /></div>
 
       <div className="detail-section">
         <span className="section-label">Description</span>
@@ -998,6 +1382,8 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
             <button
               key={assignee}
               className={item.assignees.includes(assignee) ? 'selected' : ''}
+              disabled={selfAssigned && assignee !== 'jeffrey'}
+              title={selfAssigned && assignee !== 'jeffrey' ? SELF_ASSIGNED_OWNER_MESSAGE : undefined}
               onClick={() => toggleAssignee(assignee)}
             >
               {assignee === 'jeffrey' ? <User size={14} /> : <Bot size={14} />}
@@ -1005,42 +1391,109 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
             </button>
           ))}
         </div>
+        {selfAssigned && <p className="assignee-exclusive-note muted">{SELF_ASSIGNED_OWNER_MESSAGE}</p>}
       </div>
 
-      <div className="detail-section execution-section">
-        <div className="section-heading">
-          <span className="section-label">Agent execution</span>
+      <div className="detail-section">
+        <span className="section-label">Prerequisites</span>
+        <p className="dependency-help muted">Tasks that must reach done or canceled before an agent can be dispatched here.</p>
+        {dependencies.length > 0 ? <ul className="dependency-list">
+          {dependencies.map((dependency) => (
+            <li key={dependency.id} className={dependency.isOpen ? 'open' : 'satisfied'}>
+              <button type="button" className="dependency-open" onClick={() => onOpenTask(dependency.id)} title={`Open ${dependency.title}`}>
+                {dependency.isOpen ? <AlertTriangle size={12} /> : <Check size={12} />}
+                <span>{dependency.title}</span>
+              </button>
+              <span className="dependency-status">{dependency.isOpen ? dependency.status.replace('_', ' ') : 'satisfied'}</span>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={`Remove prerequisite ${dependency.title}`}
+                disabled={update.isPending}
+                onClick={() => setDependencies(dependencies.filter((entry) => entry.id !== dependency.id).map((entry) => entry.id))}
+              ><X size={13} /></button>
+            </li>
+          ))}
+        </ul> : <p className="muted dependency-empty">No prerequisites. This task can be dispatched on its own.</p>}
+        <div className="dependency-search">
+          <Search size={13} />
+          <input
+            value={dependencyQuery}
+            onChange={(event) => setDependencyQuery(event.target.value)}
+            placeholder="Search tasks to add as a prerequisite"
+            aria-label="Search tasks to add as a prerequisite"
+          />
         </div>
+        {/* The server rejects cycles, but filtering the obvious ones out here keeps
+            Jeffrey from discovering the rule through an error message. */}
+        {(() => {
+          if (!normalizedDependencyQuery) return null;
+          const chosen = new Set(dependencies.map((dependency) => dependency.id));
+          const candidates = (dependencyCandidates.data?.items ?? []).filter((candidate) => !chosen.has(candidate.id)
+            && !(candidate.blockedBy ?? []).some((edge) => edge.id === item.id));
+          if (dependencyCandidates.isLoading) return <p className="muted dependency-empty">Loading tasks…</p>;
+          if (!candidates.length) return <p className="muted dependency-empty">No other tasks match.</p>;
+          return <ul className="dependency-candidates">
+            {candidates.slice(0, 8).map((candidate) => (
+              <li key={candidate.id}>
+                <button type="button" disabled={update.isPending} onClick={() => {
+                  setDependencies([...dependencies.map((entry) => entry.id), candidate.id]);
+                  setDependencyQuery('');
+                }}>
+                  <Plus size={12} />
+                  <span>{candidate.title}</span>
+                  <small>{candidate.projectName ?? 'Personal'}</small>
+                </button>
+              </li>
+            ))}
+          </ul>;
+        })()}
+      </div>
+
+        </div>
+      </details>
+
+      <details className="detail-section task-collapsible execution-section" open={!hasBeenExecuted}>
+        <summary><span>Agent execution</span><small>{hasBeenExecuted ? 'Already executed' : 'Model and execution controls'}</small></summary>
+        <div className="task-collapsible-content">
+        {hasBeenExecuted && <div className="task-execution-locked"><Check size={13} /><span><strong>Already executed</strong><small>This task cannot be executed again.</small></span></div>}
+        {selfAssigned && <div className="task-execution-locked blocked"><User size={13} /><span><strong>Assigned to you</strong><small>{SELF_ASSIGNED_EXECUTION_MESSAGE}</small></span></div>}
+        {openDependencies.length > 0 && <div className="task-execution-locked blocked"><AlertTriangle size={13} /><span><strong>Blocked by {openDependencies.length} prerequisite{openDependencies.length === 1 ? '' : 's'}</strong><small>{openDependencies.map((dependency) => dependency.title).join(', ')}</small></span></div>}
         <p className="execution-copy">Workbench will classify the task, choose the right agent, and either execute it directly or return an approval-ready decomposition for complex work.</p>
         {execute.error && <p className="error-message">{execute.error.message}</p>}
         <label>Model <ModelProfileSelect value={executionProfile} onChange={setExecutionProfile} /></label>
-        <button className="button primary execute-button" onClick={() => execute.mutate()} disabled={execute.isPending || detail.data.runs.some((run) => run.status === 'queued' || run.status === 'running')}>
-          {execute.isPending ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
-          Execute
+        <button className="button primary execute-button" onClick={() => execute.mutate()} disabled={hasBeenExecuted || selfAssigned || openDependencies.length > 0 || execute.isPending}
+          title={hasBeenExecuted ? 'This task has already been executed.' : selfAssigned ? SELF_ASSIGNED_EXECUTION_MESSAGE : openDependencies.length > 0 ? 'Complete this task\u2019s prerequisites before dispatching an agent.' : undefined}>
+          {execute.isPending ? <LoaderCircle className="spin" size={16} /> : selfAssigned ? <User size={16} /> : openDependencies.length > 0 ? <AlertTriangle size={16} /> : <Sparkles size={16} />}
+          {hasBeenExecuted ? 'Already executed' : selfAssigned ? 'Assigned to you' : openDependencies.length > 0 ? 'Blocked by prerequisites' : 'Execute'}
         </button>
       </div>
+      </details>
 
       {detail.data.runs.length > 0 && (
-        <div className="detail-section runs-section">
-          <span className="section-label">Agent runs</span>
-          {detail.data.runs.map((run) => (
+        <details className="detail-section task-collapsible runs-section" open>
+          <summary><span>Agent runs</span><small>{detail.data.runs.length} run{detail.data.runs.length === 1 ? '' : 's'}</small></summary>
+          <div className="task-collapsible-content">
+          {detail.data.runs.map((run, runIndex) => (
             <article className="run-card" key={run.id}>
               <header>
                 <span className={`run-status run-${run.status}`}>{run.status === 'running' && <LoaderCircle className="spin" size={11} />}{run.status === 'queued' && run.attempt > 0 ? `Retrying (attempt ${run.attempt + 1} of ${run.maxAttempts})…` : run.status}</span>
                 <strong>{run.agent} · {run.kind}</strong>
                 <time>{new Date(run.createdAt).toLocaleString()}</time>
                 {(run.status === 'queued' || run.status === 'running') && <button className="cancel-run" onClick={() => cancelRun.mutate(run.id)}><X size={11} /> Cancel</button>}
+                {runIndex === 0 && (run.status === 'failed' || run.status === 'canceled') && <button className="retry-run" onClick={() => retryRun.mutate(run.id)} disabled={retryRun.isPending}><RefreshCw size={11} /> Retry / continue</button>}
               </header>
               {run.instructions && <p className="run-prompt">{run.instructions}</p>}
               {run.status === 'running' && !run.conversationId && <div className="live-output-label"><span /> Live activity & reasoning summaries</div>}
               {run.output && run.status !== 'completed' && !run.conversationId && <pre aria-live="polite">{humanizeRunOutput(run.output)}</pre>}
-              {run.model && <span className="model-badge" title={formatRunTelemetry(run)}>{run.model} · {formatRunTelemetry(run)}</span>}
+              {run.model && <span className="model-badge" title={formatRunTelemetry(run)}>{run.model} · {formatRunBadge(run)}</span>}
               {run.status === 'completed' && run.output && <div className="run-summary"><span className="section-label">Agent summary</span><AgentMessageBody body={run.output} running={false} workItemId={item.id} /></div>}
               {run.error && <p className="error-message">{run.error}</p>}
               {run.conversationId && <button className="open-run-chat" onClick={() => onOpenConversation(run.conversationId!)}><MessageCircle size={13} /> Open execution chat</button>}
             </article>
           ))}
-        </div>
+          </div>
+        </details>
       )}
 
       {detail.data.executionPlan && (
@@ -1051,14 +1504,18 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
             {detail.data.executionPlan.tasks.map((task, index) => <li key={`${task.title}-${index}`}><label><input type="checkbox" checked={selectedExecutionTaskIndexes.has(index)} onChange={() => setSelectedExecutionTaskIndexes((current) => { const next = new Set(current); if (next.has(index)) next.delete(index); else next.add(index); return next; })} /><span><strong>{task.title}</strong><p>{task.description}</p></span></label></li>)}
           </ol>
           <div className="dialog-actions">
-            <button className="button secondary" onClick={() => resolveExecutionPlan.mutate('rejected')}>Reject plan</button>
-            <button className="button primary" disabled={selectedExecutionTaskIndexes.size === 0 || resolveExecutionPlan.isPending} onClick={() => resolveExecutionPlan.mutate('accepted')}><Check size={15} /> Create {selectedExecutionTaskIndexes.size} selected</button>
+            <button className="button secondary" onClick={() => resolveExecutionPlan.mutate({ resolution: 'rejected' })}>Reject plan</button>
+            <button className="button primary" disabled={selectedExecutionTaskIndexes.size === 0 || resolveExecutionPlan.isPending} onClick={() => setExecutionPlanArchivePromptOpen(true)}><Check size={15} /> Create {selectedExecutionTaskIndexes.size} selected</button>
           </div>
         </div>
       )}
 
-      <div className="detail-section relationships-section">
-        <span className="section-label">Relationships & history</span>
+      {executionPlanArchivePromptOpen && <FollowUpArchiveDialog count={selectedExecutionTaskIndexes.size} pending={resolveExecutionPlan.isPending} onClose={() => setExecutionPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolveExecutionPlan.mutate({ resolution: 'accepted', archiveParent })} />}
+      {deleteTaskPromptOpen && <ConfirmationDialog title={`Delete “${item.title}”?`} description="This permanently deletes the task and cannot be undone." confirmLabel="Delete task" pending={lifecycle.isPending} onClose={() => setDeleteTaskPromptOpen(false)} onConfirm={() => lifecycle.mutate('delete')} />}
+
+      <details className="detail-section task-collapsible relationships-section">
+        <summary><span>Linked items & history</span><small>{detail.data.children.length + linkedTasks.length + detail.data.conversations.length + detail.data.artifacts.length + references.length} linked</small></summary>
+        <div className="task-collapsible-content">
         {detail.data.children.length > 0 && (
           <div className="relationship-group">
             <span className="relationship-group-label">Follow-ups</span>
@@ -1070,6 +1527,23 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
             ))}
           </div>
         )}
+        <div className="relationship-group">
+          <span className="relationship-group-label">Linked tasks</span>
+          {linkedTasks.map((linkedTask) => (
+            <div className="relationship-item reference-item" key={linkedTask.id}>
+              <button type="button" className="relationship-task-link" onClick={() => onOpenTask(linkedTask.id)}><span>{linkedTask.title}</span></button>
+              <button type="button" className="icon-button" aria-label={`Remove linked task ${linkedTask.title}`} disabled={removeTaskLink.isPending} onClick={() => removeTaskLink.mutate(linkedTask.id)}><X size={12} /></button>
+            </div>
+          ))}
+          {showAddTaskLink ? (
+            <div className="reference-form">
+              <input autoFocus value={taskLinkQuery} onChange={(event) => setTaskLinkQuery(event.target.value)} placeholder="Search tasks to link" aria-label="Search tasks to link" />
+              {addTaskLink.error && <p className="error-message">Could not link task: {addTaskLink.error.message}</p>}
+              {normalizedTaskLinkQuery && (taskLinkCandidateQuery.isLoading ? <p className="muted">Loading tasks…</p> : taskLinkCandidates.length ? <ul className="dependency-candidates">{taskLinkCandidates.slice(0, 8).map((candidate) => <li key={candidate.id}><button type="button" disabled={addTaskLink.isPending} onClick={() => addTaskLink.mutate(candidate.id)}><Plus size={12} /><span>{candidate.title}</span><small>{candidate.projectName ?? 'Personal'}</small></button></li>)}</ul> : <p className="muted">No other tasks match.</p>)}
+              <div><button type="button" className="button secondary compact" onClick={() => { setTaskLinkQuery(''); setShowAddTaskLink(false); }}>Cancel</button></div>
+            </div>
+          ) : <button type="button" className="button secondary compact" onClick={() => setShowAddTaskLink(true)}><Plus size={13} /> Link another task</button>}
+        </div>
         {detail.data.conversations.length > 0 && (
           <div className="relationship-group">
             <span className="relationship-group-label">Conversations</span>
@@ -1098,13 +1572,24 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
           </div>
         )}
         <div className="relationship-group">
+          <span className="relationship-group-label">Add artifact</span>
+          {showAddArtifactLink ? (
+            <div className="reference-form">
+              <input autoFocus value={artifactLinkQuery} onChange={(event) => setArtifactLinkQuery(event.target.value)} placeholder="Search unlinked artifacts" aria-label="Search unlinked artifacts" />
+              {addArtifactLink.error && <p className="error-message">Could not link artifact: {addArtifactLink.error.message}</p>}
+              {artifactLinkCandidateQuery.isLoading ? <p className="muted">Loading artifacts…</p> : normalizedArtifactLinkQuery && (artifactLinkCandidates.length ? <ul className="dependency-candidates">{artifactLinkCandidates.slice(0, 8).map((artifact) => <li key={artifact.id}><button type="button" disabled={addArtifactLink.isPending} onClick={() => addArtifactLink.mutate(artifact.id)}><FileText size={12} /><span>{artifact.title}</span><small>v{artifact.version}</small></button></li>)}</ul> : <p className="muted">No unlinked artifacts match.</p>)}
+              <div><button type="button" className="button secondary compact" onClick={() => { setArtifactLinkQuery(''); setShowAddArtifactLink(false); }}>Cancel</button></div>
+            </div>
+          ) : <button type="button" className="button secondary compact" onClick={() => setShowAddArtifactLink(true)}><Plus size={13} /> Link an artifact</button>}
+        </div>
+        <div className="relationship-group">
           <span className="relationship-group-label">Linked references</span>
-          {detail.data.references.length === 0 && !showAddReference && <p className="muted">No Linear issues, pull requests, Slack threads, or documents linked yet.</p>}
-          {detail.data.references.map((reference) => (
+          {references.length === 0 && !showAddReference && <p className="muted">No Linear issues, pull requests, Slack threads, or documents linked yet.</p>}
+          {references.map((reference) => (
             <div className="relationship-item reference-item" key={reference.id}>
               <ReferenceTypeIcon type={reference.type} />
               <a href={reference.url} target="_blank" rel="noreferrer">{reference.title}</a>
-              <button type="button" className="icon-button" aria-label="Remove reference" onClick={() => removeReference.mutate(reference.id)}><X size={12} /></button>
+              {reference.source ? <em className="relationship-tag">source</em> : <button type="button" className="icon-button" aria-label="Remove reference" onClick={() => removeReference.mutate(reference.id)}><X size={12} /></button>}
             </div>
           ))}
           {showAddReference ? (
@@ -1125,17 +1610,26 @@ function TaskDetail({ id, onClose, onOpenConversation, onOpenTask }: { id: strin
             <button type="button" className="button secondary compact" onClick={() => setShowAddReference(true)}><Link2 size={13} /> Link Linear, PR, Slack, or a document</button>
           )}
         </div>
-      </div>
+        </div>
+      </details>
 
-      <div className="detail-section activity-section">
-        <span className="section-label">Activity</span>
+      <details className="detail-section task-collapsible activity-section">
+        {/* The decision count is the reason to open this section: it says up front
+            that the routing, model, and fallback choices are recorded in here. */}
+        <summary><span>Activity</span><small>{activity.length} event{activity.length === 1 ? '' : 's'}{decisionCount > 0 && ` · ${decisionCount} agent decision${decisionCount === 1 ? '' : 's'}`}</small></summary>
+        <div className="task-collapsible-content">
         {activity.length === 0 ? <p className="muted">No activity yet.</p> : activity.map((entry) => (
-          <div className="activity" key={entry.id}>
+          <div className={`activity${agentDecisionKinds.has(entry.kind) ? ' decision' : ''}`} key={entry.id}>
             <span className="activity-dot" />
-            <div><strong>{entry.actor}</strong> <span>{entry.body}</span><time>{new Date(entry.createdAt).toLocaleString()}</time></div>
+            <div>
+              <strong>{entry.actor}</strong> <span className="activity-kind">{activityKindLabel(entry.kind)}</span>{' '}
+              <span className="activity-body">{entry.body}</span>
+              <time>{new Date(entry.createdAt).toLocaleString()}</time>
+            </div>
           </div>
         ))}
-      </div>
+        </div>
+      </details>
     </section>
   );
 }
@@ -1225,30 +1719,103 @@ function DiscoveryCard({ candidate, selected, tasks, onSelected, onResolve }: { 
 
 export function App() {
   const queryClient = useQueryClient();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const route = useRoute();
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [focusedId, setFocusedId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showSources, setShowSources] = useState(false);
   const [showProposalDetail, setShowProposalDetail] = useState(false);
-  const [view, setView] = useState<'active' | 'workbench' | 'archive' | 'discovery' | 'context' | 'artifacts' | 'memories'>('active');
-  const [agentConversationId, setAgentConversationId] = useState<string | null>(null);
+  // A task URL names the task, never a stack, so a link keeps working after the
+  // task moves. The queue shown behind an open task is resolved from the task.
+  const [taskStack, setTaskStack] = useState<StackName>('active');
+  const [resolvedTaskId, setResolvedTaskId] = useState<string | null>(null);
+  const [conversationNavigationVersion, setConversationNavigationVersion] = useState(0);
   const [pendingTaskNavigation, setPendingTaskNavigation] = useState<string | null>(null);
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
-  const selectedInitialItem = useRef(false);
-  const queueScrollRef = useRef<HTMLDivElement>(null);
+  const selectedId = route.name === 'task' ? route.taskId : null;
+  const agentConversationId = route.name === 'conversations' ? route.conversationId : null;
+  const view = route.name === 'stack' ? route.stack : route.name === 'task' ? taskStack : route.name === 'conversations' ? 'context' : route.name;
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [isCompactNav, setIsCompactNav] = useState(() => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 820px)').matches);
   useEffect(() => {
-    const timeout = window.setTimeout(() => setDebouncedSearch(search.trim()), 250);
-    return () => window.clearTimeout(timeout);
-  }, [search]);
+    if (typeof window.matchMedia !== 'function') return;
+    const mql = window.matchMedia('(max-width: 820px)');
+    const handleChange = (event: MediaQueryListEvent) => setIsCompactNav(event.matches);
+    mql.addEventListener('change', handleChange);
+    return () => mql.removeEventListener('change', handleChange);
+  }, []);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
+  const queueScrollRef = useRef<HTMLDivElement>(null);
+  const queueView = view === 'archive' ? 'archive' : view === 'workbench' ? 'workbench' : 'active';
   const items = useInfiniteQuery({
-    queryKey: ['work-items', view === 'archive' ? 'archive' : view === 'workbench' ? 'workbench' : 'active', debouncedSearch],
-    queryFn: ({ pageParam }) => api.listWorkItems(view === 'archive' ? 'archive' : view === 'workbench' ? 'workbench' : 'active', debouncedSearch, pageParam),
+    queryKey: ['work-items', queueView],
+    queryFn: ({ pageParam }) => api.listWorkItems(queueView, '', pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
     enabled: view === 'active' || view === 'workbench' || view === 'archive',
   });
   const workItemCounts = useQuery({ queryKey: ['work-item-counts'], queryFn: api.getWorkItemCounts, refetchInterval: 1_500 });
+  const unreadConversationCount = useQuery({ queryKey: ['conversation-unread-count'], queryFn: api.getUnreadConversationCount, refetchInterval: 1_500 });
+  const notificationConversations = useQuery({ queryKey: ['notification-conversations'], queryFn: () => api.listSharedConversations('active'), refetchInterval: 1_000 });
+  const previousConversationStates = useRef<Map<string, SharedConversation['state']> | null>(null);
+  const syncedConversationId = useRef<string | null>(route.name === 'conversations' ? route.conversationId : null);
+  function openConversation(conversationId: string) {
+    navigate({ name: 'conversations', conversationId });
+  }
+  function handleConversationSelected(conversationId: string | null) {
+    syncedConversationId.current = conversationId;
+    // Landing on the console picks a conversation for you; replacing that entry
+    // keeps one back press enough to leave the console again.
+    navigate({ name: 'conversations', conversationId }, { replace: route.name === 'conversations' && route.conversationId === null });
+  }
+  useEffect(() => {
+    if (route.name !== 'conversations' || route.conversationId === syncedConversationId.current) return;
+    // The address changed from outside the workspace — a link, a notification,
+    // or the back button — so remount it on the conversation the URL names.
+    syncedConversationId.current = route.conversationId;
+    setConversationNavigationVersion((current) => current + 1);
+  }, [route]);
+  useEffect(() => {
+    if (route.name === 'stack') setTaskStack(route.stack);
+  }, [route]);
+  useEffect(() => {
+    if (route.name !== 'task' || resolvedTaskId === route.taskId) return;
+    const taskId = route.taskId;
+    let canceled = false;
+    void queryClient.fetchQuery({ queryKey: ['work-item', taskId], queryFn: () => api.getWorkItem(taskId) })
+      .then(({ item }) => {
+        if (canceled) return;
+        setTaskStack(item.archivedAt ? 'archive' : item.stack === 'workbench' ? 'workbench' : 'active');
+        setResolvedTaskId(taskId);
+      })
+      .catch(() => {
+        // A dead task link still renders the detail panel, which reports the
+        // failure in place; this only stops the stack lookup from retrying.
+        if (!canceled) setResolvedTaskId(taskId);
+      });
+    return () => { canceled = true; };
+  }, [queryClient, resolvedTaskId, route]);
+  useEffect(() => {
+    const conversations = notificationConversations.data?.conversations;
+    if (!conversations) return;
+    const next = new Map(conversations.map((conversation) => [conversation.id, conversation.state]));
+    const previous = previousConversationStates.current;
+    previousConversationStates.current = next;
+    if (!previous) return;
+    for (const conversation of conversations) {
+      if (previous.get(conversation.id) !== 'working' || conversation.state === 'working') continue;
+      const conversationIsOpen = view === 'context' && agentConversationId === conversation.id;
+      const linkedTaskIsOpen = (view === 'active' || view === 'workbench' || view === 'archive') && selectedId === conversation.workItemId;
+      if (conversationIsOpen || linkedTaskIsOpen) continue;
+      const openNotificationConversation = () => openConversation(conversation.id);
+      if (conversation.state === 'needs_attention') {
+        toast.error('Agent needs your attention', { description: conversation.title, duration: 0, action: openNotificationConversation, actionLabel: 'Open conversation' });
+      } else if (conversation.state === 'waiting_approval') {
+        toast.info('Agent has follow-ups for review', { description: conversation.title, duration: 0, action: openNotificationConversation, actionLabel: 'Review suggestions' });
+      } else if (conversation.state === 'finished') {
+        toast.success('Agent finished', { description: conversation.title, duration: 8_000, action: openNotificationConversation, actionLabel: 'Open conversation' });
+      }
+    }
+  }, [agentConversationId, notificationConversations.data?.conversations, selectedId, view]);
   const queueAgentActivity = useQuery({ queryKey: ['shared-message-activity'], queryFn: () => api.listSharedMessages(), refetchInterval: 1_000 });
   const queueAgentStatusSignature = (queueAgentActivity.data?.messages ?? []).map((message) => `${message.id}:${message.status}`).join('|');
   useEffect(() => {
@@ -1256,64 +1823,124 @@ export function App() {
   }, [queryClient, queueAgentStatusSignature]);
   const reorder = useMutation({
     mutationFn: api.reorderQueue,
+    onError: (error) => toastError('Could not save the new order. The list will reset.', error),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['work-items'] }),
   });
   const resolveProposal = useMutation({
     mutationFn: ({ id, resolution }: { id: string; resolution: 'accepted' | 'rejected' }) => api.resolveQueueProposal(id, resolution),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['work-items'] }),
+    onSuccess: ({ proposal }, variables) => {
+      navigate({ name: 'stack', stack: proposal.stack === 'workbench' ? 'workbench' : 'active' });
+      toast.success(variables.resolution === 'accepted' ? 'Proposed stack accepted.' : 'Proposed stack rejected.');
+      void queryClient.invalidateQueries({ queryKey: ['work-items'] });
+    },
+    onError: (error) => toastError('Could not update the proposal.', error),
   });
   const planQueue = useMutation({
-    mutationFn: api.planQueue,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['work-items'] }),
+    mutationFn: (stack: 'attention' | 'workbench') => api.planQueue(stack),
+    onSuccess: () => {
+      toast.success('Stack reordered.');
+      queryClient.invalidateQueries({ queryKey: ['work-items'] });
+    },
+    onError: (error) => toastError('Could not reorder the stack.', error),
+  });
+  const bulkUpdate = useMutation({
+    mutationFn: api.bulkUpdateWorkItems,
+    onSuccess: (result) => {
+      const applied = new Set(result.appliedIds);
+      const conflicts = result.conflicts;
+      setSelectedIds((current) => new Set([...current].filter((id) => !applied.has(id))));
+      if (conflicts.length) toast.error(`${conflicts.length} task${conflicts.length === 1 ? '' : 's'} could not be updated: ${conflicts.map((entry) => entry.reason.replace('_', ' ')).join(', ')}`);
+      else toast.success(`${applied.size} task${applied.size === 1 ? '' : 's'} updated.`);
+      void Promise.all([queryClient.invalidateQueries({ queryKey: ['work-items'] }), queryClient.invalidateQueries({ queryKey: ['work-item-counts'] })]);
+    },
+    onError: (error) => toastError('Could not update the selected tasks.', error),
   });
   const filtered = useMemo(() => items.data?.pages.flatMap((page) => page.items) ?? [], [items.data?.pages]);
   const { renderedItems, renderedRows } = useMemo(() => {
     const stackView = view === 'active' || view === 'workbench';
     const progress = stackView ? filtered.filter((item) => item.status === 'in_progress') : [];
     const attention = stackView ? filtered.filter((item) => item.status !== 'in_progress') : [];
+    const taskRows = (section: 'progress' | 'attention' | 'archive', sectionItems: WorkItem[]) => sectionItems.map((item) => ({ type: 'item' as const, id: item.id, item, group: section }));
     return {
       renderedItems: stackView ? [...progress, ...attention] : filtered,
       renderedRows: stackView ? [
         { type: 'header' as const, id: 'in-progress-header', label: 'In progress', count: progress.length, group: 'progress' as const },
-        ...progress.map((item) => ({ type: 'item' as const, id: item.id, item, group: 'progress' as const })),
+        ...taskRows('progress', progress),
         { type: 'header' as const, id: 'attention-header', label: 'Attention stack', count: attention.length, group: 'attention' as const },
-        ...attention.map((item) => ({ type: 'item' as const, id: item.id, item, group: 'attention' as const })),
-      ] : filtered.map((item) => ({ type: 'item' as const, id: item.id, item, group: 'archive' as const })),
+        ...taskRows('attention', attention),
+      ] : taskRows('archive', filtered),
     };
   }, [filtered, view]);
   useEffect(() => {
-    if (!selectedInitialItem.current && !pendingTaskNavigation && filtered[0]) {
-      selectedInitialItem.current = true;
-      setSelectedId(filtered[0].id);
-    }
-  }, [filtered, pendingTaskNavigation]);
-  useEffect(() => {
-    if (view === 'context' || view === 'discovery' || view === 'artifacts' || view === 'memories' || !pendingTaskNavigation) return;
-    setSelectedId(pendingTaskNavigation);
+    if (route.name !== 'task' || !pendingTaskNavigation || pendingTaskNavigation !== route.taskId) return;
+    // Wait until the stack behind the task is known: before that the queue can
+    // still be listing another stack, where the task is legitimately missing.
+    if (pendingTaskNavigation !== resolvedTaskId) return;
+    const resolvedDetail = queryClient.getQueryData<WorkItemDetail>(['work-item', pendingTaskNavigation]);
+    const resolvedStack = resolvedDetail?.item.archivedAt ? 'archive' : resolvedDetail?.item.stack === 'workbench' ? 'workbench' : 'active';
+    // React can commit the detail lookup before the infinite query behind it has
+    // switched stacks. Never judge membership against that stale list.
+    if (resolvedDetail && queueView !== resolvedStack) return;
     const target = filtered.find((item) => item.id === pendingTaskNavigation);
     if (target) {
       window.requestAnimationFrame(() => {
-        queueScrollRef.current
-          ?.querySelector<HTMLElement>(`[data-work-item-id="${pendingTaskNavigation}"]`)
-          ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // The route transition renders the stack and its sortable cards in
+        // separate commits. Wait for the next frame so this also works when a
+        // task was opened from a conversation, artifact, or task relationship.
+        window.requestAnimationFrame(() => {
+          queueScrollRef.current
+            ?.querySelector<HTMLElement>(`[data-work-item-id="${pendingTaskNavigation}"]`)
+            ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
       });
       setPendingTaskNavigation(null);
       return;
     }
-    if (items.hasNextPage && !items.isFetchingNextPage) void items.fetchNextPage();
-  }, [filtered, items, pendingTaskNavigation, view]);
+    if (items.hasNextPage) {
+      if (!items.isFetchingNextPage) void items.fetchNextPage();
+      return;
+    }
+    // The task detail endpoint is authoritative. A card can legitimately be
+    // absent from the loaded list (filter changes, lifecycle transitions, or a
+    // newly scored page); failing to center it must not turn successful task
+    // navigation into an error.
+    setPendingTaskNavigation(null);
+  }, [filtered, items, pendingTaskNavigation, queryClient, queueView, resolvedTaskId, route]);
+  useEffect(() => {
+    // On tall mobile viewports the first page can be shorter than the
+    // container, so it never becomes scrollable and onScroll-driven
+    // pagination never fires, leaving a permanent blank gap below the list.
+    const element = queueScrollRef.current;
+    if (!element || !items.hasNextPage || items.isFetchingNextPage) return;
+    if (element.scrollHeight <= element.clientHeight) void items.fetchNextPage();
+  }, [renderedRows.length, items.hasNextPage, items.isFetchingNextPage, items]);
 
-  async function openTaskFromConversation(taskId: string) {
-    const { item } = await queryClient.fetchQuery({ queryKey: ['work-item', taskId], queryFn: () => api.getWorkItem(taskId) });
-    setSearch('');
-    setDebouncedSearch('');
+  function openTaskFromConversation(taskId: string) {
     setPendingTaskNavigation(taskId);
-    setView(item.archivedAt ? 'archive' : item.projectName?.toLowerCase() === 'workbench' ? 'workbench' : 'active');
+    navigate({ name: 'task', taskId });
+  }
+
+  function selectTaskInStack(taskId: string) {
+    // The stack on screen already contains this task, so the URL can change
+    // without waiting to be told which stack the task belongs to.
+    setResolvedTaskId(taskId);
+    setPendingTaskNavigation(taskId);
+    navigate({ name: 'task', taskId });
+  }
+
+  function revealCreatedTask(item: WorkItem) {
+    // Creation can place a task anywhere in the scored stack, including a page
+    // that has not been loaded yet. The existing pending-navigation effect will
+    // fetch forward until it can center the new card.
+    setTaskStack(item.stack === 'workbench' ? 'workbench' : 'active');
+    setResolvedTaskId(item.id);
+    setPendingTaskNavigation(item.id);
+    navigate({ name: 'task', taskId: item.id });
   }
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
-    if (!over || active.id === over.id || debouncedSearch || items.isFetchingNextPage) return;
+    if (!over || active.id === over.id || items.isFetchingNextPage) return;
     const current = filtered;
     const activeItem = current.find((item) => item.id === active.id);
     const overItem = current.find((item) => item.id === over.id);
@@ -1330,45 +1957,71 @@ export function App() {
     else if (previous) reorder.mutate({ itemId: String(active.id), afterId: previous.id });
   }
 
+  function handleQueueKeyDown(event: KeyboardEvent<HTMLDivElement>, itemId: string) {
+    const target = event.target as HTMLElement;
+    if (target.closest('input, select, textarea, button, a, [contenteditable="true"]')) return;
+    const visible = renderedRows.filter((row): row is Extract<typeof renderedRows[number], { type: 'item' }> => row.type === 'item').map((row) => row.item);
+    const currentIndex = visible.findIndex((item) => item.id === itemId);
+    if (event.key === 'Enter') { event.preventDefault(); selectTaskInStack(itemId); return; }
+    if (event.key === ' ') { event.preventDefault(); setSelectedIds((current) => { const next = new Set(current); if (next.has(itemId)) next.delete(itemId); else if (next.size < 200) next.add(itemId); return next; }); return; }
+    if (event.key === 'Escape') { setSelectedIds(new Set()); return; }
+    const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? visible.length - 1 : event.key === 'ArrowDown' ? currentIndex + 1 : event.key === 'ArrowUp' ? currentIndex - 1 : currentIndex;
+    if (nextIndex !== currentIndex && visible[nextIndex]) { event.preventDefault(); setFocusedId(visible[nextIndex].id); document.querySelector<HTMLElement>(`[data-work-item-id="${visible[nextIndex].id}"]`)?.focus(); }
+  }
+
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand"><span className="brand-mark">W</span><span>Workbench</span></div>
-        <nav>
-          <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={() => { setView('active'); setSelectedId(null); }}><Command size={16} /> Attention stack <span>{workItemCounts.data?.active ?? '…'}</span></button>
-          <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={() => { setView('workbench'); setSelectedId(null); }}><Wrench size={16} /> Workbench <span>{workItemCounts.data?.workbench ?? '…'}</span></button>
-          <button className={`nav-item ${view === 'archive' ? 'active' : ''}`} onClick={() => { setView('archive'); setSelectedId(null); }}><Archive size={16} /> Archive <span>{workItemCounts.data?.archive ?? '…'}</span></button>
-          <DiscoveryNav active={view === 'discovery'} onClick={() => { setView('discovery'); setSelectedId(null); }} />
-          <button className={`nav-item ${view === 'context' ? 'active' : ''}`} onClick={() => { setView('context'); setSelectedId(null); setAgentConversationId(null); }}><MessageCircle size={16} /> Agent console</button>
-          <ArtifactNav active={view === 'artifacts'} onClick={() => { setView('artifacts'); setSelectedId(null); }} />
-          <MemoriesNav active={view === 'memories'} onClick={() => { setView('memories'); setSelectedId(null); }} />
-          <button className="nav-item" onClick={() => setShowSources(true)}><Cloud size={16} /> Sources</button>
+      <Toaster />
+      <aside
+        id="primary-nav"
+        className="sidebar"
+      >
+        <div className="brand">
+          <span className="brand-mark">W</span>
+          <span>Workbench</span>
+        </div>
+        <nav onClick={(event) => {
+          // A pointer-clicked tab retains focus by default, which keeps the
+          // :focus-within rail expanded after the pointer leaves it. Preserve
+          // keyboard focus, but release pointer focus once navigation starts.
+          if (event.detail > 0) (event.target as HTMLElement).closest<HTMLButtonElement>('button')?.blur();
+        }}>
+          <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={() => { navigate({ name: 'stack', stack: 'active' }); setMobileNavOpen(false); }}><Command size={16} /> Attention stack <span>{workItemCounts.data?.active ?? '…'}</span></button>
+          <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={() => { navigate({ name: 'stack', stack: 'workbench' }); setMobileNavOpen(false); }}><Wrench size={16} /> Workbench <span>{workItemCounts.data?.workbench ?? '…'}</span></button>
+          <DiscoveryNav active={view === 'discovery'} onClick={() => { navigate({ name: 'discovery' }); setMobileNavOpen(false); }} />
+          <button className={`nav-item ${view === 'context' ? 'active' : ''}`} onClick={() => { navigate({ name: 'conversations', conversationId: null }); setMobileNavOpen(false); }}><MessageCircle size={16} /> Agent console <span>{unreadConversationCount.data?.count ?? '…'}</span></button>
+          <div id="mobile-nav-more" className="mobile-nav-secondary" aria-label="More destinations">
+            <button className={`nav-item ${view === 'archive' ? 'active' : ''}`} onClick={() => { navigate({ name: 'stack', stack: 'archive' }); setMobileNavOpen(false); }}><Archive size={16} /> Archive <span>{workItemCounts.data?.archive ?? '…'}</span></button>
+            <ArtifactNav active={view === 'artifacts'} onClick={() => { navigate({ name: 'artifacts' }); setMobileNavOpen(false); }} />
+            <InsightsNav active={view === 'insights'} onClick={() => { navigate({ name: 'insights' }); setMobileNavOpen(false); }} />
+            <button className="nav-item" onClick={() => { setShowSources(true); setMobileNavOpen(false); }}><Cloud size={16} /> Sources</button>
+          </div>
+          {isCompactNav && (
+            <button className={`nav-item mobile-nav-more ${mobileNavOpen || ['archive', 'artifacts', 'insights'].includes(view) ? 'active' : ''}`} aria-controls="mobile-nav-more" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((open) => !open)}><MoreHorizontal size={18} /> More</button>
+          )}
         </nav>
       </aside>
 
-      {view === 'context' ? <SharedWorkspace initialConversationId={agentConversationId} onOpenTask={(taskId) => { void openTaskFromConversation(taskId); }} /> : view === 'artifacts' ? <ArtifactLibraryView onOpenTask={(taskId) => { void openTaskFromConversation(taskId); }} onOpenConversation={(conversationId) => { setAgentConversationId(conversationId); setView('context'); }} /> : view === 'memories' ? <MemoriesView /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { void openTaskFromConversation(taskId); }} onOpenStack={() => { setSelectedId(null); setView('active'); }} /> : <><main className="queue-panel">
+      {view === 'context' ? <SharedWorkspace key={`conversation-${conversationNavigationVersion}`} initialConversationId={agentConversationId} onSelectConversation={handleConversationSelected} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} /> : view === 'artifacts' ? <ArtifactLibraryView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : view === 'insights' ? <InsightsView /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenStack={() => navigate({ name: 'stack', stack: 'active' })} /> : <><main className="queue-panel">
         <header className="queue-header">
           <div><span className="eyebrow">{view === 'active' ? 'Focus' : view === 'workbench' ? 'Build' : 'History'}</span><h2>{view === 'active' ? 'Attention stack' : view === 'workbench' ? 'Workbench roadmap' : 'Archive'}</h2></div>
           <div className="header-actions">
             {(view === 'active' || view === 'workbench') && <>
-            {view === 'active' && <>
-            <button className="button secondary compact" onClick={() => planQueue.mutate()} disabled={planQueue.isPending}>
+            <button className="button secondary compact" onClick={() => planQueue.mutate(view === 'workbench' ? 'workbench' : 'attention')} disabled={planQueue.isPending}>
               {planQueue.isPending ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} {planQueue.isPending ? 'Reordering…' : 'Reorder stack'}
             </button>
-            </>}
             <button className="button primary compact" onClick={() => setShowCreate(true)}><Plus size={15} /> New</button>
             </>}
           </div>
         </header>
-        <div className="search-box"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search work…" /></div>
-        {planQueue.error && <div className="inline-error">{planQueue.error.message}</div>}
+        {selectedIds.size > 0 && <div className="queue-bulkbar" role="toolbar" aria-label="Bulk task actions"><span>{selectedIds.size} selected</span><button onClick={() => bulkUpdate.mutate({ action: view === 'archive' ? 'restore' : 'archive', ids: [...selectedIds] })} disabled={bulkUpdate.isPending}>{view === 'archive' ? 'Restore' : 'Archive'}</button><button onClick={() => setSelectedIds(new Set())}>Clear</button>{(view === 'active' || view === 'workbench') && <small>Changing projects no longer moves tasks between Attention and Workbench.</small>}</div>}
         {items.data?.pages[0]?.proposal && (
           <div className="proposal-banner">
-            <div><Sparkles size={15} /><span><strong>Proposed stack applied</strong><small>{items.data.pages[0].proposal.rationale}</small></span></div>
-            <div>
-              <button onClick={() => setShowProposalDetail((current) => !current)}>{showProposalDetail ? 'Hide breakdown' : 'See breakdown'}</button>
-              <button onClick={() => resolveProposal.mutate({ id: items.data!.pages[0].proposal!.id, resolution: 'rejected' })}>Reject & restore</button>
-              <button className="accept" onClick={() => resolveProposal.mutate({ id: items.data!.pages[0].proposal!.id, resolution: 'accepted' })}>Accept</button>
+            <div className="proposal-copy"><Sparkles size={15} /><span><strong>Review proposed order</strong><small>{items.data.pages[0].proposal.rationale}</small></span></div>
+            <div className="proposal-actions">
+              <button onClick={() => setShowProposalDetail((current) => !current)}>{showProposalDetail ? 'Hide changes' : 'Show changes'}</button>
+              <button className="proposal-revert" onClick={() => resolveProposal.mutate({ id: items.data!.pages[0].proposal!.id, resolution: 'rejected' })}>Revert</button>
+              <button className="accept" onClick={() => resolveProposal.mutate({ id: items.data!.pages[0].proposal!.id, resolution: 'accepted' })}>Keep order</button>
             </div>
           </div>
         )}
@@ -1384,12 +2037,12 @@ export function App() {
         }}>
           {items.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading queue…</div>}
           {items.isError && <div className="list-state error-message">Could not load work items. <button className="button secondary compact" onClick={() => items.refetch()}>Retry</button></div>}
-          {!items.isLoading && !items.isError && filtered.length === 0 && <div className="list-state">{debouncedSearch ? 'No matching work items.' : view === 'active' ? 'No work items yet. Add one or connect Linear.' : view === 'workbench' ? 'No Workbench roadmap tasks yet.' : 'No archived tasks.'}</div>}
-          <SortableContext items={(view === 'active' || view === 'workbench') && !debouncedSearch ? renderedItems.map((item) => item.id) : []} strategy={verticalListSortingStrategy}>
+          {!items.isLoading && !items.isError && filtered.length === 0 && <div className="list-state">{view === 'active' ? 'No work items yet. Add one or connect Linear.' : view === 'workbench' ? 'No Workbench roadmap tasks yet.' : 'No archived tasks.'}</div>}
+          <SortableContext items={(view === 'active' || view === 'workbench') && !items.hasNextPage && selectedIds.size === 0 ? renderedItems.map((item) => item.id) : []} strategy={verticalListSortingStrategy}>
             <div className="queue-rows">
               {renderedRows.map((rendered, index) => rendered.type === 'header'
                 ? <div key={rendered.id} className={`stack-header stack-header-${rendered.group}`}><span>{rendered.label}</span><strong>{rendered.count}</strong></div>
-                : <div key={rendered.id} className={`task-group-row task-group-${rendered.group}`}><SortableQueueItem item={rendered.item} index={index} selected={selectedId === rendered.item.id} draggable={(view === 'active' || view === 'workbench') && !debouncedSearch && !items.isFetchingNextPage} onSelect={() => setSelectedId(rendered.item.id)} /></div>)}
+                : <div key={rendered.id} className={`task-group-row task-group-${rendered.group}`}><TaskQueueItem item={rendered.item} index={index} selected={selectedIds.has(rendered.item.id)} focused={(focusedId ?? renderedItems[0]?.id) === rendered.item.id} draggable={(view === 'active' || view === 'workbench') && !items.isFetchingNextPage && !items.hasNextPage && selectedIds.size === 0} onSelect={() => selectTaskInStack(rendered.item.id)} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onFocus={() => setFocusedId(rendered.item.id)} onKeyDown={(event) => handleQueueKeyDown(event, rendered.item.id)} /></div>)}
             </div>
           </SortableContext>
           {items.isFetchingNextPage && <div className="page-state"><LoaderCircle className="spin" size={14} /> Loading more…</div>}
@@ -1398,8 +2051,8 @@ export function App() {
         </DndContext>
       </main>
 
-      {selectedId ? <TaskDetail id={selectedId} onClose={() => setSelectedId(null)} onOpenTask={(taskId) => { void openTaskFromConversation(taskId); }} onOpenConversation={(conversationId) => { setAgentConversationId(conversationId); setView('context'); }} /> : <section className="detail-empty"><Sparkles /><h2>Choose your next move</h2><p>Select an item or add something new.</p></section>}</>}
-      {showCreate && <CreateTask onClose={() => setShowCreate(false)} defaultProjectName={view === 'workbench' ? 'Workbench' : ''} />}
+      {selectedId ? <TaskDetail key={selectedId} id={selectedId} onClose={() => navigate({ name: 'stack', stack: taskStack })} onCreated={revealCreatedTask} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : <section className="detail-empty"><Sparkles /><h2>Choose your next move</h2><p>Select an item or add something new.</p></section>}</>}
+      {showCreate && <CreateTask onClose={() => setShowCreate(false)} onCreated={revealCreatedTask} defaultProjectName={view === 'workbench' ? 'Workbench' : ''} />}
       {showSources && <SourcesDialog onClose={() => setShowSources(false)} />}
     </div>
   );

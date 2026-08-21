@@ -1,4 +1,5 @@
 import type { QueueItemExplanation, QueueSignal, QueueSignalKey, WorkItem } from '../shared/contracts.js';
+import { dueDaysFromToday, dueState, type DueState } from '../shared/due-date.js';
 
 /**
  * Deterministic, explainable ranking for the attention stack.
@@ -34,10 +35,18 @@ export interface QueueContext {
   activeRuns: Map<string, number>;
   /** Item ids whose most recent activity note is an unresolved blocker. */
   unresolvedBlockers: Set<string>;
+  /**
+   * Blocker item id → how many still-open tasks list it as a prerequisite.
+   * This is the reverse of `WorkItem.blockedBy`, which the planner reads off the
+   * item itself; only the outgoing direction needs a lookup table.
+   */
+  openDependents: Map<string, number>;
   /** Item id → short description of source movement since the last plan. */
   sourceChanges: Map<string, string>;
   /** Learned weight per signal key, from proposals Jeffrey accepted or rejected. */
   feedback: Map<QueueSignalKey, FeedbackWeight>;
+  /** IANA timezone used to interpret calendar-date deadlines. */
+  timeZone?: string;
 }
 
 export interface FeedbackWeight { weight: number; accepted: number; rejected: number; }
@@ -79,17 +88,37 @@ export function scoreItem(item: WorkItem, context: QueueContext, workInProgress:
   if (days >= 1) signals.push(signal('aging', Math.min(8, days), `${days} day${days === 1 ? '' : 's'} without activity`));
 
   if (item.dueDate) {
-    const dueInDays = (new Date(item.dueDate).getTime() - context.now) / 86_400_000;
-    if (Number.isFinite(dueInDays)) {
-      if (dueInDays < 0) signals.push(signal('deadline', 10, 'the due date has already passed'));
-      else if (dueInDays <= 1) signals.push(signal('deadline', 8, 'it is due within a day'));
-      else if (dueInDays <= 3) signals.push(signal('deadline', 5, 'it is due within three days'));
-    }
+    const state: DueState = dueState(item.dueDate, context.now, context.timeZone);
+    const dueInDays = dueDaysFromToday(item.dueDate, context.now, context.timeZone);
+    if (state === 'overdue') signals.push(signal('deadline', 10, 'the due date has already passed'));
+    else if (dueInDays <= 1) signals.push(signal('deadline', 8, state === 'due_today' ? 'it is due today' : 'it is due tomorrow'));
+    else if (dueInDays <= 3) signals.push(signal('deadline', 5, 'it is due within three days'));
   }
 
   const openChildren = context.openChildren.get(item.id) ?? 0;
   if (openChildren > 0) signals.push(signal('blocker', -6, `it is waiting on ${openChildren} open subtask${openChildren === 1 ? '' : 's'}`));
+  // A task with open prerequisites cannot be dispatched at all — POST /execute
+  // and POST /runs both reject it with 409 — so it sinks harder than a task that
+  // is merely waiting on subtasks, which a human can still pick up and progress.
+  const openDependencies = (item.blockedBy ?? []).filter((dependency) => dependency.isOpen);
+  if (openDependencies.length > 0) {
+    const titles = openDependencies.slice(0, 3).map((dependency) => dependency.title).join(', ');
+    const overflow = openDependencies.length > 3 ? ` and ${openDependencies.length - 3} more` : '';
+    signals.push(signal(
+      'blocker',
+      -12,
+      `it is blocked by ${openDependencies.length} open prerequisite${openDependencies.length === 1 ? '' : 's'}: ${titles}${overflow}`,
+    ));
+  }
   if (context.unresolvedBlockers.has(item.id)) signals.push(signal('blocker', -4, 'its most recent note records an unresolved blocker'));
+
+  // The mirror image: work on the critical path is promoted, because finishing it
+  // is what opens the gate on everything queued behind it. Capped so a single hub
+  // task with many dependents cannot dominate the whole stack.
+  const dependents = context.openDependents.get(item.id) ?? 0;
+  if (dependents > 0 && openDependencies.length === 0) {
+    signals.push(signal('blocker', Math.min(9, 3 * dependents), `finishing it unblocks ${dependents} task${dependents === 1 ? '' : 's'}`));
+  }
 
   const change = context.sourceChanges.get(item.id);
   if (change) signals.push(signal('source_change', 6, change));

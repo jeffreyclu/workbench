@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
-import { WorkItemRepository } from './repository.js';
+import { WorkItemDependencyError, WorkItemRepository } from './repository.js';
 import { cancelSharedReply, dispatchNextSharedTurn } from './shared-room.js';
 
 describe('WorkItemRepository', () => {
@@ -13,6 +13,40 @@ describe('WorkItemRepository', () => {
   });
 
   afterEach(() => database.close());
+
+  it('aggregates reported token usage by provider and model for terminal runs', () => {
+    const item = repository.create({ title: 'Measure usage', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const codexRun = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Implement it.');
+    const claudeRun = repository.createRun(item.id, 'review', 'claude', 'claude', 'Review it.');
+    const unreportedRun = repository.createRun(item.id, 'research', 'codex', 'codex', 'Research it.');
+    repository.updateRun(codexRun.id, { status: 'completed', model: 'gpt-5.6-terra', inputTokens: 1_200, outputTokens: 300 });
+    repository.updateRun(claudeRun.id, { status: 'failed', model: 'claude-sonnet', inputTokens: 400, outputTokens: 100 });
+    repository.updateRun(unreportedRun.id, { status: 'completed', model: 'gpt-5.6-terra' });
+
+    expect(repository.getRunInsights()).toMatchObject({
+      inputTokens: 1_600,
+      outputTokens: 400,
+      tokenUsageByModel: [
+        { provider: 'codex', model: 'gpt-5.6-terra', inputTokens: 1_200, outputTokens: 300 },
+        { provider: 'claude', model: 'claude-sonnet', inputTokens: 400, outputTokens: 100 },
+      ],
+    });
+  });
+
+  it('uses lifecycle events for retry and handoff insights, including chat-era history', () => {
+    const item = repository.create({ title: 'Lifecycle telemetry', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const run = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');
+    repository.updateRun(run.id, { status: 'canceled', completedAt: new Date().toISOString() });
+    repository.addActivity(item.id, 'system', 'execution_retried', 'Retrying claude execute after the prior attempt canceled.');
+    repository.addActivity(item.id, 'system', 'agent_fallback', 'claude was unavailable; continued with codex.');
+
+    expect(repository.getRunInsights()).toMatchObject({
+      retryCount: 1,
+      handoffCount: 1,
+      retryRate: 1,
+      fallbackRate: 1,
+    });
+  });
 
   it('creates and updates a manual work item', () => {
     const item = repository.create({
@@ -42,6 +76,58 @@ describe('WorkItemRepository', () => {
     const restored = repository.restore(item.id)!;
     expect(restored).toEqual(expect.objectContaining({ archivedAt: null, completedAt: null, completionStatus: 'incomplete', status: 'ready', isQueued: true }));
     expect(repository.listConversations().find((conversation) => conversation.workItemId === item.id)?.archivedAt).toBeUndefined();
+  });
+
+  it('logs every lifecycle move so a task never leaves the queue unexplained', () => {
+    const item = repository.create({ title: 'Ship the log', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    repository.archive(item.id, true, false, { actor: 'jeffrey' });
+    repository.restore(item.id, false, { actor: 'jeffrey' });
+    repository.archive(item.id, false, false, { reason: 'its conversation was archived' });
+
+    expect(repository.listActivity(item.id).map((entry) => ({ actor: entry.actor, kind: entry.kind, body: entry.body })))
+      .toEqual(expect.arrayContaining([
+        { actor: 'jeffrey', kind: 'completed', body: 'Completed and moved to the archive.' },
+        { actor: 'jeffrey', kind: 'restored', body: 'Restored from the archive.' },
+        { actor: 'system', kind: 'archived', body: 'Archived without completing because its conversation was archived.' },
+      ]));
+  });
+
+  it('logs a rejected plan so the task does not look untouched after a proposal', () => {
+    const parent = repository.create({ title: 'Big migration', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const plan = repository.createExecutionPlan(parent.id, 'Split it.', [
+      { title: 'First', description: 'Do it.', workspacePath: null },
+      { title: 'Second', description: 'Then this.', workspacePath: null },
+    ]);
+
+    repository.resolveExecutionPlan(plan.id, 'rejected');
+
+    expect(repository.listActivity(parent.id).find((entry) => entry.kind === 'decomposed'))
+      .toMatchObject({ actor: 'jeffrey', body: 'Rejected the proposed breakdown into 2 tasks.' });
+  });
+
+  it('keeps same-millisecond activity in insertion order so a decision precedes its consequence', () => {
+    const item = repository.create({ title: 'Fast writer', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    // These land inside one millisecond in practice, which is exactly when a
+    // created_at-only sort used to flip the routing decision behind its model.
+    repository.addActivity(item.id, 'system', 'execution_started', 'Execution type: execute.');
+    repository.addActivity(item.id, 'system', 'model_selected', 'Model: codex gpt-5.6-terra.');
+
+    expect(repository.listActivity(item.id).map((entry) => entry.kind).slice(0, 2)).toEqual(['model_selected', 'execution_started']);
+  });
+
+  it('does not repeat a lifecycle entry when the same move is applied twice', () => {
+    const item = repository.create({ title: 'Double tapped', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const lifecycle = () => repository.listActivity(item.id).filter((entry) => ['archived', 'completed'].includes(entry.kind));
+
+    repository.archive(item.id, false);
+    repository.archive(item.id, false);
+    expect(lifecycle().map((entry) => entry.kind)).toEqual(['archived']);
+
+    // Completing a task that was already archived incomplete is a real transition.
+    repository.archive(item.id, true);
+    repository.archive(item.id, true);
+    expect(lifecycle().map((entry) => entry.kind)).toEqual(['completed', 'archived']);
   });
 
   it('preserves local strategy, assignment, and priority during Linear sync', () => {
@@ -77,6 +163,37 @@ describe('WorkItemRepository', () => {
     expect(updated.priority).toBe(0);
   });
 
+  it('preserves a local Linear field edit and records a conflict only when Linear also changes it', () => {
+    const input = { sourceIdentifier: 'ENG-43', sourceUrl: null, title: 'Provider title', description: 'Provider description', status: 'ready' as const, priority: 2, projectName: 'Core', labels: ['frontend'], dueDate: null, providerUpdatedAt: '2026-08-18T10:00:00.000Z', providerPayload: {} };
+    repository.upsertLinearItem(input);
+    const item = repository.searchLinear('ENG-43')[0];
+    repository.update(item.id, { title: 'Local title' });
+    repository.upsertLinearItem({ ...input, description: 'Provider description v2', providerUpdatedAt: '2026-08-18T11:00:00.000Z' });
+    expect(repository.get(item.id)?.title).toBe('Local title');
+    expect(repository.get(item.id)?.description).toBe('Provider description v2');
+    expect(repository.listProviderConflicts(item.id)).toEqual([]);
+
+    repository.upsertLinearItem({ ...input, title: 'Provider title v2', description: 'Provider description v2', providerUpdatedAt: '2026-08-18T12:00:00.000Z' });
+    expect(repository.get(item.id)?.title).toBe('Local title');
+    expect(repository.listProviderConflicts(item.id)).toEqual([expect.objectContaining({ field: 'title', localValue: 'Local title', providerValue: 'Provider title v2' })]);
+    repository.resolveProviderConflict(item.id, 'title', 'use_provider');
+    expect(repository.get(item.id)?.title).toBe('Provider title v2');
+    expect(repository.listProviderConflicts(item.id)).toEqual([]);
+  });
+
+  it('preserves locally edited labels and exposes the provider value when they conflict', () => {
+    const input = { sourceIdentifier: 'ENG-44', sourceUrl: null, title: 'Provider title', description: '', status: 'ready' as const, priority: 2, projectName: null, labels: ['backend'], dueDate: null, providerUpdatedAt: '2026-08-18T10:00:00.000Z', providerPayload: {} };
+    repository.upsertLinearItem(input);
+    const item = repository.searchLinear('ENG-44')[0];
+    repository.update(item.id, { labels: ['frontend', 'backend'] });
+    repository.upsertLinearItem({ ...input, labels: ['api'], providerUpdatedAt: '2026-08-18T11:00:00.000Z' });
+
+    expect(repository.get(item.id)?.labels).toEqual(['backend', 'frontend']);
+    expect(repository.listProviderConflicts(item.id)).toEqual([expect.objectContaining({ field: 'labels', localValue: ['backend', 'frontend'], providerValue: ['api'] })]);
+    repository.resolveProviderConflict(item.id, 'labels', 'keep_local');
+    expect(repository.listProviderConflicts(item.id)).toEqual([]);
+  });
+
   it('applies and rejects a reversible stack proposal', () => {
     const first = repository.create({ title: 'First', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const second = repository.create({ title: 'Second', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
@@ -86,7 +203,22 @@ describe('WorkItemRepository', () => {
     expect(repository.list().map((item) => item.id)).toEqual([second.id, first.id]);
   });
 
-  it('shares recent room context and automatically preserves archived conversations', () => {
+  it('plans the Workbench roadmap without reordering the attention stack', () => {
+    const attention = repository.create({ title: 'Customer task', description: '', priority: 2, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
+    const fresh = repository.create({ title: 'Fresh Workbench task', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const stale = repository.create({ title: 'Stale Workbench task', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    database.prepare('UPDATE work_items SET last_touched_at = ? WHERE id = ?').run(new Date(Date.now() - 9 * 86_400_000).toISOString(), stale.id);
+
+    const proposal = repository.buildDailyProposal(Date.now(), 'workbench');
+
+    expect(proposal.stack).toBe('workbench');
+    expect(repository.listWorkbench().map((item) => item.id)).toEqual([stale.id, fresh.id]);
+    expect(repository.list().map((item) => item.id)).toEqual([attention.id]);
+    expect(repository.getPendingProposal('workbench')?.id).toBe(proposal.id);
+    expect(repository.getPendingProposal('attention')).toBeNull();
+  });
+
+  it('shares recent completed room context without synthesizing durable records', () => {
     const conversation = repository.createConversation('Queue operating model');
     repository.createSharedMessage('jeffrey', 'The queue order is the priority.', 'completed', conversation.id);
     repository.createSharedMessage('claude', 'Preserve yesterday’s order unless context changes.', 'completed', conversation.id);
@@ -95,8 +227,6 @@ describe('WorkItemRepository', () => {
     expect(repository.listSharedMessages().messages).toHaveLength(3);
     repository.setConversationArchived(conversation.id, true);
     const context = repository.getSharedContext();
-    expect(context).toContain('Durable context from archived work:');
-    expect(context).toContain('Archived conversation: Queue operating model');
     expect(context).toContain('jeffrey: The queue order is the priority.');
     expect(context).toContain('claude: Preserve yesterday’s order unless context changes.');
     expect(context).not.toContain('codex: ');
@@ -109,6 +239,7 @@ describe('WorkItemRepository', () => {
     repository.createSharedMessage('codex', 'Here are the findings', 'completed', conversation.id);
 
     expect(repository.setConversationArchived(conversation.id, true)?.archivedAt).toEqual(expect.any(String));
+    expect(repository.get(task.id)).toEqual(expect.objectContaining({ archivedAt: expect.any(String), completionStatus: 'incomplete' }));
     expect(repository.listConversationPage(30, null, 'archive').conversations.map((item) => item.id)).toContain(conversation.id);
     expect(repository.listConversationPage(30, null, 'active').conversations.map((item) => item.id)).not.toContain(conversation.id);
 
@@ -116,6 +247,54 @@ describe('WorkItemRepository', () => {
     expect(fork).toEqual(expect.objectContaining({ workItemId: task.id, forkedFromConversationId: conversation.id, archivedAt: null }));
     expect(repository.listSharedMessages(100, null, fork.id).messages.map((message) => message.body)).toEqual(['Investigate this', 'Here are the findings']);
     expect(repository.setConversationArchived(conversation.id, false)?.archivedAt).toBeNull();
+  });
+
+  it('logs a model preference activity on the linked task when Jeffrey sets or clears a conversation tier', () => {
+    const task = repository.create({ title: 'Model tier task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Tier thread', task.id);
+
+    repository.setConversationExecutionProfile(conversation.id, 'deep');
+    expect(repository.listActivity(task.id).some((entry) => entry.kind === 'model_preference' && entry.body.includes('deep'))).toBe(true);
+
+    repository.setConversationExecutionProfile(conversation.id, null);
+    expect(repository.listActivity(task.id).filter((entry) => entry.kind === 'model_preference')).toHaveLength(2);
+
+    const before = repository.listActivity(task.id).length;
+    repository.setConversationExecutionProfile(conversation.id, null);
+    expect(repository.listActivity(task.id)).toHaveLength(before);
+  });
+
+  it('protects task-linked conversations from direct deletion and deletes them with their task', () => {
+    const task = repository.create({ title: 'Owned conversation', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Task history', task.id);
+
+    expect(repository.deleteConversation(conversation.id)).toBe(false);
+    expect(repository.getConversation(conversation.id)).not.toBeNull();
+
+    expect(repository.delete(task.id)).toBe(true);
+    expect(repository.getConversation(conversation.id)).toBeNull();
+  });
+
+  it('summarizes conversation states for the navigation cards', () => {
+    const working = repository.createConversation('Working thread');
+    repository.createSharedMessage('codex', '', 'running', working.id);
+    const failed = repository.createConversation('Failed thread');
+    repository.createSharedMessage('claude', 'Stopped', 'canceled', failed.id);
+    const finished = repository.createConversation('Finished thread');
+    repository.createSharedMessage('codex', 'Done', 'completed', finished.id);
+    const task = repository.create({ title: 'Approval task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const approval = repository.createConversation('Approval thread', task.id);
+    repository.createSharedMessage('claude', 'Plan ready', 'completed', approval.id);
+    repository.createExecutionPlan(task.id, 'Choose follow-ups.', [{ title: 'Follow-up', description: 'Do it.', workspacePath: null }]);
+
+    const states = new Map(repository.listConversations().map((conversation) => [conversation.id, conversation.state]));
+    expect(states.get(working.id)).toBe('working');
+    expect(states.get(failed.id)).toBe('needs_attention');
+    expect(states.get(finished.id)).toBe('finished');
+    expect(states.get(approval.id)).toBe('waiting_approval');
+    expect(repository.countUnreadConversations()).toBe(4);
+    repository.markConversationRead(finished.id);
+    expect(repository.countUnreadConversations()).toBe(3);
   });
 
   it('turns only selected execution-plan items into ordered queue tasks', () => {
@@ -126,11 +305,16 @@ describe('WorkItemRepository', () => {
     ]);
     repository.resolveExecutionPlan(plan.id, 'accepted', [1]);
 
-    expect(repository.get(parent.id)).toEqual(expect.objectContaining({ status: 'ready', archivedAt: expect.any(String), completionStatus: 'incomplete' }));
-    expect(repository.listArchived().map((item) => item.id)).toContain(parent.id);
-    expect(repository.listWorkbench().map((item) => item.title)).toEqual(['Implement migration']);
-    expect(repository.listWorkbench()[0].workspacePath).toBe('/tmp/project');
-    expect(repository.listWorkbench()[0].parentWorkItemId).toBe(parent.id);
+    expect(repository.get(parent.id)).toEqual(expect.objectContaining({ status: 'ready', archivedAt: null, completionStatus: 'incomplete' }));
+    expect(repository.listArchived().map((item) => item.id)).not.toContain(parent.id);
+    expect(repository.listWorkbench().map((item) => item.title)).toEqual(['Large migration', 'Implement migration']);
+    expect(repository.listWorkbench()[1].workspacePath).toBe('/tmp/project');
+    expect(repository.listWorkbench()[1].parentWorkItemId).toBe(parent.id);
+
+    const archivalParent = repository.create({ title: 'Archive after split', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const archivalPlan = repository.createExecutionPlan(archivalParent.id, 'Archive deliberately.', [{ title: 'Child', description: 'Continue.', workspacePath: null }]);
+    repository.resolveExecutionPlan(archivalPlan.id, 'accepted', undefined, true);
+    expect(repository.get(archivalParent.id)?.archivedAt).toEqual(expect.any(String));
   });
 
   it('preserves relative order when daily context does not justify a move', () => {
@@ -315,7 +499,7 @@ describe('WorkItemRepository', () => {
     expect(repository.listSourceConnections()).toEqual([]);
   });
 
-  it('distinguishes incomplete archives from completed archives and writes shared memory', () => {
+  it('distinguishes incomplete archives from completed archives and preserves conversation history', () => {
     const incomplete = repository.create({ title: 'Paused work', description: 'Useful context', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const completed = repository.create({ title: 'Shipped work', description: 'Finished context', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const archivedConversation = repository.getOrCreateWorkConversation(incomplete.id, incomplete.title);
@@ -330,8 +514,7 @@ describe('WorkItemRepository', () => {
     expect(repository.listConversations().some((conversation) => conversation.id === archivedConversation.id)).toBe(false);
     expect(repository.listSharedMessages(100, null, archivedConversation.id).messages).toEqual(expect.arrayContaining([expect.objectContaining({ body: 'Useful archived report' })]));
     expect(repository.listSharedMessages().messages.filter((message) => message.pinned)).toEqual([]);
-    expect(repository.getSharedContext()).toContain('Archived task (incomplete): Paused work');
-    expect(repository.getSharedContext()).toContain('Archived task (completed): Shipped work');
+    expect(repository.getSharedContext()).toContain('Useful archived report');
   });
 
   describe('full-text search over shared conversations and messages', () => {
@@ -456,6 +639,32 @@ describe('WorkItemRepository', () => {
 
     expect(repository.removeReference(parent.id, linear.id)).toBe(true);
     expect(repository.listReferences(parent.id).map((entry) => entry.id)).toEqual([pr.id]);
+  });
+
+  it('links existing tasks from either side without allowing duplicate or self links', () => {
+    const first = repository.create({ title: 'First task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const second = repository.create({ title: 'Second task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    repository.addTaskLink(first.id, second.id);
+    repository.addTaskLink(second.id, first.id);
+
+    expect(repository.listLinkedTasks(first.id).map((item) => item.id)).toEqual([second.id]);
+    expect(repository.listLinkedTasks(second.id).map((item) => item.id)).toEqual([first.id]);
+    expect(repository.listActivity(first.id).filter((entry) => entry.kind === 'task_linked')).toHaveLength(1);
+    expect(() => repository.addTaskLink(first.id, first.id)).toThrow('cannot link to itself');
+    expect(repository.removeTaskLink(second.id, first.id)).toBe(true);
+    expect(repository.listLinkedTasks(first.id)).toEqual([]);
+  });
+
+  it('includes compact follow-up lineage in queue items', () => {
+    const parent = repository.create({ title: 'Parent task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const openChild = repository.createFollowUp(parent.id, 'Open follow-up', '');
+    const archivedChild = repository.createFollowUp(parent.id, 'Archived follow-up', '');
+    repository.archive(archivedChild!.id, true);
+
+    const items = repository.list();
+    expect(items.find((item) => item.id === parent.id)?.lineage).toEqual({ parentTitle: null, followUpCount: 2, openFollowUpCount: 1 });
+    expect(items.find((item) => item.id === openChild!.id)?.lineage).toEqual({ parentTitle: 'Parent task', followUpCount: 0, openFollowUpCount: 0 });
   });
 
   it('keeps children, conversations, and references reachable across archive and restore', () => {
@@ -656,6 +865,27 @@ describe('WorkItemRepository', () => {
   });
 
   describe('claim/retry primitives', () => {
+    it('retries a failed task run in place without creating a second run or chat reply', () => {
+      const item = repository.create({ title: 'Retry in place', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const conversation = repository.getOrCreateWorkConversation(item.id, item.title);
+      const message = repository.createSharedMessage('codex', 'Partial output', 'failed', conversation.id);
+      const run = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Continue', conversation.id, message.id);
+      repository.updateRun(run.id, { status: 'failed', error: 'Agent process stopped reporting progress.' });
+
+      const retried = repository.prepareRunRetry(run.id);
+
+      expect(retried?.id).toBe(run.id);
+      expect(retried?.status).toBe('queued');
+      expect(repository.listRuns(item.id)).toHaveLength(1);
+      expect(repository.listAllSharedMessages(conversation.id).filter((entry) => entry.author === 'codex')).toHaveLength(1);
+      expect(repository.getSharedMessageById(message.id)?.status).toBe('running');
+
+      repository.updateRun(run.id, { status: 'completed' });
+      repository.updateSharedMessage(message.id, { status: 'completed' });
+      expect(repository.getRun(run.id)?.error).toBe('');
+      expect(repository.getSharedMessageById(message.id)?.error).toBe('');
+    });
+
     function createQueuedRun() {
       const item = repository.create({ title: 'Reliability task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
       return repository.createRun(item.id, 'analysis', 'codex', 'codex', '');
@@ -675,7 +905,7 @@ describe('WorkItemRepository', () => {
       // claim can succeed.
       const run = createQueuedRun();
       repository.claimRun(run.id, 'owner-a', -1); // lease already expired
-      repository.reclaimExpired();
+      repository.reclaimExpired(0);
       expect(repository.claimRun(run.id, 'owner-b', 60_000)).toBe(true);
     });
 
@@ -708,12 +938,27 @@ describe('WorkItemRepository', () => {
       const executeRun = repository.createRun(item.id, 'execute', 'codex', 'codex', '');
       repository.claimRun(executeRun.id, 'dead-owner', -1);
 
-      const result = repository.reclaimExpired();
+      const result = repository.reclaimExpired(0);
       expect(result.recoveredRunIds).toContain(analysisRun.id);
       expect(result.failedRunIds).toContain(executeRun.id);
       expect(repository.getRun(analysisRun.id)?.status).toBe('queued');
       expect(repository.getRun(executeRun.id)?.status).toBe('failed');
-      expect(repository.getRun(executeRun.id)?.error).toMatch(/Interrupted by API restart/);
+      expect(repository.getRun(executeRun.id)?.error).toMatch(/stopped reporting progress/);
+    });
+
+    it('does not mark a linked chat failed while its interrupted run is being retried', () => {
+      const item = repository.create({ title: 'Recover linked reply', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const conversation = repository.getOrCreateWorkConversation(item.id, item.title);
+      const message = repository.createSharedMessage('codex', 'Partial response', 'running', conversation.id);
+      const run = repository.createRun(item.id, 'analysis', 'codex', 'codex', '', conversation.id, message.id);
+      repository.claimRun(run.id, 'dead-owner', -1);
+      repository.claimSharedMessage(message.id, 'dead-owner', -1);
+
+      repository.reclaimExpired(0);
+
+      expect(repository.getRun(run.id)?.status).toBe('queued');
+      expect(repository.getSharedMessageById(message.id)?.status).toBe('running');
+      expect(repository.getSharedMessageById(message.id)?.error).toBe('');
     });
 
     it('dueWork returns queued runs with no future next_attempt_at and excludes scheduled retries not yet due', () => {
@@ -772,118 +1017,361 @@ describe('WorkItemRepository', () => {
       // Claim with negative lease (already expired).
       repository.claimSharedMessage(message.id, 'dead-owner', -1);
 
-      const result = repository.reclaimExpired();
+      const result = repository.reclaimExpired(0);
       expect(result.recoveredMessageIds).toContain(message.id);
       const recovered = repository.listSharedMessages(10, null, conversation.id).messages.find((m) => m.id === message.id);
       expect(recovered?.status).toBe('failed');
-      expect(recovered?.error).toMatch(/Interrupted by API restart/);
+      expect(recovered?.error).toMatch(/stopped reporting progress/);
       expect(recovered?.body).toBe('partial output'); // Partial output is preserved for inspection.
     });
   });
 
-  describe('structured memories (Phase 1)', () => {
-    // Regression guard: this must stay byte-identical to the pre-memory output
-    // whenever no structured memories exist and no scope is passed, so this test
-    // must run against a fresh, memory-free database and fail loudly if the
-    // shape of getSharedContext's output ever changes for that case.
-    it('produces byte-identical output to the pre-memory implementation when there are no structured memories', () => {
-      const conversation = repository.createConversation('Queue operating model');
-      repository.createSharedMessage('jeffrey', 'The queue order is the priority.', 'completed', conversation.id);
-      repository.createSharedMessage('claude', 'Preserve yesterday’s order unless context changes.', 'completed', conversation.id);
-      repository.createSharedMessage('codex', '', 'running', conversation.id);
-      repository.setConversationArchived(conversation.id, true);
-
-      const context = repository.getSharedContext();
-      const archiveBody = [
-        'Archived conversation: Queue operating model',
-        'jeffrey: The queue order is the priority.',
-        'claude: Preserve yesterday’s order unless context changes.',
-      ].join('\n\n');
-      const recentText = [
-        'jeffrey: The queue order is the priority.',
-        'claude: Preserve yesterday’s order unless context changes.',
-      ].join('\n');
-      expect(context).toBe([
-        'Durable context from archived work:',
-        `archive: ${archiveBody}`,
-        'Recent shared room:',
-        recentText,
-      ].join('\n'));
+  describe('audit log', () => {
+    it('records and lists append-only audit entries, newest first', () => {
+      repository.addAuditEntry('outbound_call', 'linear', 'POST https://api.linear.app/graphql');
+      repository.addAuditEntry('agent_file_read', 'codex', 'src/index.ts');
+      const page = repository.listAuditLog();
+      expect(page.entries).toHaveLength(2);
+      expect(page.entries[0]).toMatchObject({ category: 'agent_file_read', source: 'codex', detail: 'src/index.ts' });
+      expect(page.entries[1]).toMatchObject({ category: 'outbound_call', source: 'linear' });
+      expect(page.nextCursor).toBeNull();
     });
 
-    it('creates a memory, lists it, and edits it, changing prompt output', () => {
-      const memory = repository.createMemory({
-        kind: 'constraint', scope: 'global', projectName: null, workspacePath: null,
-        body: 'Never deploy on Fridays.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: 'jeffrey',
+    it('associates an audit entry with a work item and survives its deletion via SET NULL', () => {
+      const item = repository.create({ title: 'Task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      repository.addAuditEntry('agent_file_write', 'claude', 'src/app.ts', item.id);
+      expect(repository.listAuditLog(100, null, undefined, item.id).entries).toHaveLength(1);
+      expect(repository.listAuditLog(100, null, 'agent_file_write').entries).toHaveLength(1);
+      expect(repository.listAuditLog(100, null, 'agent_tool_use').entries).toHaveLength(0);
+    });
+
+    it('paginates with a bounded cursor and rejects an invalid one', () => {
+      for (let index = 0; index < 5; index += 1) repository.addAuditEntry('outbound_call', 'slack', `call ${index}`);
+      const firstPage = repository.listAuditLog(2);
+      expect(firstPage.entries).toHaveLength(2);
+      expect(firstPage.nextCursor).not.toBeNull();
+      const secondPage = repository.listAuditLog(2, firstPage.nextCursor);
+      expect(secondPage.entries).toHaveLength(2);
+      expect(secondPage.entries.map((entry) => entry.detail)).not.toEqual(firstPage.entries.map((entry) => entry.detail));
+      expect(() => repository.listAuditLog(2, 'not-a-real-cursor')).toThrow('Invalid audit log cursor.');
+    });
+  });
+
+  describe('stack ownership', () => {
+    const make = (title: string, projectName: string | null, stack?: 'attention' | 'workbench') =>
+      repository.create({ title, description: '', priority: 2, status: 'ready', projectName, stack, workspacePath: null, dueDate: null });
+
+    it('seeds the stack from the project name once, then stores it explicitly', () => {
+      expect(make('Build it', 'Workbench').stack).toBe('workbench');
+      expect(make('Ship it', 'Writer').stack).toBe('attention');
+      expect(make('No project', null).stack).toBe('attention');
+      // Case-insensitively, matching the predicate this replaced.
+      expect(make('Lowercase', 'workbench').stack).toBe('workbench');
+    });
+
+    it('honours an explicit stack over the project name', () => {
+      expect(make('Explicit attention', 'Workbench', 'attention').stack).toBe('attention');
+      expect(make('Explicit workbench', 'Writer', 'workbench').stack).toBe('workbench');
+      expect(repository.listWorkbench().map((item) => item.title)).toEqual(['Explicit workbench']);
+      expect(repository.list().map((item) => item.title)).toEqual(['Explicit attention']);
+    });
+
+    it('does not move a task between stacks when its project is renamed', () => {
+      const item = make('Roadmap work', 'Workbench');
+      expect(repository.listWorkbench().map((entry) => entry.id)).toEqual([item.id]);
+
+      const renamed = repository.update(item.id, { projectName: 'Workbench Platform' })!;
+
+      expect(renamed.stack).toBe('workbench');
+      expect(repository.listWorkbench().map((entry) => entry.id)).toEqual([item.id]);
+      expect(repository.list()).toHaveLength(0);
+      expect(repository.getWorkItemCounts()).toEqual(expect.objectContaining({ active: 0, workbench: 1 }));
+    });
+
+    it('does not pull a task into the workbench stack by naming its project Workbench', () => {
+      const item = make('Attention work', 'Writer');
+      const renamed = repository.update(item.id, { projectName: 'Workbench' })!;
+
+      expect(renamed.stack).toBe('attention');
+      expect(repository.listWorkbench()).toHaveLength(0);
+      expect(repository.list().map((entry) => entry.id)).toEqual([item.id]);
+    });
+
+    it('moves a task only on an explicit stack change and reseats its queue position', () => {
+      const first = make('Workbench first', 'Workbench');
+      const second = make('Workbench second', 'Workbench');
+      const attention = make('Attention only', null);
+
+      const moved = repository.update(second.id, { stack: 'attention' })!;
+
+      expect(moved.stack).toBe('attention');
+      expect(repository.listWorkbench().map((item) => item.id)).toEqual([first.id]);
+      // Reseated at the top of its new stack rather than keeping a position
+      // that belonged to the stack it left.
+      expect(repository.list().map((item) => item.id)).toEqual([second.id, attention.id]);
+      expect(repository.listActivity(second.id).some((entry) => entry.kind === 'stack_changed')).toBe(true);
+    });
+
+    it('keeps the stack local when Linear sync rewrites the project name', () => {
+      repository.upsertLinearItem({
+        sourceIdentifier: 'CON-1', sourceUrl: null, title: 'Imported', description: '', status: 'ready',
+        priority: 2, projectName: 'Workbench', labels: [], dueDate: null,
+        providerUpdatedAt: '2026-08-20T09:00:00.000Z', providerPayload: {},
       });
-      expect(repository.getMemory(memory.id)).toEqual(memory);
-      expect(repository.listMemoriesStructured().map((entry) => entry.id)).toContain(memory.id);
-      expect(repository.getSharedContext()).toContain('Never deploy on Fridays.');
+      const imported = repository.searchLinear('Imported')[0];
+      // A provider project literally named "Workbench" no longer captures the task.
+      expect(imported.stack).toBe('attention');
 
-      const updated = repository.updateMemory(memory.id, { body: 'Never deploy after 4pm on Fridays.' });
-      expect(updated?.body).toBe('Never deploy after 4pm on Fridays.');
-      expect(repository.getSharedContext()).toContain('Never deploy after 4pm on Fridays.');
-      expect(repository.getSharedContext()).not.toContain('Never deploy on Fridays.');
+      repository.queueLinearItem(imported.id);
+      repository.update(imported.id, { stack: 'workbench' });
+      expect(repository.listWorkbench().map((item) => item.id)).toEqual([imported.id]);
+
+      repository.upsertLinearItem({
+        sourceIdentifier: 'CON-1', sourceUrl: null, title: 'Imported', description: '', status: 'ready',
+        priority: 2, projectName: 'Something Else', labels: [], dueDate: null,
+        providerUpdatedAt: '2026-08-20T10:00:00.000Z', providerPayload: {},
+      });
+
+      const synced = repository.get(imported.id)!;
+      expect(synced.projectName).toBe('Something Else');
+      expect(synced.stack).toBe('workbench');
+      expect(repository.listWorkbench().map((item) => item.id)).toEqual([imported.id]);
     });
 
-    it('filters by status: proposed/superseded/rejected never appear in scoped selection', () => {
-      const active = repository.createMemory({ kind: 'fact', scope: 'global', projectName: null, workspacePath: null, body: 'Active fact.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
-      const rejected = repository.createMemory({ kind: 'fact', scope: 'global', projectName: null, workspacePath: null, body: 'Rejected fact.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
-      repository.rejectMemory(rejected.id);
-      const superseded = repository.createMemory({ kind: 'fact', scope: 'global', projectName: null, workspacePath: null, body: 'Old fact.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
-      const replacement = repository.supersedeMemory(superseded.id, { kind: 'fact', body: 'New fact.' });
+    it('gives follow-ups and approved plan children the parent stack, not its project name', () => {
+      const parent = make('Parent', 'Writer', 'workbench');
+      const followUp = repository.createFollowUp(parent.id, 'Follow up', '')!;
+      expect(followUp.stack).toBe('workbench');
+      expect(repository.listWorkbench().map((item) => item.id)).toEqual([parent.id, followUp.id]);
 
-      const context = repository.getSharedContext();
-      expect(context).toContain(active.body);
-      expect(context).toContain(replacement!.body);
-      expect(context).not.toContain('Rejected fact.');
-      expect(context).not.toContain('Old fact.');
-      expect(repository.getMemory(superseded.id)?.status).toBe('superseded');
-      expect(repository.getMemory(rejected.id)?.status).toBe('rejected');
+      const plan = repository.createExecutionPlan(parent.id, 'Split it.', [
+        { title: 'Child task', description: 'Do the work.', workspacePath: null },
+      ]);
+      repository.resolveExecutionPlan(plan.id, 'accepted');
+      expect(repository.listWorkbench().map((item) => item.title)).toContain('Child task');
+      expect(repository.listWorkbench().every((item) => item.stack === 'workbench')).toBe(true);
     });
 
-    it('orders global memories by kind priority (constraint > preference > decision > convention > fact) then recency', () => {
-      repository.createMemory({ kind: 'fact', scope: 'global', projectName: null, workspacePath: null, body: 'A fact.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
-      repository.createMemory({ kind: 'constraint', scope: 'global', projectName: null, workspacePath: null, body: 'A constraint.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
-      repository.createMemory({ kind: 'convention', scope: 'global', projectName: null, workspacePath: null, body: 'A convention.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
+    it('restores an archived task to the stack it was archived from', () => {
+      const item = make('Archived roadmap task', 'Writer', 'workbench');
+      repository.archive(item.id, false);
+      expect(repository.listWorkbench()).toHaveLength(0);
 
-      const context = repository.getSharedContext();
-      const constraintIndex = context.indexOf('A constraint.');
-      const conventionIndex = context.indexOf('A convention.');
-      const factIndex = context.indexOf('A fact.');
-      expect(constraintIndex).toBeGreaterThan(-1);
-      expect(constraintIndex).toBeLessThan(conventionIndex);
-      expect(conventionIndex).toBeLessThan(factIndex);
+      const restored = repository.restore(item.id)!;
+      expect(restored.stack).toBe('workbench');
+      expect(repository.listWorkbench().map((entry) => entry.id)).toEqual([item.id]);
+      expect(repository.list()).toHaveLength(0);
     });
 
-    it('caps global memories at 10 and reports the rest as omitted', () => {
-      for (let index = 0; index < 12; index += 1) {
-        repository.createMemory({ kind: 'fact', scope: 'global', projectName: null, workspacePath: null, body: `Fact ${index}.`, sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
-      }
-      const context = repository.getSharedContext();
-      expect(context).toMatch(/\(2 more structured memories omitted due to budget\)/);
+    it('moves tasks in bulk through set_stack and renumbers both stacks', () => {
+      const first = make('First', 'Workbench');
+      const second = make('Second', 'Workbench');
+      const attention = make('Attention', null);
+
+      const result = repository.bulkUpdate({ action: 'set_stack', ids: [first.id, second.id], stack: 'attention' });
+
+      expect(result.conflicts).toEqual([]);
+      expect(result.appliedIds).toEqual([first.id, second.id]);
+      expect(repository.listWorkbench()).toHaveLength(0);
+      expect(repository.list().map((item) => item.id)).toEqual([first.id, second.id, attention.id]);
+      expect(repository.list().map((item) => item.queuePosition)).toEqual([1, 2, 3]);
     });
 
-    it('scopes memories: a project-scoped memory does not appear in another project\'s prompt (criterion 1)', () => {
-      const itemA = repository.create({ title: 'Task A', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
-      const itemB = repository.create({ title: 'Task B', description: '', priority: 2, status: 'ready', projectName: 'Other Project', workspacePath: null, dueDate: null });
-      repository.createMemory({ kind: 'preference', scope: 'project', projectName: 'Workbench', workspacePath: null, body: 'Workbench prefers small PRs.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
+    it('leaves a bulk project rename from moving anything between stacks', () => {
+      const item = make('Roadmap', 'Workbench');
+      repository.bulkUpdate({ action: 'set_project', ids: [item.id], projectName: 'Renamed' });
 
-      const contextForA = repository.getSharedContext(undefined, { workItemId: itemA.id });
-      const contextForB = repository.getSharedContext(undefined, { workItemId: itemB.id });
-      expect(contextForA).toContain('Workbench prefers small PRs.');
-      expect(contextForB).not.toContain('Workbench prefers small PRs.');
+      expect(repository.get(item.id)!.stack).toBe('workbench');
+      expect(repository.listWorkbench().map((entry) => entry.id)).toEqual([item.id]);
     });
 
-    it('honors the WORKBENCH_MEMORY_DISABLED kill switch', () => {
-      repository.createMemory({ kind: 'constraint', scope: 'global', projectName: null, workspacePath: null, body: 'Kill switch test fact.', sourceTaskId: null, sourceConversationId: null, sourceMessageId: null, sourceQuote: null, createdBy: null });
-      expect(repository.getSharedContext()).toContain('Kill switch test fact.');
-      process.env.WORKBENCH_MEMORY_DISABLED = '1';
-      try {
-        expect(repository.getSharedContext()).not.toContain('Kill switch test fact.');
-      } finally {
-        delete process.env.WORKBENCH_MEMORY_DISABLED;
-      }
+    it('logs an edit entry for each item touched by a bulk status or assignee change', () => {
+      const first = make('First', 'Workbench');
+      const second = make('Second', 'Workbench');
+
+      repository.bulkUpdate({ action: 'set_status', ids: [first.id, second.id], status: 'in_progress' });
+      expect(repository.listActivity(first.id).some((entry) => entry.kind === 'edited')).toBe(true);
+      expect(repository.listActivity(second.id).some((entry) => entry.kind === 'edited')).toBe(true);
+
+      repository.bulkUpdate({ action: 'set_assignees', ids: [first.id], assignees: ['codex'] });
+      expect(repository.listActivity(first.id).filter((entry) => entry.kind === 'edited')).toHaveLength(2);
+
+      repository.bulkUpdate({ action: 'set_project', ids: [first.id], projectName: 'Renamed' });
+      expect(repository.listActivity(first.id).filter((entry) => entry.kind === 'edited')).toHaveLength(3);
+    });
+
+    it('rejects a stack value outside the allowed set at the database boundary', () => {
+      const item = make('Guarded', null);
+      expect(() => database.prepare('UPDATE work_items SET stack = ? WHERE id = ?').run('nonsense', item.id))
+        .toThrow(/CHECK constraint failed/);
+    });
+  });
+
+describe('task dependencies', () => {
+  let database: WorkbenchDatabase;
+  let repository: WorkItemRepository;
+
+  beforeEach(() => {
+    database = openDatabase(':memory:');
+    repository = new WorkItemRepository(database);
+  });
+
+  afterEach(() => database.close());
+
+  const makeTask = (title: string) => repository.create({
+    title, description: 'Original brief.', priority: 1, status: 'ready',
+    projectName: 'Workbench', workspacePath: null, dueDate: null,
+  });
+
+    const make = (title: string) => repository.create({
+      title, description: '', priority: 2, status: 'ready',
+      projectName: 'Workbench', workspacePath: null, dueDate: null,
+    });
+
+    it('records prerequisites and reports them on every queue read', () => {
+      const blocker = make('Schema first');
+      const dependent = make('API second');
+
+      expect(repository.replaceDependencies(dependent.id, [blocker.id]).map((entry) => entry.id)).toEqual([blocker.id]);
+      expect(repository.get(dependent.id)!.blockedBy).toEqual([
+        expect.objectContaining({ id: blocker.id, title: 'Schema first', isOpen: true }),
+      ]);
+      // The list read must carry the same edges, or the queue UI would show a
+      // blocked task as dispatchable. These tasks carry the "Workbench" project
+      // name, so create() seats them in the workbench stack rather than attention.
+      expect(repository.listWorkbench().find((entry) => entry.id === dependent.id)!.blockedBy)
+        .toEqual([expect.objectContaining({ id: blocker.id })]);
+      expect(repository.get(blocker.id)!.blockedBy).toEqual([]);
+    });
+
+    it('closes the gate only when a prerequisite reaches a terminal state', () => {
+      const blocker = make('Schema first');
+      const dependent = make('API second');
+      repository.replaceDependencies(dependent.id, [blocker.id]);
+
+      expect(repository.listOpenDependencies(dependent.id)).toHaveLength(1);
+
+      repository.update(blocker.id, { status: 'in_progress' });
+      expect(repository.listOpenDependencies(dependent.id)).toHaveLength(1);
+
+      repository.update(blocker.id, { status: 'done' });
+      expect(repository.listOpenDependencies(dependent.id)).toHaveLength(0);
+      expect(repository.listDependencies(dependent.id)).toEqual([
+        expect.objectContaining({ id: blocker.id, isOpen: false }),
+      ]);
+    });
+
+    it('treats a canceled prerequisite as satisfied but an archived incomplete one as still open', () => {
+      const canceled = make('Dropped approach');
+      const archived = make('Parked work');
+      const dependent = make('Downstream');
+      repository.replaceDependencies(dependent.id, [canceled.id, archived.id]);
+
+      repository.update(canceled.id, { status: 'canceled' });
+      // Archiving incomplete work is a filing action, not a completion: it must
+      // not silently open the execution gate on everything behind it.
+      repository.archive(archived.id, false);
+
+      expect(repository.listOpenDependencies(dependent.id).map((entry) => entry.id)).toEqual([archived.id]);
+    });
+
+    it('rejects a self-dependency', () => {
+      const item = make('Alone');
+      expect(() => repository.replaceDependencies(item.id, [item.id])).toThrow(WorkItemDependencyError);
+      expect(repository.listDependencies(item.id)).toEqual([]);
+    });
+
+    it('rejects a prerequisite that does not exist', () => {
+      const item = make('Real');
+      expect(() => repository.replaceDependencies(item.id, ['00000000-0000-4000-8000-000000000000']))
+        .toThrow(/existing task/i);
+    });
+
+    it('rejects a direct cycle and leaves the existing edges untouched', () => {
+      const first = make('First');
+      const second = make('Second');
+      repository.replaceDependencies(second.id, [first.id]);
+
+      expect(() => repository.replaceDependencies(first.id, [second.id])).toThrow(/cycle/i);
+      // The rollback matters: a failed write must not strip the edge it replaced.
+      expect(repository.listDependencies(first.id)).toEqual([]);
+      expect(repository.listDependencies(second.id).map((entry) => entry.id)).toEqual([first.id]);
+    });
+
+    it('rejects an indirect cycle across three tasks', () => {
+      const first = make('First');
+      const second = make('Second');
+      const third = make('Third');
+      repository.replaceDependencies(second.id, [first.id]);
+      repository.replaceDependencies(third.id, [second.id]);
+
+      expect(() => repository.replaceDependencies(first.id, [third.id])).toThrow(/cycle/i);
+      expect(repository.listDependencies(first.id)).toEqual([]);
+    });
+
+    it('replaces the whole edge set and de-duplicates repeated prerequisites', () => {
+      const first = make('First');
+      const second = make('Second');
+      const dependent = make('Dependent');
+
+      repository.replaceDependencies(dependent.id, [first.id, first.id]);
+      expect(repository.listDependencies(dependent.id).map((entry) => entry.id)).toEqual([first.id]);
+
+      repository.replaceDependencies(dependent.id, [second.id]);
+      expect(repository.listDependencies(dependent.id).map((entry) => entry.id)).toEqual([second.id]);
+
+      repository.replaceDependencies(dependent.id, []);
+      expect(repository.listDependencies(dependent.id)).toEqual([]);
+    });
+
+    it('sets prerequisites through update() and rolls back the field changes when the edge is invalid', () => {
+      const blocker = make('Blocker');
+      const dependent = make('Dependent');
+
+      expect(repository.update(dependent.id, { blockedByIds: [blocker.id] })!.blockedBy)
+        .toEqual([expect.objectContaining({ id: blocker.id })]);
+
+      // A rejected dependency edit must not leak a half-applied title change.
+      expect(() => repository.update(dependent.id, { title: 'Renamed', blockedByIds: [dependent.id] }))
+        .toThrow(WorkItemDependencyError);
+      expect(repository.get(dependent.id)!.title).toBe('Dependent');
+      expect(repository.listDependencies(dependent.id).map((entry) => entry.id)).toEqual([blocker.id]);
+    });
+
+    it('lists the work waiting on a blocker and drops the edge when a task is deleted', () => {
+      const blocker = make('Blocker');
+      const first = make('Waiting one');
+      const second = make('Waiting two');
+      repository.replaceDependencies(first.id, [blocker.id]);
+      repository.replaceDependencies(second.id, [blocker.id]);
+
+      expect(repository.listBlockedWork(blocker.id).map((entry) => entry.id).sort())
+        .toEqual([first.id, second.id].sort());
+
+      repository.delete(first.id);
+      expect(repository.listBlockedWork(blocker.id).map((entry) => entry.id)).toEqual([second.id]);
+      expect(repository.listDependencies(second.id).map((entry) => entry.id)).toEqual([blocker.id]);
+    });
+
+    it('excludes the task itself from its own prerequisite candidates', () => {
+      const item = make('Self');
+      const other = make('Other');
+
+      const candidates = repository.searchDependencyCandidates(item.id);
+      expect(candidates.map((entry) => entry.id)).toContain(other.id);
+      expect(candidates.map((entry) => entry.id)).not.toContain(item.id);
+      expect(repository.searchDependencyCandidates(item.id, 'Other').map((entry) => entry.id)).toEqual([other.id]);
+    });
+
+    it('counts only still-open dependents when building the planner context', () => {
+      const blocker = make('Critical path');
+      const open = make('Waiting');
+      const finished = make('Already done');
+      repository.replaceDependencies(open.id, [blocker.id]);
+      repository.replaceDependencies(finished.id, [blocker.id]);
+      repository.update(finished.id, { status: 'done' });
+
+      expect(repository.buildQueueContext().openDependents.get(blocker.id)).toBe(1);
     });
   });
 });

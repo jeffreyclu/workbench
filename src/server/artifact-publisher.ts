@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { marked } from 'marked';
 import sanitizeHtml from 'sanitize-html';
+import { recordAudit } from './audit-log.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -12,6 +13,14 @@ export interface PublishedArtifact {
   id: string;
   url: string;
   title: string;
+}
+
+/** What the DB considers currently live for one published artifact. */
+export interface LiveArtifact {
+  id: string;
+  sourcePath: string;
+  title: string;
+  version: number;
 }
 
 export interface ArtifactPageOptions {
@@ -33,8 +42,8 @@ export interface PublishInput {
 }
 
 export interface ArtifactPublisher {
-  publish(input: PublishInput): Promise<PublishedArtifact>;
-  revoke(id: string): Promise<void>;
+  publish(input: PublishInput, live: LiveArtifact[]): Promise<PublishedArtifact>;
+  revoke(id: string, live: LiveArtifact[], publicUrl: string): Promise<{ verified: boolean }>;
 }
 
 function escapeHtml(value: string): string {
@@ -102,6 +111,47 @@ export function renderArtifactPage(sourcePath: string, title: string, options: A
   return injectFooter(page, footer);
 }
 
+/**
+ * Cloudflare Pages deploys are whole-directory snapshots: every `wrangler
+ * pages deploy` replaces the entire prior production deployment with exactly
+ * what's on disk (there is no partial/incremental production update). So the
+ * only way to stop one publish or revoke from silently dropping every other
+ * previously-shared link is to make sure `outputDirectory` matches what the
+ * DB considers live before every deploy — not trust whatever happens to be
+ * on disk (which is gitignored and won't exist on a fresh checkout).
+ *
+ * This regenerates any live artifact's page from its stored source file when
+ * the directory is missing it. Artifacts whose source file is also gone
+ * can't be reconstructed; those ids come back in `missing` so the caller can
+ * refuse to deploy rather than silently taking them offline.
+ */
+export function reconcileArtifactDirectory(outputDirectory: string, live: LiveArtifact[]): { restored: string[]; missing: string[] } {
+  const restored: string[] = [];
+  const missing: string[] = [];
+  for (const artifact of live) {
+    const artifactDirectory = resolve(outputDirectory, artifact.id);
+    if (existsSync(resolve(artifactDirectory, 'index.html'))) continue;
+    if (!existsSync(artifact.sourcePath)) { missing.push(artifact.id); continue; }
+    const versionDirectory = resolve(artifactDirectory, `v${artifact.version}`);
+    mkdirSync(versionDirectory, { recursive: true });
+    const publishedAt = new Date().toISOString();
+    writeFileSync(resolve(artifactDirectory, 'index.html'), renderArtifactPage(artifact.sourcePath, artifact.title, { version: artifact.version, publishedAt }));
+    writeFileSync(resolve(versionDirectory, 'index.html'), renderArtifactPage(artifact.sourcePath, artifact.title, { version: artifact.version, publishedAt, latestUrl: '../' }));
+    restored.push(artifact.id);
+  }
+  return { restored, missing };
+}
+
+/** Bounded check that a revoked artifact's public URL actually stopped serving. Best-effort: a network error or non-404 status is reported as unverified rather than assumed safe. */
+export async function verifyRevoked(url: string, timeoutMs = 3_000): Promise<boolean> {
+  try {
+    const response = await fetch(url, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
+    return response.status === 404;
+  } catch {
+    return false;
+  }
+}
+
 export class CloudflarePagesPublisher implements ArtifactPublisher {
   private readonly outputDirectory = resolve(process.env.ARTIFACT_OUTPUT_DIRECTORY ?? 'data/published');
   private readonly project = process.env.ARTIFACT_PAGES_PROJECT?.trim();
@@ -114,6 +164,7 @@ export class CloudflarePagesPublisher implements ArtifactPublisher {
 
   private async deploy(): Promise<void> {
     const { project } = this.configuration();
+    recordAudit('outbound_call', 'cloudflare', `wrangler pages deploy --project-name ${project}`);
     await execFileAsync('npx', ['--yes', 'wrangler', 'pages', 'deploy', this.outputDirectory, '--project-name', project, '--branch', 'main', '--commit-dirty=true'], {
       env: process.env, timeout: 120_000, maxBuffer: 2_000_000,
     });
@@ -121,6 +172,7 @@ export class CloudflarePagesPublisher implements ArtifactPublisher {
   }
 
   private async pruneOldDeployments(project: string): Promise<void> {
+    recordAudit('outbound_call', 'cloudflare', `wrangler pages deployment list --project-name ${project}`);
     const { stdout } = await execFileAsync('npx', ['--yes', 'wrangler', 'pages', 'deployment', 'list', '--project-name', project, '--json'], {
       env: process.env, timeout: 30_000, maxBuffer: 2_000_000,
     });
@@ -128,6 +180,7 @@ export class CloudflarePagesPublisher implements ArtifactPublisher {
     const production = deployments.filter((entry) => entry.Environment === 'Production');
     for (const deployment of production.slice(1)) {
       try {
+        recordAudit('outbound_call', 'cloudflare', `wrangler pages deployment delete ${deployment.Id} --project-name ${project}`);
         await execFileAsync('npx', ['--yes', 'wrangler', 'pages', 'deployment', 'delete', deployment.Id, '--project-name', project, '--force'], {
           env: process.env, timeout: 30_000, maxBuffer: 2_000_000,
         });
@@ -142,8 +195,10 @@ export class CloudflarePagesPublisher implements ArtifactPublisher {
    * version, and `/<id>/v<n>/` keeps that exact version reachable after later
    * republishes. A link someone already shared never silently changes meaning.
    */
-  async publish(input: PublishInput): Promise<PublishedArtifact> {
+  async publish(input: PublishInput, live: LiveArtifact[]): Promise<PublishedArtifact> {
     const { baseUrl } = this.configuration();
+    const { missing } = reconcileArtifactDirectory(this.outputDirectory, live.filter((artifact) => artifact.id !== input.id));
+    if (missing.length) throw new Error(`Cannot publish: ${missing.length} previously published artifact(s) are missing both locally and at their source (${missing.join(', ')}). Deploying now would take those links offline.`);
     const artifactDirectory = resolve(this.outputDirectory, input.id);
     const versionDirectory = resolve(artifactDirectory, `v${input.version}`);
     mkdirSync(versionDirectory, { recursive: true });
@@ -159,10 +214,19 @@ export class CloudflarePagesPublisher implements ArtifactPublisher {
     return `${this.configuration().baseUrl}/${id}/v${version}/`;
   }
 
-  async revoke(id: string): Promise<void> {
+  /**
+   * `live` must be read from the DB after the caller has already marked this
+   * id revoked there, so the query naturally excludes it and this method
+   * only has to remove `id`'s own directory and restore anything else that's
+   * still supposed to be live.
+   */
+  async revoke(id: string, live: LiveArtifact[], publicUrl: string): Promise<{ verified: boolean }> {
     this.configuration();
     rmSync(resolve(this.outputDirectory, id), { recursive: true, force: true });
+    const { missing } = reconcileArtifactDirectory(this.outputDirectory, live);
+    if (missing.length) throw new Error(`Revoked locally, but ${missing.length} other published artifact(s) are missing both locally and at their source (${missing.join(', ')}) and cannot be safely redeployed. Publish them again to restore, then retry this revoke.`);
     await this.deploy();
+    return { verified: await verifyRevoked(publicUrl) };
   }
 
   removeLocal(id: string): void {

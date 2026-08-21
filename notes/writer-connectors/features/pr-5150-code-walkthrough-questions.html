@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PR #5150 — Code Walkthrough Questions</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1c1c1a; background: #f7f7f2; }
+    body { max-width: 900px; margin: 0 auto; padding: 48px 24px 64px; }
+    header { border-bottom: 1px solid #d9d9d1; padding-bottom: 24px; margin-bottom: 28px; }
+    h1 { font-size: clamp(28px, 5vw, 42px); line-height: 1.06; letter-spacing: -.035em; margin: 0 0 10px; }
+    h2 { font-size: 20px; margin: 34px 0 12px; }
+    p { line-height: 1.55; }
+    .meta, .hint { color: #62625d; }
+    .priority { display: inline-block; border-radius: 999px; background: #dff4ad; color: #315300; font-weight: 700; font-size: 12px; padding: 4px 9px; margin-right: 8px; }
+    ol { display: grid; gap: 14px; padding-left: 24px; }
+    li { padding-left: 5px; line-height: 1.5; }
+    q { font-weight: 650; }
+    .why { display: block; color: #62625d; font-size: 14px; margin-top: 4px; }
+    .checklist { background: #fff; border: 1px solid #d9d9d1; border-radius: 12px; padding: 18px 20px; }
+    .checklist ul { margin: 8px 0 0; padding-left: 20px; line-height: 1.65; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="meta">Code walkthrough prep · PR #5150 · Analytics Governance tab</div>
+    <h1>Questions that expose the real gaps</h1>
+    <p>Use these as demo prompts, not a line-by-line interrogation. The highest-signal checks are URL/filter behavior, independently failing queries, and a connector with 51+ child profiles.</p>
+  </header>
+
+  <h2><span class="priority">Start here</span> Demo the risky paths</h2>
+  <ol>
+    <li><q>Can we set a date range and filters, switch Analytics ↔ Govern, then refresh and share the URL?</q><span class="why">Catches filter loss, broken deep links, and tab state that is not preserved.</span></li>
+    <li><q>Can we demo a connector with more than 50 profiles or children?</q><span class="why">Ask what users see when <code>children_truncated</code> is true. Profiles must not silently disappear.</span></li>
+    <li><q>What happens when the leaderboard, usage banner, and governance list each fail independently?</q><span class="why">Verify visible error and retry states. “No connectors found” must never mask an API failure.</span></li>
+    <li><q>When I click “View all” from Most errored or Slowest, what tells the user why the destination table is ordered that way?</q><span class="why">The active sort must be visible and match the backend query, or the result looks arbitrary.</span></li>
+  </ol>
+
+  <h2>Metric and API-contract questions</h2>
+  <ol start="5">
+    <li><q>What does “completion rate” mean exactly: tool-call success, connector auth success, or an agent workflow completing?</q><span class="why">The generated contract describes tool success rate. Confirm the UI label does not overpromise.</span></li>
+    <li><q>Which API fields are authoritative, and which are best-effort or unavailable?</q><span class="why">Probe cost, latency, profile attribution, and zero traffic. Missing data needs to be distinguishable from a true zero.</span></li>
+    <li><q>How are percentage metrics formatted and tested for whole-number values such as 100?</q><span class="why">Formatting must follow the metric type, not whether a number happens to have a fractional part.</span></li>
+    <li><q>What prevents the analytics and governance adapters from drifting as the API evolves?</q><span class="why">Look for generated-contract use, adapter/contract tests, and a named owner.</span></li>
+  </ol>
+
+  <h2>Scale, architecture, and readiness</h2>
+  <ol start="9">
+    <li><q>What is the expected experience for 10 connectors with hundreds of child profiles?</q><span class="why">Probe payload size, pagination, row virtualization, and whether inline child rows make the table unusable.</span></li>
+    <li><q>Why does Analytics depend on Governance feature types?</q><span class="why">If the sort concepts are shared, they should live in a shared/domain layer rather than creating feature-to-feature coupling.</span></li>
+    <li><q>What UI-level behavior is covered by tests?</q><span class="why">Ask specifically about tab/query preservation, error recovery, truncation, empty versus failed states, and every leaderboard “View all” link.</span></li>
+  </ol>
+
+  <section class="checklist">
+    <strong>Walkthrough exit criteria</strong>
+    <ul>
+      <li>Filters survive tab changes, refresh, and a copied URL.</li>
+      <li>Errors are distinct from empty data and can recover without remounting.</li>
+      <li>51+ child profiles have an explicit, complete user path.</li>
+      <li>Metric labels, units, and API semantics agree.</li>
+      <li>The destination state of every “View all” link is visible and explainable.</li>
+    </ul>
+  </section>
+</body>
+</html>

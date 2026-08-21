@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
-import { backoffDelayMs, buildPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, estimateUsageCost, isAgentCapacityError, isTransientAgentError, readableAgentEvent, resolveAgents, resolveWorkingDirectory, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { agentSubprocessEnv } from './agent-security.js';
+import { backoffDelayMs, buildPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, compactPromptSection, estimateUsageCost, isAgentCapacityError, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 
 const item = (title: string, description = ''): WorkItem => ({
   id: 'item', title, description, status: 'ready', priority: 2, queuePosition: 1,
   source: 'manual', isQueued: true, sourceIdentifier: null, sourceUrl: null, sourceTags: ['Manual'],
   archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete', agentOutcome: null,
-  projectName: null, workspacePath: null, strategy: '', assignees: [], labels: [],
+  projectName: null, stack: 'attention', workspacePath: null, strategy: '', assignees: [], labels: [],
   dueDate: null, providerUpdatedAt: null, createdAt: '', updatedAt: '', lastTouchedAt: '',
 });
 
@@ -17,9 +18,22 @@ describe('classifyExecution', () => {
     expect(selectExecutionProfile(item('Summarize these notes'), { kind: 'analysis', instructions: '' })).toBe('economy');
     expect(selectExecutionProfile(item('Implement the task card'), { kind: 'execute', instructions: '' })).toBe('standard');
     expect(selectExecutionProfile(item('Migrate authentication across systems'), { kind: 'execute', instructions: '' })).toBe('deep');
-    expect(selectPromptExecutionProfile('thanks, what changed?')).toBe('economy');
+    expect(selectPromptExecutionProfile('thanks, what changed?')).toBe('standard');
     expect(selectPromptExecutionProfile('debug and test the React component')).toBe('standard');
+    expect(selectPromptExecutionProfile('Add a dropdown to the task card')).toBe('standard');
+    expect(selectPromptExecutionProfile('Fix it')).toBe('standard');
     expect(selectPromptExecutionProfile('design a cross-system authentication migration')).toBe('deep');
+    expect(selectAutoExecutionProfile(item('Implement the task card'), { kind: 'execute', instructions: '' }, 'go')).toBe('standard');
+    expect(selectAutoExecutionProfile(item('Migrate authentication across systems'), { kind: 'execute', instructions: '' }, 'go')).toBe('deep');
+    expect(selectExecutionProfile(item('Implement the whole settings page'), { kind: 'execute', instructions: '' })).toBe('deep');
+  });
+
+  it('does not let generated prompt scaffolding escalate a scoped execution task', () => {
+    const task = item('Fix the task card loading state');
+    const run = { agent: 'codex', kind: 'execute', instructions: 'Make the requested code change and verify it.' } as AgentRun;
+    const generatedPrompt = buildPrompt(task, run, 'Architecture notes: preserve the existing security boundary.');
+    expect(selectPromptExecutionProfile(generatedPrompt)).toBe('deep');
+    expect(resolveExecutionProfileDecision(task, run, `${task.title}\n${task.description}\n${run.instructions}`)).toEqual({ profile: 'standard', source: 'task' });
   });
   it('recognizes provider quota failures that should trigger agent fallback', () => {
     expect(isAgentCapacityError(new Error("You've hit your usage limit; resets at 1am"))).toBe(true);
@@ -35,6 +49,14 @@ describe('classifyExecution', () => {
     expect(estimateUsageCost('codex', 100_000, 50_000)).toBe(0.6);
     delete process.env.WORKBENCH_CODEX_INPUT_TOKEN_USD_PER_MILLION;
     delete process.env.WORKBENCH_CODEX_OUTPUT_TOKEN_USD_PER_MILLION;
+  });
+
+  it('bounds large prompt sections while retaining the beginning and conclusion', () => {
+    const compacted = compactPromptSection(`START ${'x'.repeat(20_000)} END`, 2_000);
+    expect(compacted.length).toBeLessThan(2_100);
+    expect(compacted).toContain('START');
+    expect(compacted).toContain('END');
+    expect(compacted).toContain('compacted for this turn');
   });
 
   it('infers the workspace from real paths in task context', () => {
@@ -163,6 +185,39 @@ describe('classifyExecution', () => {
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'App.tsx' } }] } })).progress).toBe('● Reading App.tsx');
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'system', subtype: 'init' })).progress).toBe('');
     expect(readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'reasoning', text: 'The failing test points to stale state.' } })).progress).toContain('Reasoning summary');
+  });
+
+  it('extracts audit candidates for file reads, writes, and tool use out of the same parsed events', () => {
+    const claudeRead = readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'App.tsx' } }] } }));
+    expect(claudeRead.audit).toEqual([{ category: 'agent_file_read', detail: 'App.tsx' }]);
+
+    const claudeWrite = readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'src/app.ts' } }] } }));
+    expect(claudeWrite.audit).toEqual([{ category: 'agent_file_write', detail: 'src/app.ts' }]);
+
+    const claudeBash = readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } }));
+    expect(claudeBash.audit).toEqual([{ category: 'agent_tool_use', detail: 'Bash' }]);
+
+    const codexCommand = readableAgentEvent('codex', JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'npm test' } }));
+    expect(codexCommand.audit).toEqual([{ category: 'agent_tool_use', detail: 'command_execution: npm test' }]);
+
+    const codexFileChange = readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'file_change', changes: [{ path: 'src/foo.ts', kind: 'update' }] } }));
+    expect(codexFileChange.audit).toEqual([{ category: 'agent_file_write', detail: 'update: src/foo.ts' }]);
+
+    expect(readableAgentEvent('claude', JSON.stringify({ type: 'system', subtype: 'init' })).audit).toEqual([]);
+  });
+
+  it('spawns agent subprocesses with an allowlisted environment, never Workbench secrets', () => {
+    const spawnedEnv = agentSubprocessEnv({
+      ...process.env,
+      WORKBENCH_TOKEN: 'workbench-secret',
+      LINEAR_API_KEY: 'linear-secret',
+      GITHUB_TOKEN: 'github-secret',
+    } as NodeJS.ProcessEnv);
+    expect(spawnedEnv.WORKBENCH_TOKEN).toBeUndefined();
+    expect(spawnedEnv.LINEAR_API_KEY).toBeUndefined();
+    expect(spawnedEnv.GITHUB_TOKEN).toBeUndefined();
+    if (process.env.PATH) expect(spawnedEnv.PATH).toBe(process.env.PATH);
+    if (process.env.HOME) expect(spawnedEnv.HOME).toBe(process.env.HOME);
   });
 
   describe('error classification and backoff', () => {

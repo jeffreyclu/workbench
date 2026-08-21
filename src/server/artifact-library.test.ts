@@ -117,6 +117,9 @@ describe('artifact library', () => {
       VALUES ('legacy-1', '/dev/workbench/notes/legacy.md', 'Legacy report', 'https://artifacts.example.com/legacy-1/', 'hash-legacy', '2026-08-01T00:00:00.000Z');
       DELETE FROM artifact_versions WHERE artifact_id = 'legacy-1';
       DELETE FROM artifact_events WHERE artifact_id = 'legacy-1';
+      -- This represents a database created before the migration ledger. A
+      -- versioned current database is intentionally not repaired at startup.
+      DELETE FROM schema_migrations;
     `);
     first.close();
 

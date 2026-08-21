@@ -25,6 +25,29 @@ The component being decomposed is `frontend/src/components/agents/manage-tabs/co
 
 **Section classification note:** the current UI branches on a synthesized `enabled` flag, not real profile presence — `connector-gateway-adapter.ts:414` defaults `enabled: false`, then line 424 sets `enabled = profile.authenticated ? true : existing.enabled`. The new list-state hook should classify Connected/Available directly from the profile array, not this synthesized flag.
 
+### Decision: profile states within the two-section UI
+
+The page keeps exactly two presentation sections: **Connected** and **Available to connect**. They are not operational-state buckets.
+
+- **Connected** means a profile exists for that connector. A card remains here when its profile is disabled, unhealthy, or needs reauthentication; moving it to Available would falsely imply that no connection exists.
+- **Available to connect** means no applicable profile exists for the current context. Its Connect action enters the existing provider-specific connection route.
+- A connector can have an organization profile, a user profile, or both. The projection must use the existing profile identity and ownership rules; it must not collapse them into one generic `enabled` boolean or silently choose one profile.
+
+Each Connected card must expose a semantic status and only actions valid for its profile, ownership, permission, and auth route. The green connected indicator is reserved for a ready/healthy profile; it must not represent disabled or broken profiles as usable.
+
+| Section | Existing profile condition | Card treatment | Primary action |
+| --- | --- | --- | --- |
+| Connected | Active and healthy | Connected status; ownership label where relevant | Manage |
+| Connected | Disabled | Off status; preserve the existing profile | Turn on / Manage, if permitted |
+| Connected | Authentication expired or connection error | Needs reconnect status and recovery copy | Reconnect |
+| Connected | Organization-owned | Shared/organization ownership label; enforce organization permissions | Manage organization connection, if permitted |
+| Connected | User-owned | Personal ownership label | Manage my connection |
+| Available to connect | No applicable profile | No connection status | Connect |
+
+`code_grant`, API-key, and HTTP-basic connectors stay on their existing auth routes. Auth type is not a third section or a generic visual badge by default; it changes the connect/reconnect flow and any copy needed to make that flow clear. Calendar is the proof case for a `code_grant` profile: an existing, expired Calendar profile remains in Connected and offers Reconnect, rather than appearing as a new Available connection. Add equivalent fixture/test coverage for API-key and HTTP-basic paths.
+
+**Compatibility guardrail:** this page’s new projection must not change the Chat connector dropdown’s existing eligibility or profile-selection behavior. Before implementation, identify the dropdown’s ownership/profile-type assumptions; regression coverage must exercise the states above, including a Calendar `code_grant` profile.
+
 **Flag:** existing gateway-mode flag is `useFeatureFlag('connector-gateway')` (`connectors-tab.tsx:131`, defined in `frontend/src/hooks/use-feature-flags.ts`). No V2 flag key exists yet in the flag hook — it needs to be created, following the same `useFeatureFlag('<key>')` pattern. Flag flips happen via the Statsig dashboard (see card 6), not a code change.
 
 **Acceptance criteria**
@@ -35,6 +58,7 @@ The component being decomposed is `frontend/src/components/agents/manage-tabs/co
 - The duplicate profile refetch (`connectors-tab.tsx:170-179`) is replaced by a single query with a stable, deduped cache key.
 - Logo resolution uses `resolveConnectorLogo` at the data boundary: built-in URLs pass through, custom `logo_…` paths are signed via the `['signed-logos', orgId, sortedCustomPaths]` query, unsigned/in-flight/failed paths yield `undefined` (not raw storage paths).
 - Connected and Available to connect are mutually exclusive projections based on actual profile presence, not the synthesized `enabled` field (`connector-gateway-adapter.ts:414,424`).
+- The projection preserves profile ownership, health, and auth-route distinctions inside Connected; it does not reclassify disabled or expired profiles as Available.
 - Search covers connector name, display name, profile name, and description across both sections.
 - The delivered sort is name A–Z; no unapproved sort control is introduced.
 - Tests cover both gateway modes, pagination, search, section classification, logo states (built-in, signed custom, unsigned custom, failure), and consent-replay scenarios.
@@ -65,11 +89,11 @@ Create a page-local `ConnectorManagementCard` and a props-only `connectors-page-
 **Acceptance criteria**
 
 - The shell imports only props and local fixture data — no feature flags, provider queries, auth hooks, or persistence APIs.
-- Cards display the status indicator (`ConnectorStatusIndicator`), Default pill (`DefaultBadge`), Connect action, overflow menu, accessible status text, and resolved-logo/fallback rendering via `ConnectorIcon` (fixtures include a broken/unsigned logo case).
+- Cards display a status treatment appropriate to the actual profile state, Default pill (`DefaultBadge`) where applicable, Connect action, overflow menu, accessible status text, ownership label where relevant, and resolved-logo/fallback rendering via `ConnectorIcon` (fixtures include a broken/unsigned logo case). Green `ConnectorStatusIndicator` is only used for ready/healthy profiles.
 - Grid renders four, two, two, and one columns at 2400, 1400, 1031/768, and 640px design widths without horizontal overflow — verify exact breakpoints against `tailwind.config`/WDS tokens before implementing.
 - Search, sort, and the Available action are keyboard accessible; Available action scrolls and focuses its section with reduced-motion-safe behavior.
 - Initial load, per-section empty states, no-search-result, later-page loading, and retryable-error states are visually distinct and triggerable from the fixture set.
-- Light/dark, hover, menu-open, connected, available, and default variants have component coverage, matching the `project-settings-connectors.stories.tsx` fixture-array pattern.
+- Light/dark, hover, menu-open, healthy connected, disabled, needs-reconnect, organization-owned, user-owned, available, and default variants have component coverage, matching the `project-settings-connectors.stories.tsx` fixture-array pattern. Fixtures cover Calendar `code_grant`, API-key, and HTTP-basic routes.
 
 ## 3. Build the designed Connect dialog on fixtures
 
@@ -120,6 +144,7 @@ Create `use-connectors-modal-orchestration.ts` to own selected connector state, 
 - Explore and Preview remain functional; they are not consolidated or deleted.
 - The existing consent-replay behavior (`pendingAllowAction` → `handleAllowConnectorsAccept`) is preserved: a connect/enable action blocked by consent resumes exactly once after consent is accepted, not after cancellation.
 - OAuth, API-key, organization-profile, default, disconnect, revoke, and legacy-vs-gateway post-auth paths preserve current behavior.
+- A disabled or expired existing profile is managed/recovered in place under Connected; it is never routed through the new-profile Available flow merely because it is not currently usable.
 - Revoke never deletes a profile when prerequisite config cleanup fails, for the legacy path (already true today). **Decide explicitly whether this card also fixes the Connector Gateway stub (`use-cg-connectors.ts:169`) or documents it as known-preserved-but-weaker.**
 - Tests cover consent replay, connection routing, organization-connect deduplication, and revoke failure (both gateway modes if the CG gap is being fixed here).
 - Jotai's introduction is called out explicitly in the PR description as a first-of-its-kind scoped exception to zustand, not folded silently into the diff.
@@ -144,6 +169,7 @@ Swap fixtures in cards 2 and 3 for real data and orchestration from card 1 and c
 - Card-3 Connect dialog now reads `use-connectors-modal-orchestration` instead of fixtures — props contract unchanged.
 - V2 off: old page renders unchanged. V2 on: new page functions with all real data.
 - Both gateway modes (legacy MCP and Connector Gateway) render the same sections, counts, logos, and status.
+- Both gateway modes preserve the two-section state model: disabled, expired, organization-owned, and user-owned existing profiles remain Connected with the correct permitted action and auth route.
 - Connection, consent, API-key, default, disconnect, revoke, loading, partial-failure/retry, and logo-failure flows work in both gateway modes where applicable.
 - Explicit decision recorded on whether the 5 external `ConnectConnectorModal` call sites (card 3) migrate to the new dialog as part of this card.
 - Matrix tests use a typed case array + `it.each`, matching `connector-gateway-adapter.test.ts`.
@@ -173,6 +199,7 @@ Note: pagination here is presentational only — every row is already fetched vi
 
 - Both V2 off and V2 on states are fully functional until cutover.
 - Verification covers all four V2/gateway flag combinations, desktop and narrow viewports, light/dark themes, keyboard navigation, and screen-reader-visible status/error copy.
+- Regression coverage verifies that the Chat connector dropdown retains its existing eligibility and profile-selection behavior for organization, user, disabled, and expired profiles, including a Calendar `code_grant` case.
 - Visual comparison (manual, against Storybook/Figma — no automated tooling exists) documents intended design differences and shows no unintended regression.
 - The old table/page-number UI (`connectors-tab.tsx:506-578`, `connector-table-row.tsx`, `connectors-tab-sort-indicator.tsx`, `use-paginated-search.ts`) is deleted only after V2 is default-on via the Statsig dashboard.
 - `pnpm type-check`, `pnpm test:unit`, and `pnpm build` pass.
@@ -180,3 +207,9 @@ Note: pagination here is presentational only — every row is already fetched vi
 ## Separate product decision — first-use setup dialog
 
 The Figma onboarding/empty-state dialog is not included above. Product needs to define when it appears, what its checkbox controls, and where that preference persists before it becomes an implementation card.
+
+## Separate bug — org/user tool-gating inversion (not a V2 card)
+
+`connector-gateway-adapter.ts` reads an org profile's empty tool allow-list as "everything enabled," but the backend reads an empty list as "nothing allowed." An org profile with no explicit tool allow-list would show the UI saying every function is enabled while every actual call fails. Confirmed by reading the source; not yet verified at runtime.
+
+This doesn't land on any of the 6 cards above — the per-tool toggle UI (`isToolConnected`, `onConnectorToolToggle`) lives in `PreviewConnectorModal`, which card 4 explicitly keeps as an untouched existing leaf component. File as its own ticket, not folded into this redesign.

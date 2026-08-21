@@ -3,6 +3,7 @@ dist/
 .workbench-runtime/
 data/*.db
 data/*.db-*
+data/*.log
 data/attachments/
 data/published/
 data/logs/

@@ -22,7 +22,11 @@ Current stack, highest attention first, with the deterministic score already com
 ${items.map((item, index) => {
     const explanation = explanationById.get(item.id);
     const reasons = explanation?.signals.map((entry) => `${entry.key} ${entry.delta >= 0 ? '+' : ''}${entry.delta} (${entry.detail})`).join('; ') || 'no signals';
-    return `${index + 1}. [${item.id}] ${item.title}\nScore: ${explanation?.score ?? 0}; signals: ${reasons}\nStatus: ${item.status}; due: ${item.dueDate ?? 'none'}; last meaningful activity: ${item.lastTouchedAt}; source: ${item.sourceUrl ?? item.sourceIdentifier ?? item.source}\n${item.description.slice(0, 300)}`;
+    const openDependencies = (item.blockedBy ?? []).filter((dependency) => dependency.isOpen);
+    const prerequisites = openDependencies.length
+      ? openDependencies.map((dependency) => dependency.title).join(', ')
+      : 'none';
+    return `${index + 1}. [${item.id}] ${item.title}\nScore: ${explanation?.score ?? 0}; signals: ${reasons}\nStatus: ${item.status}; open prerequisites: ${prerequisites}; due: ${item.dueDate ?? 'none'}; last meaningful activity: ${item.lastTouchedAt}; source: ${item.sourceUrl ?? item.sourceIdentifier ?? item.source}\n${item.description.slice(0, 300)}`;
   }).join('\n\n')}
 
 Deterministic baseline order: ${baseline.orderedItemIds.join(', ')}

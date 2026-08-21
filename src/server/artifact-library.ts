@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ArtifactComment, ArtifactDetail, ArtifactEvent, ArtifactEventKind, ArtifactSummary, ArtifactVersion } from '../shared/contracts.js';
 import type { WorkbenchDatabase } from './database.js';
+import type { LiveArtifact } from './artifact-publisher.js';
 
 type Row = Record<string, string | number | null>;
 
@@ -174,6 +175,19 @@ export class ArtifactLibrary {
   listComments(id: string): ArtifactComment[] {
     const rows = this.database.prepare('SELECT * FROM artifact_comments WHERE artifact_id = ? ORDER BY created_at ASC').all(id) as Row[];
     return rows.map(mapComment);
+  }
+
+  /**
+   * The DB's source of truth for what should currently be live, used to
+   * reconcile the local `data/published` directory before every deploy so a
+   * missing or wiped directory can't silently take other shares offline.
+   */
+  listLive(): LiveArtifact[] {
+    const rows = this.database.prepare(`
+      SELECT id, source_path, title, current_version AS version
+      FROM published_artifacts WHERE revoked_at IS NULL
+    `).all() as Row[];
+    return rows.map((row) => ({ id: String(row.id), sourcePath: text(row.source_path), title: text(row.title), version: Number(row.version ?? 1) }));
   }
 
   listForWorkItem(workItemId: string): ArtifactSummary[] {

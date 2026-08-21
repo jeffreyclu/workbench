@@ -1,9 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { createApp } from './app.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolveClose) => {
+    server.close(() => resolveClose());
+    server.closeAllConnections();
+  });
+}
 
 describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
   let database: WorkbenchDatabase;
@@ -22,7 +29,7 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
   });
 
   afterEach(async () => {
-    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    await closeServer(server);
     database.close();
   });
 
@@ -37,6 +44,17 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     expect(body.error).toMatch(/already has an active agent run/i);
   });
 
+  it('rejects executing a task again after its first run has finished', async () => {
+    const item = repository.create({ title: 'One-shot execution task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const prior = repository.createRun(item.id, 'execute', 'codex', 'codex', '');
+    repository.updateRun(prior.id, { status: 'completed', completedAt: new Date().toISOString() });
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}/execute`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+
+    expect(response.status).toBe(409);
+    expect((await response.json() as { error: string }).error).toMatch(/already been executed/i);
+  });
+
   it('rejects a duplicate /runs request while a run is already active for the task (409)', async () => {
     const item = repository.create({ title: 'Dedup guard task 2', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     repository.createRun(item.id, 'review', 'codex', 'codex', '');
@@ -46,6 +64,157 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
       body: JSON.stringify({ kind: 'review', target: 'codex', instructions: '' }),
     });
     expect(response.status).toBe(409);
+  });
+
+  describe('open-prerequisite dispatch gate', () => {
+    const seedBlockedTask = () => {
+      const blocker = repository.create({ title: 'Schema lands first', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const dependent = repository.create({ title: 'API lands second', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      repository.replaceDependencies(dependent.id, [blocker.id]);
+      return { blocker, dependent };
+    };
+
+    it('rejects /execute while a prerequisite is still open and names the blockers', async () => {
+      const { blocker, dependent } = seedBlockedTask();
+
+      const response = await fetch(`${baseUrl}/api/work-items/${dependent.id}/execute`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+
+      expect(response.status).toBe(409);
+      const body = await response.json() as { code: string; blockedBy: Array<{ id: string; title: string }> };
+      // The client renders these titles, so the payload has to carry them rather
+      // than leaving the UI to re-fetch the task just to explain the refusal.
+      expect(body.code).toBe('OPEN_PREREQUISITES');
+      expect(body.blockedBy).toEqual([expect.objectContaining({ id: blocker.id, title: 'Schema lands first' })]);
+      // The gate must refuse before any run row exists, or a blocked task would
+      // burn its one-shot execution budget on a request that never dispatched.
+      expect(repository.listRuns(dependent.id)).toHaveLength(0);
+    });
+
+    it('rejects /runs while a prerequisite is still open', async () => {
+      const { dependent } = seedBlockedTask();
+
+      const response = await fetch(`${baseUrl}/api/work-items/${dependent.id}/runs`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'review', target: 'codex', instructions: '' }),
+      });
+
+      expect(response.status).toBe(409);
+      expect((await response.json() as { code: string }).code).toBe('OPEN_PREREQUISITES');
+      expect(repository.listRuns(dependent.id)).toHaveLength(0);
+    });
+
+    it('opens the gate once the prerequisite reaches a terminal state', async () => {
+      const { blocker, dependent } = seedBlockedTask();
+      repository.update(blocker.id, { status: 'done' });
+
+      // An active run on the dependent isolates this assertion to the dependency
+      // gate: reaching the *dedup* 409 proves the prerequisite check let it past.
+      repository.createRun(dependent.id, 'review', 'codex', 'codex', '');
+      const response = await fetch(`${baseUrl}/api/work-items/${dependent.id}/runs`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'review', target: 'codex', instructions: '' }),
+      });
+
+      expect(response.status).toBe(409);
+      const body = await response.json() as { code?: string; error: string };
+      expect(body.code).toBeUndefined();
+      expect(body.error).toMatch(/already has an active agent run/i);
+    });
+
+    it('lets an unblocked task past the gate', async () => {
+      const { dependent } = seedBlockedTask();
+      repository.replaceDependencies(dependent.id, []);
+      repository.createRun(dependent.id, 'review', 'codex', 'codex', '');
+
+      const response = await fetch(`${baseUrl}/api/work-items/${dependent.id}/runs`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'review', target: 'codex', instructions: '' }),
+      });
+
+      expect((await response.json() as { code?: string }).code).toBeUndefined();
+    });
+  });
+
+  describe('self-assigned execution gate', () => {
+    const seedSelfAssignedTask = () => {
+      const item = repository.create({ title: 'Jeffrey handles this one', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      repository.update(item.id, { assignees: ['jeffrey'] });
+      return item;
+    };
+
+    it('rejects /execute while Jeffrey owns the task and starts no run', async () => {
+      const item = seedSelfAssignedTask();
+
+      const response = await fetch(`${baseUrl}/api/work-items/${item.id}/execute`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+
+      expect(response.status).toBe(409);
+      expect((await response.json() as { code: string }).code).toBe('SELF_ASSIGNED');
+      // Refusing before any run row exists keeps the task's one-shot execution budget intact.
+      expect(repository.listRuns(item.id)).toHaveLength(0);
+    });
+
+    it('rejects /runs while Jeffrey owns the task', async () => {
+      const item = seedSelfAssignedTask();
+
+      const response = await fetch(`${baseUrl}/api/work-items/${item.id}/runs`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'review', target: 'codex', instructions: '' }),
+      });
+
+      expect(response.status).toBe(409);
+      expect((await response.json() as { code: string }).code).toBe('SELF_ASSIGNED');
+      expect(repository.listRuns(item.id)).toHaveLength(0);
+    });
+
+    it('rejects retrying an earlier run once Jeffrey takes the task over', async () => {
+      const item = seedSelfAssignedTask();
+      const prior = repository.createRun(item.id, 'execute', 'codex', 'codex', '');
+      repository.updateRun(prior.id, { status: 'failed', completedAt: new Date().toISOString() });
+
+      const response = await fetch(`${baseUrl}/api/agent-runs/${prior.id}/retry`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+
+      expect(response.status).toBe(409);
+      expect((await response.json() as { code: string }).code).toBe('SELF_ASSIGNED');
+    });
+
+    it('rejects assigning an agent alongside Jeffrey', async () => {
+      const item = seedSelfAssignedTask();
+
+      const response = await fetch(`${baseUrl}/api/work-items/${item.id}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ assignees: ['jeffrey', 'codex'] }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(repository.get(item.id)?.assignees).toEqual(['jeffrey']);
+    });
+
+    it('lets execution through once Jeffrey is unassigned', async () => {
+      const item = seedSelfAssignedTask();
+      repository.update(item.id, { assignees: ['codex'] });
+      // An active run isolates this assertion to the ownership gate: reaching the
+      // dedup 409 proves the self-assignment check let the request past.
+      repository.createRun(item.id, 'review', 'codex', 'codex', '');
+
+      const response = await fetch(`${baseUrl}/api/work-items/${item.id}/execute`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+
+      expect(response.status).toBe(409);
+      expect((await response.json() as { code?: string }).code).toBeUndefined();
+    });
+  });
+
+  it('parses screenshot-sized JSON bodies instead of rejecting them at the Express boundary', async () => {
+    const item = repository.create({ title: 'Large request parser check', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ description: 'x'.repeat(1_100_000) }),
+    });
+
+    // The route schema may reject the unknown field, but the body parser must not
+    // reject a normal mobile screenshot payload with HTTP 413 first.
+    expect(response.status).toBe(400);
+    expect(await response.text()).not.toMatch(/entity too large/i);
   });
 
   it('allows a fresh /runs request once the prior run has completed', async () => {
@@ -61,7 +230,7 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
   });
 });
 
-describe('/api/memories', () => {
+describe('linked task API', () => {
   let database: WorkbenchDatabase;
   let repository: WorkItemRepository;
   let server: Server;
@@ -70,120 +239,114 @@ describe('/api/memories', () => {
   beforeEach(async () => {
     database = openDatabase(':memory:');
     repository = new WorkItemRepository(database);
-    const app = createApp(database);
-    server = app.listen(0);
+    server = createApp(database).listen(0);
     await new Promise<void>((resolveListen) => server.once('listening', () => resolveListen()));
-    const { port } = server.address() as AddressInfo;
-    baseUrl = `http://127.0.0.1:${port}`;
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
 
-  afterEach(async () => {
-    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
-    database.close();
+  afterEach(async () => { await closeServer(server); database.close(); });
+
+  it('adds and removes a bidirectional task link exposed by task detail', async () => {
+    const first = repository.create({ title: 'First', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const second = repository.create({ title: 'Second', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    const created = await fetch(`${baseUrl}/api/work-items/${first.id}/linked-tasks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ linkedWorkItemId: second.id }) });
+    expect(created.status).toBe(201);
+    expect((await created.json() as { item: { id: string } }).item.id).toBe(second.id);
+
+    const detail = await (await fetch(`${baseUrl}/api/work-items/${second.id}`)).json() as { linkedTasks: Array<{ id: string }> };
+    expect(detail.linkedTasks).toEqual([expect.objectContaining({ id: first.id })]);
+
+    const removed = await fetch(`${baseUrl}/api/work-items/${first.id}/linked-tasks/${second.id}`, { method: 'DELETE' });
+    expect(removed.status).toBe(204);
+  });
+});
+
+describe('work-item metadata ownership and dates', () => {
+  let database: WorkbenchDatabase;
+  let repository: WorkItemRepository;
+  let server: Server;
+  let baseUrl: string;
+
+  beforeEach(async () => {
+    database = openDatabase(':memory:');
+    repository = new WorkItemRepository(database);
+    server = createApp(database).listen(0);
+    await new Promise<void>((resolveListen) => server.once('listening', resolveListen));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
 
-  it('creates a memory via POST, landing active, and exposes provenance on GET (criterion 3)', async () => {
-    const item = repository.create({ title: 'Provenance task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    const conversation = repository.createConversation('Provenance thread', item.id);
-    const message = repository.createSharedMessage('codex', 'We decided to use SQLite for this.', 'completed', conversation.id);
+  afterEach(async () => { await closeServer(server); database.close(); });
 
-    const createResponse = await fetch(`${baseUrl}/api/memories`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        kind: 'decision', scope: 'reference', sourceTaskId: item.id, sourceConversationId: conversation.id,
-        sourceMessageId: message.id, sourceQuote: 'We decided to use SQLite for this.', body: 'Use SQLite for local persistence.', createdBy: 'codex',
-      }),
-    });
-    expect(createResponse.status).toBe(201);
-    const created = (await createResponse.json()) as { memory: { id: string; status: string } };
-    expect(created.memory.status).toBe('active');
+  it('accepts real past calendar dates and rejects impossible dates', async () => {
+    const valid = await fetch(`${baseUrl}/api/work-items`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Overdue task', dueDate: '2024-02-29' }) });
+    expect(valid.status).toBe(201);
+    expect((await valid.json() as { item: { dueDate: string } }).item.dueDate).toBe('2024-02-29');
 
-    const getResponse = await fetch(`${baseUrl}/api/memories?scope=reference`);
-    expect(getResponse.status).toBe(200);
-    const listed = (await getResponse.json()) as { memories: Array<Record<string, unknown>> };
-    const found = listed.memories.find((entry) => entry.id === created.memory.id);
-    expect(found).toMatchObject({
-      sourceTaskId: item.id,
-      sourceConversationId: conversation.id,
-      sourceMessageId: message.id,
-      sourceQuote: 'We decided to use SQLite for this.',
-    });
+    const invalid = await fetch(`${baseUrl}/api/work-items`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Bad date', dueDate: '2026-02-30' }) });
+    expect(invalid.status).toBe(400);
   });
 
-  it('rejects a memory scope missing its required field with a 400', async () => {
-    const response = await fetch(`${baseUrl}/api/memories`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'fact', scope: 'project', body: 'Missing project name.' }),
-    });
-    expect(response.status).toBe(400);
-  });
+  it('records Jeffrey\'s pertinent edits in the activity log, and ignores queue-only moves', async () => {
+    const item = repository.create({ title: 'Edited task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
 
-  it('edits a memory via PATCH', async () => {
-    const createResponse = await fetch(`${baseUrl}/api/memories`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'fact', scope: 'global', body: 'Original body.' }),
-    });
-    const { memory } = (await createResponse.json()) as { memory: { id: string } };
-
-    const patchResponse = await fetch(`${baseUrl}/api/memories/${memory.id}`, {
+    const edit = await fetch(`${baseUrl}/api/work-items/${item.id}`, {
       method: 'PATCH', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ body: 'Edited body.' }),
+      body: JSON.stringify({ status: 'blocked', priority: 1, dueDate: '2026-08-25', assignees: ['claude'] }),
     });
-    expect(patchResponse.status).toBe(200);
-    const patched = (await patchResponse.json()) as { memory: { body: string } };
-    expect(patched.memory.body).toBe('Edited body.');
+    expect(edit.status).toBe(200);
+    const logged = repository.listActivity(item.id).find((entry) => entry.kind === 'edited');
+    expect(logged?.actor).toBe('jeffrey');
+    expect(logged?.body).toBe('Status: ready → blocked · Priority: 2 → 1 · Owners: none → claude · Due date: none → 2026-08-25.');
+
+    const before = repository.listActivity(item.id).length;
+    await fetch(`${baseUrl}/api/work-items/${item.id}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ queuePosition: 5 }),
+    });
+    expect(repository.listActivity(item.id)).toHaveLength(before);
   });
 
-  it('returns 404 for PATCH/supersede/DELETE on an unknown memory id', async () => {
-    const unknownId = '00000000-0000-0000-0000-000000000000';
-    const patchResponse = await fetch(`${baseUrl}/api/memories/${unknownId}`, {
-      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ body: 'x' }),
-    });
-    expect(patchResponse.status).toBe(404);
+  it('attributes lifecycle moves made from the UI to Jeffrey', async () => {
+    const item = repository.create({ title: 'Finished task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
 
-    const supersedeResponse = await fetch(`${baseUrl}/api/memories/${unknownId}/supersede`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'fact', body: 'x' }),
-    });
-    expect(supersedeResponse.status).toBe(404);
+    expect((await fetch(`${baseUrl}/api/work-items/${item.id}/complete`, { method: 'POST' })).status).toBe(200);
+    expect((await fetch(`${baseUrl}/api/work-items/${item.id}/restore`, { method: 'POST' })).status).toBe(200);
+    expect((await fetch(`${baseUrl}/api/work-items/${item.id}/archive`, { method: 'POST' })).status).toBe(200);
 
-    const deleteResponse = await fetch(`${baseUrl}/api/memories/${unknownId}`, { method: 'DELETE' });
-    expect(deleteResponse.status).toBe(404);
+    expect(repository.listActivity(item.id)
+      .filter((entry) => ['archived', 'completed', 'restored'].includes(entry.kind))
+      .map((entry) => `${entry.actor}/${entry.kind}: ${entry.body}`))
+      .toEqual(expect.arrayContaining([
+        'jeffrey/completed: Completed and moved to the archive.',
+        'jeffrey/restored: Restored from the archive.',
+        'jeffrey/archived: Archived without completing.',
+      ]));
   });
 
-  it('supersedes a memory: old marked superseded, new one returned active', async () => {
-    const createResponse = await fetch(`${baseUrl}/api/memories`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'constraint', scope: 'global', body: 'Old constraint.' }),
-    });
-    const { memory: original } = (await createResponse.json()) as { memory: { id: string } };
-
-    const supersedeResponse = await fetch(`${baseUrl}/api/memories/${original.id}/supersede`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'constraint', body: 'New constraint.' }),
-    });
-    expect(supersedeResponse.status).toBe(201);
-    const { memory: replacement } = (await supersedeResponse.json()) as { memory: { id: string; status: string; supersedesId: string; body: string } };
-    expect(replacement.status).toBe('active');
-    expect(replacement.supersedesId).toBe(original.id);
-    expect(replacement.body).toBe('New constraint.');
-
-    const listResponse = await fetch(`${baseUrl}/api/memories?status=superseded`);
-    const listed = (await listResponse.json()) as { memories: Array<{ id: string; status: string }> };
-    expect(listed.memories.find((entry) => entry.id === original.id)?.status).toBe('superseded');
+  it('tracks local Linear status and due-date edits for conflict-aware sync', async () => {
+    repository.upsertLinearItem({ sourceIdentifier: 'ENG-99', sourceUrl: 'https://linear.app/example/issue/ENG-99', title: 'Provider item', description: '', status: 'ready', priority: 2, projectName: null, labels: [], dueDate: '2026-08-22', providerUpdatedAt: '2026-08-20T00:00:00.000Z', providerPayload: {} });
+    const item = repository.searchLinear('ENG-99')[0];
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dueDate: '2026-08-23' }) });
+    expect(response.status).toBe(200);
+    expect(repository.get(item.id)?.dueDate).toBe('2026-08-23');
   });
 
-  it('DELETE rejects a memory and returns the row, never 204', async () => {
-    const createResponse = await fetch(`${baseUrl}/api/memories`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'fact', scope: 'global', body: 'Delete me.' }),
-    });
-    const { memory } = (await createResponse.json()) as { memory: { id: string } };
+  it('returns and resolves a Linear field conflict without overwriting the local edit', async () => {
+    const input = { sourceIdentifier: 'ENG-100', sourceUrl: null, title: 'Provider title', description: '', status: 'ready' as const, priority: 2, projectName: null, labels: [], dueDate: null, providerUpdatedAt: '2026-08-20T00:00:00.000Z', providerPayload: {} };
+    repository.upsertLinearItem(input);
+    const item = repository.searchLinear('ENG-100')[0];
+    await fetch(`${baseUrl}/api/work-items/${item.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Local title' }) });
+    repository.upsertLinearItem({ ...input, title: 'Provider title v2', providerUpdatedAt: '2026-08-20T01:00:00.000Z' });
 
-    const deleteResponse = await fetch(`${baseUrl}/api/memories/${memory.id}`, { method: 'DELETE' });
-    expect(deleteResponse.status).toBe(200);
-    const deleted = (await deleteResponse.json()) as { memory: { id: string; status: string } };
-    expect(deleted.memory.id).toBe(memory.id);
-    expect(deleted.memory.status).toBe('rejected');
+    const detail = await fetch(`${baseUrl}/api/work-items/${item.id}`);
+    expect((await detail.json() as { providerConflicts: Array<{ field: string; localValue: string; providerValue: string }> }).providerConflicts)
+      .toEqual([expect.objectContaining({ field: 'title', localValue: 'Local title', providerValue: 'Provider title v2' })]);
+
+    const resolution = await fetch(`${baseUrl}/api/work-items/${item.id}/provider-conflicts/title/resolve`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ resolution: 'keep_local' }),
+    });
+    expect(resolution.status).toBe(200);
+    expect(await resolution.json()).toEqual(expect.objectContaining({ item: expect.objectContaining({ title: 'Local title' }), providerConflicts: [] }));
   });
 });
 
@@ -204,7 +367,7 @@ describe('GET /api/shared/search', () => {
   });
 
   afterEach(async () => {
-    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    await closeServer(server);
     database.close();
   });
 
@@ -254,7 +417,7 @@ describe('queue explainability and undo routes', () => {
   });
 
   afterEach(async () => {
-    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    await closeServer(server);
     database.close();
   });
 
@@ -317,5 +480,168 @@ describe('queue explainability and undo routes', () => {
     const undo = await fetch(`${baseUrl}/api/queue/undo`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     expect(undo.status).toBe(200);
     expect(repository.list().map((entry) => entry.id)).toEqual([fresh.id, stale.id]);
+  });
+
+  it('plans the Workbench roadmap independently from the attention stack', async () => {
+    const attention = create('Customer task');
+    const fresh = repository.create({ title: 'Fresh roadmap task', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const stale = repository.create({ title: 'Stale roadmap task', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    database.prepare('UPDATE work_items SET last_touched_at = ? WHERE id = ?').run(new Date(Date.now() - 9 * 86_400_000).toISOString(), stale.id);
+
+    const response = await fetch(`${baseUrl}/api/queue/plan`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stack: 'workbench' }),
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json() as { proposal: { id: string; stack: string }; items: Array<{ id: string }> };
+    expect(body.proposal.stack).toBe('workbench');
+    expect(body.items.map((item) => item.id)).toEqual([stale.id, fresh.id]);
+    expect(repository.list().map((item) => item.id)).toEqual([attention.id]);
+    const accepted = await fetch(`${baseUrl}/api/queue/proposals/${body.proposal.id}/accepted`, { method: 'POST' });
+    const acceptedBody = await accepted.json() as { proposal: { stack: string }; items: Array<{ id: string }> };
+    expect(acceptedBody.proposal.stack).toBe('workbench');
+    expect(acceptedBody.items.map((item) => item.id)).toEqual([stale.id, fresh.id]);
+  });
+});
+
+describe('destructive operations soft-delete instead of hard-deleting', () => {
+  let database: WorkbenchDatabase;
+  let repository: WorkItemRepository;
+  let server: Server;
+  let baseUrl: string;
+
+  beforeEach(async () => {
+    database = openDatabase(':memory:');
+    repository = new WorkItemRepository(database);
+    const app = createApp(database);
+    server = app.listen(0);
+    await new Promise<void>((resolveListen) => server.once('listening', () => resolveListen()));
+    const { port } = server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterEach(async () => {
+    await closeServer(server);
+    database.close();
+  });
+
+  it('deletes a work item from every list/get view while keeping the row in the database and logging the action', async () => {
+    const item = repository.create({ title: 'Delete me', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}`, { method: 'DELETE' });
+    expect(response.status).toBe(204);
+
+    expect(repository.get(item.id)).toBeNull();
+    expect(repository.list().some((entry) => entry.id === item.id)).toBe(false);
+    expect(repository.listArchived().some((entry) => entry.id === item.id)).toBe(false);
+    const row = database.prepare('SELECT deleted_at FROM work_items WHERE id = ?').get(item.id) as { deleted_at: string | null };
+    expect(row.deleted_at).not.toBeNull();
+    const audit = repository.listAuditLog(10, null, 'destructive_action');
+    expect(audit.entries).toEqual(expect.arrayContaining([expect.objectContaining({ detail: expect.stringContaining(item.id), workItemId: item.id })]));
+  });
+
+  it('404s a repeat DELETE for a work item that no longer exists (already deleted)', async () => {
+    const item = repository.create({ title: 'Delete twice', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    await fetch(`${baseUrl}/api/work-items/${item.id}`, { method: 'DELETE' });
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}`, { method: 'DELETE' });
+    expect(response.status).toBe(404);
+  });
+
+  it('deletes a conversation from listings while keeping the row and logging the action', async () => {
+    const conversation = repository.createConversation('To be deleted');
+
+    const response = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}`, { method: 'DELETE' });
+    expect(response.status).toBe(204);
+
+    expect(repository.listConversations('all').some((entry) => entry.id === conversation.id)).toBe(false);
+    const row = database.prepare('SELECT deleted_at FROM shared_conversations WHERE id = ?').get(conversation.id) as { deleted_at: string | null };
+    expect(row.deleted_at).not.toBeNull();
+    const audit = repository.listAuditLog(10, null, 'destructive_action');
+    expect(audit.entries).toEqual(expect.arrayContaining([expect.objectContaining({ detail: expect.stringContaining(conversation.id) })]));
+  });
+
+  it('removes a source connection from listings while keeping the row and logging the action', async () => {
+    repository.setSourceConnection('github', 'Work GitHub', { token: 'secret-token' });
+
+    const response = await fetch(`${baseUrl}/api/source-connections/github`, { method: 'DELETE' });
+    expect(response.status).toBe(204);
+
+    expect(repository.listSourceConnections()).toEqual([]);
+    const row = database.prepare('SELECT deleted_at FROM source_connections WHERE provider = ?').get('github') as { deleted_at: string | null };
+    expect(row.deleted_at).not.toBeNull();
+    const audit = repository.listAuditLog(10, null, 'destructive_action');
+    expect(audit.entries).toEqual(expect.arrayContaining([expect.objectContaining({ detail: expect.stringContaining('github') })]));
+  });
+
+  it('404s removing a source connection that was never configured', async () => {
+    const response = await fetch(`${baseUrl}/api/source-connections/github`, { method: 'DELETE' });
+    expect(response.status).toBe(404);
+  });
+
+  it('lets reconnecting a soft-deleted source restore it to the active listing', async () => {
+    repository.setSourceConnection('github', 'Work GitHub', { token: 'secret-token' });
+    repository.removeSourceConnection('github');
+    expect(repository.listSourceConnections()).toEqual([]);
+
+    repository.setSourceConnection('github', 'Work GitHub (again)', { token: 'new-token' });
+    expect(repository.listSourceConnections()).toEqual([expect.objectContaining({ provider: 'github', label: 'Work GitHub (again)' })]);
+  });
+});
+
+describe('GET /api/audit-log', () => {
+  let database: WorkbenchDatabase;
+  let repository: WorkItemRepository;
+  let server: Server;
+  let baseUrl: string;
+
+  beforeEach(async () => {
+    database = openDatabase(':memory:');
+    repository = new WorkItemRepository(database);
+    const app = createApp(database);
+    server = app.listen(0);
+    await new Promise<void>((resolveListen) => server.once('listening', () => resolveListen()));
+    const { port } = server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterEach(async () => {
+    await closeServer(server);
+    database.close();
+  });
+
+  it('lists recorded audit entries newest first, bounded by limit', async () => {
+    repository.addAuditEntry('outbound_call', 'linear', 'POST https://api.linear.app/graphql');
+    repository.addAuditEntry('agent_file_write', 'codex', 'src/app.ts');
+
+    const response = await fetch(`${baseUrl}/api/audit-log`);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { entries: Array<{ category: string; source: string; detail: string }>; nextCursor: string | null };
+    expect(body.entries).toHaveLength(2);
+    expect(body.entries[0]).toMatchObject({ category: 'agent_file_write', source: 'codex' });
+    expect(body.nextCursor).toBeNull();
+  });
+
+  it('filters by category and workItemId', async () => {
+    const item = repository.create({ title: 'Audited task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.addAuditEntry('outbound_call', 'linear', 'call one');
+    repository.addAuditEntry('agent_file_read', 'claude', 'src/index.ts', item.id);
+
+    const byCategory = await fetch(`${baseUrl}/api/audit-log?category=agent_file_read`);
+    const byCategoryBody = await byCategory.json() as { entries: Array<{ category: string }> };
+    expect(byCategoryBody.entries).toEqual([expect.objectContaining({ category: 'agent_file_read' })]);
+
+    const byWorkItem = await fetch(`${baseUrl}/api/audit-log?workItemId=${item.id}`);
+    const byWorkItemBody = await byWorkItem.json() as { entries: Array<{ workItemId: string | null }> };
+    expect(byWorkItemBody.entries).toEqual([expect.objectContaining({ workItemId: item.id })]);
+  });
+
+  it('rejects an invalid cursor with 400 instead of throwing', async () => {
+    const response = await fetch(`${baseUrl}/api/audit-log?cursor=not-a-real-cursor`);
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects a limit above the bounded maximum of 200', async () => {
+    const response = await fetch(`${baseUrl}/api/audit-log?limit=5000`);
+    expect(response.status).toBe(400);
   });
 });

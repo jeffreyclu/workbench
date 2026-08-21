@@ -112,13 +112,19 @@ describe('artifact library', () => {
     await waitFor(() => expect(calls.some((call) => call.url === '/api/artifacts/abc123/republish' && call.method === 'POST')).toBe(true));
   });
 
-  it('confirms before revoking, because the link stops working for everyone', async () => {
+  it('uses the app dialog before revoking, because the link stops working for everyone', async () => {
     const calls = stubApi();
-    vi.stubGlobal('confirm', vi.fn(() => false));
     renderLibrary();
 
-    fireEvent.click(await screen.findByRole('button', { name: /revoke/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Revoke$/ }));
+    expect(await screen.findByRole('dialog', { name: 'Revoke this shared artifact?' })).toBeTruthy();
+    expect(screen.getByText('The link stops working for everyone.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(calls.some((call) => call.method === 'DELETE')).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Revoke$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Revoke artifact' }));
+    await waitFor(() => expect(calls.some((call) => call.url === '/api/artifacts/abc123' && call.method === 'DELETE')).toBe(true));
   });
 
   it('offers a restore instead of a republish once an artifact is revoked', async () => {

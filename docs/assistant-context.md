@@ -1,17 +1,15 @@
 # Assistant Context Contract
 
-Workbench is the canonical shared task context. Assistant memories are secondary and must not be treated as the source of truth for work state.
+Workbench tasks, conversations, and activity are the canonical shared context.
 
 The shared room is the common conversation for Jeffrey, Codex, and Claude. Every task execution prompt includes:
-- Recent archived task records (deduplicated, capped to ~8 KB)
 - Recent completed room messages (last 6, capped to ~1.5 KB each)
-
-Pinned lessons are planned but not yet implemented.
 
 ## Rules
 
 - Read the full work item before proposing or executing a strategy.
 - Record durable decisions, progress, blockers, and handoffs as activity.
+- Pass `actor` to `update_work_item` and `set_work_item_lifecycle` so the field changes and lifecycle moves you make are attributed in the task activity log. Workbench writes those entries automatically; do not duplicate them with `add_activity`.
 - Keep strategy actionable: outcome, approach, assignments, risks, and verification.
 - Do not modify provider-owned fields through local assistant tools.
 - Do not mark an item done without recording verification evidence.
@@ -31,8 +29,13 @@ layer as REST and never reads SQLite directly.
 - Discoveries: `list_discoveries`, `resolve_discovery`
 - Conversations: `list_conversations`, `get_conversation`, `create_conversation`,
   `add_conversation_message`
-- Memories: `list_memories`, `record_memory`
 - Plans and results: `list_execution_plans`, `propose_execution_plan`, `list_results`
+
+Workbench writes its own routing decisions into the same activity log: the execution type
+and why it was chosen, the agent and why, the model and effort tier, and any capacity
+fallback. Jeffrey's own field edits and lifecycle moves — archive, complete, restore — are
+logged there too, with the cause named when Workbench applied the move as a cascade. One
+timeline explains a task.
 
 The MCP surface intentionally excludes provider sync and credentials, hard delete,
 agent dispatch/cancel/retry, execution-plan approval, result mutation, and artifact

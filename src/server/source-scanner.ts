@@ -3,10 +3,12 @@ import { WorkItemRepository } from './repository.js';
 import { scanSlackMcp } from './slack-mcp.js';
 import { isMcpReauthenticationError, mcpAuthenticationMessage, scanRemoteMcp } from './remote-mcp.js';
 import { scanSlackWithCodex } from './slack-codex.js';
+import { recordAudit } from './audit-log.js';
 
 export interface SourceSignal { provider: string; title: string; summary: string; url: string | null; occurredAt: string | null; }
 
 async function requestJson<T>(url: string, headers: Record<string, string>): Promise<T> {
+  recordAudit('outbound_call', 'source-scanner', `GET ${url}`);
   const response = await fetch(url, { headers, signal: AbortSignal.timeout(20_000) });
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
   return response.json() as Promise<T>;
@@ -52,11 +54,13 @@ async function scanGmail(settings: Record<string, string>): Promise<SourceSignal
   }));
 }
 
-const scanners: Record<SourceProvider, (settings: Record<string, string>) => Promise<SourceSignal[]>> = { github: scanGitHub, slack: scanSlackMcp, confluence: scanConfluence, gmail: scanGmail };
+const scanners: Partial<Record<SourceProvider, (settings: Record<string, string>) => Promise<SourceSignal[]>>> = { github: scanGitHub, slack: scanSlackMcp, confluence: scanConfluence, gmail: scanGmail };
 
 export function scanSource(provider: SourceProvider, settings: Record<string, string>): Promise<SourceSignal[]> {
-  if ((provider === 'slack' || provider === 'confluence' || provider === 'gmail') && settings.serverUrl) return scanRemoteMcp(provider, settings);
-  return scanners[provider](settings);
+  if ((provider === 'slack' || provider === 'figma' || provider === 'confluence' || provider === 'gmail') && settings.serverUrl) return scanRemoteMcp(provider, settings);
+  const scanner = scanners[provider];
+  if (!scanner) throw new Error(`${provider} source settings are incomplete. Reconnect this source.`);
+  return scanner(settings);
 }
 
 export async function scanConnectedSources(repository: WorkItemRepository): Promise<{ signals: SourceSignal[]; errors: string[] }> {

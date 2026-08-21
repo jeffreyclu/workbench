@@ -31,6 +31,7 @@ This voice is stable, not frozen. Learn from Jeffrey's accepted edits and sample
 - Code review routes through the `frontend-reviewer` entry point. Do not present an informal review as its substitute.
 - Verify why a change exists before recording its rationale in a spec or durable note. Mark unverified rationale as such.
 - When multiple agents may edit one file, establish an explicit handoff before writing. Never silently overlap edits.
+- Never drop or incompatibly change database schema while an older live, preview, or worker runtime may still access it. During rolling or atomic release handoffs, first deploy code that stops using the schema, verify every serving runtime has switched, and only then remove the compatibility schema in a later migration.
 
 - Use TypeScript and React for product code.
 - Keep the core work-item model provider-neutral. Linear-specific fields belong in provider metadata or sync records.

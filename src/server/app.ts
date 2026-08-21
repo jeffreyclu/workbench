@@ -10,16 +10,13 @@ import {
   createArtifactCommentSchema,
   updateArtifactSchema,
   artifactLibraryViewSchema,
+  createWorkItemLinkSchema,
   createWorkItemReferenceSchema,
   createWorkItemSchema,
   generateTaskDraftSchema,
   createQueueProposalSchema,
   createSharedMessageSchema,
   createSharedConversationSchema,
-  createMemorySchema,
-  listMemoriesQuerySchema,
-  supersedeMemorySchema,
-  updateMemorySchema,
   reorderQueueSchema,
   runKindSchema,
   resolveSourceUrlSchema,
@@ -29,13 +26,26 @@ import {
   updateDiscoveryCandidateSchema,
   resolveDiscoveryCandidateSchema,
   updateWorkItemSchema,
+  providerSyncFieldSchema,
+  providerSyncConflictResolutionSchema,
+  bulkWorkItemActionSchema,
+  createSavedWorkItemFilterSchema,
+  savedWorkItemFilterViewSchema,
+  updateSavedWorkItemFilterSchema,
+  workItemFilterSchema,
+  listAuditLogQuerySchema,
+  isSelfAssigned,
+  SELF_ASSIGNED_EXECUTION_MESSAGE,
 } from '../shared/contracts.js';
+import { generateFastAiTaskDraft } from './fast-task-draft-ai.js';
+import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { z } from 'zod';
 import type { WorkbenchDatabase } from './database.js';
 import { LinearProvider } from './providers/linear.js';
-import { WorkItemRepository } from './repository.js';
+import { WorkItemDependencyError, WorkItemRepository } from './repository.js';
 import { cancelAgentRun, classificationForKind, classifyExecutionRobust, executeAgentRun, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback } from './agent-runner.js';
-import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, runSharedBackgroundJob } from './shared-room.js';
+import { describeExecutionRouting, summarizeWorkItemChanges } from './activity-log.js';
+import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, runSharedBackgroundJob } from './shared-room.js';
 import { createAuthGate } from './auth.js';
 import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMessage } from './slack-notify.js';
 import { finishRemoteMcpOAuth, startRemoteMcpOAuth } from './remote-mcp.js';
@@ -44,9 +54,34 @@ import { artifactContentHash, CloudflarePagesPublisher, createArtifactId } from 
 import { ArtifactLibrary, artifactFeedbackConfig, createCommentRateLimiter } from './artifact-library.js';
 import { runDiscovery, shouldRunDiscoveryCatchUp } from './discovery.js';
 import { isRuntimeApproval, promoteRuntime } from './runtime-promotion.js';
+import { runtimePreviewStatus } from './runtime-preview.js';
+import { startManagedMcpLogin } from './managed-mcp-login.js';
 import { isArtifactAllowed } from './artifact-access.js';
 import { LEASE_MS, OWNER_ID } from './scheduler.js';
 import { createWorkbenchMcpHandler, rejectUnsupportedMcpMethod } from './workbench-mcp.js';
+import { setAuditSink } from './audit-log.js';
+
+/**
+ * Tagging Jeffrey as an owner claims the task for him, so no agent may execute it
+ * until he is unassigned. This guards every durable-run entry point, not just the
+ * Execute button, so a direct API call or a retry cannot slip past the rule.
+ */
+function rejectSelfAssignedExecution(item: WorkItem, response: Response): boolean {
+  if (!isSelfAssigned(item.assignees)) return false;
+  response.status(409).json({ error: SELF_ASSIGNED_EXECUTION_MESSAGE, code: 'SELF_ASSIGNED' });
+  return true;
+}
+
+function rejectOpenPrerequisites(repository: WorkItemRepository, workItemId: string, response: Response): boolean {
+  const blockedBy = repository.listOpenDependencies(workItemId);
+  if (!blockedBy.length) return false;
+  response.status(409).json({
+    error: 'Task is blocked by open prerequisites.',
+    code: 'OPEN_PREREQUISITES',
+    blockedBy,
+  });
+  return true;
+}
 
 export function createApp(database: WorkbenchDatabase) {
   const app = express();
@@ -54,11 +89,19 @@ export function createApp(database: WorkbenchDatabase) {
   const artifactPublisher = new CloudflarePagesPublisher();
   const artifacts = new ArtifactLibrary(database);
   const allowComment = createCommentRateLimiter();
+  setAuditSink((category, source, detail, workItemId) => repository.addAuditEntry(category, source, detail, workItemId ?? null));
   app.use(createAuthGate(undefined));
-  app.use(express.json({ limit: '1mb' }));
+  // Attachments are transported as base64 JSON today. Ten 10 MB files can expand
+  // to roughly 134 MB before JSON overhead, so the parser must not reject a valid
+  // request before the attachment schema can enforce its per-file limits.
+  app.use(express.json({ limit: '150mb' }));
 
   app.get('/api/health', (_request, response) => {
     response.json({ ok: true });
+  });
+
+  app.get('/api/runtime/preview-status', (_request, response) => {
+    response.json(runtimePreviewStatus());
   });
 
   app.post('/mcp', createWorkbenchMcpHandler(repository));
@@ -68,6 +111,20 @@ export function createApp(database: WorkbenchDatabase) {
   app.get('/api/discovery', (request, response) => {
     const view = z.enum(['pending', 'reviewed']).catch('pending').parse(request.query.view);
     response.json(repository.getDiscoveryInbox(view));
+  });
+
+  app.get('/api/insights', (request, response) => {
+    const days = z.enum(['7', '30']).catch('30').parse(request.query.days);
+    response.json(repository.getRunInsights(days === '7' ? 7 : 30));
+  });
+
+  app.get('/api/audit-log', (request, response) => {
+    const input = listAuditLogQuerySchema.parse(request.query);
+    try {
+      response.json(repository.listAuditLog(input.limit, input.cursor ?? null, input.category, input.workItemId));
+    } catch {
+      response.status(400).json({ error: 'Invalid audit log cursor.' });
+    }
   });
 
   app.post('/api/discovery/scan', (_request, response) => {
@@ -195,13 +252,16 @@ export function createApp(database: WorkbenchDatabase) {
     if (!plan.needsDeploy && plan.existing) {
       return { artifact: { id: plan.existing.id, title: plan.existing.title, url: plan.existing.url }, changed: false, published: false, kind: plan.kind };
     }
+    // Mark superseded rows revoked in the DB before touching local files, so a
+    // crash between the two never leaves the DB claiming a share is live when
+    // its files are already gone.
+    artifacts.supersede(plan.supersededIds);
     for (const supersededId of plan.supersededIds) artifactPublisher.removeLocal(supersededId);
     const feedback = artifactFeedbackConfig();
     const published = await artifactPublisher.publish({
       id: plan.id, title: input.title, sourcePath: input.sourcePath, version: plan.version,
       feedback: feedback ? { artifactId: plan.id, endpointOrigin: feedback.endpointOrigin } : null,
-    });
-    artifacts.supersede(plan.supersededIds);
+    }, artifacts.listLive());
     const summary = artifacts.recordPublication({
       id: plan.id, sourcePath: input.sourcePath, title: input.title, url: published.url, contentHash,
       version: plan.version, workItemId: input.workItemId ?? null, conversationId: input.conversationId ?? null,
@@ -273,10 +333,20 @@ export function createApp(database: WorkbenchDatabase) {
   app.delete('/api/artifacts/:id', async (request, response) => {
     try {
       const artifact = artifacts.get(request.params.id);
-      if (!artifact || artifact.revokedAt) return response.status(404).json({ error: 'Published artifact not found.' });
-      await artifactPublisher.revoke(request.params.id);
-      response.json({ artifact: artifacts.markRevoked(request.params.id) });
-    } catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : 'Could not revoke artifact.' }); }
+      if (!artifact) return response.status(404).json({ error: 'Published artifact not found.' });
+      // Mark the DB revoked before touching the deployment. If the deploy step
+      // below fails or the process dies mid-request, the DB already reflects
+      // "revoked" — the artifact is excluded from `listLive()` and every later
+      // publish/revoke reconciles it away, and this same request is safe to
+      // retry (it no longer 404s just because revokedAt is already set).
+      if (!artifact.revokedAt) artifacts.markRevoked(request.params.id);
+      const result = await artifactPublisher.revoke(request.params.id, artifacts.listLive(), artifact.url);
+      repository.addAuditEntry('destructive_action', 'workbench', `Revoked artifact ${request.params.id}${result.verified ? '' : ' (could not verify the public URL stopped serving)'}`, artifact.workItemId ?? null);
+      response.json({ artifact: artifacts.get(request.params.id), verified: result.verified });
+    } catch (error) {
+      repository.addAuditEntry('destructive_action', 'workbench', `Revoke failed for artifact ${request.params.id}: ${error instanceof Error ? error.message : 'unknown error'}`);
+      response.status(500).json({ error: error instanceof Error ? error.message : 'Could not revoke artifact.' });
+    }
   });
 
   // Coworker feedback. The published page lives on another origin and its reader
@@ -328,13 +398,20 @@ export function createApp(database: WorkbenchDatabase) {
     response.json(repository.listConversationPage(limit, cursor, view));
   });
 
+  app.get('/api/shared/conversations-unread-count', (_request, response) => {
+    response.json({ count: repository.countUnreadConversations() });
+  });
+
   app.post('/api/shared/conversations', (request, response) => {
     const input = createSharedConversationSchema.parse(request.body);
     response.status(201).json({ conversation: repository.createConversation(input.title) });
   });
 
   app.delete('/api/shared/conversations/:id', (request, response) => {
+    const conversation = repository.getConversation(request.params.id);
+    if (conversation?.workItemId) return response.status(409).json({ error: 'Task-linked conversations can only be deleted by deleting their task.' });
     if (!repository.deleteConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
+    repository.addAuditEntry('destructive_action', 'workbench', `Deleted conversation ${request.params.id}`);
     repository.ensureDefaultConversation();
     response.status(204).end();
   });
@@ -347,6 +424,19 @@ export function createApp(database: WorkbenchDatabase) {
 
   app.post('/api/shared/conversations/:id/restore', (request, response) => {
     const conversation = repository.setConversationArchived(request.params.id, false);
+    if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
+    response.json({ conversation });
+  });
+
+  app.patch('/api/shared/conversations/:id/preferences', (request, response) => {
+    const { executionProfile } = z.object({ executionProfile: z.enum(['economy', 'standard', 'deep']).nullable() }).parse(request.body);
+    const conversation = repository.setConversationExecutionProfile(request.params.id, executionProfile);
+    if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
+    response.json({ conversation });
+  });
+
+  app.post('/api/shared/conversations/:id/read', (request, response) => {
+    const conversation = repository.markConversationRead(request.params.id);
     if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
     response.json({ conversation });
   });
@@ -396,7 +486,7 @@ export function createApp(database: WorkbenchDatabase) {
     });
     if (isRuntimeApproval(input.body)) {
       const message = repository.createSharedMessage('jeffrey', input.body, 'completed', input.conversationId, attachments, 'none');
-      const reply = repository.createSharedMessage('system', 'Approval received. Preparing the Workbench preview for promotion…', 'running', input.conversationId);
+      const reply = repository.createSharedMessage('system', 'Approval received. Preparing the Workbench preview for promotion…', 'running', input.conversationId, [], 'promotion');
       // DB-backed rather than process-local: queued/running rows are the source of
       // truth for "is there live work," including work owned by another process.
       void runSharedBackgroundJob(repository, reply.id, (signal, onProgress) => promoteRuntime(database, signal, onProgress, () => repository.hasLiveWork()));
@@ -421,6 +511,24 @@ export function createApp(database: WorkbenchDatabase) {
     const message = cancelSharedReply(repository, request.params.id);
     if (!message) return response.status(404).json({ error: 'Running or queued message not found.' });
     response.json({ message });
+  });
+
+  app.post('/api/shared/messages/:id/retry', (request, response) => {
+    const prior = repository.getSharedMessageById(request.params.id);
+    if (!prior) return response.status(404).json({ error: 'Chat response not found.' });
+    if ((prior.author !== 'codex' && prior.author !== 'claude') || (prior.status !== 'failed' && prior.status !== 'canceled')) {
+      return response.status(409).json({ error: 'Only failed or canceled agent responses can be continued.' });
+    }
+    if (repository.getRunByMessage(prior.id)) return response.status(409).json({ error: 'Retry this response from its related task run.' });
+    if (repository.listAllSharedMessages(prior.conversationId).some((message) => message.status === 'running' || message.status === 'queued')) {
+      return response.status(409).json({ error: 'Wait for the active response to finish before continuing this one.' });
+    }
+    const executionProfile = prior.executionProfile === 'routing' ? null : prior.executionProfile;
+    const reply = repository.prepareSharedMessageRetry(prior.id);
+    if (!reply) return response.status(409).json({ error: 'This response is no longer retryable.' });
+    if (executionProfile !== prior.executionProfile) repository.updateSharedMessage(reply.id, { executionProfile });
+    void replyInSharedRoom(repository, prior.author, reply.id);
+    response.status(202).json({ reply });
   });
 
   app.post('/api/shared/messages/:id/interject', (request, response) => {
@@ -453,46 +561,48 @@ export function createApp(database: WorkbenchDatabase) {
     } catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : 'Could not start task extraction.' }); }
   });
 
-  // --- Structured memories (Phase 1) -----------------------------------------
-  app.get('/api/memories', (request, response) => {
-    const input = listMemoriesQuerySchema.parse(request.query);
-    response.json({ memories: repository.listMemoriesStructured(input) });
-  });
-
-  app.post('/api/memories', (request, response) => {
-    const input = createMemorySchema.parse(request.body);
-    response.status(201).json({ memory: repository.createMemory(input) });
-  });
-
-  // Declared before /api/memories/:id/:action-style routes so "supersede" is
-  // never mistaken for a dynamic :id segment.
-  app.post('/api/memories/:id/supersede', (request, response) => {
-    const input = supersedeMemorySchema.parse(request.body);
-    const memory = repository.supersedeMemory(request.params.id, input);
-    if (!memory) return response.status(404).json({ error: 'Memory not found.' });
-    response.status(201).json({ memory });
-  });
-
-  app.patch('/api/memories/:id', (request, response) => {
-    const input = updateMemorySchema.parse(request.body);
-    const memory = repository.updateMemory(request.params.id, input);
-    if (!memory) return response.status(404).json({ error: 'Memory not found.' });
-    response.json({ memory });
-  });
-
-  // Soft delete: sets status to 'rejected' and returns the row so the client
-  // doesn't need a refetch. Never 204 — the row still carries provenance.
-  app.delete('/api/memories/:id', (request, response) => {
-    const memory = repository.rejectMemory(request.params.id);
-    if (!memory) return response.status(404).json({ error: 'Memory not found.' });
-    response.json({ memory });
-  });
-
   app.get('/api/work-items', (request, response) => {
     const view = request.query.view === 'archive' ? 'archive' : request.query.view === 'workbench' ? 'workbench' : 'active';
     const limit = Number(request.query.limit ?? 50);
     if (!Number.isFinite(limit)) return response.status(400).json({ error: 'Invalid page limit.' });
-    response.json(repository.listPage(view, limit, typeof request.query.cursor === 'string' ? request.query.cursor : null, typeof request.query.query === 'string' ? request.query.query : ''));
+    if (request.query.filter !== undefined && request.query.query !== undefined) return response.status(400).json({ error: 'Use either filter or query, not both.' });
+    let filter;
+    try {
+      filter = request.query.filter === undefined
+        ? workItemFilterSchema.parse({ query: typeof request.query.query === 'string' ? request.query.query : '' })
+        : workItemFilterSchema.parse(JSON.parse(z.string().parse(request.query.filter)));
+    } catch { return response.status(400).json({ error: 'Invalid work-item filter.' }); }
+    try { response.json(repository.listPage(view, limit, typeof request.query.cursor === 'string' ? request.query.cursor : null, filter)); }
+    catch (error) { response.status(400).json({ error: error instanceof Error ? error.message : 'Invalid work-item cursor.' }); }
+  });
+
+  app.get('/api/work-item-filters', (request, response) => {
+    const view = request.query.view === undefined ? undefined : savedWorkItemFilterViewSchema.parse(request.query.view);
+    response.json({ filters: repository.listSavedFilters(view) });
+  });
+
+  app.post('/api/work-item-filters', (request, response) => {
+    try { response.status(201).json({ filter: repository.createSavedFilter(createSavedWorkItemFilterSchema.parse(request.body)) }); }
+    catch (error) {
+      if (error instanceof Error && error.message.includes('UNIQUE constraint failed')) return response.status(409).json({ error: 'A saved filter with this name already exists in this view.' });
+      throw error;
+    }
+  });
+
+  app.patch('/api/work-item-filters/:id', (request, response) => {
+    try {
+      const filter = repository.updateSavedFilter(request.params.id, updateSavedWorkItemFilterSchema.parse(request.body));
+      if (!filter) return response.status(404).json({ error: 'Saved filter not found.' });
+      response.json({ filter });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('UNIQUE constraint failed')) return response.status(409).json({ error: 'A saved filter with this name already exists in this view.' });
+      throw error;
+    }
+  });
+
+  app.delete('/api/work-item-filters/:id', (request, response) => {
+    if (!repository.deleteSavedFilter(request.params.id)) return response.status(404).json({ error: 'Saved filter not found.' });
+    response.status(204).end();
   });
 
   app.get('/api/work-item-counts', (_request, response) => {
@@ -528,10 +638,11 @@ export function createApp(database: WorkbenchDatabase) {
     } catch (error) { next(error); }
   });
 
-  app.post('/api/queue/plan', (_request, response, next) => {
+  app.post('/api/queue/plan', (request, response, next) => {
     try {
-      const proposal = repository.buildDailyProposal();
-      response.status(201).json({ proposal, items: repository.list() });
+      const stack = z.enum(['attention', 'workbench']).default('attention').parse(request.body?.stack ?? 'attention');
+      const proposal = repository.buildDailyProposal(Date.now(), stack);
+      response.status(201).json({ proposal, items: stack === 'workbench' ? repository.listWorkbench() : repository.list() });
     } catch (error) {
       next(error);
     }
@@ -563,28 +674,38 @@ export function createApp(database: WorkbenchDatabase) {
 
   app.post('/api/source-connections/:provider/mcp/oauth/start', async (request, response, next) => {
     try {
-      const provider = z.enum(['confluence', 'slack', 'gmail']).parse(request.params.provider);
-      const defaultUrl = provider === 'confluence' ? 'https://mcp.atlassian.com/v1/mcp/authv2' : null;
+      const provider = z.enum(['confluence', 'slack', 'figma', 'gmail']).parse(request.params.provider);
+      const defaultUrl = provider === 'confluence' ? 'https://mcp.atlassian.com/v1/mcp/authv2' : provider === 'slack' ? 'https://mcp.slack.com/mcp' : provider === 'figma' ? 'https://mcp.figma.com/mcp' : null;
       const serverUrl = z.string().url().parse(request.body?.serverUrl || defaultUrl);
-      const callbackBase = process.env.APP_API_ORIGIN ?? `http://localhost:${process.env.PORT ?? 4317}/api/source-connections`;
+      const callbackBase = process.env.APP_API_ORIGIN ?? `${request.protocol}://${request.get('host')}/api/source-connections`;
       response.json({ url: await startRemoteMcpOAuth(provider, serverUrl, callbackBase) });
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/source-connections/figma/managed/oauth/start', async (_request, response, next) => {
+    try {
+      const login = await startManagedMcpLogin('figma');
+      void login.completion.then(() => repository.setSourceConnection('figma', 'Figma MCP · Codex', { mode: 'managed' })).catch(() => undefined);
+      response.json({ url: login.url });
     } catch (error) { next(error); }
   });
 
   app.get('/api/source-connections/:provider/mcp/oauth/callback', async (request, response) => {
     try {
-      const provider = z.enum(['confluence', 'slack', 'gmail']).parse(request.params.provider);
+      const provider = z.enum(['confluence', 'slack', 'figma', 'gmail']).parse(request.params.provider);
       const code = z.string().min(1).parse(request.query.code);
       const state = z.string().min(1).parse(request.query.state);
       const settings = await finishRemoteMcpOAuth(provider, code, state);
-      repository.setSourceConnection(provider, 'Atlassian MCP', settings as unknown as Record<string, string>);
+      const label = provider === 'confluence' ? 'Atlassian MCP' : provider === 'figma' ? 'Figma MCP' : provider === 'slack' ? 'Slack MCP' : 'Google Workspace MCP';
+      repository.setSourceConnection(provider, label, settings as unknown as Record<string, string>);
       response.type('html').send(`<!doctype html><title>MCP connected</title><script>window.opener?.postMessage({type:'workbench:mcp-connected'},'*');window.close()</script><p>MCP connected. You can close this window.</p>`);
     } catch (error) { response.status(400).type('html').send(`<p>MCP connection failed: ${(error instanceof Error ? error.message : 'Unknown error').replace(/[<>&]/g, '')}</p>`); }
   });
 
   app.delete('/api/source-connections/:provider', (request, response) => {
     const provider = sourceProviderSchema.parse(request.params.provider);
-    repository.removeSourceConnection(provider);
+    if (!repository.removeSourceConnection(provider)) return response.status(404).json({ error: 'Source connection not found.' });
+    repository.addAuditEntry('destructive_action', 'workbench', `Removed source connection ${provider}`);
     response.status(204).end();
   });
 
@@ -592,7 +713,7 @@ export function createApp(database: WorkbenchDatabase) {
     const resolution = z.enum(['accepted', 'rejected']).parse(request.params.resolution);
     const proposal = repository.resolveProposal(request.params.id, resolution);
     if (!proposal) return response.status(404).json({ error: 'Pending proposal not found.' });
-    response.json({ proposal, items: repository.list() });
+    response.json({ proposal, items: proposal.stack === 'workbench' ? repository.listWorkbench() : repository.list() });
   });
 
   app.get('/api/work-items/:id', (request, response) => {
@@ -608,8 +729,17 @@ export function createApp(database: WorkbenchDatabase) {
       classification: repository.getClassification(item.id),
       conversations: repository.listConversationsForWorkItem(item.id),
       artifacts: repository.listArtifactsForWorkItem(item.id),
+      linkedTasks: repository.listLinkedTasks(item.id),
       references: repository.listReferences(item.id),
+      blocks: repository.listBlockedWork(item.id),
+      providerConflicts: repository.listProviderConflicts(item.id),
     });
+  });
+
+  app.get('/api/work-items/:id/dependency-candidates', (request, response) => {
+    if (!repository.get(request.params.id)) return response.status(404).json({ error: 'Work item not found.' });
+    const query = z.string().trim().max(500).catch('').parse(request.query.q);
+    response.json({ items: repository.searchDependencyCandidates(request.params.id, query) });
   });
 
   app.post('/api/work-items/:id/references', (request, response) => {
@@ -619,6 +749,20 @@ export function createApp(database: WorkbenchDatabase) {
     } catch (error) {
       response.status(404).json({ error: error instanceof Error ? error.message : 'Task not found.' });
     }
+  });
+
+  app.post('/api/work-items/:id/linked-tasks', (request, response) => {
+    try {
+      const linkedTask = repository.addTaskLink(request.params.id, createWorkItemLinkSchema.parse(request.body).linkedWorkItemId);
+      response.status(201).json({ item: linkedTask });
+    } catch (error) {
+      response.status(error instanceof ZodError ? 400 : 404).json({ error: error instanceof Error ? error.message : 'Could not link task.' });
+    }
+  });
+
+  app.delete('/api/work-items/:id/linked-tasks/:linkedTaskId', (request, response) => {
+    if (!repository.removeTaskLink(request.params.id, request.params.linkedTaskId)) return response.status(404).json({ error: 'Task link not found.' });
+    response.status(204).end();
   });
 
   app.delete('/api/work-items/:id/references/:referenceId', (request, response) => {
@@ -648,19 +792,14 @@ export function createApp(database: WorkbenchDatabase) {
     response.status(201).json({ item });
   });
 
+  app.post('/api/work-items/bulk', (request, response) => {
+    response.json(repository.bulkUpdate(bulkWorkItemActionSchema.parse(request.body)));
+  });
+
   app.post('/api/work-items/generate-draft', async (request, response, next) => {
     try {
       const input = generateTaskDraftSchema.parse(request.body);
-      const { output } = await runAgentCommandWithFallback('claude', process.cwd(), `Turn Jeffrey's rough task description into one independently executable Workbench task. Infer only what is strongly supported. Preserve every supplied link, constraint, expected outcome, and relevant detail. The description must give a future agent enough context to execute without asking what the task means. Include explicit verification when it is inferable. Do not invent acceptance criteria or claim facts not present in the input.\n\nShared working context:\n${repository.getSharedContext()}\n\nRough description:\n${input.prompt}\n\nReturn exactly: <task-draft>{"title":"concise action-oriented title","description":"self-contained task context and outcome","projectName":null,"workspacePath":null}</task-draft>`);
-      const match = output.match(/<task-draft>([\s\S]*?)<\/task-draft>/);
-      if (!match) throw new Error('AI did not return a valid task draft.');
-      const parsed = JSON.parse(match[1]) as Record<string, unknown>;
-      if (typeof parsed.title !== 'string' || typeof parsed.description !== 'string') throw new Error('AI returned an incomplete task draft.');
-      response.json({ draft: {
-        title: parsed.title, description: parsed.description,
-        projectName: typeof parsed.projectName === 'string' ? parsed.projectName : null,
-        workspacePath: typeof parsed.workspacePath === 'string' ? parsed.workspacePath : null,
-      } });
+      response.json({ draft: await generateFastAiTaskDraft(input.prompt) });
     } catch (error) { next(error); }
   });
 
@@ -683,31 +822,52 @@ export function createApp(database: WorkbenchDatabase) {
 
   app.patch('/api/work-items/:id', (request, response) => {
     const input = updateWorkItemSchema.parse(request.body);
-    const item = repository.update(request.params.id, input);
+    const existing = repository.get(request.params.id);
+    if (!existing) return response.status(404).json({ error: 'Work item not found.' });
+    let item;
+    try {
+      item = repository.update(request.params.id, input);
+    } catch (error) {
+      if (error instanceof WorkItemDependencyError) {
+        return response.status(409).json({ error: error.message, code: error.code });
+      }
+      throw error;
+    }
     if (!item) return response.status(404).json({ error: 'Work item not found.' });
+    const edits = summarizeWorkItemChanges(existing, item);
+    if (edits.length) repository.addActivity(item.id, 'jeffrey', 'edited', `${edits.join(' · ')}.`);
     response.json({ item });
   });
 
+  app.post('/api/work-items/:id/provider-conflicts/:field/resolve', (request, response) => {
+    const field = providerSyncFieldSchema.parse(request.params.field);
+    const { resolution } = providerSyncConflictResolutionSchema.parse(request.body);
+    const item = repository.resolveProviderConflict(request.params.id, field, resolution);
+    if (!item) return response.status(404).json({ error: 'Provider conflict not found.' });
+    response.json({ item, providerConflicts: repository.listProviderConflicts(item.id) });
+  });
+
   app.post('/api/work-items/:id/archive', (request, response) => {
-    const item = repository.archive(request.params.id, false);
+    const item = repository.archive(request.params.id, false, false, { actor: 'jeffrey' });
     if (!item) return response.status(404).json({ error: 'Work item not found.' });
     response.json({ item });
   });
 
   app.post('/api/work-items/:id/restore', (request, response) => {
-    const item = repository.restore(request.params.id);
+    const item = repository.restore(request.params.id, false, { actor: 'jeffrey' });
     if (!item) return response.status(404).json({ error: 'Work item not found.' });
     response.json({ item });
   });
 
   app.post('/api/work-items/:id/complete', (request, response) => {
-    const item = repository.archive(request.params.id, true);
+    const item = repository.archive(request.params.id, true, false, { actor: 'jeffrey' });
     if (!item) return response.status(404).json({ error: 'Work item not found.' });
     response.json({ item });
   });
 
   app.delete('/api/work-items/:id', (request, response) => {
     if (!repository.delete(request.params.id)) return response.status(404).json({ error: 'Work item not found.' });
+    repository.addAuditEntry('destructive_action', 'workbench', `Deleted work item ${request.params.id}`, request.params.id);
     response.status(204).end();
   });
 
@@ -722,6 +882,8 @@ export function createApp(database: WorkbenchDatabase) {
   app.post('/api/work-items/:id/runs', async (request, response) => {
     const item = repository.get(request.params.id);
     if (!item) return response.status(404).json({ error: 'Work item not found.' });
+    if (rejectSelfAssignedExecution(item, response)) return;
+    if (rejectOpenPrerequisites(repository, item.id, response)) return;
     // Reject a duplicate request (client retry, double click) rather than starting a
     // second concurrent agent run against the same task: two agents editing the same
     // workspace concurrently is a correctness hazard, not just wasted work.
@@ -731,9 +893,21 @@ export function createApp(database: WorkbenchDatabase) {
     repository.createSharedMessage('system', `Requested ${input.kind}: ${input.instructions || item.description}`, 'completed', conversation.id);
     const resolvedAgents = resolveAgents(input.kind, input.target);
     const agents = input.target === 'auto' ? [repository.selectBalancedAgent(resolvedAgents[0])] : resolvedAgents;
-    const runs = agents.map((agent) =>
-      repository.createRun(item.id, input.kind, input.target, agent, input.instructions, conversation.id, repository.createSharedMessage(agent, '', 'running', conversation.id).id),
-    );
+    const runs = agents.map((agent) => {
+      const reply = repository.createSharedMessage(agent, '', 'running', conversation.id);
+      const run = repository.createRun(item.id, input.kind, input.target, agent, input.instructions, conversation.id, reply.id);
+      if (!input.executionProfile) return run;
+      repository.updateRun(run.id, { executionProfile: input.executionProfile });
+      repository.updateSharedMessage(reply.id, { executionProfile: input.executionProfile });
+      return { ...run, executionProfile: input.executionProfile };
+    });
+    repository.addActivity(item.id, 'jeffrey', 'execution_started', describeExecutionRouting({
+      kind: input.kind,
+      agents,
+      reason: 'you asked for this run type',
+      agentSource: input.target === 'auto' ? 'balanced' : 'assigned',
+      requestedProfile: input.executionProfile,
+    }));
     const sourceContext = await contextForPrompt(repository, [item.title, item.description, item.sourceUrl, ...repository.listReferences(item.id).map((reference) => reference.url)].filter(Boolean).join('\n'));
     for (const run of runs) void executeAgentRun(repository, run, OWNER_ID, LEASE_MS, sourceContext);
     response.status(202).json({ runs });
@@ -745,18 +919,51 @@ export function createApp(database: WorkbenchDatabase) {
     response.json({ run });
   });
 
+  app.post('/api/agent-runs/:id/retry', async (request, response) => {
+    const prior = repository.getRun(request.params.id);
+    if (!prior) return response.status(404).json({ error: 'Agent run not found.' });
+    if (prior.status !== 'failed' && prior.status !== 'canceled') return response.status(409).json({ error: 'Only failed or canceled runs can be retried.' });
+    if (repository.activeRunsForItem(prior.workItemId).length) return response.status(409).json({ error: 'This task already has an active agent run.' });
+    const item = repository.get(prior.workItemId);
+    if (!item) return response.status(404).json({ error: 'Work item not found.' });
+    if (rejectSelfAssignedExecution(item, response)) return;
+    if (rejectOpenPrerequisites(repository, item.id, response)) return;
+    const conversation = prior.conversationId
+      ? repository.listConversations('all').find((entry) => entry.id === prior.conversationId) ?? repository.getOrCreateWorkConversation(item.id, item.title)
+      : repository.getOrCreateWorkConversation(item.id, item.title);
+    const run = repository.prepareRunRetry(prior.id);
+    if (!run) return response.status(409).json({ error: 'This run is no longer retryable.' });
+    repository.update(item.id, { status: 'in_progress' });
+    const activity = repository.addActivity(item.id, 'system', 'execution_retried', `Retrying ${prior.agent} ${prior.kind} after the prior attempt ${prior.status}.`);
+    const sourceContext = await contextForPrompt(repository, [item.title, item.description, item.sourceUrl, ...repository.listReferences(item.id).map((reference) => reference.url)].filter(Boolean).join('\n'));
+    void executeAgentRun(repository, run, OWNER_ID, LEASE_MS, sourceContext);
+    response.status(202).json({ run, conversation, activity });
+  });
+
   app.post('/api/work-items/:id/execute', async (request, response) => {
     const item = repository.get(request.params.id);
     if (!item) return response.status(404).json({ error: 'Work item not found.' });
     if (item.archivedAt || item.status === 'done' || item.status === 'canceled') return response.status(409).json({ error: 'Archived or completed tasks cannot be executed. Restore the task first.' });
+    if (rejectSelfAssignedExecution(item, response)) return;
+    if (rejectOpenPrerequisites(repository, item.id, response)) return;
     if (repository.activeRunsForItem(item.id).length) return response.status(409).json({ error: 'This task already has an active agent run.' });
+    if (repository.listRuns(item.id).length) return response.status(409).json({ error: 'This task has already been executed. Create a follow-up task for additional work.' });
     const { executionProfile } = z.object({ executionProfile: z.enum(['economy', 'standard', 'deep']).nullable().default(null) }).parse(request.body ?? {});
-    const classified = repository.getClassification(item.id) ?? repository.setClassification(item.id, await classifyExecutionRobust(item));
+    let classified = repository.getClassification(item.id);
+    let classificationReason = classified?.source === 'manual'
+      ? 'you picked this task type by hand'
+      : 'reused the classification from the first routing pass';
+    if (!classified) {
+      const fresh = await classifyExecutionRobust(item);
+      classificationReason = fresh.reason;
+      classified = repository.setClassification(item.id, fresh);
+    }
     const explicitlyAssigned = repository.getExplicitAgentAssignees(item.id);
     const agents = explicitlyAssigned.length ? explicitlyAssigned : [repository.selectBalancedAgent(classified.agent)];
     const classification = { ...classified, agent: agents[0] };
     if (!explicitlyAssigned.length) repository.updateAutomaticAgentAssignees(item.id, agents);
-    const conversation = repository.getOrCreateWorkConversation(item.id, item.title);
+    let conversation = repository.getOrCreateWorkConversation(item.id, item.title);
+    conversation = repository.setConversationExecutionProfile(conversation.id, executionProfile) ?? conversation;
     repository.createSharedMessage('system', `Execute: ${item.title}`, 'completed', conversation.id);
     const runs = agents.map((agent) => {
       const reply = repository.createSharedMessage(agent, '', 'running', conversation.id);
@@ -770,7 +977,13 @@ export function createApp(database: WorkbenchDatabase) {
       item.id,
       'system',
       'execution_started',
-      `Started ${classification.kind} execution with ${agents.join(' + ')}.`,
+      describeExecutionRouting({
+        kind: classification.kind,
+        agents,
+        reason: classificationReason,
+        agentSource: explicitlyAssigned.length ? 'assigned' : 'balanced',
+        requestedProfile: executionProfile,
+      }),
     );
     const sourceContext = await contextForPrompt(repository, [item.title, item.description, item.sourceUrl, ...repository.listReferences(item.id).map((reference) => reference.url)].filter(Boolean).join('\n'));
     for (const run of runs) void executeAgentRun(repository, run, OWNER_ID, LEASE_MS, sourceContext);
@@ -779,8 +992,11 @@ export function createApp(database: WorkbenchDatabase) {
 
   app.post('/api/execution-plans/:id/:resolution', (request, response) => {
     const resolution = z.enum(['accepted', 'rejected']).parse(request.params.resolution);
-    const { selectedTaskIndexes } = z.object({ selectedTaskIndexes: z.array(z.number().int().nonnegative()).optional() }).parse(request.body ?? {});
-    const plan = repository.resolveExecutionPlan(request.params.id, resolution, selectedTaskIndexes);
+    const { selectedTaskIndexes, archiveParent } = z.object({
+      selectedTaskIndexes: z.array(z.number().int().nonnegative()).optional(),
+      archiveParent: z.boolean().default(false),
+    }).parse(request.body ?? {});
+    const plan = repository.resolveExecutionPlan(request.params.id, resolution, selectedTaskIndexes, archiveParent);
     if (!plan) return response.status(404).json({ error: 'Pending execution plan not found.' });
     if (resolution === 'accepted') {
       // Accepting a decomposition supersedes all execution still aimed at the
@@ -793,7 +1009,7 @@ export function createApp(database: WorkbenchDatabase) {
         }
       }
     }
-    response.json({ plan, items: repository.list() });
+    response.json({ plan, items: repository.list(), parentArchived: resolution === 'accepted' && archiveParent });
   });
 
   app.post('/api/providers/linear/sync', async (_request, response, next) => {
@@ -804,8 +1020,10 @@ export function createApp(database: WorkbenchDatabase) {
         repository.getLinearConfig().projectIds,
       );
       const issues = await provider.fetchOpenIssues();
-      const counts = { imported: 0, updated: 0, skipped: 0 };
+      const counts = { imported: 0, updated: 0, skipped: 0, conflicts: 0 };
+      const conflictsBefore = repository.countProviderConflicts();
       for (const issue of issues) counts[repository.upsertLinearItem(issue)] += 1;
+      counts.conflicts = repository.countProviderConflicts() - conflictsBefore;
       response.json({ ...counts, syncedAt: new Date().toISOString() });
     } catch (error) {
       next(error);
@@ -870,6 +1088,10 @@ export function createApp(database: WorkbenchDatabase) {
     void _next;
     if (error instanceof ZodError) {
       response.status(400).json({ error: 'Invalid request.', details: error.issues });
+      return;
+    }
+    if (typeof error === 'object' && error !== null && ('type' in error && error.type === 'entity.too.large' || 'status' in error && error.status === 413)) {
+      response.status(413).json({ error: 'Attachments are too large. Each file can be up to 10 MB, with at most 10 files per message.' });
       return;
     }
     console.error(error);

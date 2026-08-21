@@ -17,7 +17,6 @@ import type {
   SharedConversation,
   SharedSearchResponse,
   ConversationPage,
-  Memory,
   WorkItem,
   WorkItemDetail,
   WorkItemPage,
@@ -28,9 +27,17 @@ import type {
   DiscoveryInbox,
   WorkItemReference,
   WorkItemReferenceType,
+  RunInsights,
+  BulkWorkItemAction,
+  BulkWorkItemResult,
+  SavedWorkItemFilter,
+  SavedWorkItemFilterView,
+  WorkItemFilter,
+  UpdateWorkItemInput,
+  ProviderSyncField,
+  ProviderSyncConflictResolution,
 } from '../shared/contracts';
 import type { z } from 'zod';
-import type { createMemorySchema, updateMemorySchema, supersedeMemorySchema } from '../shared/contracts';
 
 /** Mirrors the server's QueuePlan (queue-intelligence.ts), which is not part of the shared contract. */
 export interface QueuePlan {
@@ -52,6 +59,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   getDiscoveryInbox: (view: 'pending' | 'reviewed' = 'pending') => request<DiscoveryInbox>(`/api/discovery?view=${view}`),
+  getInsights: (days: 7 | 30 = 30) => request<RunInsights>(`/api/insights?days=${days}`),
   scanDiscovery: () => request<{ started: boolean }>('/api/discovery/scan', { method: 'POST' }),
   resolveDiscovery: (id: string, action: 'convert' | 'dismiss' | 'snooze' | 'merge', workItemId?: string) =>
     request(`/api/discovery/${id}/${action}`, { method: 'POST', body: JSON.stringify({ workItemId }) }),
@@ -71,13 +79,21 @@ export const api = {
     request<{ comment: ArtifactComment }>(`/api/artifacts/${id}/comments`, { method: 'POST', body: JSON.stringify(input) }),
   resolveArtifactComment: (id: string, commentId: string, resolved: boolean) =>
     request<{ comment: ArtifactComment }>(`/api/artifacts/${id}/comments/${commentId}`, { method: 'PATCH', body: JSON.stringify({ resolved }) }),
-  listWorkItems: (view: 'active' | 'workbench' | 'archive', query: string, cursor?: string) => {
+  listWorkItems: (view: 'active' | 'workbench' | 'archive', query: string, cursor?: string, filter?: WorkItemFilter) => {
     const params = new URLSearchParams({ view, limit: '50' });
-    if (query) params.set('query', query);
+    if (filter) params.set('filter', JSON.stringify(filter));
+    else if (query) params.set('query', query);
     if (cursor) params.set('cursor', cursor);
     return request<WorkItemPage>(`/api/work-items?${params}`);
   },
+  listSavedWorkItemFilters: (view?: SavedWorkItemFilterView) => request<{ filters: SavedWorkItemFilter[] }>(`/api/work-item-filters${view ? `?view=${view}` : ''}`),
+  createSavedWorkItemFilter: (input: { name: string; view: SavedWorkItemFilterView; filter: WorkItemFilter }) => request<{ filter: SavedWorkItemFilter }>('/api/work-item-filters', { method: 'POST', body: JSON.stringify(input) }),
+  updateSavedWorkItemFilter: (id: string, input: Partial<Pick<SavedWorkItemFilter, 'name' | 'filter' | 'sortOrder'>>) => request<{ filter: SavedWorkItemFilter }>(`/api/work-item-filters/${id}`, { method: 'PATCH', body: JSON.stringify(input) }),
+  deleteSavedWorkItemFilter: (id: string) => request<void>(`/api/work-item-filters/${id}`, { method: 'DELETE' }),
+  bulkUpdateWorkItems: (input: BulkWorkItemAction) => request<BulkWorkItemResult>('/api/work-items/bulk', { method: 'POST', body: JSON.stringify(input) }),
   getWorkItem: (id: string) => request<WorkItemDetail>(`/api/work-items/${id}`),
+  listDependencyCandidates: (id: string, query = '') =>
+    request<{ items: WorkItem[] }>(`/api/work-items/${id}/dependency-candidates?q=${encodeURIComponent(query)}`),
   classifyWorkItem: (id: string, kind: AgentRun['kind']) => request<{ classification: WorkItemDetail['classification'] }>(`/api/work-items/${id}/classify`, { method: 'POST', body: JSON.stringify({ kind }) }),
   createWorkItem: (input: {
     title: string;
@@ -89,6 +105,10 @@ export const api = {
     workspacePath?: string | null;
   }) => request<{ item: WorkItem }>('/api/work-items', { method: 'POST', body: JSON.stringify(input) }),
   createFollowUp: (id: string, title: string, description: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/follow-ups`, { method: 'POST', body: JSON.stringify({ title, description }) }),
+  addTaskLink: (id: string, linkedWorkItemId: string) =>
+    request<{ item: WorkItem }>(`/api/work-items/${id}/linked-tasks`, { method: 'POST', body: JSON.stringify({ linkedWorkItemId }) }),
+  removeTaskLink: (id: string, linkedWorkItemId: string) =>
+    request<void>(`/api/work-items/${id}/linked-tasks/${linkedWorkItemId}`, { method: 'DELETE' }),
   addWorkItemReference: (id: string, input: { type: WorkItemReferenceType; url: string; title?: string }) =>
     request<{ reference: WorkItemReference }>(`/api/work-items/${id}/references`, { method: 'POST', body: JSON.stringify(input) }),
   removeWorkItemReference: (id: string, referenceId: string) =>
@@ -96,8 +116,10 @@ export const api = {
   generateTaskDraft: (prompt: string) => request<{ draft: GeneratedTaskDraft }>('/api/work-items/generate-draft', { method: 'POST', body: JSON.stringify({ prompt }) }),
   resolveSourceUrl: (url: string) => request<{ draft: ResolvedSourceDraft }>('/api/sources/resolve', { method: 'POST', body: JSON.stringify({ url }) }),
   searchSources: (query: string, sources: BrokerSourceId[], signal?: AbortSignal) => request<BrokerSearchResponse>('/api/sources/search', { method: 'POST', body: JSON.stringify({ query, sources }), signal }),
-  updateWorkItem: (id: string, input: Partial<WorkItem>) =>
+  updateWorkItem: (id: string, input: UpdateWorkItemInput) =>
     request<{ item: WorkItem }>(`/api/work-items/${id}`, { method: 'PATCH', body: JSON.stringify(input) }),
+  resolveProviderConflict: (id: string, field: ProviderSyncField, resolution: ProviderSyncConflictResolution) =>
+    request<{ item: WorkItem; providerConflicts: WorkItemDetail['providerConflicts'] }>(`/api/work-items/${id}/provider-conflicts/${field}/resolve`, { method: 'POST', body: JSON.stringify({ resolution }) }),
   archiveWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/archive`, { method: 'POST' }),
   restoreWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/restore`, { method: 'POST' }),
   completeWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/complete`, { method: 'POST' }),
@@ -113,15 +135,17 @@ export const api = {
       body: JSON.stringify({ kind: input.kind, target: input.requestedTarget, instructions: input.instructions }),
     }),
   cancelAgentRun: (id: string) => request<{ run: AgentRun }>(`/api/agent-runs/${id}/cancel`, { method: 'POST' }),
+  retryAgentRun: (id: string) => request<{ run: AgentRun; conversation: SharedConversation; activity: Activity }>(`/api/agent-runs/${id}/retry`, { method: 'POST' }),
+  retrySharedMessage: (id: string) => request<{ reply: SharedMessage }>(`/api/shared/messages/${id}/retry`, { method: 'POST' }),
   executeWorkItem: (id: string, executionProfile: AgentRun['executionProfile']) =>
     request<{ run: AgentRun; runs: AgentRun[]; classification: WorkItemDetail['classification']; conversation: SharedConversation; activity: Activity }>(`/api/work-items/${id}/execute`, { method: 'POST', body: JSON.stringify({ executionProfile }) }),
-  resolveExecutionPlan: (id: string, resolution: 'accepted' | 'rejected', selectedTaskIndexes?: number[]) =>
-    request(`/api/execution-plans/${id}/${resolution}`, { method: 'POST', body: JSON.stringify({ selectedTaskIndexes }) }),
+  resolveExecutionPlan: (id: string, resolution: 'accepted' | 'rejected', selectedTaskIndexes?: number[], archiveParent = false) =>
+    request<{ plan: ExecutionPlan; items: WorkItem[]; parentArchived: boolean }>(`/api/execution-plans/${id}/${resolution}`, { method: 'POST', body: JSON.stringify({ selectedTaskIndexes, archiveParent }) }),
   reorderQueue: (input: { itemId: string; beforeId?: string; afterId?: string }) =>
     request<{ items: WorkItem[] }>('/api/queue/order', { method: 'PUT', body: JSON.stringify(input) }),
   resolveQueueProposal: (id: string, resolution: 'accepted' | 'rejected') =>
     request<{ proposal: QueueProposal; items: WorkItem[] }>(`/api/queue/proposals/${id}/${resolution}`, { method: 'POST' }),
-  planQueue: () => request<{ proposal: QueueProposal; items: WorkItem[] }>('/api/queue/plan', { method: 'POST' }),
+  planQueue: (stack: 'attention' | 'workbench' = 'attention') => request<{ proposal: QueueProposal; items: WorkItem[] }>('/api/queue/plan', { method: 'POST', body: JSON.stringify({ stack }) }),
   explainQueue: () =>
     request<{ plan: QueuePlan; history: QueueOrderChange[] }>('/api/queue/explain'),
   undoQueue: (stack: 'attention' | 'workbench' = 'attention') =>
@@ -141,14 +165,17 @@ export const api = {
       body: JSON.stringify(config),
     }),
   listSourceConnections: () => request<{ connections: BrokerConnection[] }>('/api/source-connections'),
-  startMcpOAuth: (provider: 'confluence' | 'slack' | 'gmail', serverUrl?: string) => request<{ url: string }>(`/api/source-connections/${provider}/mcp/oauth/start`, { method: 'POST', body: JSON.stringify({ serverUrl }) }),
-  disconnectSource: (provider: 'confluence' | 'slack' | 'gmail' | 'github') => request<void>(`/api/source-connections/${provider}`, { method: 'DELETE' }),
+  startMcpOAuth: (provider: 'confluence' | 'slack' | 'figma' | 'gmail', serverUrl?: string) => request<{ url: string }>(`/api/source-connections/${provider}/mcp/oauth/start`, { method: 'POST', body: JSON.stringify({ serverUrl }) }),
+  startManagedFigmaOAuth: () => request<{ url: string }>('/api/source-connections/figma/managed/oauth/start', { method: 'POST' }),
+  disconnectSource: (provider: 'confluence' | 'slack' | 'figma' | 'gmail' | 'github') => request<void>(`/api/source-connections/${provider}`, { method: 'DELETE' }),
   listSharedConversations: (view: 'active' | 'archive', cursor?: string) => {
     const params = new URLSearchParams({ limit: '30', view });
     if (cursor) params.set('cursor', cursor);
     return request<ConversationPage>(`/api/shared/conversations?${params}`);
   },
+  getUnreadConversationCount: () => request<{ count: number }>('/api/shared/conversations-unread-count'),
   getWorkItemCounts: () => request<{ active: number; workbench: number; archive: number }>('/api/work-item-counts'),
+  getRuntimePreviewStatus: () => request<{ pending: boolean; currentFingerprint: string; promotedFingerprint: string | null; promotedAt: string | null }>('/api/runtime/preview-status'),
   searchShared: (query: string, limit?: number) => {
     const params = new URLSearchParams({ q: query });
     if (limit) params.set('limit', String(limit));
@@ -157,34 +184,16 @@ export const api = {
   createSharedConversation: (title = 'New conversation') => request<{ conversation: SharedConversation }>('/api/shared/conversations', { method: 'POST', body: JSON.stringify({ title }) }),
   archiveSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/archive`, { method: 'POST' }),
   restoreSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/restore`, { method: 'POST' }),
+  updateSharedConversationPreferences: (id: string, executionProfile: AgentRun['executionProfile']) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/preferences`, { method: 'PATCH', body: JSON.stringify({ executionProfile }) }),
+  markSharedConversationRead: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/read`, { method: 'POST' }),
   forkSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/fork`, { method: 'POST' }),
   deleteSharedConversation: (id: string) => request<void>(`/api/shared/conversations/${id}`, { method: 'DELETE' }),
-  listSharedMessages: (conversationId?: string) => request<{ messages: SharedMessage[] }>(conversationId ? `/api/shared/messages?conversationId=${encodeURIComponent(conversationId)}` : '/api/shared/messages'),
+  listSharedMessages: (conversationId?: string) => request<{ messages: SharedMessage[] }>(conversationId ? `/api/shared/messages?conversationId=${encodeURIComponent(conversationId)}&limit=200` : '/api/shared/messages?limit=200'),
   createSharedMessage: (conversationId: string, body: string, dispatchTo: 'auto' | 'both' | 'codex' | 'claude' | 'none', attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }>, executionProfile: AgentRun['executionProfile'] = null) =>
     request<{ message: SharedMessage; replies: SharedMessage[] }>('/api/shared/messages', {
       method: 'POST', body: JSON.stringify({ conversationId, body, dispatchTo, attachments, executionProfile }),
     }),
-  updateSharedMessage: (id: string, pinned: boolean) =>
-    request<{ message: SharedMessage }>(`/api/shared/messages/${id}`, {
-      method: 'PATCH', body: JSON.stringify({ pinned }),
-    }),
   cancelSharedReply: (id: string) => request<{ message: SharedMessage }>(`/api/shared/messages/${id}/cancel`, { method: 'POST' }),
   interjectSharedMessage: (id: string) => request<{ replies: SharedMessage[] }>(`/api/shared/messages/${id}/interject`, { method: 'POST' }),
   createTasksFromReport: (id: string) => request<{ plan?: ExecutionPlan; jobMessage?: SharedMessage }>(`/api/shared/messages/${id}/create-tasks`, { method: 'POST' }),
-  listMemories: (filter?: { scope?: Memory['scope']; projectName?: string; status?: Memory['status']; kind?: Memory['kind'] }) => {
-    const params = new URLSearchParams();
-    if (filter?.scope) params.set('scope', filter.scope);
-    if (filter?.projectName) params.set('projectName', filter.projectName);
-    if (filter?.status) params.set('status', filter.status);
-    if (filter?.kind) params.set('kind', filter.kind);
-    const query = params.toString();
-    return request<{ memories: Memory[] }>(`/api/memories${query ? `?${query}` : ''}`);
-  },
-  createMemory: (input: z.input<typeof createMemorySchema>) =>
-    request<{ memory: Memory }>('/api/memories', { method: 'POST', body: JSON.stringify(input) }),
-  updateMemory: (id: string, changes: z.input<typeof updateMemorySchema>) =>
-    request<{ memory: Memory }>(`/api/memories/${id}`, { method: 'PATCH', body: JSON.stringify(changes) }),
-  supersedeMemory: (id: string, replacement: z.input<typeof supersedeMemorySchema>) =>
-    request<{ memory: Memory }>(`/api/memories/${id}/supersede`, { method: 'POST', body: JSON.stringify(replacement) }),
-  rejectMemory: (id: string) => request<{ memory: Memory }>(`/api/memories/${id}`, { method: 'DELETE' }),
 };

@@ -1,5 +1,6 @@
 import type { LinearTeam, WorkItemStatus } from '../../shared/contracts.js';
 import type { ProviderWorkItem } from '../repository.js';
+import { recordAudit } from '../audit-log.js';
 
 interface LinearIssue {
   id: string;
@@ -151,6 +152,8 @@ export class LinearProvider {
 
   private async request<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
     if (!this.apiKey) throw new Error('LINEAR_API_KEY is not configured.');
+    const operation = query.match(/(?:query|mutation)\s+(\w+)/)?.[1] ?? 'graphql';
+    recordAudit('outbound_call', 'linear', `POST https://api.linear.app/graphql (${operation})`);
     const response = await fetch('https://api.linear.app/graphql', {
       method: 'POST',
       headers: { Authorization: this.apiKey, 'Content-Type': 'application/json' },

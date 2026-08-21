@@ -9,9 +9,67 @@ export const workItemStatusSchema = z.enum([
   'canceled',
 ]);
 
+/** States a user can set while work is active. Completion is a lifecycle action. */
+export const activeWorkItemStatusSchema = z.enum(['backlog', 'ready', 'in_progress', 'blocked']);
+
+/** A real calendar date, intentionally independent of an instant or timezone. */
+export const calendarDateSchema = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD.')
+  .refine((value) => {
+    const [year, month, day] = value.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+  }, 'Use a real calendar date.');
+
 export const assigneeSchema = z.enum(['jeffrey', 'codex', 'claude']);
 export const sourceSchema = z.enum(['manual', 'linear']);
 
+/**
+ * Assigning Jeffrey to a task is exclusive: it means he is doing the work himself.
+ * While he owns a task no agent can be assigned alongside him and no agent run can
+ * be dispatched against it, so agents never spend a run on work he has claimed.
+ */
+export const isAgentAssignee = (assignee: Assignee): assignee is AgentAssignee => assignee !== 'jeffrey';
+export const isSelfAssigned = (assignees: readonly Assignee[]): boolean => assignees.includes('jeffrey');
+export const SELF_ASSIGNED_OWNER_MESSAGE = 'Jeffrey owns this task. Unassign him before assigning Codex or Claude.';
+export const SELF_ASSIGNED_EXECUTION_MESSAGE = 'Jeffrey owns this task, so an agent cannot execute it. Unassign him first.';
+
+/**
+ * Assignment lists carry the exclusivity rule. Filter inputs deliberately keep the
+ * plain array schema: filtering for "mine and Codex's" is a legitimate query.
+ */
+export const assigneeSelectionSchema = z.array(assigneeSchema).max(3)
+  .refine((assignees) => !(isSelfAssigned(assignees) && assignees.some(isAgentAssignee)), SELF_ASSIGNED_OWNER_MESSAGE);
+
+export interface WorkItemLineage {
+  parentTitle: string | null;
+  followUpCount: number;
+  openFollowUpCount: number;
+}
+
+/**
+ * Which stack a task belongs to. This is locally owned and explicit: it is never
+ * derived from `projectName`, so renaming or bulk-reassigning a project can no
+ * longer silently move tasks between stacks.
+ */
+export const workItemStackSchema = z.enum(['attention', 'workbench']);
+export type WorkItemStack = z.infer<typeof workItemStackSchema>;
+
+export const workItemDependencySchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: workItemStatusSchema,
+  archivedAt: z.string().nullable(),
+  completedAt: z.string().nullable(),
+  isOpen: z.boolean(),
+});
+export type WorkItemDependency = z.infer<typeof workItemDependencySchema>;
+
+/**
+ * How a human closed out an agent result. `left_open` is a real decision: it
+ * clears the task from the review inbox without changing its status, for work
+ * that is still in flight but no longer needs a look.
+ */
 export const workItemSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -32,6 +90,7 @@ export const workItemSchema = z.object({
   sourceUrl: z.string().nullable(),
   sourceTags: z.array(z.string()),
   projectName: z.string().nullable(),
+  stack: workItemStackSchema,
   workspacePath: z.string().nullable(),
   strategy: z.string(),
   assignees: z.array(assigneeSchema),
@@ -41,11 +100,82 @@ export const workItemSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   lastTouchedAt: z.string(),
+  // Optional while older promoted runtimes can still return the pre-dependency
+  // contract. New repository reads always populate it.
+  blockedBy: z.array(workItemDependencySchema).optional(),
+  lineage: z.object({
+    parentTitle: z.string().nullable(),
+    followUpCount: z.number().int().nonnegative(),
+    openFollowUpCount: z.number().int().nonnegative(),
+  }).optional(),
 });
 
 export type WorkItem = z.infer<typeof workItemSchema>;
 export type WorkItemStatus = z.infer<typeof workItemStatusSchema>;
 export type Assignee = z.infer<typeof assigneeSchema>;
+export type AgentAssignee = Exclude<Assignee, 'jeffrey'>;
+
+export const providerSyncFieldSchema = z.enum(['title', 'description', 'status', 'projectName', 'labels', 'dueDate']);
+export type ProviderSyncField = z.infer<typeof providerSyncFieldSchema>;
+export interface ProviderSyncConflict {
+  field: ProviderSyncField;
+  localValue: string | string[] | null;
+  providerValue: string | string[] | null;
+  providerBaseline: string | string[] | null;
+  conflictedAt: string;
+}
+
+export const providerSyncConflictResolutionSchema = z.object({
+  resolution: z.enum(['keep_local', 'use_provider']),
+}).strict();
+export type ProviderSyncConflictResolution = z.infer<typeof providerSyncConflictResolutionSchema>['resolution'];
+
+export const workItemFilterSchema = z.object({
+  projectNames: z.array(z.string().trim().min(1).max(200)).max(50).default([]),
+  statuses: z.array(workItemStatusSchema).max(20).default([]),
+  assignees: z.array(assigneeSchema).max(3).default([]),
+  sources: z.array(sourceSchema).max(2).default([]),
+  labels: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
+  dueStates: z.array(z.enum(['overdue', 'due_today', 'due_later', 'unscheduled'])).max(4).default([]),
+  query: z.string().trim().max(2_000).default(''),
+}).strict();
+export type WorkItemFilter = z.infer<typeof workItemFilterSchema>;
+
+export const savedWorkItemFilterViewSchema = z.enum(['active', 'workbench', 'archive']);
+export type SavedWorkItemFilterView = z.infer<typeof savedWorkItemFilterViewSchema>;
+export const savedWorkItemFilterSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  view: savedWorkItemFilterViewSchema,
+  filter: workItemFilterSchema,
+  sortOrder: z.number().int(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type SavedWorkItemFilter = z.infer<typeof savedWorkItemFilterSchema>;
+export const createSavedWorkItemFilterSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  view: savedWorkItemFilterViewSchema,
+  filter: workItemFilterSchema,
+}).strict();
+export const updateSavedWorkItemFilterSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  filter: workItemFilterSchema.optional(),
+  sortOrder: z.number().int().min(0).optional(),
+}).strict().refine((value) => Object.keys(value).length > 0, 'Provide at least one field.');
+
+const bulkWorkItemIdsSchema = z.array(z.string().uuid()).min(1).max(200);
+export const bulkWorkItemActionSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('set_status'), ids: bulkWorkItemIdsSchema, status: activeWorkItemStatusSchema }).strict(),
+  z.object({ action: z.literal('archive'), ids: bulkWorkItemIdsSchema }).strict(),
+  z.object({ action: z.literal('restore'), ids: bulkWorkItemIdsSchema }).strict(),
+  z.object({ action: z.literal('set_assignees'), ids: bulkWorkItemIdsSchema, assignees: assigneeSelectionSchema }).strict(),
+  z.object({ action: z.literal('set_project'), ids: bulkWorkItemIdsSchema, projectName: z.string().trim().min(1).max(200).nullable() }).strict(),
+  z.object({ action: z.literal('set_stack'), ids: bulkWorkItemIdsSchema, stack: workItemStackSchema }).strict(),
+]);
+export type BulkWorkItemAction = z.infer<typeof bulkWorkItemActionSchema>;
+export type BulkWorkItemConflict = { id: string; reason: 'not_found' | 'active_run' | 'provider_owned' | 'invalid_state' };
+export interface BulkWorkItemResult { appliedIds: string[]; conflicts: BulkWorkItemConflict[]; }
 
 export interface WorkItemPage {
   items: WorkItem[];
@@ -83,10 +213,13 @@ export const createWorkItemSchema = z.object({
   title: z.string().trim().min(1).max(300),
   description: z.string().max(20_000).default(''),
   priority: z.number().int().min(0).max(4).default(2),
-  status: workItemStatusSchema.default('backlog'),
+  status: activeWorkItemStatusSchema.default('backlog'),
   projectName: z.string().trim().max(200).nullable().default(null),
+  // Omitted means "infer from projectName once, at creation time". The stored
+  // value is authoritative from then on.
+  stack: workItemStackSchema.optional(),
   workspacePath: z.string().trim().max(1_000).nullable().default(null),
-  dueDate: z.string().nullable().default(null),
+  dueDate: calendarDateSchema.nullable().default(null),
   sourceUrl: z.string().url().nullable().default(null),
 });
 
@@ -96,7 +229,7 @@ export interface GeneratedTaskDraft { title: string; description: string; projec
 export const resolveSourceUrlSchema = z.object({ url: z.string().url().max(4_000) });
 export interface ResolvedSourceDraft { source: string; sourceUrl: string; title: string; description: string; }
 
-export const sourceProviderSchema = z.enum(['github', 'slack', 'confluence', 'gmail']);
+export const sourceProviderSchema = z.enum(['github', 'slack', 'figma', 'confluence', 'gmail']);
 export type SourceProvider = z.infer<typeof sourceProviderSchema>;
 export type SourceAuthMode = 'oauth' | 'api_key' | 'managed_externally';
 export type SourceConfigurationState = 'unconfigured' | 'authorizing' | 'connected' | 'reauth_required' | 'disabled';
@@ -181,14 +314,18 @@ export const updateWorkItemSchema = z.object({
   title: z.string().trim().min(1).max(300).optional(),
   description: z.string().max(20_000).optional(),
   priority: z.number().int().min(0).max(4).optional(),
-  status: workItemStatusSchema.optional(),
+  status: activeWorkItemStatusSchema.optional(),
   projectName: z.string().trim().max(200).nullable().optional(),
+  stack: workItemStackSchema.optional(),
   workspacePath: z.string().trim().max(1_000).nullable().optional(),
-  dueDate: z.string().nullable().optional(),
+  dueDate: calendarDateSchema.nullable().optional(),
+  labels: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
   strategy: z.string().max(50_000).optional(),
-  assignees: z.array(assigneeSchema).optional(),
+  assignees: assigneeSelectionSchema.optional(),
   queuePosition: z.number().optional(),
+  blockedByIds: z.array(z.string().uuid()).max(200).optional(),
 });
+export type UpdateWorkItemInput = z.infer<typeof updateWorkItemSchema>;
 
 export const activitySchema = z.object({
   id: z.string(),
@@ -225,6 +362,10 @@ export const createWorkItemReferenceSchema = z.object({
   title: z.string().trim().max(300).default(''),
 });
 
+export const createWorkItemLinkSchema = z.object({
+  linkedWorkItemId: z.string().uuid(),
+});
+
 export interface WorkItemDetail {
   item: WorkItem;
   parentItem: WorkItem | null;
@@ -235,9 +376,22 @@ export interface WorkItemDetail {
   classification: TaskClassification | null;
   conversations: SharedConversation[];
   artifacts: ArtifactSummary[];
+  linkedTasks: WorkItem[];
   references: WorkItemReference[];
+  blocks?: WorkItemDependency[];
+  providerConflicts: ProviderSyncConflict[];
 }
 
+/**
+ * One task waiting on a human verdict, paired with just enough of the agent's
+ * result to decide without opening the task: the last finished run's summary,
+ * and the size of any decomposition it is proposing.
+ */
+
+/**
+ * A review verdict. `follow_up` needs the follow-up task's copy; `rerun` may
+ * carry extra instructions telling the agent what the first attempt missed.
+ */
 export interface TaskClassification {
   kind: AgentRun['kind'];
   agent: AgentRun['agent'];
@@ -308,6 +462,7 @@ export interface LinearSyncResult {
   imported: number;
   updated: number;
   skipped: number;
+  conflicts: number;
   syncedAt: string;
 }
 
@@ -359,6 +514,7 @@ export interface QueueItemExplanation {
 
 export interface QueueProposal {
   id: string;
+  stack: 'attention' | 'workbench';
   status: 'pending' | 'accepted' | 'rejected' | 'superseded';
   previousOrder: string[];
   proposedOrder: string[];
@@ -501,8 +657,7 @@ export const updateArtifactSchema = z.object({
 });
 
 export const artifactLibraryViewSchema = z.enum(['published', 'revoked', 'all']).catch('published');
-export interface SharedConversation { id: string; title: string; workItemId: string | null; forkedFromConversationId: string | null; archivedAt: string | null; createdAt: string; updatedAt: string; isActive?: boolean; }
-export interface SharedMemory { id: string; kind: 'assistant_codex' | 'assistant_claude' | 'task_archive' | 'conversation_archive'; body: string; createdAt: string; }
+export interface SharedConversation { id: string; title: string; workItemId: string | null; forkedFromConversationId: string | null; archivedAt: string | null; preferredExecutionProfile?: AgentRun['executionProfile']; state?: 'working' | 'needs_attention' | 'waiting_approval' | 'finished' | null; isUnread?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
 
 export const createSharedMessageSchema = z.object({
   conversationId: z.string().uuid(),
@@ -523,71 +678,117 @@ export const updateSharedMessageSchema = z.object({
   pinned: z.boolean(),
 });
 
-// --- Structured memory (Phase 1) --------------------------------------------
+// --- Diagnostics and insights -----------------------------------------------
 //
-// A memory is a small, provenanced fact/decision/preference/constraint/convention
-// that should keep showing up in agent prompts until it's edited away. Distinct
-// from the older free-text `shared_memories` archive: memories are structured,
-// scoped (global/project/workspace/reference), and status-tracked so a bad one
-// can be superseded or rejected without deleting history.
+// Structured logging for scheduler, agent, and system events. Events flow into
+// the diagnostics table, which self-prunes and feeds the insights dashboard.
 
-export const memoryKindSchema = z.enum(['constraint', 'preference', 'decision', 'convention', 'fact']);
-export const memoryScopeSchema = z.enum(['global', 'project', 'workspace', 'reference']);
-export const memoryStatusSchema = z.enum(['proposed', 'active', 'superseded', 'rejected']);
+export const diagnosticEventSchema = z.enum(['scheduler_tick', 'scheduler_error', 'retention_cleanup', 'message_prune', 'run_compact', 'run_recovery', 'agent_failure', 'lease_expired']);
 
-export interface Memory {
+export interface DiagnosticEvent {
   id: string;
-  kind: z.infer<typeof memoryKindSchema>;
-  scope: z.infer<typeof memoryScopeSchema>;
-  projectName: string | null;
-  workspacePath: string | null;
-  body: string;
-  status: z.infer<typeof memoryStatusSchema>;
-  supersedesId: string | null;
-  sourceTaskId: string | null;
-  sourceConversationId: string | null;
-  sourceMessageId: string | null;
-  sourceQuote: string | null;
-  createdBy: string | null;
+  event: z.infer<typeof diagnosticEventSchema>;
+  subsystem: 'scheduler' | 'retention' | 'recovery' | 'agent';
+  outcome: 'success' | 'failure';
+  errorCode: string | null;
+  detail: string;
+  durationMs: number | null;
   createdAt: string;
-  updatedAt: string;
 }
 
-export const createMemorySchema = z.object({
-  kind: memoryKindSchema,
-  scope: memoryScopeSchema,
-  projectName: z.string().trim().max(200).nullable().default(null),
-  workspacePath: z.string().trim().max(1_000).nullable().default(null),
-  body: z.string().trim().min(1).max(800),
-  sourceTaskId: z.string().uuid().nullable().default(null),
-  sourceConversationId: z.string().uuid().nullable().default(null),
-  sourceMessageId: z.string().uuid().nullable().default(null),
-  sourceQuote: z.string().trim().max(2_000).nullable().default(null),
-  createdBy: z.string().trim().max(80).nullable().default(null),
-}).refine((input) => (input.scope !== 'project' || Boolean(input.projectName)), {
-  message: 'projectName is required when scope is "project".', path: ['projectName'],
-}).refine((input) => (input.scope !== 'workspace' || Boolean(input.workspacePath)), {
-  message: 'workspacePath is required when scope is "workspace".', path: ['workspacePath'],
-}).refine((input) => (input.scope !== 'reference' || Boolean(input.sourceTaskId || input.sourceConversationId)), {
-  message: 'sourceTaskId or sourceConversationId is required when scope is "reference".', path: ['sourceTaskId'],
-});
+export interface RunInsights {
+  retryRate: number | null;
+  retryCount: number;
+  fallbackRate: number | null;
+  handoffCount: number;
+  costByDay: RunInsightsCostByDay[];
+  inputTokens: number;
+  outputTokens: number;
+  tokenUsageByModel: RunInsightsTokenUsage[];
+  byAgent: RunInsightsByAgent[];
+  byKind: RunInsightsByKind[];
+  completedRuns: number;
+  completedTasks: number;
+  medianTaskCycleMs: number | null;
+  followUpsCreated: number;
+  agentFit: RunInsightsAgentFit[];
+  cursing: CurseInsight;
+}
 
-export const updateMemorySchema = z.object({
-  kind: memoryKindSchema.optional(),
-  body: z.string().trim().min(1).max(800).optional(),
-  projectName: z.string().trim().max(200).nullable().optional(),
-  workspacePath: z.string().trim().max(1_000).nullable().optional(),
-  status: memoryStatusSchema.optional(),
-});
+export interface CurseInsight {
+  total: number;
+  messagesAnalyzed: number;
+  messagesWithCurses: number;
+  instancesPer100Messages: number;
+  byTerm: Array<{ term: string; count: number }>;
+  byDay: Array<{ day: string; count: number }>;
+}
 
-export const listMemoriesQuerySchema = z.object({
-  scope: memoryScopeSchema.optional(),
-  projectName: z.string().trim().max(200).optional(),
-  status: memoryStatusSchema.optional(),
-  kind: memoryKindSchema.optional(),
-});
+export interface RunInsightsAgentFit {
+  kind: z.infer<typeof runKindSchema>;
+  agent: 'codex' | 'claude';
+  completed: number;
+  failed: number;
+  successRate: number | null;
+  medianDurationMs: number | null;
+}
 
-export const supersedeMemorySchema = z.object({
-  kind: memoryKindSchema,
-  body: z.string().trim().min(1).max(800),
+export interface RunInsightsCostByDay {
+  day: string;
+  costUsd: number;
+}
+
+export interface RunInsightsTokenUsage {
+  provider: 'codex' | 'claude';
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface RunInsightsByAgent {
+  agent: 'codex' | 'claude';
+  total: number;
+  completed: number;
+  failed: number;
+  successRate: number | null;
+  retryRate: number | null;
+  fallbackRate: number | null;
+  medianDurationMs: number | null;
+  p90DurationMs: number | null;
+}
+
+export interface RunInsightsByKind {
+  kind: z.infer<typeof runKindSchema>;
+  completed: number;
+  failed: number;
+  successRate: number | null;
+}
+
+// --- Audit log ---------------------------------------------------------------
+//
+// Append-only record of outbound calls to third parties, agent file
+// reads/writes/tool use, and destructive actions taken through the API, so
+// external, agent, and destructive activity all leave a trace.
+
+export const auditCategorySchema = z.enum(['outbound_call', 'agent_file_read', 'agent_file_write', 'agent_tool_use', 'destructive_action']);
+
+export interface AuditLogEntry {
+  id: string;
+  category: z.infer<typeof auditCategorySchema>;
+  source: string;
+  detail: string;
+  workItemId: string | null;
+  createdAt: string;
+}
+
+export interface AuditLogPage {
+  entries: AuditLogEntry[];
+  nextCursor: string | null;
+}
+
+export const listAuditLogQuerySchema = z.object({
+  category: auditCategorySchema.optional(),
+  workItemId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+  cursor: z.string().optional(),
 });

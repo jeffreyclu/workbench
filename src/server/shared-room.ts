@@ -2,7 +2,7 @@ import type { AgentRun, SharedMessage } from '../shared/contracts.js';
 import { judgeExecutionProfile, modelFor, runAgentCommandWithFallback, selectPromptExecutionProfile } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
-import { OWNER_ID, LEASE_MS } from './scheduler.js';
+import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
 
 const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
@@ -13,6 +13,31 @@ function connectionSearchQuery(message: string): string {
 }
 
 export const connectionContextForPrompt = contextForPrompt;
+
+export function compactConversationHistory(messages: SharedMessage[], budget = 8_000): string {
+  const reserveForOlder = messages.length > 4 ? Math.min(900, Math.floor(budget * 0.15)) : 0;
+  let remaining = Math.max(0, budget - reserveForOlder);
+  const recent: string[] = [];
+  let firstIncluded = messages.length;
+  for (let index = messages.length - 1; index >= 0 && remaining > 0; index -= 1) {
+    const message = messages[index];
+    const attachmentText = message.attachments.length ? `\nAttached files:\n${message.attachments.map((file) => `- ${file.name}: ${file.path}`).join('\n')}` : '';
+    const prefix = `${message.author}: `;
+    const bodyBudget = Math.min(1_500, Math.max(0, remaining - prefix.length - attachmentText.length - 2));
+    if (bodyBudget < 80) break;
+    recent.push(`${prefix}${message.body.slice(0, bodyBudget)}${attachmentText}`);
+    remaining -= recent[recent.length - 1].length + 2;
+    firstIncluded = index;
+  }
+  recent.reverse();
+  const older = messages.slice(0, firstIncluded);
+  const olderHeader = older.length ? `Earlier conversation (${older.length} messages, compacted):\n` : '';
+  const olderSummary = older.length ? older.slice(-4).map((message) => {
+    const oneLine = message.body.replace(/\s+/g, ' ').trim();
+    return `- ${message.author}: ${oneLine.slice(0, 140)}${oneLine.length > 140 ? '…' : ''}`;
+  }).join('\n').slice(0, Math.max(0, reserveForOlder - olderHeader.length - 2)) : '';
+  return [olderSummary ? `${olderHeader}${olderSummary}` : '', recent.join('\n\n')].filter(Boolean).join('\n\n');
+}
 
 export function linearContextForPrompt(repository: WorkItemRepository, message: string): string {
   if (!/\blinear\b|linear\.app/i.test(message)) return '';
@@ -51,8 +76,9 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'running', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile));
   for (const reply of replies) {
     const agent = reply.author as AgentRun['agent'];
+    const taskKind = linkedItem ? repository.getClassification(linkedItem.id)?.kind ?? 'analysis' : 'analysis';
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'
-      ? repository.createRun(linkedItem.id, 'analysis', queued.dispatchTarget, agent, queued.message.body, conversationId, reply.id)
+      ? repository.createRun(linkedItem.id, taskKind, queued.dispatchTarget, agent, queued.message.body, conversationId, reply.id)
       : null;
     void replyInSharedRoom(repository, agent, reply.id, run?.id);
   }
@@ -78,6 +104,8 @@ export async function runSharedBackgroundJob(
   const target = repository.getSharedMessageById(messageId);
   // Claim a lease so the scheduler knows this process is actively working on this message.
   if (!repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS)) return;
+  const leaseHeartbeat = setInterval(() => repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS), HEARTBEAT_MS);
+  leaseHeartbeat.unref();
 
   const controller = new AbortController();
   activeReplies.set(messageId, controller);
@@ -89,6 +117,7 @@ export async function runSharedBackgroundJob(
       ? { status: 'canceled' }
       : { status: 'failed', error: error instanceof Error ? error.message : 'Background job failed.' });
   } finally {
+    clearInterval(leaseHeartbeat);
     activeReplies.delete(messageId);
     if (target) settleLinkedTask(repository, target.conversationId, 'Agent work finished; review the conversation.');
   }
@@ -101,6 +130,15 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
   // Claim a lease so the scheduler knows this process is actively working on this message.
   // On restart, expired leases trigger recovery (mark failed for messages without runs).
   if (!repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS)) return;
+  if (runId && !repository.claimRun(runId, OWNER_ID, LEASE_MS)) {
+    repository.updateSharedMessage(messageId, { status: 'failed', error: 'Could not claim the linked agent run.' });
+    return;
+  }
+  const leaseHeartbeat = setInterval(() => {
+    repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS);
+    if (runId) repository.renewRunLease(runId, OWNER_ID, LEASE_MS);
+  }, HEARTBEAT_MS);
+  leaseHeartbeat.unref();
 
   const controller = new AbortController();
   activeReplies.set(messageId, controller);
@@ -120,7 +158,7 @@ ${repository.getSharedContext(target.conversationId, { conversationId: target.co
 ${connectionContext}
 
 Current conversation:
-${thread.slice(-12).map((message) => `${message.author}: ${message.body.slice(0, 4_000)}${message.attachments.length ? `\nAttached files:\n${message.attachments.map((file) => `- ${file.name}: ${file.path}`).join('\n')}` : ''}`).join('\n\n')}
+${compactConversationHistory(thread)}
 
 Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential.`;
     const selfHostingGuard = `
@@ -134,6 +172,7 @@ This conversation is running inside the live Workbench control plane. Source edi
       : await judgeExecutionProfile(latestUserMessage || guardedPrompt, process.cwd(), controller.signal);
     repository.updateSharedMessage(messageId, { model: modelFor(agent, profile), executionProfile: profile });
     if (runId) repository.updateRun(runId, { model: modelFor(agent, profile), executionProfile: profile });
+    repository.setConversationExecutionProfile(target.conversationId, profile);
     const result = await runAgentCommandWithFallback(agent, process.cwd(), guardedPrompt, (partial) => {
       repository.updateSharedMessage(messageId, { body: partial });
       if (runId) repository.updateRun(runId, { output: partial });
@@ -160,6 +199,7 @@ This conversation is running inside the live Workbench control plane. Source edi
     });
     if (runId) repository.updateRun(runId, { status: 'failed', error: errorMessage, completedAt: new Date().toISOString() });
   } finally {
+    clearInterval(leaseHeartbeat);
     activeReplies.delete(messageId);
     replyRunIds.delete(messageId);
     const synthesized = await synthesizeSharedTurn(repository, target.conversationId, target.createdAt);

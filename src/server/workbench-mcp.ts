@@ -3,9 +3,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import {
-  assigneeSchema,
-  workItemStatusSchema,
+  assigneeSelectionSchema,
+  activeWorkItemStatusSchema,
+  calendarDateSchema,
+  workItemFilterSchema,
 } from '../shared/contracts.js';
+import { summarizeWorkItemChanges } from './activity-log.js';
+import { WorkItemDependencyError } from './repository.js';
 import type { WorkItemRepository } from './repository.js';
 
 const actorSchema = z.enum(['codex', 'claude']).describe('The assistant recording this mutation. Jeffrey and system cannot be impersonated through MCP.');
@@ -119,7 +123,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository): McpSer
     annotations: readOnlyAnnotations,
   }, async ({ stack, limit, cursor, query }) => runTool('list_work_items', () => {
     try {
-      return repository.listPage(stack === 'attention' ? 'active' : stack, limit, cursor, query);
+      return repository.listPage(stack === 'attention' ? 'active' : stack, limit, cursor, workItemFilterSchema.parse({ query }));
     } catch {
       throw new ToolFailure('INVALID_ARGUMENT', 'Invalid work-item cursor.');
     }
@@ -127,7 +131,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository): McpSer
 
   server.registerTool('get_work_item', {
     title: 'Get complete work-item state',
-    description: 'Returns a work item with parent/children, activity, immutable execution results, pending plan, classification, conversations, artifacts, and references.',
+    description: 'Returns a work item with parent/children, activity, immutable execution results, pending plan, classification, conversations, artifacts, references, and dependency edges in both directions.',
     inputSchema: { workItemId: z.string().uuid() },
     annotations: readOnlyAnnotations,
   }, async ({ workItemId }) => runTool('get_work_item', () => {
@@ -143,20 +147,24 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository): McpSer
       conversations: repository.listConversationsForWorkItem(item.id),
       artifacts: repository.listArtifactsForWorkItem(item.id),
       references: repository.listReferences(item.id),
+      // `item.blockedBy` carries the prerequisites; `blocks` is the reverse edge
+      // so an agent can see what its work is holding up before it reprioritises.
+      blocks: repository.listBlockedWork(item.id),
     };
   }));
 
   server.registerTool('create_work_item', {
     title: 'Create a manual work item',
-    description: 'Creates a locally owned manual task at the top of its inferred stack. Provider ownership fields cannot be supplied.',
+    description: 'Creates a locally owned manual task at the top of its stack. Pass `stack` to choose it explicitly; omitted, it is inferred once from the project name. Provider ownership fields cannot be supplied.',
     inputSchema: {
       title: z.string().trim().min(1).max(300),
       description: z.string().max(20_000).default(''),
       priority: z.number().int().min(0).max(4).default(2),
-      status: z.enum(['backlog', 'ready', 'in_progress', 'blocked']).default('backlog'),
+      status: activeWorkItemStatusSchema.default('backlog'),
       projectName: z.string().trim().max(200).nullable().default(null),
+      stack: activeStackSchema.optional(),
       workspacePath: z.string().trim().max(1_000).nullable().default(null),
-      dueDate: z.string().max(100).nullable().default(null),
+      dueDate: calendarDateSchema.nullable().default(null),
       sourceUrl: z.string().url().max(2_000).nullable().default(null),
       parentWorkItemId: z.string().uuid().nullable().default(null),
     },
@@ -174,28 +182,50 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository): McpSer
       title: z.string().trim().min(1).max(300).optional(),
       description: z.string().max(20_000).optional(),
       priority: z.number().int().min(0).max(4).optional(),
-      status: workItemStatusSchema.optional(),
+      status: activeWorkItemStatusSchema.optional(),
       projectName: z.string().trim().max(200).nullable().optional(),
+      stack: activeStackSchema.optional(),
       workspacePath: z.string().trim().max(1_000).nullable().optional(),
-      dueDate: z.string().max(100).nullable().optional(),
+      dueDate: calendarDateSchema.nullable().optional(),
       strategy: z.string().max(50_000).optional(),
-      assignees: z.array(assigneeSchema).max(3).optional(),
+      assignees: assigneeSelectionSchema.optional()
+        .describe('Owners of the task. Jeffrey is exclusive: he cannot be listed alongside codex or claude.'),
+      blockedByIds: z.array(z.string().uuid()).max(200).optional()
+        .describe('Full replacement set of prerequisite task ids. An empty array clears them. Cycles and self-references are rejected.'),
+      actor: actorSchema.optional().describe('Optional. Attributes the resulting activity-log entry to the calling assistant instead of the system.'),
     },
     annotations: mutationAnnotations(true),
-  }, async ({ workItemId, ...changes }) => runTool('update_work_item', () => {
-    requireWorkItem(repository, workItemId);
+  }, async ({ workItemId, actor, ...changes }) => runTool('update_work_item', () => {
+    const item = requireWorkItem(repository, workItemId);
     if (Object.values(changes).every((value) => value === undefined)) throw new ToolFailure('INVALID_ARGUMENT', 'Provide at least one locally owned field to update.');
-    return { item: repository.update(workItemId, changes) };
+    try {
+      const updated = repository.update(workItemId, changes);
+      // Every field change an assistant makes shows up in the same activity log
+      // Jeffrey's own edits land in, so the task history has one timeline.
+      const edits = updated ? summarizeWorkItemChanges(item, updated) : [];
+      if (updated && edits.length) repository.addActivity(workItemId, actor ?? 'system', 'edited', `${edits.join(' · ')}.`);
+      return { item: updated };
+    } catch (error) {
+      // Graph rejections are the caller's fault, not a server fault, so they
+      // surface as CONFLICT rather than a generic INTERNAL_ERROR.
+      if (error instanceof WorkItemDependencyError) throw new ToolFailure('CONFLICT', error.message);
+      throw error;
+    }
   }));
 
   server.registerTool('set_work_item_lifecycle', {
     title: 'Archive, complete, or restore a work item',
     description: 'Applies the recoverable Workbench lifecycle transition. complete records completion and archives; archive preserves incomplete state; restore requeues the item.',
-    inputSchema: { workItemId: z.string().uuid(), action: z.enum(['archive', 'complete', 'restore']) },
+    inputSchema: {
+      workItemId: z.string().uuid(),
+      action: z.enum(['archive', 'complete', 'restore']),
+      actor: actorSchema.optional().describe('Optional. Attributes the resulting activity-log entry to the calling assistant instead of the system.'),
+    },
     annotations: mutationAnnotations(),
-  }, async ({ workItemId, action }) => runTool('set_work_item_lifecycle', () => {
+  }, async ({ workItemId, action, actor }) => runTool('set_work_item_lifecycle', () => {
     requireWorkItem(repository, workItemId);
-    const item = action === 'restore' ? repository.restore(workItemId) : repository.archive(workItemId, action === 'complete');
+    const context = { actor };
+    const item = action === 'restore' ? repository.restore(workItemId, false, context) : repository.archive(workItemId, action === 'complete', false, context);
     if (!item) throw new ToolFailure('CONFLICT', 'Workbench could not apply the lifecycle transition.');
     return { item };
   }));
@@ -314,23 +344,6 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository): McpSer
     if (!repository.getConversation(conversationId)) throw new ToolFailure('NOT_FOUND', 'Conversation not found.');
     return { message: repository.createSharedMessage(actor, body, 'completed', conversationId, [], 'none') };
   }));
-
-  server.registerTool('list_memories', {
-    title: 'List durable shared memories',
-    description: 'Lists assistant-authored memories and system-generated task/conversation archive memories. All assistants read the same records.',
-    inputSchema: {
-      kind: z.enum(['assistant_codex', 'assistant_claude', 'task_archive', 'conversation_archive']).optional(),
-      limit: z.number().int().min(1).max(100).default(50),
-    },
-    annotations: readOnlyAnnotations,
-  }, async ({ kind, limit }) => runTool('list_memories', () => ({ memories: repository.listMemories(kind, limit) })));
-
-  server.registerTool('record_memory', {
-    title: 'Record a durable assistant memory',
-    description: 'Appends an attributed durable memory shared by Codex and Claude. Archive memories remain system-owned and immutable.',
-    inputSchema: { actor: actorSchema, body: z.string().trim().min(1).max(12_000) },
-    annotations: mutationAnnotations(),
-  }, async ({ actor, body }) => runTool('record_memory', () => ({ memory: repository.recordMemory(actor, body) })));
 
   server.registerTool('list_execution_plans', {
     title: 'List work-item execution plans',

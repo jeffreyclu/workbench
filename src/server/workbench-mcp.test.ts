@@ -43,12 +43,10 @@ describe('Workbench MCP', () => {
       'list_conversations',
       'list_discoveries',
       'list_execution_plans',
-      'list_memories',
       'list_results',
       'list_stacks',
       'list_work_items',
       'propose_execution_plan',
-      'record_memory',
       'reorder_stack',
       'resolve_discovery',
       'set_work_item_lifecycle',
@@ -108,6 +106,15 @@ describe('Workbench MCP', () => {
     expect(detail.activity).toContainEqual(expect.objectContaining({ actor: 'codex', kind: 'decision', body: 'Provider-owned fields remain outside MCP.' }));
   });
 
+  it('logs an attributed activity entry for the fields an assistant changes', async () => {
+    const item = repository.create({ title: 'Assistant edit', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    await callData('update_work_item', { workItemId: item.id, actor: 'claude', status: 'blocked', priority: 0 });
+
+    const logged = repository.listActivity(item.id).find((entry) => entry.kind === 'edited');
+    expect(logged).toEqual(expect.objectContaining({ actor: 'claude', body: 'Status: ready → blocked · Priority: 2 → 0.' }));
+  });
+
   it('rejects assistant impersonation at the tool contract boundary', async () => {
     const item = repository.create({ title: 'Scoped actor', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const result = await client.callTool({
@@ -116,21 +123,6 @@ describe('Workbench MCP', () => {
     });
     expect(result.isError).toBe(true);
     expect(repository.listActivity(item.id)).toHaveLength(1);
-  });
-
-  it('shares attributed conversation messages and durable memories without dispatching work', async () => {
-    const item = repository.create({ title: 'Shared context', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    const created = await callData<{ conversation: { id: string } }>('create_conversation', { title: 'MCP design', workItemId: item.id });
-    await callData('add_conversation_message', { conversationId: created.conversation.id, actor: 'claude', body: 'The repository is authoritative.' });
-    await callData('record_memory', { actor: 'codex', body: 'Results are immutable through MCP.' });
-
-    const conversation = await callData<{ messages: Array<{ author: string; body: string; status: string; dispatchTarget: string }> }>('get_conversation', { conversationId: created.conversation.id });
-    expect(conversation.messages).toEqual([expect.objectContaining({ author: 'claude', body: 'The repository is authoritative.', status: 'completed', dispatchTarget: 'none' })]);
-
-    const memories = await callData<{ memories: Array<{ kind: string; body: string }> }>('list_memories', { limit: 10 });
-    expect(memories.memories).toContainEqual(expect.objectContaining({ kind: 'assistant_codex', body: 'Results are immutable through MCP.' }));
-    expect(repository.getSharedContext()).toContain('memory: Results are immutable through MCP.');
-    expect(repository.activeRunsForItem(item.id)).toHaveLength(0);
   });
 
   it('exposes plan proposals and immutable execution results but not plan approval or run mutation', async () => {
