@@ -1665,11 +1665,14 @@ function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (id: stri
   });
   const restore = useMutation({ mutationFn: api.restoreDiscovery, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['discovery'] }); } });
   const lastRun = inbox.data?.lastRun;
+  // The scan endpoint returns as soon as the background job is accepted. Keep
+  // the button visibly busy during that handoff as well as for the job itself.
+  const isScanning = scan.isPending || Boolean(inbox.data?.running);
   return <section className="discovery-workspace">
     <header className="discovery-header">
       <div><span className="eyebrow">Morning review</span><h2>Discovered overnight</h2><p>Nothing enters your stack until you approve it.</p></div>
-      <button className="button secondary compact" onClick={() => scan.mutate()} disabled={inbox.data?.running || scan.isPending}>
-        {inbox.data?.running ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} {inbox.data?.running ? 'Scanning sources…' : 'Scan now'}
+      <button className="button secondary compact" onClick={() => scan.mutate()} disabled={isScanning}>
+        {isScanning ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} {isScanning ? 'Scanning sources…' : 'Scan now'}
       </button>
     </header>
     <div className="discovery-status">
