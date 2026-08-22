@@ -14,6 +14,7 @@ import { CodeNode } from '@lexical/code-core';
 import { LinkNode } from '@lexical/link';
 import { $getRoot, FORMAT_TEXT_COMMAND, KEY_ENTER_COMMAND, type EditorState, COMMAND_PRIORITY_HIGH } from 'lexical';
 import { Bold, Code2, Italic, List, ListOrdered, Quote } from 'lucide-react';
+import { copyText } from './copy-code.js';
 
 type MarkdownComposerProps = {
   conversationId: string | null;
@@ -69,6 +70,37 @@ function SyncEditorEditable({ disabled }: { disabled: boolean }) {
   return null;
 }
 
+/** Lexical owns code-block DOM nodes, so add a non-editable control after each reconciliation. */
+function CopyCodeBlocksPlugin() {
+  const [editor] = useLexicalComposerContext();
+  useEffect(() => editor.registerRootListener((root) => {
+    if (!root) return;
+    const addButtons = () => root.querySelectorAll('pre').forEach((pre) => {
+      if (pre.querySelector(':scope > .copy-code-button')) return;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'copy-code-button';
+      button.textContent = 'Copy';
+      button.title = 'Copy code';
+      button.setAttribute('aria-label', 'Copy code to clipboard');
+      button.setAttribute('contenteditable', 'false');
+      button.addEventListener('mousedown', (event) => event.preventDefault());
+      button.addEventListener('click', () => {
+        void copyText(pre.querySelector('code')?.textContent ?? '').then(() => {
+          button.textContent = 'Copied';
+          window.setTimeout(() => { button.textContent = 'Copy'; }, 1_200);
+        });
+      });
+      pre.prepend(button);
+    });
+    const observer = new MutationObserver(addButtons);
+    observer.observe(root, { childList: true, subtree: true });
+    addButtons();
+    return () => observer.disconnect();
+  }), [editor]);
+  return null;
+}
+
 function MarkdownEditor({ value, onChange, onSubmit, disabled }: Pick<MarkdownComposerProps, 'value' | 'onChange' | 'onSubmit' | 'disabled'>) {
   return <>
     <RichTextPlugin
@@ -87,6 +119,7 @@ function MarkdownEditor({ value, onChange, onSubmit, disabled }: Pick<MarkdownCo
     <OnChangePlugin onChange={(editorState: EditorState) => editorState.read(() => onChange($convertToMarkdownString(TRANSFORMERS)))} />
     <SyncMarkdownValue value={value} />
     <SyncEditorEditable disabled={Boolean(disabled)} />
+    <CopyCodeBlocksPlugin />
     {!disabled && <SubmitOnEnter onSubmit={onSubmit} />}
     <MarkdownToolbar />
   </>;

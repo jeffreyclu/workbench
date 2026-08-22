@@ -187,10 +187,12 @@ export const api = {
     if (limit) params.set('limit', String(limit));
     return request<SharedSearchResponse>(`/api/shared/search?${params}`);
   },
+  getSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}`),
   createSharedConversation: (title = 'New conversation') => request<{ conversation: SharedConversation }>('/api/shared/conversations', { method: 'POST', body: JSON.stringify({ title }) }),
   archiveSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/archive`, { method: 'POST' }),
   restoreSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/restore`, { method: 'POST' }),
   updateSharedConversationPreferences: (id: string, executionProfile: AgentRun['executionProfile']) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/preferences`, { method: 'PATCH', body: JSON.stringify({ executionProfile }) }),
+  setSharedConversationTask: (id: string, workItemId: string | null) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/task`, { method: 'PATCH', body: JSON.stringify({ workItemId }) }),
   markSharedConversationRead: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/read`, { method: 'POST' }),
   forkSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/fork`, { method: 'POST' }),
   deleteSharedConversation: (id: string) => request<void>(`/api/shared/conversations/${id}`, { method: 'DELETE' }),

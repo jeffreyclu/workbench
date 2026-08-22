@@ -24,7 +24,24 @@ export const HEARTBEAT_MS = 20_000;
 export const TICK_MS = 5_000;
 export const RETENTION_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Global ceiling on concurrently `running` agent runs. Each run spawns a real
+ * Codex/Claude CLI subprocess, so an unbounded backlog (e.g. after a restart
+ * requeues many leases, or a batch execute) would otherwise spawn unbounded
+ * concurrent subprocesses on the host machine. Conservative default because this
+ * runs on a laptop, not a fleet. Override with WORKBENCH_MAX_CONCURRENT_RUNS.
+ */
+export const MAX_CONCURRENT_RUNS = (() => {
+  const raw = process.env.WORKBENCH_MAX_CONCURRENT_RUNS;
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 6;
+})();
+
 export function startScheduler(repository: WorkItemRepository): { stop: () => void } {
+  // Tracks whether we've already logged a "queue stalled at capacity" diagnostic for
+  // the current stall, so repeated ticks don't spam the log every 5s. Resets to false
+  // once capacity frees up, so the next stall can log again.
+  let stallLogged = false;
   const heartbeat = setInterval(() => {
     try { repository.renewLeases(OWNER_ID, LEASE_MS); }
     catch (error) {
@@ -47,7 +64,22 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
         );
       }
       repository.surfaceStrandedRuns();
-      const { runIds } = repository.dueWork();
+      const allDue = repository.dueWork();
+      const { runIds } = repository.dueWork(MAX_CONCURRENT_RUNS);
+      const stalled = runIds.length === 0 && allDue.runIds.length > 0;
+      if (stalled) {
+        if (!stallLogged) {
+          repository.logDiagnostic(
+            'scheduler_tick',
+            'scheduler',
+            'success',
+            `Dispatch queue stalled at capacity: ${repository.runningRunCount()}/${MAX_CONCURRENT_RUNS} runs already running; ${allDue.runIds.length} queued run(s) waiting for capacity.`,
+          );
+          stallLogged = true;
+        }
+      } else {
+        stallLogged = false;
+      }
       for (const runId of runIds) {
         const run = repository.getRun(runId);
         if (!run) continue;

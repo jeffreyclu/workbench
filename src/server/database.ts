@@ -61,6 +61,7 @@ const baseSchemaStatements = [
       work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
       kind TEXT NOT NULL,
       requested_target TEXT NOT NULL,
+      requested_agent TEXT,
       agent TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'queued',
       instructions TEXT NOT NULL DEFAULT '',
@@ -78,6 +79,8 @@ const baseSchemaStatements = [
       ,estimated_cost_usd REAL
       ,fallback_from TEXT
       ,fallback_reason TEXT
+      ,cancel_requested INTEGER NOT NULL DEFAULT 0
+      ,cancel_requested_at TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_agent_runs_item
@@ -101,8 +104,14 @@ const baseSchemaStatements = [
       previous_order_json TEXT NOT NULL,
       proposed_order_json TEXT NOT NULL,
       rationale TEXT NOT NULL,
+      queue_version INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       resolved_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS queue_versions (
+      stack TEXT PRIMARY KEY,
+      version INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS shared_messages (
@@ -458,6 +467,7 @@ function applyLegacyUpgrades(database: DatabaseSync) {
   const runColumns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
   if (!runColumns.some((column) => column.name === 'conversation_id')) database.exec('ALTER TABLE agent_runs ADD COLUMN conversation_id TEXT;');
   if (!runColumns.some((column) => column.name === 'message_id')) database.exec('ALTER TABLE agent_runs ADD COLUMN message_id TEXT;');
+  if (!runColumns.some((column) => column.name === 'adopted_conversation_id')) database.exec('ALTER TABLE agent_runs ADD COLUMN adopted_conversation_id TEXT;');
   if (!runColumns.some((column) => column.name === 'model')) database.exec('ALTER TABLE agent_runs ADD COLUMN model TEXT;');
   if (!runColumns.some((column) => column.name === 'input_tokens')) database.exec('ALTER TABLE agent_runs ADD COLUMN input_tokens INTEGER;');
   if (!runColumns.some((column) => column.name === 'output_tokens')) database.exec('ALTER TABLE agent_runs ADD COLUMN output_tokens INTEGER;');
@@ -465,6 +475,8 @@ function applyLegacyUpgrades(database: DatabaseSync) {
   if (!runColumns.some((column) => column.name === 'fallback_from')) database.exec('ALTER TABLE agent_runs ADD COLUMN fallback_from TEXT;');
   if (!runColumns.some((column) => column.name === 'fallback_reason')) database.exec('ALTER TABLE agent_runs ADD COLUMN fallback_reason TEXT;');
   if (!runColumns.some((column) => column.name === 'execution_profile')) database.exec('ALTER TABLE agent_runs ADD COLUMN execution_profile TEXT;');
+  if (!runColumns.some((column) => column.name === 'cancel_requested')) database.exec('ALTER TABLE agent_runs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;');
+  if (!runColumns.some((column) => column.name === 'cancel_requested_at')) database.exec('ALTER TABLE agent_runs ADD COLUMN cancel_requested_at TEXT;');
   const artifactColumns = database.prepare('PRAGMA table_info(published_artifacts)').all() as Array<{ name: string }>;
   if (!artifactColumns.some((column) => column.name === 'content_hash')) database.exec('ALTER TABLE published_artifacts ADD COLUMN content_hash TEXT;');
   if (!artifactColumns.some((column) => column.name === 'current_version')) database.exec('ALTER TABLE published_artifacts ADD COLUMN current_version INTEGER NOT NULL DEFAULT 1;');
@@ -499,6 +511,14 @@ function applyLegacyUpgrades(database: DatabaseSync) {
   const proposalColumns = database.prepare('PRAGMA table_info(queue_proposals)').all() as Array<{ name: string }>;
   if (!proposalColumns.some((column) => column.name === 'explanations_json')) database.exec('ALTER TABLE queue_proposals ADD COLUMN explanations_json TEXT;');
   if (!proposalColumns.some((column) => column.name === 'stack')) database.exec("ALTER TABLE queue_proposals ADD COLUMN stack TEXT NOT NULL DEFAULT 'attention';");
+  if (!proposalColumns.some((column) => column.name === 'queue_version')) database.exec('ALTER TABLE queue_proposals ADD COLUMN queue_version INTEGER NOT NULL DEFAULT 0;');
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS queue_versions (
+      stack TEXT PRIMARY KEY,
+      version INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT OR IGNORE INTO queue_versions (stack, version) VALUES ('attention', 0), ('workbench', 0);
+  `);
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_work_items_active_page ON work_items(queue_position, id)
       WHERE is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled');
@@ -698,6 +718,108 @@ const schemaMigrations: readonly Migration[] = [
       if (tables.has('shared_memories')) database.exec('DELETE FROM shared_memories;');
     },
   },
+  {
+    id: '010_durable_agent_run_cancellation',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'cancel_requested')) {
+        database.exec('ALTER TABLE agent_runs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;');
+      }
+      if (!columns.some((column) => column.name === 'cancel_requested_at')) {
+        database.exec('ALTER TABLE agent_runs ADD COLUMN cancel_requested_at TEXT;');
+      }
+    },
+  },
+  {
+    id: '011_agent_run_requested_agent',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'requested_agent')) {
+        database.exec('ALTER TABLE agent_runs ADD COLUMN requested_agent TEXT;');
+      }
+      database.exec('UPDATE agent_runs SET requested_agent = agent WHERE requested_agent IS NULL;');
+    },
+  },
+  {
+    // This table was introduced in the base schema after existing databases
+    // had already recorded migration 001. Keep the upgrade additive so task
+    // detail queries work for both fresh and established Workbench databases.
+    id: '012_work_item_links',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS work_item_links (
+          work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+          linked_work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (work_item_id, linked_work_item_id),
+          CHECK (work_item_id < linked_work_item_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_work_item_links_linked
+          ON work_item_links(linked_work_item_id, created_at DESC);
+      `);
+    },
+  },
+  {
+    // Additive queue revision metadata lets a newer runtime reject stale
+    // proposal decisions while an older runtime can continue using its columns.
+    id: '014_queue_versions',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(queue_proposals)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'queue_version')) {
+        database.exec('ALTER TABLE queue_proposals ADD COLUMN queue_version INTEGER NOT NULL DEFAULT 0;');
+      }
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS queue_versions (
+          stack TEXT PRIMARY KEY,
+          version INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT OR IGNORE INTO queue_versions (stack, version) VALUES ('attention', 0), ('workbench', 0);
+      `);
+    },
+  },
+  {
+    // Rendered version content is deliberately separate from source_path. A
+    // source checkout is mutable and may disappear; a public version URL is
+    // immutable and must remain reconstructable from SQLite alone.
+    id: '015_durable_artifact_publication',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS artifact_rendered_versions (
+          artifact_id TEXT NOT NULL REFERENCES published_artifacts(id) ON DELETE CASCADE,
+          version INTEGER NOT NULL,
+          content TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (artifact_id, version),
+          FOREIGN KEY (artifact_id, version) REFERENCES artifact_versions(artifact_id, version) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS artifact_deployment_operations (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind IN ('publish', 'revoke')),
+          state TEXT NOT NULL CHECK (state IN ('staged', 'deployed', 'completed', 'failed')),
+          manifest_json TEXT NOT NULL,
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_artifact_deployment_operations_recovery
+          ON artifact_deployment_operations(state, updated_at)
+          WHERE state IN ('staged', 'deployed');
+      `);
+    },
+  },
+  {
+    // A linked conversation is adopted as task execution history. The marker
+    // lets unlink reverse only the synthesized run records, never real runs.
+    id: '016_conversation_run_adoption',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'adopted_conversation_id')) {
+        database.exec('ALTER TABLE agent_runs ADD COLUMN adopted_conversation_id TEXT;');
+      }
+      database.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_adopted_conversation
+        ON agent_runs(adopted_conversation_id) WHERE adopted_conversation_id IS NOT NULL;`);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {
@@ -736,7 +858,9 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
   if (absolutePath !== ':memory:') mkdirSync(dirname(absolutePath), { recursive: true });
 
   const database = new DatabaseSync(absolutePath);
-  database.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+  // A bounded wait handles normal writer handoffs between API and scheduler
+  // connections without turning an actual lock leak into an indefinite stall.
+  database.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 1000;');
   applyMigrations(database);
   return database;
 }

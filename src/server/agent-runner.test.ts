@@ -1,9 +1,42 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { backoffDelayMs, buildPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, compactPromptSection, estimateUsageCost, isAgentCapacityError, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { backoffDelayMs, buildPrompt, cancelAgentRun, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { openDatabase } from './database.js';
+import { WorkItemRepository } from './repository.js';
+
+const originalPath = process.env.PATH;
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  process.env.PATH = originalPath;
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+function fakeAgentDirectory(codexBody: string, claudeBody: string): { directory: string; log: string } {
+  const directory = mkdtempSync(join(tmpdir(), 'workbench-agent-test-'));
+  temporaryDirectories.push(directory);
+  const log = join(directory, 'spawns.log');
+  for (const [agent, body] of [['codex', codexBody], ['claude', claudeBody]] as const) {
+    const path = join(directory, agent);
+    writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' '${agent}' >> '${log}'\n${body}\n`);
+    chmodSync(path, 0o755);
+  }
+  process.env.PATH = directory;
+  return { directory, log };
+}
+
+async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for agent test condition.');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 const item = (title: string, description = ''): WorkItem => ({
   id: 'item', title, description, status: 'ready', priority: 2, queuePosition: 1,
@@ -42,13 +75,211 @@ describe('classifyExecution', () => {
     expect(isAgentCapacityError(new Error('Task implementation failed a test'))).toBe(false);
   });
 
-  it('only estimates token cost when deployment pricing is configured', () => {
-    expect(estimateUsageCost('codex', 100, 50)).toBeNull();
+  it('grants agents full home access while retaining the task workspace as cwd', () => {
+    for (const kind of ['analysis', 'research', 'review', 'strategy'] as const) {
+      const codex = commandFor('codex', '/tmp/project', 'economy', kind).args;
+      const claude = commandFor('claude', '/tmp/project', 'economy', kind).args;
+      expect(codex).toContain('--dangerously-bypass-approvals-and-sandbox');
+      expect(claude).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--forward-subagent-text']));
+      expect(claude).toEqual(expect.arrayContaining(['--add-dir', '/tmp/project', homedir()]));
+    }
+    expect(commandFor('claude', '/tmp/project', 'standard', 'execute').args).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions']));
+  });
+
+  it('does not fall back when a successful short answer mentions rate limit and capacity', async () => {
+    const answer = 'A short answer about rate limit and capacity.';
+    const { directory, log } = fakeAgentDirectory(
+      `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: answer } })}'`,
+      `printf '%s\\n' '${JSON.stringify({ type: 'result', result: 'Unexpected fallback.' })}'`,
+    );
+
+    const result = await runAgentCommandWithFallback('codex', directory, 'Explain rate limiting.');
+
+    expect(result).toEqual(expect.objectContaining({ output: answer, agent: 'codex', fallbackFrom: null, fallbackReason: null }));
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['codex']);
+  });
+
+  it('falls back on a non-zero 429 diagnostic and preserves requested and executing agents', async () => {
+    const { directory, log } = fakeAgentDirectory(
+      `printf '%s\\n' 'HTTP 429: usage limit reached' >&2\nexit 1`,
+      `printf '%s\\n' '${JSON.stringify({ type: 'result', result: 'Fallback completed.' })}'`,
+    );
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Fix provider fallback', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'codex', 'codex', 'Implement it.');
+
+    await executeAgentRun(repository, run, 'test-owner', 60_000);
+
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['codex', 'claude']);
+    expect(repository.getRun(run.id)).toEqual(expect.objectContaining({
+      status: 'completed', requestedAgent: 'codex', agent: 'claude', fallbackFrom: 'codex', fallbackReason: expect.stringContaining('429'),
+    }));
+    database.close();
+  });
+
+  it('observes cancellation requested through a second database connection within one heartbeat', async () => {
+    const { directory } = fakeAgentDirectory(
+      `trap 'exit 143' TERM\nwhile true; do /bin/sleep 0.1; done`,
+      'exit 1',
+    );
+    const databasePath = join(directory, 'shared.db');
+    const ownerDatabase = openDatabase(databasePath);
+    const ownerRepository = new WorkItemRepository(ownerDatabase);
+    const task = ownerRepository.create({ title: 'Cross-process cancellation', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: directory, dueDate: null });
+    const run = ownerRepository.createRun(task.id, 'execute', 'codex', 'codex', 'Wait until canceled.');
+    const execution = executeAgentRun(ownerRepository, run, 'owner-process', 3_000);
+    const cancelingDatabase = openDatabase(databasePath);
+    const cancelingRepository = new WorkItemRepository(cancelingDatabase);
+
+    try {
+      expect(isAgentRunActive(run.id)).toBe(true);
+      expect(cancelingRepository.requestRunCancellation(run.id)).toBe(true);
+      await execution;
+      expect(ownerRepository.getRun(run.id)?.status).toBe('canceled');
+      expect(isAgentRunActive(run.id)).toBe(false);
+    } finally {
+      cancelingDatabase.close();
+      ownerDatabase.close();
+    }
+  });
+
+  it('keeps cancellation authoritative when the agent completes just after a remote cancel', async () => {
+    const partial = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Partial output' } });
+    const completed = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Completed output' } });
+    const { directory } = fakeAgentDirectory(
+      `printf '%s\\n' '${partial}'\n/bin/sleep 0.2\nprintf '%s\\n' '${completed}'`,
+      'exit 1',
+    );
+    const databasePath = join(directory, 'race.db');
+    const ownerDatabase = openDatabase(databasePath);
+    const ownerRepository = new WorkItemRepository(ownerDatabase);
+    const task = ownerRepository.create({ title: 'Cancel completion race', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: directory, dueDate: null });
+    const run = ownerRepository.createRun(task.id, 'execute', 'codex', 'codex', 'Produce output.');
+    const cancelingDatabase = openDatabase(databasePath);
+    const cancelingRepository = new WorkItemRepository(cancelingDatabase);
+    const originalWebhook = process.env.SLACK_WEBHOOK_URL;
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn();
+    process.env.SLACK_WEBHOOK_URL = 'https://hooks.slack.com/services/test';
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    try {
+      const execution = executeAgentRun(ownerRepository, run, 'owner-process', 3_000);
+      await waitFor(() => ownerRepository.getRun(run.id)?.output.includes('Partial output') === true);
+      expect(cancelAgentRun(cancelingRepository, run.id)?.status).toBe('canceled');
+      cancelingRepository.update(task.id, { status: 'canceled' });
+      await execution;
+
+      expect(ownerRepository.getRun(run.id)?.status).toBe('canceled');
+      expect(ownerRepository.get(task.id)?.status).toBe('canceled');
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      if (originalWebhook === undefined) delete process.env.SLACK_WEBHOOK_URL;
+      else process.env.SLACK_WEBHOOK_URL = originalWebhook;
+      globalThis.fetch = originalFetch;
+      cancelingDatabase.close();
+      ownerDatabase.close();
+    }
+  });
+
+  it('aborts the subprocess when the lease heartbeat can no longer renew ownership', async () => {
+    const { directory } = fakeAgentDirectory(
+      `trap 'exit 143' TERM\nwhile true; do /bin/sleep 0.1; done`,
+      'exit 1',
+    );
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Lease ownership loss', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'codex', 'codex', 'Wait until ownership is lost.');
+    vi.spyOn(repository, 'renewRunLease').mockReturnValue(false);
+
+    try {
+      await executeAgentRun(repository, run, 'stale-owner', 3_000);
+      expect(isAgentRunActive(run.id)).toBe(false);
+      expect(repository.getRun(run.id)?.status).toBe('running');
+    } finally {
+      database.close();
+    }
+  });
+
+  it('does not immediately cancel an explicitly retried run after clearing the stale request', async () => {
+    const completed = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Retry completed' } });
+    const { directory } = fakeAgentDirectory(`printf '%s\\n' '${completed}'`, 'exit 1');
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Retry canceled run', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'codex', 'codex', 'Try again.');
+    repository.claimRun(run.id, 'first-owner', 60_000);
+    repository.requestRunCancellation(run.id);
+    repository.updateRun(run.id, { status: 'canceled', completedAt: new Date().toISOString() });
+    const retried = repository.prepareRunRetry(run.id)!;
+
+    try {
+      await executeAgentRun(repository, retried, 'retry-owner', 3_000);
+      expect(repository.getRun(run.id)).toEqual(expect.objectContaining({ status: 'completed', output: 'Retry completed' }));
+    } finally {
+      database.close();
+    }
+  });
+
+  it('terminates and settles when spawning the child emits an error', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-agent-missing-'));
+    temporaryDirectories.push(directory);
+    process.env.PATH = directory;
+
+    await expect(runAgentCommandWithFallback('codex', directory, 'Fail to spawn.')).rejects.toThrow(/ENOENT|spawn codex/);
+  });
+
+  it('prices usage per model, preferring environment overrides over built-in rates', () => {
+    // No model and no override: nothing can be priced.
+    expect(estimateUsageCost('codex', null, 100, 50)).toBeNull();
+
+    // Built-in list prices differ per tier, which is the whole point of keying by model.
+    expect(estimateUsageCost('claude', 'haiku', 1_000_000, 1_000_000)).toBe(6);
+    expect(estimateUsageCost('claude', 'opus', 1_000_000, 1_000_000)).toBe(90);
+    expect(estimateUsageCost('claude', 'claude-opus-5-20260401', 1_000_000, 0)).toBe(15);
+
+    // A per-model override beats the built-in rate.
+    process.env.WORKBENCH_MODEL_SONNET_INPUT_TOKEN_USD_PER_MILLION = '2';
+    process.env.WORKBENCH_MODEL_SONNET_OUTPUT_TOKEN_USD_PER_MILLION = '8';
+    expect(estimateUsageCost('claude', 'sonnet', 100_000, 50_000)).toBe(0.6);
+    delete process.env.WORKBENCH_MODEL_SONNET_INPUT_TOKEN_USD_PER_MILLION;
+    delete process.env.WORKBENCH_MODEL_SONNET_OUTPUT_TOKEN_USD_PER_MILLION;
+
+    // The legacy agent-level override still applies to unknown models.
     process.env.WORKBENCH_CODEX_INPUT_TOKEN_USD_PER_MILLION = '2';
     process.env.WORKBENCH_CODEX_OUTPUT_TOKEN_USD_PER_MILLION = '8';
-    expect(estimateUsageCost('codex', 100_000, 50_000)).toBe(0.6);
+    expect(estimateUsageCost('codex', 'some-unlisted-model', 100_000, 50_000)).toBe(0.6);
     delete process.env.WORKBENCH_CODEX_INPUT_TOKEN_USD_PER_MILLION;
     delete process.env.WORKBENCH_CODEX_OUTPUT_TOKEN_USD_PER_MILLION;
+  });
+
+  it('sums Claude per-message usage and lets the terminal result event supersede it with the billed total', async () => {
+    // Two assistant messages plus a terminal result. Before this change reportUsage
+    // overwrote on each event, so a multi-turn run kept only the last message.
+    const assistantOne = '{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":40}}}';
+    const assistantTwo = '{"type":"assistant","message":{"usage":{"input_tokens":200,"output_tokens":60}}}';
+    const result = '{"type":"result","result":"done","total_cost_usd":0.1234,"usage":{"input_tokens":300,"output_tokens":100}}';
+    fakeAgentDirectory('exit 1', `cat > /dev/null\nprintf '%s\\n%s\\n%s\\n' '${assistantOne}' '${assistantTwo}' '${result}'`);
+
+    const run = await runAgentCommandWithFallback('claude', tmpdir(), 'Report usage.');
+
+    expect(run.usage.inputTokens).toBe(300);
+    expect(run.usage.outputTokens).toBe(100);
+    // The provider's own billed total wins over any rate-table estimate.
+    expect(run.usage.estimatedCostUsd).toBe(0.1234);
+  });
+
+  it('prices a Claude run from the model rate table when the provider reports no billed total', async () => {
+    const assistant = '{"type":"assistant","message":{"usage":{"input_tokens":1000000,"output_tokens":1000000}}}';
+    const result = '{"type":"result","result":"done"}';
+    fakeAgentDirectory('exit 1', `cat > /dev/null\nprintf '%s\\n%s\\n' '${assistant}' '${result}'`);
+
+    // 'economy' resolves to haiku: $1/M in + $5/M out.
+    const run = await runAgentCommandWithFallback('claude', tmpdir(), 'Report usage.', undefined, undefined, undefined, 'economy');
+
+    expect(run.usage.estimatedCostUsd).toBe(6);
   });
 
   it('bounds large prompt sections while retaining the beginning and conclusion', () => {
@@ -183,6 +414,8 @@ describe('classifyExecution', () => {
   it('turns Codex and Claude JSON events into readable live progress', () => {
     expect(readableAgentEvent('codex', JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'npm test' } })).progress).toBe('● Running tests');
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'App.tsx' } }] } })).progress).toBe('● Reading App.tsx');
+    const forwardedSubagentText = readableAgentEvent('claude', JSON.stringify({ type: 'assistant', parent_tool_use_id: 'toolu_subagent', message: { content: [{ type: 'text', text: 'I found the failing test.' }] } }));
+    expect(forwardedSubagentText).toEqual(expect.objectContaining({ progress: 'I found the failing test.', final: null }));
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'system', subtype: 'init' })).progress).toBe('');
     expect(readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'reasoning', text: 'The failing test points to stale state.' } })).progress).toContain('Reasoning summary');
   });

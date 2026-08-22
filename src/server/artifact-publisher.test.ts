@@ -1,8 +1,8 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { renderArtifactPage } from './artifact-publisher.js';
+import { reconcileArtifactDirectory, renderArtifactPage, repairLegacyArtifactSnapshots } from './artifact-publisher.js';
 
 describe('artifact snapshots', () => {
   it('renders Markdown while removing active content', () => {
@@ -75,5 +75,62 @@ describe('artifact snapshots', () => {
     const withoutFeedback = renderArtifactPage(path, 'Rollout', { version: 2 });
     expect(withoutFeedback).not.toContain('Send feedback');
     expect(withoutFeedback).not.toContain('<script');
+  });
+
+  it('rebuilds current and historical URLs from immutable snapshots in a fresh directory', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-output-'));
+    const result = reconcileArtifactDirectory(directory, [{
+      id: 'report', sourcePath: '/source/no-longer-needed.md', title: 'Report', version: 2,
+      snapshots: [{ version: 1, content: '<h1>Version one</h1>' }, { version: 2, content: '<h1>Version two</h1>' }],
+    }]);
+
+    expect(result).toEqual({ restored: ['report'], missing: [] });
+    expect(readFileSync(join(directory, 'report/index.html'), 'utf8')).toContain('Version two');
+    expect(readFileSync(join(directory, 'report/v1/index.html'), 'utf8')).toContain('Version one');
+    expect(existsSync(join(directory, 'report/v2/index.html'))).toBe(true);
+  });
+
+  it('removes unexpected directories instead of carrying orphaned content into a deploy', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-output-'));
+    writeFileSync(join(directory, 'orphan.html'), '<h1>Do not deploy me</h1>');
+    const result = reconcileArtifactDirectory(directory, [{
+      id: 'report', sourcePath: '/source/report.md', title: 'Report', version: 1,
+      snapshots: [{ version: 1, content: '<h1>Canonical snapshot</h1>' }],
+    }]);
+
+    expect(result).toEqual({ restored: ['report'], missing: [] });
+    expect(existsSync(join(directory, 'orphan.html'))).toBe(false);
+    expect(readFileSync(join(directory, 'report/index.html'), 'utf8')).toContain('Canonical snapshot');
+  });
+
+  it('refuses a deployment manifest with a missing historical snapshot', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-output-'));
+    const result = reconcileArtifactDirectory(directory, [{
+      id: 'report', sourcePath: '/source/missing.md', title: 'Report', version: 2,
+      snapshots: [{ version: 1, content: null }, { version: 2, content: '<h1>Version two</h1>' }],
+    }]);
+
+    expect(result).toEqual({ restored: [], missing: ['report'] });
+    expect(existsSync(join(directory, 'report/index.html'))).toBe(false);
+  });
+
+  it('imports legacy deployed pages without re-rendering mutable source files', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-output-'));
+    mkdirSync(join(directory, 'report', 'v1'), { recursive: true });
+    mkdirSync(join(directory, 'current'), { recursive: true });
+    writeFileSync(join(directory, 'report', 'v1', 'index.html'), '<h1>Published version</h1>', { flag: 'w' });
+    writeFileSync(join(directory, 'current', 'index.html'), '<h1>Current published version</h1>', { flag: 'w' });
+    const restored: Array<{ id: string; version: number; content: string }> = [];
+    const result = repairLegacyArtifactSnapshots(directory, [
+      { id: 'report', sourcePath: '/source/report.md', title: 'Report', version: 1, snapshots: [{ version: 1, content: null }] },
+      { id: 'current', sourcePath: '/source/current.md', title: 'Current', version: 1, snapshots: [{ version: 1, content: null }] },
+      { id: 'missing', sourcePath: '/source/missing.md', title: 'Missing', version: 1, snapshots: [{ version: 1, content: null }] },
+    ], (id, version, content) => { restored.push({ id, version, content }); return true; });
+
+    expect(result).toEqual({ restored: [{ id: 'report', version: 1 }, { id: 'current', version: 1 }], missing: [{ id: 'missing', version: 1 }] });
+    expect(restored).toEqual([
+      { id: 'report', version: 1, content: '<h1>Published version</h1>' },
+      { id: 'current', version: 1, content: '<h1>Current published version</h1>' },
+    ]);
   });
 });

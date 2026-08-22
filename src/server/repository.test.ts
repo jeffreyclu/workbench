@@ -33,6 +33,48 @@ describe('WorkItemRepository', () => {
     });
   });
 
+  it('backfills cost for historical runs that recorded tokens but no cost, and does not overwrite an existing cost', () => {
+    const item = repository.create({ title: 'Backfill cost', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const priced = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');
+    const alreadyPriced = repository.createRun(item.id, 'review', 'claude', 'claude', 'Review it.');
+    const unknownModel = repository.createRun(item.id, 'research', 'codex', 'codex', 'Research it.');
+    repository.updateRun(priced.id, { status: 'completed', model: 'opus', inputTokens: 1_000_000, outputTokens: 1_000_000 });
+    repository.updateRun(alreadyPriced.id, { status: 'completed', model: 'opus', inputTokens: 1_000_000, outputTokens: 1_000_000, estimatedCostUsd: 0.5 });
+    repository.updateRun(unknownModel.id, { status: 'completed', model: 'not-a-real-model', inputTokens: 500, outputTokens: 500 });
+
+    expect(repository.backfillEstimatedCosts()).toBe(1);
+    // opus list price: $15/M in + $75/M out.
+    expect(repository.getRun(priced.id)?.estimatedCostUsd).toBe(90);
+    // A provider-reported total must survive the backfill untouched.
+    expect(repository.getRun(alreadyPriced.id)?.estimatedCostUsd).toBe(0.5);
+    // No rate for the model means no invented number.
+    expect(repository.getRun(unknownModel.id)?.estimatedCostUsd).toBeNull();
+    // Idempotent: a second pass finds nothing left to fill.
+    expect(repository.backfillEstimatedCosts()).toBe(0);
+  });
+
+  it('reports total, per-agent, and per-model cost, and counts runs it could not price', () => {
+    const item = repository.create({ title: 'Cost insights', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const claudeRun = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');
+    const codexRun = repository.createRun(item.id, 'review', 'codex', 'codex', 'Review it.');
+    const unpriced = repository.createRun(item.id, 'research', 'codex', 'codex', 'Research it.');
+    repository.updateRun(claudeRun.id, { status: 'completed', model: 'opus', inputTokens: 100, outputTokens: 200, estimatedCostUsd: 2 });
+    repository.updateRun(codexRun.id, { status: 'completed', model: 'gpt-5.6-terra', inputTokens: 100, outputTokens: 200, estimatedCostUsd: 0.5 });
+    repository.updateRun(unpriced.id, { status: 'completed', model: 'not-a-real-model', inputTokens: 100, outputTokens: 200 });
+
+    const insights = repository.getRunInsights();
+    expect(insights.costUsd).toBe(2.5);
+    expect(insights.pricedRuns).toBe(2);
+    expect(insights.unpricedRuns).toBe(1);
+    // No history before this window, so there is nothing to trend against.
+    expect(insights.previousCostUsd).toBeNull();
+    expect(insights.byAgent.find((agent) => agent.agent === 'claude')?.costUsd).toBe(2);
+    expect(insights.byAgent.find((agent) => agent.agent === 'codex')?.costUsd).toBe(0.5);
+    expect(insights.tokenUsageByModel.find((row) => row.model === 'opus')).toMatchObject({ costUsd: 2, runs: 1, rateSource: 'default' });
+    expect(insights.tokenUsageByModel.find((row) => row.model === 'not-a-real-model')).toMatchObject({ costUsd: 0, rateSource: null });
+    expect(insights.costByDay.reduce((total, day) => total + day.costUsd, 0)).toBe(2.5);
+  });
+
   it('uses lifecycle events for retry and handoff insights, including chat-era history', () => {
     const item = repository.create({ title: 'Lifecycle telemetry', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const run = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');
@@ -201,6 +243,16 @@ describe('WorkItemRepository', () => {
     expect(updated.priority).toBe(0);
   });
 
+  it('syncs terminal Linear status in an enclosing transaction without overwriting local fields', () => {
+    const input = { sourceIdentifier: 'ENG-TERMINAL', sourceUrl: null, title: 'Provider item', description: '', status: 'ready' as const, priority: 2, projectName: null, labels: [], dueDate: null, providerUpdatedAt: '2026-08-20T00:00:00.000Z', providerPayload: {} };
+    repository.upsertLinearItem(input);
+    const item = repository.searchLinear('ENG-TERMINAL')[0];
+    repository.update(item.id, { strategy: 'Locally owned', priority: 0 });
+
+    expect(repository.transaction(() => repository.upsertLinearItems([{ ...input, status: 'done' as const, providerUpdatedAt: '2026-08-21T00:00:00.000Z' }]))).toEqual(['updated']);
+    expect(repository.get(item.id)).toEqual(expect.objectContaining({ status: 'done', strategy: 'Locally owned', priority: 0 }));
+  });
+
   it('preserves a local Linear field edit and records a conflict only when Linear also changes it', () => {
     const input = { sourceIdentifier: 'ENG-43', sourceUrl: null, title: 'Provider title', description: 'Provider description', status: 'ready' as const, priority: 2, projectName: 'Core', labels: ['frontend'], dueDate: null, providerUpdatedAt: '2026-08-18T10:00:00.000Z', providerPayload: {} };
     repository.upsertLinearItem(input);
@@ -232,12 +284,16 @@ describe('WorkItemRepository', () => {
     expect(repository.listProviderConflicts(item.id)).toEqual([]);
   });
 
-  it('applies and rejects a reversible stack proposal', () => {
+  it('keeps a proposal side-effect-free until acceptance and rejects stale decisions', () => {
     const first = repository.create({ title: 'First', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const second = repository.create({ title: 'Second', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    const proposal = repository.createProposal([second.id, first.id], 'New context promotes the second task.');
+    const proposal = repository.createProposal([first.id, second.id], 'New context promotes the first task.');
     expect(repository.list().map((item) => item.id)).toEqual([second.id, first.id]);
-    repository.resolveProposal(proposal.id, 'rejected');
+    expect(repository.resolveProposal(proposal.id, 'accepted')?.status).toBe('accepted');
+    expect(repository.list().map((item) => item.id)).toEqual([first.id, second.id]);
+    const stale = repository.createProposal([second.id, first.id], 'Undo the move.');
+    repository.move(second.id, { beforeId: first.id });
+    expect(repository.resolveProposal(stale.id, 'rejected')?.status).toBe('superseded');
     expect(repository.list().map((item) => item.id)).toEqual([second.id, first.id]);
   });
 
@@ -285,6 +341,30 @@ describe('WorkItemRepository', () => {
     expect(fork).toEqual(expect.objectContaining({ workItemId: task.id, forkedFromConversationId: conversation.id, archivedAt: null }));
     expect(repository.listSharedMessages(100, null, fork.id).messages.map((message) => message.body)).toEqual(['Investigate this', 'Here are the findings']);
     expect(repository.setConversationArchived(conversation.id, false)?.archivedAt).toBeNull();
+  });
+
+  it('unlinks the source conversation from its task when it is forked', () => {
+    const task = repository.create({ title: 'Forked task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Original thread', task.id);
+    repository.createSharedMessage('codex', 'Working on it.', 'completed', conversation.id);
+
+    const fork = repository.forkConversation(conversation.id)!;
+    expect(fork.workItemId).toBe(task.id);
+    expect(repository.getConversation(conversation.id)?.workItemId).toBeNull();
+    expect(repository.listActivity(task.id).some((activity) => activity.kind === 'conversation_unlinked')).toBe(true);
+  });
+
+  it('links and unlinks an existing conversation from a task', () => {
+    const task = repository.create({ title: 'Link target', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Manual thread');
+    const reply = repository.createSharedMessage('codex', 'The implementation is complete.', 'completed', conversation.id);
+
+    expect(repository.setConversationWorkItem(conversation.id, task.id)).toEqual(expect.objectContaining({ workItemId: task.id }));
+    expect(repository.listRuns(task.id)).toEqual([expect.objectContaining({ agent: 'codex', messageId: reply.id, conversationId: conversation.id, output: reply.body, status: 'completed' })]);
+    expect(repository.listActivity(task.id).some((entry) => entry.kind === 'conversation_linked')).toBe(true);
+    expect(repository.setConversationWorkItem(conversation.id, null)).toEqual(expect.objectContaining({ workItemId: null }));
+    expect(repository.listRuns(task.id)).toEqual([]);
+    expect(repository.listActivity(task.id).some((entry) => entry.kind === 'conversation_unlinked')).toBe(true);
   });
 
   it('logs a model preference activity on the linked task when Jeffrey sets or clears a conversation tier', () => {
@@ -425,9 +505,11 @@ describe('WorkItemRepository', () => {
     const proposal = repository.buildDailyProposal();
 
     expect(proposal.rationale).toContain('10 days without activity');
+    expect(repository.list().map((item) => item.id)).toEqual([recent.id, old.id]);
+    repository.resolveProposal(proposal.id, 'accepted');
     expect(repository.list().map((item) => item.id)).toEqual([old.id, recent.id]);
     expect(repository.get(old.id)?.lastTouchedAt).toBe(tenDaysAgo);
-    expect(repository.getDiscoveryInbox().queueProposal?.id).toBe(proposal.id);
+    expect(repository.getPendingProposal()?.id).toBeUndefined();
   });
 
   it('records every ordering change and undoes them one step at a time', () => {
@@ -961,20 +1043,48 @@ describe('WorkItemRepository', () => {
       expect(repository.claimRun(run.id, 'owner-a', 60_000)).toBe(false);
     });
 
+    it('lets only the current uncanceled owner finish a running attempt', () => {
+      const run = createQueuedRun();
+      expect(repository.claimRun(run.id, 'owner-a', 60_000)).toBe(true);
+      expect(repository.finishRun(run.id, 'owner-b', { status: 'completed' })).toBe(false);
+      expect(repository.requestRunCancellation(run.id)).toBe(true);
+      expect(repository.isCancellationRequested(run.id)).toBe(true);
+      expect(repository.finishRun(run.id, 'owner-a', { status: 'completed' })).toBe(false);
+      expect(repository.getRun(run.id)?.status).toBe('running');
+    });
+
+    it('clears durable cancellation when a canceled run is prepared for retry', () => {
+      const run = createQueuedRun();
+      repository.claimRun(run.id, 'owner-a', 60_000);
+      repository.requestRunCancellation(run.id);
+      repository.updateRun(run.id, { status: 'canceled', completedAt: new Date().toISOString() });
+
+      const retried = repository.prepareRunRetry(run.id);
+
+      expect(retried?.status).toBe('queued');
+      expect(repository.isCancellationRequested(run.id)).toBe(false);
+      expect(database.prepare('SELECT cancel_requested, cancel_requested_at FROM agent_runs WHERE id = ?').get(run.id)).toEqual({
+        cancel_requested: 0,
+        cancel_requested_at: null,
+      });
+      expect(repository.claimRun(run.id, 'owner-b', 60_000)).toBe(true);
+      expect(repository.renewRunLease(run.id, 'owner-b', 60_000)).toBe(true);
+    });
+
     it('scheduleRunRetry re-queues with an incremented attempt and clears ownership, up to max_attempts', () => {
       const run = createQueuedRun();
       repository.claimRun(run.id, 'owner-a', 60_000);
-      expect(repository.scheduleRunRetry(run.id, 5_000)).toBe(true);
+      expect(repository.scheduleRunRetry(run.id, 'owner-a', 5_000)).toBe(true);
       const retried = repository.getRun(run.id)!;
       expect(retried.status).toBe('queued');
       expect(retried.attempt).toBe(1);
       expect(retried.nextAttemptAt).not.toBeNull();
       repository.claimRun(run.id, 'owner-a', 60_000);
-      repository.scheduleRunRetry(run.id, 0);
+      repository.scheduleRunRetry(run.id, 'owner-a', 0);
       expect(repository.getRun(run.id)?.attempt).toBe(2);
       // Third retry would hit max_attempts (default 3): refuse further retry.
       repository.claimRun(run.id, 'owner-a', 60_000);
-      expect(repository.scheduleRunRetry(run.id, 0)).toBe(false);
+      expect(repository.scheduleRunRetry(run.id, 'owner-a', 0)).toBe(false);
     });
 
     it('reclaimExpired retries a non-execute run whose lease expired and fails an execute run instead', () => {
@@ -1011,9 +1121,41 @@ describe('WorkItemRepository', () => {
       const dueRun = createQueuedRun();
       const notYetDueRun = createQueuedRun();
       repository.claimRun(notYetDueRun.id, 'owner-a', 60_000);
-      repository.scheduleRunRetry(notYetDueRun.id, 60_000); // due far in the future
+      repository.scheduleRunRetry(notYetDueRun.id, 'owner-a', 60_000); // due far in the future
       expect(repository.dueWork().runIds).toContain(dueRun.id);
       expect(repository.dueWork().runIds).not.toContain(notYetDueRun.id);
+    });
+
+    it('dueWork(limit) returns only the oldest N queued runs when the backlog exceeds the ceiling', () => {
+      const runs = [createQueuedRun(), createQueuedRun(), createQueuedRun(), createQueuedRun(), createQueuedRun()];
+      const due = repository.dueWork(2).runIds;
+      expect(due).toHaveLength(2);
+      expect(due).toEqual([runs[0].id, runs[1].id]);
+    });
+
+    it('dueWork(limit) returns nothing once the running count already meets the ceiling', () => {
+      const runningA = createQueuedRun();
+      const runningB = createQueuedRun();
+      createQueuedRun(); // still queued, would otherwise be due
+      repository.claimRun(runningA.id, 'owner-a', 60_000);
+      repository.claimRun(runningB.id, 'owner-b', 60_000);
+
+      expect(repository.dueWork(2).runIds).toEqual([]);
+    });
+
+    it('dueWork(limit) frees up capacity as running runs complete', () => {
+      const runningA = createQueuedRun();
+      const queuedB = createQueuedRun();
+      const queuedC = createQueuedRun();
+      repository.claimRun(runningA.id, 'owner-a', 60_000);
+
+      // One slot free (ceiling 2, one running): only the oldest queued run is due.
+      expect(repository.dueWork(2).runIds).toEqual([queuedB.id]);
+
+      repository.updateRun(runningA.id, { status: 'completed' });
+
+      // Both slots free now: both remaining queued runs are due, oldest first.
+      expect(repository.dueWork(2).runIds).toEqual([queuedB.id, queuedC.id]);
     });
 
     it('hasLiveWork reflects queued/running rows regardless of which process created them', () => {
@@ -1307,18 +1449,16 @@ describe('task dependencies', () => {
       ]);
     });
 
-    it('treats a canceled prerequisite as satisfied but an archived incomplete one as still open', () => {
+    it('treats terminal and tombstoned prerequisites as absent from active blockers', () => {
       const canceled = make('Dropped approach');
       const archived = make('Parked work');
       const dependent = make('Downstream');
       repository.replaceDependencies(dependent.id, [canceled.id, archived.id]);
 
       repository.update(canceled.id, { status: 'canceled' });
-      // Archiving incomplete work is a filing action, not a completion: it must
-      // not silently open the execution gate on everything behind it.
       repository.archive(archived.id, false);
 
-      expect(repository.listOpenDependencies(dependent.id).map((entry) => entry.id)).toEqual([archived.id]);
+      expect(repository.listOpenDependencies(dependent.id).map((entry) => entry.id)).toEqual([]);
     });
 
     it('rejects a self-dependency', () => {

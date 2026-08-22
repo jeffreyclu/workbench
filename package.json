@@ -20,6 +20,8 @@
     "preview:web": "WORKBENCH_API_TARGET=http://127.0.0.1:45175 vite --port 5174",
     "discovery:scan": "tsx scripts/discover.ts --force",
     "discovery:install": "zsh scripts/install-discovery-schedule.sh",
+    "backup:run": "tsx scripts/backup.ts",
+    "backup:install": "zsh scripts/install-backup-schedule.sh",
     "build": "tsc -b && vite build",
     "start": "tsx src/server/index.ts",
     "typecheck": "tsc -b --pretty false",
@@ -49,6 +51,7 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "sanitize-html": "^2.17.7",
+    "undici": "^7.29.0",
     "zod": "^4.0.17"
   },
   "devDependencies": {

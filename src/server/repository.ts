@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+
 import { isSelfAssigned, workItemFilterSchema, type Activity, type AgentRun, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryCandidateStatus, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType } from '../shared/contracts.js';
 import { learnFeedbackWeights, planQueue, type FeedbackWeight, type QueueContext, type QueuePlan } from './queue-intelligence.js';
 import type { WorkbenchDatabase } from './database.js';
@@ -6,6 +7,7 @@ import { ArtifactLibrary } from './artifact-library.js';
 import { DEFAULT_WORKBENCH_TIMEZONE, localCalendarDate } from '../shared/due-date.js';
 import { describeLifecycleChange, summarizeWorkItemChanges } from './activity-log.js';
 import { summarizeCursing } from './profanity.js';
+import { estimateModelCost, resolveModelRate } from './model-pricing.js';
 
 /** Who applied a lifecycle move, and what forced it when Workbench applied it as a cascade. */
 export interface LifecycleContext { actor?: Activity['actor']; reason?: string }
@@ -45,6 +47,26 @@ interface ActivityRow {
   kind: string;
   body: string;
   created_at: string;
+}
+
+interface RunPatch {
+  agent?: AgentRun['agent'];
+  status?: AgentRun['status'];
+  output?: string;
+  error?: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  model?: string;
+  executionProfile?: NonNullable<AgentRun['executionProfile']>;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  estimatedCostUsd?: number | null;
+  fallbackFrom?: AgentRun['agent'] | null;
+  fallbackReason?: string | null;
+  ownerId?: string | null;
+  leaseExpiresAt?: string | null;
+  nextAttemptAt?: string | null;
+  attempt?: number;
 }
 
 function percentile(values: number[], fraction: number): number | null {
@@ -199,7 +221,38 @@ export class WorkItemDependencyError extends Error {
 }
 
 export class WorkItemRepository {
+  private transactionDepth = 0;
+
   constructor(private readonly database: WorkbenchDatabase, private readonly timeZone = process.env.WORKBENCH_TIMEZONE ?? DEFAULT_WORKBENCH_TIMEZONE) {}
+
+  /**
+   * Repository operations compose through this boundary. SQLite has no nested
+   * BEGIN transaction, so compound operations must share their caller's unit
+   * of work rather than opening a second transaction underneath it.
+   */
+  transaction<T>(operation: () => T): T {
+    const outermost = this.transactionDepth === 0;
+    if (outermost) this.database.exec('BEGIN IMMEDIATE');
+    this.transactionDepth += 1;
+    try {
+      const result = operation();
+      this.transactionDepth -= 1;
+      if (outermost) this.database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.transactionDepth -= 1;
+      if (outermost) this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  private queueVersion(stack: 'attention' | 'workbench'): number {
+    return Number((this.database.prepare('SELECT version FROM queue_versions WHERE stack = ?').get(stack) as { version: number } | undefined)?.version ?? 0);
+  }
+
+  private incrementQueueVersion(stack: 'attention' | 'workbench'): void {
+    this.database.prepare('INSERT INTO queue_versions (stack, version) VALUES (?, 1) ON CONFLICT(stack) DO UPDATE SET version = version + 1').run(stack);
+  }
 
   getDiscoveryInbox(view: 'pending' | 'reviewed' = 'pending'): DiscoveryInbox {
     const now = new Date().toISOString();
@@ -239,13 +292,11 @@ export class WorkItemRepository {
   }
 
   resolveDiscoveryCandidate(id: string, action: 'convert' | 'dismiss' | 'snooze' | 'merge', workItemId?: string): DiscoveryCandidate | null {
-    const row = this.database.prepare('SELECT * FROM discovery_candidates WHERE id = ?').get(id) as Record<string, string | null> | undefined;
-    if (!row || row.status !== 'pending') return null;
-    const candidate = this.mapDiscoveryCandidate(row); const now = new Date().toISOString();
-    const claimed = this.database.prepare("UPDATE discovery_candidates SET status = 'resolving', updated_at = ? WHERE id = ? AND status = 'pending'").run(now, id).changes;
-    if (!claimed) return null;
-    let linkedId = workItemId ?? null;
-    try {
+    return this.transaction(() => {
+      const row = this.database.prepare('SELECT * FROM discovery_candidates WHERE id = ? AND status = \'pending\'').get(id) as Record<string, string | null> | undefined;
+      if (!row) return null;
+      const candidate = this.mapDiscoveryCandidate(row); const now = new Date().toISOString();
+      let linkedId = workItemId ?? null;
       if (action === 'convert') {
         const item = this.create({ title: candidate.title, description: candidate.description, priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null, sourceUrl: candidate.sourceUrl });
         linkedId = item.id;
@@ -257,12 +308,9 @@ export class WorkItemRepository {
       }
       const status = action === 'convert' ? 'converted' : action === 'merge' ? 'merged' : action === 'dismiss' ? 'dismissed' : 'snoozed';
       const snoozedUntil = action === 'snooze' ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : null;
-      this.database.prepare("UPDATE discovery_candidates SET status = ?, work_item_id = ?, snoozed_until = ?, updated_at = ? WHERE id = ? AND status = 'resolving'").run(status, linkedId, snoozedUntil, now, id);
+      this.database.prepare("UPDATE discovery_candidates SET status = ?, work_item_id = ?, snoozed_until = ?, updated_at = ? WHERE id = ? AND status = 'pending'").run(status, linkedId, snoozedUntil, now, id);
       return this.mapDiscoveryCandidate(this.database.prepare('SELECT * FROM discovery_candidates WHERE id = ?').get(id) as Record<string, string | null>);
-    } catch (error) {
-      this.database.prepare("UPDATE discovery_candidates SET status = 'pending', updated_at = ? WHERE id = ? AND status = 'resolving'").run(new Date().toISOString(), id);
-      throw error;
-    }
+    });
   }
 
   updateDiscoveryCandidate(id: string, changes: { title?: string; description?: string }): DiscoveryCandidate | null {
@@ -423,6 +471,60 @@ export class WorkItemRepository {
     return this.getConversation(id);
   }
 
+  setConversationWorkItem(id: string, workItemId: string | null): SharedConversation | null {
+    const before = this.getConversation(id);
+    if (!before) return null;
+    if (workItemId && !this.get(workItemId)) return null;
+    const now = new Date().toISOString();
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const changed = this.database.prepare('UPDATE shared_conversations SET work_item_id = ?, updated_at = ? WHERE id = ?').run(workItemId, now, id).changes;
+      if (!changed) { this.database.exec('ROLLBACK'); return null; }
+      if (before.workItemId && before.workItemId !== workItemId) {
+        this.database.prepare('DELETE FROM agent_runs WHERE work_item_id = ? AND adopted_conversation_id = ?').run(before.workItemId, id);
+        this.addActivity(before.workItemId, 'jeffrey', 'conversation_unlinked', `Unlinked conversation “${before.title}” and removed its adopted agent-run history.`);
+      }
+      if (workItemId) {
+        const adopted = this.adoptConversationAgentRuns(workItemId, id);
+        if (before.workItemId !== workItemId || adopted) this.addActivity(workItemId, 'jeffrey', 'conversation_linked', `Linked conversation “${before.title}” and adopted ${adopted} agent ${adopted === 1 ? 'run' : 'runs'} as task execution history.`);
+      }
+      this.database.exec('COMMIT');
+    } catch (error) { this.database.exec('ROLLBACK'); throw error; }
+    return this.getConversation(id);
+  }
+
+  /** Materializes pre-existing chat replies as task runs so either surface has the same execution history. */
+  adoptConversationAgentRuns(workItemId: string, conversationId: string): number {
+    const kind = this.getClassification(workItemId)?.kind ?? 'analysis';
+    const agentReplies = this.listAllSharedMessages(conversationId).filter((message) => message.author === 'codex' || message.author === 'claude');
+    const insertRun = this.database.prepare(`
+      INSERT INTO agent_runs (id, work_item_id, kind, requested_target, requested_agent, agent, status, instructions, output, error, started_at, completed_at, created_at, conversation_id, message_id, model, execution_profile, input_tokens, output_tokens, estimated_cost_usd, fallback_from, fallback_reason, adopted_conversation_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    let adopted = 0;
+    for (const message of agentReplies) {
+      const existing = this.database.prepare('SELECT 1 FROM agent_runs WHERE message_id = ?').get(message.id);
+      if (existing) continue;
+      insertRun.run(randomUUID(), workItemId, kind, message.author, message.author, message.author, message.status, 'Adopted from linked conversation.', message.body, message.error, message.createdAt, message.completedAt, message.createdAt, conversationId, message.id, message.model, message.executionProfile, message.inputTokens, message.outputTokens, message.estimatedCostUsd, message.fallbackFrom, message.fallbackReason, conversationId);
+      adopted++;
+    }
+    return adopted;
+  }
+
+  /** Repairs conversations linked before run adoption existed. Safe to call on every process startup. */
+  backfillConversationRunAdoptions(): number {
+    const rows = this.database.prepare(`SELECT shared_conversations.id, shared_conversations.work_item_id
+      FROM shared_conversations
+      INNER JOIN work_items ON work_items.id = shared_conversations.work_item_id
+      WHERE shared_conversations.deleted_at IS NULL AND work_items.deleted_at IS NULL`).all() as Array<{ id: string; work_item_id: string }>;
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const adopted = rows.reduce((total, row) => total + this.adoptConversationAgentRuns(row.work_item_id, row.id), 0);
+      this.database.exec('COMMIT');
+      return adopted;
+    } catch (error) { this.database.exec('ROLLBACK'); throw error; }
+  }
+
   setConversationArchived(id: string, archived: boolean): SharedConversation | null {
     const now = new Date().toISOString();
     const existing = this.listConversations('all').find((conversation) => conversation.id === id);
@@ -450,6 +552,9 @@ export class WorkItemRepository {
     this.database.prepare('UPDATE shared_conversations SET forked_from_conversation_id = ? WHERE id = ?').run(source.id, fork.id);
     const messages = this.listAllSharedMessages(source.id);
     for (const message of messages) this.createSharedMessage(message.author, message.body, message.status === 'running' || message.status === 'queued' ? 'completed' : message.status, fork.id, message.attachments, 'none');
+    // The fork inherits the task link; keeping the source linked too would leave two
+    // conversations claiming to be the task's execution history, so the source is unlinked.
+    if (source.workItemId) this.setConversationWorkItem(source.id, null);
     return this.listConversations('all').find((conversation) => conversation.id === fork.id) ?? null;
   }
 
@@ -853,8 +958,8 @@ export class WorkItemRepository {
       FROM work_item_dependencies dependency
       JOIN work_items blocker ON blocker.id = dependency.blocker_work_item_id
       WHERE dependency.work_item_id IN (${ids.map(() => '?').join(', ')})
-        AND blocker.deleted_at IS NULL
-      ORDER BY dependency.created_at ASC, blocker.title COLLATE NOCASE ASC
+        AND blocker.deleted_at IS NULL AND blocker.archived_at IS NULL
+      ORDER BY dependency.created_at ASC, blocker.title COLLATE NOCASE ASC, blocker.rowid ASC
     `).all(...ids) as unknown as Array<WorkItemRow & { dependent_id: string }>;
     const byDependent = new Map<string, WorkItemDependency[]>();
     for (const row of rows) {
@@ -877,8 +982,8 @@ export class WorkItemRepository {
     const rows = this.database.prepare(`
       SELECT dependent.* FROM work_item_dependencies dependency
       JOIN work_items dependent ON dependent.id = dependency.work_item_id
-      WHERE dependency.blocker_work_item_id = ? AND dependent.deleted_at IS NULL
-      ORDER BY dependent.title COLLATE NOCASE ASC
+      WHERE dependency.blocker_work_item_id = ? AND dependent.deleted_at IS NULL AND dependent.archived_at IS NULL
+      ORDER BY dependent.title COLLATE NOCASE ASC, dependent.rowid ASC
     `).all(id) as unknown as WorkItemRow[];
     return rows.map((row) => this.dependencyFromItem(mapWorkItem(row)));
   }
@@ -888,10 +993,10 @@ export class WorkItemRepository {
     const safeLimit = Math.max(1, Math.min(100, limit));
     const rows = this.database.prepare(`
       SELECT * FROM work_items
-      WHERE id != ? AND deleted_at IS NULL
+      WHERE id != ? AND deleted_at IS NULL AND archived_at IS NULL
         AND (? = '%%' OR title LIKE ? COLLATE NOCASE OR source_identifier LIKE ? COLLATE NOCASE)
       ORDER BY CASE WHEN completed_at IS NULL AND status NOT IN ('done', 'canceled') THEN 0 ELSE 1 END,
-        updated_at DESC, title COLLATE NOCASE ASC
+        updated_at DESC, title COLLATE NOCASE ASC, rowid ASC
       LIMIT ?
     `).all(workItemId, needle, needle, needle, safeLimit) as unknown as WorkItemRow[];
     return this.withDependencies(this.withLineage(rows.map((row) => this.withAgentOutcome(mapWorkItem(row)))));
@@ -901,7 +1006,7 @@ export class WorkItemRepository {
     const uniqueIds = [...new Set(blockerIds)];
     if (uniqueIds.includes(workItemId)) throw new WorkItemDependencyError('A task cannot depend on itself.');
     if (uniqueIds.length) {
-      const rows = this.database.prepare(`SELECT id FROM work_items WHERE id IN (${uniqueIds.map(() => '?').join(', ')}) AND deleted_at IS NULL`).all(...uniqueIds) as Array<{ id: string }>;
+      const rows = this.database.prepare(`SELECT id FROM work_items WHERE id IN (${uniqueIds.map(() => '?').join(', ')}) AND deleted_at IS NULL AND archived_at IS NULL`).all(...uniqueIds) as Array<{ id: string }>;
       if (rows.length !== uniqueIds.length) throw new WorkItemDependencyError('Every prerequisite must reference an existing task.');
     }
 
@@ -944,13 +1049,13 @@ export class WorkItemRepository {
     const countRows = this.database.prepare(`
       SELECT parent_work_item_id AS parentId, COUNT(*) AS followUpCount,
         SUM(CASE WHEN archived_at IS NULL AND status NOT IN ('done', 'canceled') THEN 1 ELSE 0 END) AS openFollowUpCount
-      FROM work_items WHERE parent_work_item_id IN (${placeholders}) GROUP BY parent_work_item_id
+      FROM work_items WHERE parent_work_item_id IN (${placeholders}) AND deleted_at IS NULL GROUP BY parent_work_item_id
     `).all(...ids) as Array<{ parentId: string; followUpCount: number; openFollowUpCount: number }>;
     const parentIds = [...new Set(items.flatMap((item) => item.parentWorkItemId ? [item.parentWorkItemId] : []))];
     const parentTitles = new Map<string, string>();
     if (parentIds.length) {
       const parentPlaceholders = parentIds.map(() => '?').join(', ');
-      const parents = this.database.prepare(`SELECT id, title FROM work_items WHERE id IN (${parentPlaceholders})`).all(...parentIds) as Array<{ id: string; title: string }>;
+      const parents = this.database.prepare(`SELECT id, title FROM work_items WHERE id IN (${parentPlaceholders}) AND deleted_at IS NULL AND archived_at IS NULL`).all(...parentIds) as Array<{ id: string; title: string }>;
       for (const parent of parents) parentTitles.set(parent.id, parent.title);
     }
     const counts = new Map(countRows.map((row) => [row.parentId, row]));
@@ -997,9 +1102,10 @@ export class WorkItemRepository {
       .prepare(`
         SELECT * FROM work_items
         WHERE source = 'linear'
+          AND deleted_at IS NULL AND archived_at IS NULL
           AND (title LIKE ? COLLATE NOCASE OR description LIKE ? COLLATE NOCASE OR project_name LIKE ? COLLATE NOCASE
             OR source_identifier LIKE ? COLLATE NOCASE OR source_url LIKE ? COLLATE NOCASE)
-        ORDER BY is_queued DESC, priority ASC, provider_updated_at DESC
+        ORDER BY is_queued DESC, priority ASC, provider_updated_at DESC, rowid ASC
         LIMIT ?
       `)
       .all(needle, needle, needle, needle, needle, limit) as unknown as WorkItemRow[];
@@ -1024,8 +1130,7 @@ export class WorkItemRepository {
     if (currentIds.length !== orderedItemIds.length || !currentIds.every((id) => orderedItemIds.includes(id))) {
       throw new Error('Queue order must contain every active queued item exactly once.');
     }
-    this.database.exec('BEGIN IMMEDIATE');
-    try {
+    const apply = () => {
       const statement = this.database.prepare('UPDATE work_items SET queue_position = ?, updated_at = ? WHERE id = ?');
       const now = new Date().toISOString();
       orderedItemIds.forEach((id, index) => statement.run(index + 1, now, id));
@@ -1041,11 +1146,9 @@ export class WorkItemRepository {
           VALUES (?, ?, ?, ?, ?, ?, ?)
         `).run(randomUUID(), inferredStack, change.actor, change.reason, JSON.stringify(currentIds), JSON.stringify(orderedItemIds), now);
       }
-      this.database.exec('COMMIT');
-    } catch (error) {
-      this.database.exec('ROLLBACK');
-      throw error;
-    }
+      this.incrementQueueVersion(inferredStack);
+    };
+    this.transaction(apply);
     return inferredStack === 'workbench' ? this.listWorkbench() : this.list();
   }
 
@@ -1062,22 +1165,30 @@ export class WorkItemRepository {
    * stale snapshot would silently drop or resurrect tasks.
    */
   undoLastQueueChange(stack: 'attention' | 'workbench' = 'attention'): { change: QueueOrderChange; items: WorkItem[] } | null {
-    const currentIds = new Set((stack === 'workbench' ? this.listWorkbench() : this.list()).map((item) => item.id));
+    const currentVersion = this.queueVersion(stack);
+    const currentIds = (stack === 'workbench' ? this.listWorkbench() : this.list()).map((item) => item.id);
     const rows = this.database.prepare('SELECT * FROM queue_order_history WHERE stack = ? AND undone_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT 25')
       .all(stack) as Array<Record<string, string | null>>;
     for (const row of rows) {
       const change = this.mapQueueOrderChange(row);
-      const applicable = change.previousOrder.length === currentIds.size && change.previousOrder.every((id) => currentIds.has(id));
+      // Version + exact-order checks prevent an undo from replaying an old
+      // snapshot after any intervening queue mutation.
+      const applicable = currentVersion > 0 && change.newOrder.length === currentIds.length && change.newOrder.every((id, index) => id === currentIds[index]);
       if (!applicable) continue;
-      const undoneAt = new Date().toISOString();
-      const highWaterMark = Number((this.database.prepare('SELECT COALESCE(MAX(rowid), 0) AS mark FROM queue_order_history').get() as { mark: number }).mark);
-      this.database.prepare('UPDATE queue_order_history SET undone_at = ? WHERE id = ?').run(undoneAt, change.id);
-      this.database.prepare("UPDATE queue_proposals SET status = 'superseded', resolved_at = ? WHERE status = 'pending'").run(undoneAt);
-      const items = this.reorder(change.previousOrder, stack, { actor: 'jeffrey', reason: `Undo of: ${change.reason}` });
-      // The undo's own journal entry is closed immediately, so a second undo walks
-      // further back in history instead of toggling the same pair forever.
-      this.database.prepare('UPDATE queue_order_history SET undone_at = ? WHERE rowid > ? AND undone_at IS NULL').run(undoneAt, highWaterMark);
-      return { change: { ...change, undoneAt }, items };
+      return this.transaction(() => {
+        // Re-read under the writer lock; another connection may have changed
+        // the queue since the optimistic check above.
+        if (this.queueVersion(stack) !== currentVersion) return null;
+        const lockedIds = (stack === 'workbench' ? this.listWorkbench() : this.list()).map((item) => item.id);
+        if (!change.newOrder.every((id, index) => id === lockedIds[index])) return null;
+        const undoneAt = new Date().toISOString();
+        const highWaterMark = Number((this.database.prepare('SELECT COALESCE(MAX(rowid), 0) AS mark FROM queue_order_history').get() as { mark: number }).mark);
+        this.database.prepare('UPDATE queue_order_history SET undone_at = ? WHERE id = ? AND undone_at IS NULL').run(undoneAt, change.id);
+        this.database.prepare("UPDATE queue_proposals SET status = 'superseded', resolved_at = ? WHERE status = 'pending' AND stack = ?").run(undoneAt, stack);
+        const items = this.reorder(change.previousOrder, stack, { actor: 'jeffrey', reason: `Undo of: ${change.reason}` });
+        this.database.prepare('UPDATE queue_order_history SET undone_at = ? WHERE rowid > ? AND undone_at IS NULL').run(undoneAt, highWaterMark);
+        return { change: { ...change, undoneAt }, items };
+      });
     }
     return null;
   }
@@ -1128,12 +1239,13 @@ export class WorkItemRepository {
     }
     const now = new Date().toISOString();
     const id = randomUUID();
-    this.database.prepare("UPDATE queue_proposals SET status = 'superseded', resolved_at = ? WHERE status = 'pending' AND stack = ?").run(now, stack);
-    this.database.prepare(`
-      INSERT INTO queue_proposals (id, stack, status, previous_order_json, proposed_order_json, rationale, explanations_json, created_at)
-      VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
-    `).run(id, stack, JSON.stringify(previousOrder), JSON.stringify(orderedItemIds), rationale, JSON.stringify(explanations), now);
-    this.reorder(orderedItemIds, stack, { actor: 'agent', reason: `Applied a ${stack} stack proposal.` });
+    this.transaction(() => {
+      this.database.prepare("UPDATE queue_proposals SET status = 'superseded', resolved_at = ? WHERE status = 'pending' AND stack = ?").run(now, stack);
+      this.database.prepare(`
+        INSERT INTO queue_proposals (id, stack, status, previous_order_json, proposed_order_json, rationale, explanations_json, queue_version, created_at)
+        VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+      `).run(id, stack, JSON.stringify(previousOrder), JSON.stringify(orderedItemIds), rationale, JSON.stringify(explanations), this.queueVersion(stack), now);
+    });
     return this.getPendingProposal(stack)!;
   }
 
@@ -1257,8 +1369,10 @@ export class WorkItemRepository {
     if (!row) return null;
     const plan = this.getPendingExecutionPlan(row.work_item_id);
     if (!plan) return null;
+    return this.transaction(() => {
     if (resolution === 'accepted') {
       const parent = this.get(plan.workItemId)!;
+      if (parent.archivedAt) return null;
       const selectedTasks = selectedTaskIndexes === undefined ? plan.tasks : plan.tasks.filter((_, index) => selectedTaskIndexes.includes(index));
       if (!selectedTasks.length) return null;
       const children = selectedTasks.map((task) => this.create({
@@ -1272,25 +1386,37 @@ export class WorkItemRepository {
       const ordered = current.flatMap((item) => item.id === parent.id ? [item.id, ...childIds] : childIds.includes(item.id) ? [] : [item.id]);
       this.reorder(ordered, stack);
       this.addActivity(parent.id, 'jeffrey', 'decomposed', `Approved plan created ${selectedTasks.length} of ${plan.tasks.length} proposed tasks.`);
-      if (archiveParent) this.archive(parent.id, false, false, { reason: 'the approved plan replaced it with follow-up tasks' });
+      if (archiveParent) this.archive(parent.id, false, true, { reason: 'the approved plan replaced it with follow-up tasks' });
     } else {
       // Rejecting a plan is as much a decision as approving one, and it used to
       // leave the task looking untouched after an agent had proposed a breakdown.
       this.addActivity(plan.workItemId, 'jeffrey', 'decomposed', `Rejected the proposed breakdown into ${plan.tasks.length} tasks.`);
     }
     const resolvedAt = new Date().toISOString();
-    this.database.prepare('UPDATE execution_plans SET status = ?, resolved_at = ? WHERE id = ?').run(resolution, resolvedAt, id);
+    const changed = this.database.prepare('UPDATE execution_plans SET status = ?, resolved_at = ? WHERE id = ? AND status = \'pending\'').run(resolution, resolvedAt, id).changes;
+    if (!changed) return null;
     return { ...plan, status: resolution, resolvedAt };
+    });
   }
 
   resolveProposal(id: string, resolution: 'accepted' | 'rejected'): QueueProposal | null {
     const row = this.database.prepare("SELECT * FROM queue_proposals WHERE id = ? AND status = 'pending'").get(id) as Record<string, string | null> | undefined;
     if (!row) return null;
     const proposal = this.mapProposal(row);
-    if (resolution === 'rejected') this.reorder(proposal.previousOrder, proposal.stack, { actor: 'jeffrey', reason: `Rejected the ${proposal.stack} stack proposal.` });
-    const resolvedAt = new Date().toISOString();
-    this.database.prepare('UPDATE queue_proposals SET status = ?, resolved_at = ? WHERE id = ?').run(resolution, resolvedAt, id);
-    return { ...proposal, status: resolution, resolvedAt };
+    const proposalVersion = Number(row.queue_version ?? 0);
+    return this.transaction(() => {
+      // Both choices are version-guarded. A stale reject has no queue side
+      // effect, and a stale accept cannot overwrite a manual reorder.
+      if (this.queueVersion(proposal.stack) !== proposalVersion) {
+        const resolvedAt = new Date().toISOString();
+        this.database.prepare("UPDATE queue_proposals SET status = 'superseded', resolved_at = ? WHERE id = ? AND status = 'pending'").run(resolvedAt, id);
+        return { ...proposal, status: 'superseded', resolvedAt };
+      }
+      if (resolution === 'accepted') this.reorder(proposal.proposedOrder, proposal.stack, { actor: 'agent', reason: `Accepted the ${proposal.stack} stack proposal.` });
+      const resolvedAt = new Date().toISOString();
+      this.database.prepare('UPDATE queue_proposals SET status = ?, resolved_at = ? WHERE id = ? AND status = \'pending\'').run(resolution, resolvedAt, id);
+      return { ...proposal, status: resolution, resolvedAt };
+    });
   }
 
   private mapProposal(row: Record<string, string | null>): QueueProposal {
@@ -1391,15 +1517,16 @@ export class WorkItemRepository {
     // incomplete → completed is still a real transition and falls through.
     if (item.archivedAt && completed === (item.completionStatus === 'completed')) return item;
     const now = new Date().toISOString();
-    if (!withinTransaction) this.database.exec('BEGIN IMMEDIATE');
+    const ownsTransaction = !withinTransaction && this.transactionDepth === 0;
+    if (ownsTransaction) this.database.exec('BEGIN IMMEDIATE');
     try {
       this.database.prepare('UPDATE work_items SET archived_at = ?, completed_at = ?, status = ?, updated_at = ? WHERE id = ?')
         .run(now, completed ? now : null, completed ? 'done' : item.status, now, id);
       this.database.prepare(`UPDATE shared_conversations SET archived_at = ?, updated_at = ?
         WHERE archived_at IS NULL AND (work_item_id = ? OR id IN (SELECT conversation_id FROM agent_runs WHERE work_item_id = ? AND conversation_id IS NOT NULL))`).run(now, now, id, id);
-      if (!withinTransaction) this.database.exec('COMMIT');
+      if (ownsTransaction) this.database.exec('COMMIT');
     } catch (error) {
-      if (!withinTransaction) this.database.exec('ROLLBACK');
+      if (ownsTransaction) this.database.exec('ROLLBACK');
       throw error;
     }
     this.addActivity(id, context.actor ?? 'system', completed ? 'completed' : 'archived',
@@ -1693,7 +1820,8 @@ export class WorkItemRepository {
         const row = value as Record<string, string | null>;
         return {
           id: row.id!, workItemId: row.work_item_id!, kind: row.kind as AgentRun['kind'],
-          requestedTarget: row.requested_target as AgentRun['requestedTarget'], agent: row.agent as AgentRun['agent'],
+          requestedTarget: row.requested_target as AgentRun['requestedTarget'],
+          requestedAgent: (row.requested_agent ?? row.agent) as AgentRun['agent'], agent: row.agent as AgentRun['agent'],
           status: row.status as AgentRun['status'], instructions: row.instructions!, output: row.output!, error: row.error!,
           startedAt: row.started_at, completedAt: row.completed_at, createdAt: row.created_at!,
           conversationId: row.conversation_id, messageId: row.message_id,
@@ -1732,9 +1860,9 @@ export class WorkItemRepository {
     const id = randomUUID();
     const createdAt = new Date().toISOString();
     this.database.prepare(`
-      INSERT INTO agent_runs (id, work_item_id, kind, requested_target, agent, status, instructions, created_at, conversation_id, message_id)
-      VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
-    `).run(id, workItemId, kind, requestedTarget, agent, instructions, createdAt, conversationId, messageId);
+      INSERT INTO agent_runs (id, work_item_id, kind, requested_target, requested_agent, agent, status, instructions, created_at, conversation_id, message_id)
+      VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+    `).run(id, workItemId, kind, requestedTarget, agent, agent, instructions, createdAt, conversationId, messageId);
     return this.listRuns(workItemId).find((run) => run.id === id)!;
   }
 
@@ -1769,16 +1897,21 @@ export class WorkItemRepository {
     return load.codex < load.claude ? 'codex' : 'claude';
   }
 
-  updateRun(id: string, changes: { agent?: AgentRun['agent']; status?: AgentRun['status']; output?: string; error?: string; startedAt?: string; completedAt?: string; model?: string; executionProfile?: NonNullable<AgentRun['executionProfile']>; inputTokens?: number | null; outputTokens?: number | null; estimatedCostUsd?: number | null; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null }): void {
+  private runPatchEntries(changes: RunPatch): Array<[string, string | number | null]> {
     // Runs are retried in place, so clear any error left by the previous
     // attempt as soon as the reused run completes or is canceled.
     const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
     const columns = new Map<string, string | number | null | undefined>([
       ['agent', changes.agent], ['status', changes.status], ['output', changes.output], ['error', error], ['model', changes.model], ['execution_profile', changes.executionProfile],
       ['input_tokens', changes.inputTokens], ['output_tokens', changes.outputTokens], ['estimated_cost_usd', changes.estimatedCostUsd], ['fallback_from', changes.fallbackFrom], ['fallback_reason', changes.fallbackReason],
-      ['started_at', changes.startedAt], ['completed_at', changes.completedAt],
+      ['started_at', changes.startedAt], ['completed_at', changes.completedAt], ['owner_id', changes.ownerId], ['lease_expires_at', changes.leaseExpiresAt],
+      ['next_attempt_at', changes.nextAttemptAt], ['attempt', changes.attempt],
     ]);
-    const entries = [...columns].filter((entry): entry is [string, string | number | null] => entry[1] !== undefined);
+    return [...columns].filter((entry): entry is [string, string | number | null] => entry[1] !== undefined);
+  }
+
+  updateRun(id: string, changes: RunPatch): void {
+    const entries = this.runPatchEntries(changes);
     if (!entries.length) return;
     this.database.prepare(`UPDATE agent_runs SET ${entries.map(([column]) => `${column} = ?`).join(', ')} WHERE id = ?`)
       .run(...entries.map(([, value]) => value), id);
@@ -1790,7 +1923,8 @@ export class WorkItemRepository {
     if (!run || (run.status !== 'failed' && run.status !== 'canceled')) return null;
     const changed = this.database.prepare(`UPDATE agent_runs
       SET status = 'queued', error = '', started_at = NULL, completed_at = NULL,
-          owner_id = NULL, lease_expires_at = NULL, next_attempt_at = NULL, attempt = attempt + 1
+          owner_id = NULL, lease_expires_at = NULL, next_attempt_at = NULL, attempt = attempt + 1,
+          cancel_requested = 0, cancel_requested_at = NULL
       WHERE id = ? AND status IN ('failed', 'canceled')`).run(id).changes;
     if (!changed) return null;
     if (run.messageId) this.database.prepare(`UPDATE shared_messages
@@ -1827,8 +1961,7 @@ export class WorkItemRepository {
       const values: Array<string | null> = [];
       let visibleChanged = false;
 
-      this.database.exec('BEGIN IMMEDIATE');
-      try {
+      this.transaction(() => {
         for (const field of providerSyncFields) {
           const override = overrideByField.get(field);
           if (!override) {
@@ -1868,8 +2001,7 @@ export class WorkItemRepository {
           ON CONFLICT(work_item_id) DO UPDATE SET normalized_json = excluded.normalized_json, raw_payload_json = excluded.raw_payload_json,
             provider_updated_at = excluded.provider_updated_at, synced_at = excluded.synced_at`)
           .run(existing.id, JSON.stringify(incoming), JSON.stringify(input.providerPayload), input.providerUpdatedAt, now);
-        this.database.exec('COMMIT');
-      } catch (error) { this.database.exec('ROLLBACK'); throw error; }
+      });
       return 'updated';
     }
 
@@ -1910,6 +2042,11 @@ export class WorkItemRepository {
       VALUES (?, 'linear', ?, ?, ?, ?)`)
       .run(id, JSON.stringify(incoming), JSON.stringify(input.providerPayload), input.providerUpdatedAt, now);
     return 'imported';
+  }
+
+  /** Sync a Linear page atomically; individual upserts compose with this transaction. */
+  upsertLinearItems(inputs: ProviderWorkItem[]): Array<'imported' | 'updated' | 'skipped'> {
+    return this.transaction(() => inputs.map((input) => this.upsertLinearItem(input)));
   }
 
   listProviderConflicts(workItemId: string): ProviderSyncConflict[] {
@@ -2082,7 +2219,7 @@ export class WorkItemRepository {
     const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
     const changed = this.database.prepare(`
       UPDATE agent_runs SET owner_id = ?, lease_expires_at = ?, status = 'running'
-      WHERE id = ? AND status = 'queued' AND (owner_id IS NULL OR lease_expires_at < ?)
+      WHERE id = ? AND status = 'queued' AND cancel_requested = 0 AND (owner_id IS NULL OR lease_expires_at < ?)
     `).run(ownerId, leaseExpiresAt, id, now).changes;
     return Number(changed) > 0;
   }
@@ -2108,16 +2245,73 @@ export class WorkItemRepository {
   renewLeases(ownerId: string, leaseMs: number): void {
     const now = new Date().toISOString();
     const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
-    this.database.prepare(`UPDATE agent_runs SET lease_expires_at = ? WHERE owner_id = ? AND status = 'running' AND lease_expires_at >= ?`).run(leaseExpiresAt, ownerId, now);
+    this.database.prepare(`UPDATE agent_runs SET lease_expires_at = ? WHERE owner_id = ? AND status = 'running' AND cancel_requested = 0 AND lease_expires_at >= ?`).run(leaseExpiresAt, ownerId, now);
     this.database.prepare(`UPDATE shared_messages SET lease_expires_at = ? WHERE owner_id = ? AND status = 'running' AND lease_expires_at >= ?`).run(leaseExpiresAt, ownerId, now);
   }
 
   renewRunLease(id: string, ownerId: string, leaseMs: number): boolean {
+    const now = new Date().toISOString();
     const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
     const changed = this.database.prepare(`
       UPDATE agent_runs SET lease_expires_at = ?
-      WHERE id = ? AND owner_id = ? AND status = 'running'
-    `).run(leaseExpiresAt, id, ownerId).changes;
+      WHERE id = ? AND owner_id = ? AND status = 'running' AND cancel_requested = 0 AND lease_expires_at >= ?
+    `).run(leaseExpiresAt, id, ownerId, now).changes;
+    return Number(changed) > 0;
+  }
+
+  requestRunCancellation(id: string): boolean {
+    const requestedAt = new Date().toISOString();
+    const changed = this.database.prepare(`
+      UPDATE agent_runs SET cancel_requested = 1, cancel_requested_at = ?
+      WHERE id = ? AND status IN ('queued', 'running') AND cancel_requested = 0
+    `).run(requestedAt, id).changes;
+    return Number(changed) > 0;
+  }
+
+  isCancellationRequested(id: string): boolean {
+    const row = this.database.prepare('SELECT cancel_requested FROM agent_runs WHERE id = ?').get(id) as { cancel_requested: number } | undefined;
+    return row?.cancel_requested === 1;
+  }
+
+  /**
+   * The owner may publish a terminal result or retry only while it still owns
+   * the live, uncanceled attempt. The conditional write is the commit point;
+   * callers must suppress every downstream side effect when it returns false.
+   */
+  finishRun(id: string, ownerId: string, patch: RunPatch): boolean {
+    const entries = this.runPatchEntries(patch);
+    if (!entries.length) return false;
+    const changed = this.database.prepare(`
+      UPDATE agent_runs SET ${entries.map(([column]) => `${column} = ?`).join(', ')}
+      WHERE id = ? AND owner_id = ? AND status = 'running' AND cancel_requested = 0 AND lease_expires_at >= ?
+    `).run(...entries.map(([, value]) => value), id, ownerId, new Date().toISOString()).changes;
+    return Number(changed) > 0;
+  }
+
+  /** Commit recovery only if the same interrupted owner still has an expired lease. */
+  private finishExpiredRun(id: string, ownerId: string, recoveryCutoff: string, patch: RunPatch): boolean {
+    const entries = this.runPatchEntries(patch);
+    if (!entries.length) return false;
+    const changed = this.database.prepare(`
+      UPDATE agent_runs SET ${entries.map(([column]) => `${column} = ?`).join(', ')}
+      WHERE id = ? AND owner_id = ? AND status = 'running' AND cancel_requested = 0
+        AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?
+    `).run(...entries.map(([, value]) => value), id, ownerId, recoveryCutoff).changes;
+    return Number(changed) > 0;
+  }
+
+  finishRunCancellation(id: string, ownerId: string): boolean {
+    const changed = this.database.prepare(`
+      UPDATE agent_runs SET status = 'canceled', error = '', completed_at = ?, owner_id = NULL, lease_expires_at = NULL
+      WHERE id = ? AND owner_id = ? AND status = 'running' AND cancel_requested = 1
+    `).run(new Date().toISOString(), id, ownerId).changes;
+    return Number(changed) > 0;
+  }
+
+  finishQueuedRunCancellation(id: string): boolean {
+    const changed = this.database.prepare(`UPDATE agent_runs
+      SET status = 'canceled', error = '', completed_at = ?
+      WHERE id = ? AND status = 'queued' AND cancel_requested = 1`).run(new Date().toISOString(), id).changes;
     return Number(changed) > 0;
   }
 
@@ -2131,15 +2325,14 @@ export class WorkItemRepository {
   }
 
   /** Schedule a bounded retry for a run that failed transiently. Returns false when attempts are exhausted. */
-  scheduleRunRetry(id: string, delayMs: number): boolean {
+  scheduleRunRetry(id: string, ownerId: string, delayMs: number): boolean {
     const row = this.database.prepare('SELECT attempt, max_attempts FROM agent_runs WHERE id = ?').get(id) as { attempt: number; max_attempts: number } | undefined;
     if (!row || row.attempt + 1 >= row.max_attempts) return false;
     const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
-    this.database.prepare(`
-      UPDATE agent_runs SET status = 'queued', owner_id = NULL, lease_expires_at = NULL, attempt = attempt + 1, next_attempt_at = ?
-      WHERE id = ?
-    `).run(nextAttemptAt, id);
-    return true;
+    return this.finishRun(id, ownerId, {
+      status: 'queued', ownerId: null, leaseExpiresAt: null,
+      attempt: row.attempt + 1, nextAttemptAt,
+    });
   }
 
   /**
@@ -2152,20 +2345,25 @@ export class WorkItemRepository {
     // A missed heartbeat is not proof of a restart. Wait through a grace period
     // before recovery changes user-visible state.
     const recoveryCutoff = new Date(Date.now() - graceMs).toISOString();
-    const expiredRuns = this.database.prepare(`SELECT id, kind FROM agent_runs WHERE status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at < ?`).all(recoveryCutoff) as Array<{ id: string; kind: AgentRun['kind'] }>;
+    const expiredRuns = this.database.prepare(`SELECT id, kind, owner_id, cancel_requested, attempt, max_attempts FROM agent_runs
+      WHERE status = 'running' AND (lease_expires_at <= ? OR (owner_id IS NULL AND lease_expires_at IS NULL))`).all(recoveryCutoff) as Array<{ id: string; kind: AgentRun['kind']; owner_id: string | null; cancel_requested: number; attempt: number; max_attempts: number }>;
     const recoveredRunIds: string[] = [];
     const failedRunIds: string[] = [];
     for (const run of expiredRuns) {
-      if (run.kind === 'execute') {
-        this.updateRun(run.id, { status: 'failed', error: 'Agent process stopped reporting progress. Retry or continue the conversation.', completedAt: now });
-        this.database.prepare('UPDATE agent_runs SET owner_id = NULL, lease_expires_at = NULL WHERE id = ?').run(run.id);
+      if (run.cancel_requested === 1) {
+        this.database.prepare(`UPDATE agent_runs SET status = 'canceled', completed_at = ?, owner_id = NULL, lease_expires_at = NULL
+          WHERE id = ? AND status = 'running' AND cancel_requested = 1`).run(now, run.id);
+      } else if (!run.owner_id) {
+        this.updateRun(run.id, { status: 'failed', error: 'Agent process stopped reporting progress without a durable owner.', completedAt: now, ownerId: null, leaseExpiresAt: null });
         failedRunIds.push(run.id);
-      } else if (this.scheduleRunRetry(run.id, 0)) {
+      } else if (run.kind === 'execute') {
+        if (this.finishExpiredRun(run.id, run.owner_id, recoveryCutoff, { status: 'failed', error: 'Agent process stopped reporting progress. Retry or continue the conversation.', completedAt: now, ownerId: null, leaseExpiresAt: null })) failedRunIds.push(run.id);
+      } else if (run.attempt + 1 < run.max_attempts && this.finishExpiredRun(run.id, run.owner_id, recoveryCutoff, {
+        status: 'queued', ownerId: null, leaseExpiresAt: null, attempt: run.attempt + 1, nextAttemptAt: now,
+      })) {
         recoveredRunIds.push(run.id);
       } else {
-        this.updateRun(run.id, { status: 'failed', error: 'Retry attempts exhausted after interruption.', completedAt: now });
-        this.database.prepare('UPDATE agent_runs SET owner_id = NULL, lease_expires_at = NULL WHERE id = ?').run(run.id);
-        failedRunIds.push(run.id);
+        if (this.finishExpiredRun(run.id, run.owner_id, recoveryCutoff, { status: 'failed', error: 'Retry attempts exhausted after interruption.', completedAt: now, ownerId: null, leaseExpiresAt: null })) failedRunIds.push(run.id);
       }
     }
     // Shared messages with expired leases are interrupted (not retried). If there's
@@ -2187,11 +2385,38 @@ export class WorkItemRepository {
     return { recoveredRunIds, failedRunIds, recoveredMessageIds };
   }
 
-  /** Runs that are queued and due (no scheduled delay, or the delay has elapsed). */
-  dueWork(): { runIds: string[] } {
+  /**
+   * Runs that are queued and due (no scheduled delay, or the delay has elapsed).
+   *
+   * When `limit` (a concurrency ceiling) is given, the result is capped at
+   * `max(0, limit - currently running)`. The running count is read fresh from the
+   * database (a COUNT of `status = 'running'` rows) rather than kept as an in-process
+   * counter, because `app.ts` also dispatches runs directly, bypassing the scheduler
+   * entirely, for user-triggered actions. An in-memory counter in the scheduler would
+   * be blind to those dispatches; counting running rows in the DB makes the ceiling
+   * global across every process and every dispatch path.
+   */
+  dueWork(limit?: number): { runIds: string[] } {
     const now = new Date().toISOString();
-    const rows = this.database.prepare(`SELECT id FROM agent_runs WHERE status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at ASC`).all(now) as Array<{ id: string }>;
+    if (limit !== undefined) {
+      const running = this.runningRunCount();
+      const capacity = Math.max(0, limit - running);
+      if (capacity === 0) return { runIds: [] };
+      const rows = this.database.prepare(`
+        SELECT id FROM agent_runs
+        WHERE status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+        ORDER BY created_at ASC, rowid ASC LIMIT ?
+      `).all(now, capacity) as Array<{ id: string }>;
+      return { runIds: rows.map((row) => row.id) };
+    }
+    const rows = this.database.prepare(`SELECT id FROM agent_runs WHERE status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at ASC, rowid ASC`).all(now) as Array<{ id: string }>;
     return { runIds: rows.map((row) => row.id) };
+  }
+
+  /** Count of agent_run rows currently claimed and executing (status = 'running'). */
+  runningRunCount(): number {
+    const row = this.database.prepare(`SELECT COUNT(*) AS n FROM agent_runs WHERE status = 'running'`).get() as { n: number };
+    return Number(row.n);
   }
 
   hasLiveWork(): boolean {
@@ -2264,6 +2489,44 @@ export class WorkItemRepository {
     `).run(id, event, subsystem, outcome, errorCode ?? null, detail, durationMs ?? null, now);
   }
 
+  /**
+   * Historical runs recorded tokens but no cost, because pricing used to be
+   * keyed by agent and was never configured. Fill those gaps in from the model
+   * rate table so the cost trend has history instead of starting from today.
+   *
+   * Only null costs are filled, so this is idempotent and never overwrites a
+   * provider-reported total. Safe to call on every boot.
+   */
+  backfillEstimatedCosts(): number {
+    const rows = this.database.prepare(`
+      SELECT id, agent, model, input_tokens, output_tokens FROM agent_runs
+      WHERE estimated_cost_usd IS NULL AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL)
+    `).all() as Array<{ id: string; agent: 'codex' | 'claude'; model: string | null; input_tokens: number | null; output_tokens: number | null }>;
+    const messages = this.database.prepare(`
+      SELECT id, author, model, input_tokens, output_tokens FROM shared_messages
+      WHERE estimated_cost_usd IS NULL AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL)
+        AND author IN ('codex', 'claude')
+    `).all() as Array<{ id: string; author: 'codex' | 'claude'; model: string | null; input_tokens: number | null; output_tokens: number | null }>;
+    const updateRun = this.database.prepare('UPDATE agent_runs SET estimated_cost_usd = ? WHERE id = ?');
+    const updateMessage = this.database.prepare('UPDATE shared_messages SET estimated_cost_usd = ? WHERE id = ?');
+    let filled = 0;
+    this.transaction(() => {
+      for (const row of rows) {
+        const cost = estimateModelCost(row.agent, row.model, row.input_tokens, row.output_tokens);
+        if (cost === null) continue;
+        updateRun.run(cost, row.id);
+        filled += 1;
+      }
+      for (const row of messages) {
+        const cost = estimateModelCost(row.author, row.model, row.input_tokens, row.output_tokens);
+        if (cost === null) continue;
+        updateMessage.run(cost, row.id);
+        filled += 1;
+      }
+    });
+    return filled;
+  }
+
   getRunInsights(days: 7 | 30 = 30): RunInsights {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
     const runs = this.database.prepare(`
@@ -2322,18 +2585,37 @@ export class WorkItemRepository {
     })));
 
     const costByDay: Record<string, number> = {};
-    const tokenUsageByModel = new Map<string, { provider: 'codex' | 'claude'; model: string | null; inputTokens: number; outputTokens: number }>();
+    const costByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
+    const tokenUsageByModel = new Map<string, { provider: 'codex' | 'claude'; model: string | null; inputTokens: number; outputTokens: number; costUsd: number; runs: number }>();
+    let totalCostUsd = 0;
+    let pricedRuns = 0;
+    let unpricedRuns = 0;
     for (const run of runs) {
       const day = run.created_at.slice(0, 10);
       costByDay[day] = (costByDay[day] ?? 0) + (run.estimated_cost_usd ?? 0);
+      totalCostUsd += run.estimated_cost_usd ?? 0;
+      costByAgent[run.agent] += run.estimated_cost_usd ?? 0;
+      if (run.estimated_cost_usd !== null) pricedRuns += 1;
+      // A run that reported tokens but carries no cost has no rate for its
+      // model. Surfacing that count keeps the total honest rather than silently low.
+      else if (run.input_tokens !== null || run.output_tokens !== null) unpricedRuns += 1;
       if (run.input_tokens !== null || run.output_tokens !== null) {
         const key = `${run.agent}:${run.model ?? ''}`;
-        const bucket = tokenUsageByModel.get(key) ?? { provider: run.agent, model: run.model, inputTokens: 0, outputTokens: 0 };
+        const bucket = tokenUsageByModel.get(key) ?? { provider: run.agent, model: run.model, inputTokens: 0, outputTokens: 0, costUsd: 0, runs: 0 };
         bucket.inputTokens += run.input_tokens ?? 0;
         bucket.outputTokens += run.output_tokens ?? 0;
+        bucket.costUsd += run.estimated_cost_usd ?? 0;
+        bucket.runs += 1;
         tokenUsageByModel.set(key, bucket);
       }
     }
+    // Trend compares this window against the equally long window before it.
+    const previousWindowStart = new Date(Date.now() - days * 2 * 24 * 60 * 60 * 1000).toISOString();
+    const previousCost = this.database.prepare(`
+      SELECT COALESCE(SUM(estimated_cost_usd), 0) AS cost, COUNT(*) AS runs FROM agent_runs
+      WHERE status IN ('completed', 'failed', 'canceled') AND created_at >= ? AND created_at < ?
+    `).get(previousWindowStart, since) as { cost: number | null; runs: number | null };
+    const previousCostUsd = previousCost.runs ? Number(previousCost.cost ?? 0) : null;
 
     const fitBuckets = new Map<string, { kind: AgentRun['kind']; agent: 'codex' | 'claude'; completed: number; failed: number; durations: number[] }>();
     for (const run of runs) {
@@ -2388,7 +2670,15 @@ export class WorkItemRepository {
       handoffCount,
       inputTokens: [...tokenUsageByModel.values()].reduce((total, bucket) => total + bucket.inputTokens, 0),
       outputTokens: [...tokenUsageByModel.values()].reduce((total, bucket) => total + bucket.outputTokens, 0),
-      tokenUsageByModel: [...tokenUsageByModel.values()].sort((left, right) => {
+      costUsd: Number(totalCostUsd.toFixed(6)),
+      previousCostUsd: previousCostUsd === null ? null : Number(previousCostUsd.toFixed(6)),
+      pricedRuns,
+      unpricedRuns,
+      tokenUsageByModel: [...tokenUsageByModel.values()].map((bucket) => ({
+        ...bucket,
+        costUsd: Number(bucket.costUsd.toFixed(6)),
+        rateSource: resolveModelRate(bucket.provider, bucket.model)?.source ?? null,
+      })).sort((left, right) => {
         const usageDifference = (right.inputTokens + right.outputTokens) - (left.inputTokens + left.outputTokens);
         if (usageDifference !== 0) return usageDifference;
         return `${left.provider}:${left.model ?? ''}`.localeCompare(`${right.provider}:${right.model ?? ''}`);
@@ -2408,7 +2698,7 @@ export class WorkItemRepository {
       })),
       costByDay: Object.entries(costByDay)
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([day, costUsd]) => ({ day, costUsd })),
+        .map(([day, costUsd]) => ({ day, costUsd: Number(costUsd.toFixed(6)) })),
       byAgent: Object.entries(byAgent).map(([agent, bucket]) => ({
         agent: agent as 'codex' | 'claude',
         total: bucket.total,
@@ -2419,6 +2709,7 @@ export class WorkItemRepository {
         fallbackRate: bucket.total > 0 ? bucket.fallback / bucket.total : null,
         medianDurationMs: median(bucket.durations),
         p90DurationMs: percentile(bucket.durations, 0.9),
+        costUsd: Number(costByAgent[agent as 'codex' | 'claude'].toFixed(6)),
       })),
       byKind: Object.entries(byKind)
         .filter(([, bucket]) => bucket.completed + bucket.failed > 0)
@@ -2482,7 +2773,7 @@ export class WorkItemRepository {
     const cutoff = new Date(Date.now() - graceMs).toISOString();
     const stranded = this.database.prepare(`
       SELECT id, work_item_id, message_id FROM agent_runs
-      WHERE status = 'running' AND lease_expires_at IS NULL AND created_at < ?
+      WHERE status = 'running' AND lease_expires_at IS NULL AND created_at <= ?
     `).all(cutoff) as Array<{ id: string; work_item_id: string; message_id: string | null }>;
     if (stranded.length > 0) {
       const now = new Date().toISOString();

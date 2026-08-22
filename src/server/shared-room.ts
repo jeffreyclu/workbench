@@ -1,5 +1,6 @@
-import type { AgentRun, SharedMessage } from '../shared/contracts.js';
-import { judgeExecutionProfile, modelFor, runAgentCommandWithFallback, selectPromptExecutionProfile } from './agent-runner.js';
+import { resolve } from 'node:path';
+import type { AgentRun, SharedMessage, WorkItem } from '../shared/contracts.js';
+import { buildPrompt, classifyExecution, judgeExecutionProfile, modelFor, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -13,6 +14,15 @@ function connectionSearchQuery(message: string): string {
 }
 
 export const connectionContextForPrompt = contextForPrompt;
+
+export function classificationForLinkedItem(repository: WorkItemRepository, item: WorkItem) {
+  return repository.getClassification(item.id) ?? repository.setClassification(item.id, classifyExecution(item));
+}
+
+/** Linked conversations inherit their task workspace rather than the Workbench server cwd. */
+export function resolveSharedReplyWorkingDirectory(linkedItem: WorkItem | null): string {
+  return linkedItem ? resolveWorkingDirectory(linkedItem) : process.cwd();
+}
 
 export function compactConversationHistory(messages: SharedMessage[], budget = 8_000): string {
   const reserveForOlder = messages.length > 4 ? Math.min(900, Math.floor(budget * 0.15)) : 0;
@@ -37,6 +47,26 @@ export function compactConversationHistory(messages: SharedMessage[], budget = 8
     return `- ${message.author}: ${oneLine.slice(0, 140)}${oneLine.length > 140 ? '…' : ''}`;
   }).join('\n').slice(0, Math.max(0, reserveForOlder - olderHeader.length - 2)) : '';
   return [olderSummary ? `${olderHeader}${olderSummary}` : '', recent.join('\n\n')].filter(Boolean).join('\n\n');
+}
+
+export function buildSharedReplyPrompt(
+  agent: AgentRun['agent'],
+  sharedContext: string,
+  connectionContext: string,
+  thread: SharedMessage[],
+  linked?: { item: WorkItem; run: AgentRun },
+): string {
+  const roleContext = linked
+    ? buildPrompt(linked.item, linked.run, sharedContext)
+    : `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.\n\n${sharedContext}`;
+  return `${roleContext}
+
+${connectionContext}
+
+Current conversation:
+${compactConversationHistory(thread)}
+
+Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential. Do not claim that background work, a subagent, or a benchmark will continue after this response. Keep the Workbench run open until delegated work has returned and you can report its observed result; otherwise state that the work is blocked or incomplete.`;
 }
 
 export function linearContextForPrompt(repository: WorkItemRepository, message: string): string {
@@ -64,10 +94,17 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   // GET /api/shared/messages requests racing) both promoting and dispatching
   // the same queued turn.
   if (!repository.claimQueuedTurn(queued.message.id)) return [];
-  const agents = queued.dispatchTarget === 'both' ? ['codex', 'claude'] as const
-    : queued.dispatchTarget === 'auto' ? [repository.selectBalancedAgent('codex')] : [queued.dispatchTarget];
   const conversation = repository.listConversations().find((item) => item.id === conversationId);
   const linkedItem = conversation?.workItemId ? repository.get(conversation.workItemId) : null;
+  // A linked task may predate classification. Use its deterministic routing
+  // instead of treating every chat instruction as generic analysis, and persist
+  // it so later execute/retry paths use the same capability.
+  const classification = linkedItem ? classificationForLinkedItem(repository, linkedItem) : null;
+  const taskKind = classification?.kind ?? 'analysis';
+  const resolvedAgents = resolveAgents(taskKind, queued.dispatchTarget);
+  const agents = queued.dispatchTarget === 'auto'
+    ? [repository.selectBalancedAgent(resolvedAgents[0])]
+    : resolvedAgents;
   if (linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled') {
     repository.update(linkedItem.id, { status: 'in_progress' });
     const attachmentText = queued.message.attachments.length ? ` · ${queued.message.attachments.length} attachment${queued.message.attachments.length === 1 ? '' : 's'}` : '';
@@ -76,7 +113,6 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'running', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile));
   for (const reply of replies) {
     const agent = reply.author as AgentRun['agent'];
-    const taskKind = linkedItem ? repository.getClassification(linkedItem.id)?.kind ?? 'analysis' : 'analysis';
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'
       ? repository.createRun(linkedItem.id, taskKind, queued.dispatchTarget, agent, queued.message.body, conversationId, reply.id)
       : null;
@@ -151,29 +187,29 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const latestUserMessage = [...thread].reverse().find((message) => message.author === 'jeffrey')?.body ?? '';
     const recentSourceReferences = thread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body);
     const connectionContext = await connectionContextForPrompt(repository, [latestUserMessage, ...recentSourceReferences].join('\n'));
-    const prompt = `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.
-
-${repository.getSharedContext(target.conversationId, { conversationId: target.conversationId })}
-
-${connectionContext}
-
-Current conversation:
-${compactConversationHistory(thread)}
-
-Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential.`;
-    const selfHostingGuard = `
-
-Workbench self-hosting safety:
-This conversation is running inside the live Workbench control plane. Source edits appear in the preview at http://localhost:5174; the approved live release stays at http://localhost:5173. Never run runtime:promote, start, stop, restart, or kill Workbench, Vite, ngrok, or their ports from an agent response. Never claim either environment is down without an actual HTTP health check. If Jeffrey reports a preview bug, inspect and fix the source, verify it, and ask him to review the preview. Promotion happens only through Workbench's explicit preview-approval command after all agent work finishes.`;
+    const linkedRun = runId ? repository.getRun(runId) : null;
+    const linkedItem = linkedRun ? repository.get(linkedRun.workItemId) : null;
+    const cwd = resolveSharedReplyWorkingDirectory(linkedItem);
+    if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}.`);
+    const prompt = buildSharedReplyPrompt(
+      agent,
+      repository.getSharedContext(target.conversationId, { conversationId: target.conversationId }),
+      connectionContext,
+      thread,
+      linkedRun && linkedItem ? { item: linkedItem, run: linkedRun } : undefined,
+    );
+    const selfHostingGuard = resolve(cwd) === resolve(process.cwd())
+      ? `\n\nWorkbench self-hosting safety:\nThis conversation is running inside the live Workbench control plane. Source edits appear in the preview at http://localhost:5174; the approved live release stays at http://localhost:5173. Never run runtime:promote, start, stop, restart, or kill Workbench, Vite, ngrok, or their ports from an agent response. Never claim either environment is down without an actual HTTP health check. If Jeffrey reports a preview bug, inspect and fix the source, verify it, and ask him to review the preview. Promotion happens only through Workbench's explicit preview-approval command after all agent work finishes.`
+      : '';
     repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
     const guardedPrompt = prompt + selfHostingGuard;
     const profile = target.executionProfile && target.executionProfile !== 'routing'
       ? target.executionProfile
-      : await judgeExecutionProfile(latestUserMessage || guardedPrompt, process.cwd(), controller.signal);
+      : await judgeExecutionProfile(latestUserMessage || guardedPrompt, cwd, controller.signal);
     repository.updateSharedMessage(messageId, { model: modelFor(agent, profile), executionProfile: profile });
     if (runId) repository.updateRun(runId, { model: modelFor(agent, profile), executionProfile: profile });
     repository.setConversationExecutionProfile(target.conversationId, profile);
-    const result = await runAgentCommandWithFallback(agent, process.cwd(), guardedPrompt, (partial) => {
+    const result = await runAgentCommandWithFallback(agent, cwd, guardedPrompt, (partial) => {
       repository.updateSharedMessage(messageId, { body: partial });
       if (runId) repository.updateRun(runId, { output: partial });
     }, controller.signal, (fallback, reason) => {
@@ -183,7 +219,7 @@ This conversation is running inside the live Workbench control plane. Source edi
       const telemetry = { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd };
       repository.updateSharedMessage(messageId, telemetry);
       if (runId) repository.updateRun(runId, telemetry);
-    });
+    }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis');
     const telemetry = { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, estimatedCostUsd: result.usage.estimatedCostUsd, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
     repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'completed', ...telemetry });
     if (runId) repository.updateRun(runId, { agent: result.agent, output: result.output, status: 'completed', completedAt: new Date().toISOString(), ...telemetry });
@@ -250,14 +286,15 @@ function synthesisSource(repository: WorkItemRepository, conversationId: string,
   const request = [...messages].reverse().find((message) => message.author === 'jeffrey' && message.dispatchTarget === 'both' && message.createdAt <= replyCreatedAt);
   if (!request) return null;
   const replies = messages.filter((message) => message.createdAt >= request.createdAt && (message.author === 'codex' || message.author === 'claude'));
-  const codex = [...replies].reverse().find((message) => message.author === 'codex');
-  const claude = [...replies].reverse().find((message) => message.author === 'claude');
+  const requestedAgentFor = (message: SharedMessage) => repository.getRunByMessage(message.id)?.requestedAgent ?? message.author;
+  const codex = [...replies].reverse().find((message) => requestedAgentFor(message) === 'codex');
+  const claude = [...replies].reverse().find((message) => requestedAgentFor(message) === 'claude');
   if (!codex || !claude || codex.status !== 'completed' || claude.status !== 'completed') return null;
   const alreadySynthesized = messages.some((message) => message.author === 'system' && message.createdAt >= request.createdAt && message.body.startsWith('Synthesis:'));
   if (alreadySynthesized) return null;
   return {
     codex, claude,
-    prompt: `Synthesize these two independent agent responses to Jeffrey's request. Lead with the practical conclusion. Reconcile disagreements, retain concrete evidence, and say which points remain unverified. Do not mention that you are a synthesizer or repeat both reports. Keep it concise.\n\nJeffrey: ${request.body}\n\nCodex:\n${codex.body}\n\nClaude:\n${claude.body}`,
+    prompt: `Synthesize these two independent agent responses to Jeffrey's request. Lead with the practical conclusion. Reconcile disagreements, retain concrete evidence, and say which points remain unverified. Do not mention that you are a synthesizer or repeat both reports. Keep it concise.\n\nJeffrey: ${request.body}\n\nCodex-requested response (executed by ${codex.author}):\n${codex.body}\n\nClaude-requested response (executed by ${claude.author}):\n${claude.body}`,
   };
 }
 

@@ -5,6 +5,7 @@ import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { SourceProvider } from '../shared/contracts.js';
 import type { SourceSignal } from './source-scanner.js';
+import { assertApprovedMcpServer, createOutboundFetch } from './outbound-policy.js';
 
 interface StoredOAuth { serverUrl: string; tokens?: OAuthTokens; clientInformation?: OAuthClientInformationMixed }
 class WorkbenchOAuthProvider implements OAuthClientProvider {
@@ -36,10 +37,11 @@ export function mcpAuthenticationMessage(provider: SourceProvider): string {
 }
 
 export async function startRemoteMcpOAuth(provider: PendingMcp['provider'], serverUrl: string, callbackBase: string): Promise<string> {
+  const approvedServerUrl = assertApprovedMcpServer(provider, serverUrl);
   const state = randomUUID();
-  const stored: StoredOAuth = { serverUrl };
+  const stored: StoredOAuth = { serverUrl: approvedServerUrl.toString() };
   const oauth = new WorkbenchOAuthProvider(`${callbackBase}/${provider}/mcp/oauth/callback`, stored);
-  const transport = new StreamableHTTPClientTransport(new URL(serverUrl), { authProvider: oauth });
+  const transport = new StreamableHTTPClientTransport(approvedServerUrl, { authProvider: oauth, fetch: createOutboundFetch(provider === 'slack' ? 'mcp-slack' : provider === 'figma' ? 'mcp-figma' : 'mcp-atlassian') });
   const client = new Client({ name: 'workbench', version: '0.1.0' });
   try { await client.connect(transport); } catch { /* Expected while OAuth authorization is required. */ }
   const authorizationUrl = oauth.authorizationUrl();
@@ -55,7 +57,8 @@ export async function finishRemoteMcpOAuth(provider: PendingMcp['provider'], cod
   if (!entry || entry.provider !== provider || Date.now() - entry.createdAt > 10 * 60_000) throw new Error('MCP authorization expired. Start the connection again.');
   await entry.transport.finishAuth(code);
   await entry.client.close().catch(() => undefined);
-  const verificationTransport = new StreamableHTTPClientTransport(new URL(entry.oauth.snapshot().serverUrl), { authProvider: entry.oauth });
+  const verifiedServerUrl = assertApprovedMcpServer(provider, entry.oauth.snapshot().serverUrl);
+  const verificationTransport = new StreamableHTTPClientTransport(verifiedServerUrl, { authProvider: entry.oauth, fetch: createOutboundFetch(provider === 'slack' ? 'mcp-slack' : provider === 'figma' ? 'mcp-figma' : 'mcp-atlassian') });
   const verificationClient = new Client({ name: 'workbench', version: '0.1.0' });
   await verificationClient.connect(verificationTransport);
   await verificationClient.listTools();
@@ -67,7 +70,8 @@ export async function scanRemoteMcp(provider: PendingMcp['provider'], settings: 
   const stored = settings as unknown as StoredOAuth;
   if (!stored.serverUrl || !stored.tokens) throw new Error('MCP OAuth credentials are missing. Reconnect this source.');
   const oauth = new WorkbenchOAuthProvider('http://localhost/unused', stored);
-  const transport = new StreamableHTTPClientTransport(new URL(stored.serverUrl), { authProvider: oauth });
+  const approvedServerUrl = assertApprovedMcpServer(provider, stored.serverUrl);
+  const transport = new StreamableHTTPClientTransport(approvedServerUrl, { authProvider: oauth, fetch: createOutboundFetch(provider === 'slack' ? 'mcp-slack' : provider === 'figma' ? 'mcp-figma' : 'mcp-atlassian') });
   const client = new Client({ name: 'workbench', version: '0.1.0' });
   try {
     await client.connect(transport);

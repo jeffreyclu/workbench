@@ -1,7 +1,7 @@
 /**
- * Spawned coding-agent subprocesses (Claude Code / Codex CLIs) run with their own tool-approval
- * sandbox bypassed (see `commandFor` in agent-runner.ts), so the process environment is the only
- * remaining boundary between them and Workbench's own secrets. The CLIs authenticate from local
+ * Execute subprocesses run with write-capable approval settings; retryable read-only kinds use
+ * each CLI's restricted mode (see `commandFor` in agent-runner.ts). In either mode, the process
+ * environment is a separate boundary protecting Workbench's own secrets. The CLIs authenticate from local
  * config under HOME, not from env vars, and have no legitimate need for anything Workbench itself
  * reads via `process.env` — LINEAR_API_KEY, GITHUB_TOKEN, WORKBENCH_TOKEN, SLACK_*, CLOUDFLARE_*,
  * WORKBENCH_*_MODEL*, pricing vars, etc. This is an explicit allowlist of what the agent actually

@@ -131,6 +131,43 @@ describe('artifact library', () => {
     expect(artifacts.planPublication('/dev/workbench/notes/legacy.md', 'hash-legacy', 'unused')).toMatchObject({ kind: 'unchanged' });
     second.close();
   });
+
+  it('serializes publish and revoke with a durable operation claim, including crash states', () => {
+    const { artifacts } = library();
+    const publish = artifacts.beginDeploymentOperation('publish', '{"id":"first"}');
+    expect(() => artifacts.beginDeploymentOperation('revoke', '{"id":"second"}')).toThrow(/already in progress/i);
+    // This is the state a crash leaves before the remote deployment starts.
+    expect(artifacts.pendingDeploymentOperations()).toMatchObject([{ id: publish.id, state: 'staged' }]);
+    // This is the state a crash leaves after the remote deployment succeeds;
+    // createApp finalizes this journal entry on the next live startup.
+    artifacts.updateDeploymentOperation(publish.id, 'deployed');
+    expect(artifacts.pendingDeploymentOperations()).toMatchObject([{ id: publish.id, state: 'deployed' }]);
+    artifacts.updateDeploymentOperation(publish.id, 'completed');
+    expect(artifacts.pendingDeploymentOperations()).toEqual([]);
+  });
+
+  it('records a recovered rendered snapshot only for an existing version', () => {
+    const { artifacts } = library();
+    publish(artifacts, { id: 'report', hash: 'hash-report', version: 1 }, 'published');
+
+    expect(artifacts.recordRenderedSnapshot('report', 1, '<h1>Immutable report</h1>')).toBe(true);
+    expect(artifacts.recordRenderedSnapshot('report', 1, '<h1>Replacement</h1>')).toBe(false);
+    expect(artifacts.recordRenderedSnapshot('missing', 1, '<h1>Missing</h1>')).toBe(false);
+    expect(artifacts.listLive()).toMatchObject([{
+      id: 'report', snapshots: [{ version: 1, content: '<h1>Immutable report</h1>' }],
+    }]);
+  });
+
+  it('includes revoked artifacts when identifying snapshots for recovery', () => {
+    const { artifacts } = library();
+    publish(artifacts, { id: 'revoked-report', hash: 'hash-report', version: 1 }, 'published');
+    artifacts.markRevoked('revoked-report');
+
+    expect(artifacts.listLive()).toEqual([]);
+    expect(artifacts.listSnapshotCandidates()).toMatchObject([{
+      id: 'revoked-report', snapshots: [{ version: 1, content: null }],
+    }]);
+  });
 });
 
 describe('artifact feedback configuration', () => {

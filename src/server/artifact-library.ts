@@ -110,6 +110,16 @@ export interface PublicationInput {
   note?: string;
   workItemId?: string | null;
   conversationId?: string | null;
+  /** Immutable, fully rendered HTML used to reconstruct this exact version. */
+  renderedContent?: string;
+}
+
+export interface ArtifactDeploymentOperation {
+  id: string;
+  kind: 'publish' | 'revoke';
+  state: 'staged' | 'deployed' | 'completed' | 'failed';
+  manifest: string;
+  error: string;
 }
 
 /** What a publish attempt should do, decided before anything is deployed. */
@@ -183,11 +193,33 @@ export class ArtifactLibrary {
    * missing or wiped directory can't silently take other shares offline.
    */
   listLive(): LiveArtifact[] {
+    return this.listSnapshotCandidates(false);
+  }
+
+  /**
+   * Returns artifacts whose historical snapshots may need recovery. Revoked
+   * artifacts are included because restoring one later must not make a
+   * whole-directory deploy drop its older version URLs.
+   */
+  listSnapshotCandidates(includeRevoked = true): LiveArtifact[] {
     const rows = this.database.prepare(`
       SELECT id, source_path, title, current_version AS version
-      FROM published_artifacts WHERE revoked_at IS NULL
+      FROM published_artifacts ${includeRevoked ? '' : 'WHERE revoked_at IS NULL'}
     `).all() as Row[];
-    return rows.map((row) => ({ id: String(row.id), sourcePath: text(row.source_path), title: text(row.title), version: Number(row.version ?? 1) }));
+    return rows.map((row) => {
+      const id = String(row.id);
+      const versions = this.database.prepare(`
+        SELECT artifact_versions.version, artifact_versions.content_hash AS contentHash, artifact_rendered_versions.content
+        FROM artifact_versions LEFT JOIN artifact_rendered_versions
+          ON artifact_rendered_versions.artifact_id = artifact_versions.artifact_id
+          AND artifact_rendered_versions.version = artifact_versions.version
+        WHERE artifact_versions.artifact_id = ? ORDER BY artifact_versions.version ASC
+      `).all(id) as Array<{ version: number; contentHash: string; content: string | null }>;
+      return {
+        id, sourcePath: text(row.source_path), title: text(row.title), version: Number(row.version ?? 1),
+        snapshots: versions.map((entry) => ({ version: Number(entry.version), contentHash: entry.contentHash, content: entry.content })),
+      };
+    });
   }
 
   listForWorkItem(workItemId: string): ArtifactSummary[] {
@@ -246,9 +278,34 @@ export class ArtifactLibrary {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(randomUUID(), input.id, input.version, input.title, input.sourcePath, input.contentHash, input.url, input.note ?? '', now);
     }
+    if (input.renderedContent) {
+      this.database.prepare(`
+        INSERT INTO artifact_rendered_versions (artifact_id, version, content, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(artifact_id, version) DO NOTHING
+      `).run(input.id, input.version, input.renderedContent, now);
+    }
 
     this.addEvent(input.id, kind === 'unchanged' ? 'republished' : kind, input.version, input.note ?? '');
     return this.get(input.id)!;
+  }
+
+  /**
+   * Imports a legacy rendered page only when its artifact/version already
+   * exists. Callers must supply the page that was actually deployed, or one
+   * whose stored content hash proves it reconstructs the published version.
+   */
+  recordRenderedSnapshot(artifactId: string, version: number, content: string): boolean {
+    if (!content) return false;
+    const now = new Date().toISOString();
+    return this.database.prepare(`
+      INSERT INTO artifact_rendered_versions (artifact_id, version, content, created_at)
+      SELECT ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM artifact_versions WHERE artifact_id = ? AND version = ?
+      )
+      ON CONFLICT(artifact_id, version) DO NOTHING
+    `).run(artifactId, version, content, now, artifactId, version).changes === 1;
   }
 
   markRevoked(id: string): ArtifactSummary | null {
@@ -264,6 +321,30 @@ export class ArtifactLibrary {
     if (!ids.length) return;
     const now = new Date().toISOString();
     this.database.prepare(`UPDATE published_artifacts SET revoked_at = ? WHERE id IN (${ids.map(() => '?').join(',')}) AND revoked_at IS NULL`).run(now, ...ids);
+  }
+
+  beginDeploymentOperation(kind: ArtifactDeploymentOperation['kind'], manifest: string): ArtifactDeploymentOperation {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    // One serialized publisher is intentional. SQLite makes this a durable
+    // cross-process claim, not merely an in-memory mutex.
+    const claimed = this.database.prepare(`
+      INSERT INTO artifact_deployment_operations (id, kind, state, manifest_json, created_at, updated_at)
+      SELECT ?, ?, 'staged', ?, ?, ?
+      WHERE NOT EXISTS (SELECT 1 FROM artifact_deployment_operations WHERE state IN ('staged', 'deployed'))
+    `).run(id, kind, manifest, now, now).changes;
+    if (!claimed) throw new Error('Another artifact publish or revoke is already in progress. Retry when it finishes.');
+    return { id, kind, state: 'staged', manifest, error: '' };
+  }
+
+  updateDeploymentOperation(id: string, state: ArtifactDeploymentOperation['state'], error = ''): void {
+    this.database.prepare('UPDATE artifact_deployment_operations SET state = ?, error = ?, updated_at = ? WHERE id = ?')
+      .run(state, error, new Date().toISOString(), id);
+  }
+
+  pendingDeploymentOperations(): ArtifactDeploymentOperation[] {
+    return (this.database.prepare(`SELECT id, kind, state, manifest_json, error FROM artifact_deployment_operations WHERE state IN ('staged', 'deployed') ORDER BY created_at ASC`).all() as Array<Record<string, string>>)
+      .map((row) => ({ id: row.id, kind: row.kind as ArtifactDeploymentOperation['kind'], state: row.state as ArtifactDeploymentOperation['state'], manifest: row.manifest_json, error: row.error }));
   }
 
   link(id: string, input: { title?: string; workItemId?: string | null; conversationId?: string | null }): ArtifactSummary | null {

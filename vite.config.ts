@@ -4,20 +4,21 @@ import { createAuthGate } from './src/server/auth.js';
 
 // The dev server, not Express, answers the HTML request when Workbench is
 // reached over a tunnel, so the same shared secret has to gate it too.
-function authGatePlugin(token: string | null): Plugin {
+export function authGatePlugin(token: string | null, env: NodeJS.ProcessEnv): Plugin {
   return {
     name: 'workbench-auth-gate',
     configureServer(server) {
-      const gate = createAuthGate(token);
+      const gate = createAuthGate(token, env);
       server.middlewares.use((request, response, next) => gate(request, response, next));
     },
   };
 }
 
 export default defineConfig(({ mode }) => {
-  const token = loadEnv(mode, process.cwd(), '').WORKBENCH_TOKEN?.trim() || null;
+  const env = loadEnv(mode, process.cwd(), '');
+  const token = env.WORKBENCH_TOKEN?.trim() || null;
   return {
-    plugins: [react(), authGatePlugin(token)],
+    plugins: [react(), authGatePlugin(token, env)],
     server: {
       port: 5173,
       // LAN/Tailscale access (npm run dev:lan) arrives with a non-localhost Host

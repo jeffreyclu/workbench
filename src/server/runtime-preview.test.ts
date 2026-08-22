@@ -14,6 +14,7 @@ function fixture() {
   writeFileSync(join(root, 'src/client/App.tsx'), 'export const App = 1;');
   writeFileSync(join(root, 'src/client/App.test.tsx'), 'test("ignored", () => {});');
   writeFileSync(join(root, 'package.json'), '{}');
+  writeFileSync(join(root, 'index.html'), '<main>preview</main>');
   return root;
 }
 
@@ -35,5 +36,12 @@ describe('runtime preview status', () => {
     expect(runtimePreviewStatus(root)).toMatchObject({ pending: false, promotedAt: '2026-08-20T00:00:00.000Z' });
     writeFileSync(join(root, 'src/client/App.tsx'), `${readFileSync(join(root, 'src/client/App.tsx'), 'utf8')}\n// changed`);
     expect(runtimePreviewStatus(root).pending).toBe(true);
+  });
+
+  it('includes deployable root inputs such as index.html in the fingerprint', () => {
+    const root = fixture();
+    const initial = runtimeSourceFingerprint(root);
+    writeFileSync(join(root, 'index.html'), '<main>changed deployment input</main>');
+    expect(runtimeSourceFingerprint(root)).not.toBe(initial);
   });
 });

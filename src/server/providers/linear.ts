@@ -1,6 +1,6 @@
 import type { LinearTeam, WorkItemStatus } from '../../shared/contracts.js';
 import type { ProviderWorkItem } from '../repository.js';
-import { recordAudit } from '../audit-log.js';
+import { createOutboundFetch } from '../outbound-policy.js';
 
 interface LinearIssue {
   id: string;
@@ -45,7 +45,6 @@ const allIssuesQuery = `
     issues(
       first: 100
       after: $after
-      filter: { state: { type: { nin: ["completed", "canceled"] } } }
       orderBy: updatedAt
     ) { ${issueFields} }
   }
@@ -58,7 +57,6 @@ const projectIssuesQuery = `
       after: $after
       filter: {
         project: { id: { in: $projectIds } }
-        state: { type: { nin: ["completed", "canceled"] } }
       }
       orderBy: updatedAt
     ) { ${issueFields} }
@@ -72,7 +70,6 @@ const teamIssuesQuery = `
       after: $after
       filter: {
         team: { id: { in: $teamIds } }
-        state: { type: { nin: ["completed", "canceled"] } }
       }
       orderBy: updatedAt
     ) { ${issueFields} }
@@ -148,13 +145,12 @@ export class LinearProvider {
     private readonly apiKey: string,
     private readonly teamIds: string[] = [],
     private readonly projectIds: string[] = [],
+    private readonly fetchImpl: typeof fetch = createOutboundFetch('linear-api'),
   ) {}
 
   private async request<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
     if (!this.apiKey) throw new Error('LINEAR_API_KEY is not configured.');
-    const operation = query.match(/(?:query|mutation)\s+(\w+)/)?.[1] ?? 'graphql';
-    recordAudit('outbound_call', 'linear', `POST https://api.linear.app/graphql (${operation})`);
-    const response = await fetch('https://api.linear.app/graphql', {
+    const response = await this.fetchImpl('https://api.linear.app/graphql', {
       method: 'POST',
       headers: { Authorization: this.apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, variables }),

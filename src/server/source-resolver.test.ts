@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveSourceUrl } from './source-resolver.js';
+import { OutboundPolicyError } from './outbound-policy.js';
 
 const settings = { siteUrl: 'https://writer.atlassian.net', email: 'jeffrey@example.com', token: 'secret' };
 
@@ -19,7 +20,7 @@ describe('source URL resolution', () => {
         body: { storage: { value: '<p>Organizations choose allowed tools.</p><p>Users choose from that set.</p>' } },
       }), { status: 200, headers: { 'content-type': 'application/json' } });
     });
-    const draft = await resolveSourceUrl('https://writer.atlassian.net/wiki/spaces/AS/pages/12345/Connector+permissions', { confluenceSettings: settings, fetchImpl: fetchImpl as typeof fetch });
+    const draft = await resolveSourceUrl('https://writer.atlassian.net/wiki/spaces/AS/pages/12345/Connector+permissions', { confluenceSettings: settings, fetchForPolicy: () => fetchImpl as typeof fetch });
     expect(draft).toMatchObject({ source: 'Confluence', title: 'Connector permissions' });
     expect(draft.description).toContain('Organizations choose allowed tools.');
     expect(String(fetchImpl.mock.calls[0]?.[0])).toContain('/wiki/rest/api/content/12345');
@@ -37,10 +38,16 @@ describe('source URL resolution', () => {
     }), { status: 200, headers: { 'content-type': 'application/json' } }));
 
     const draft = await resolveSourceUrl('https://github.com/writer/connectors/issues/42', {
-      githubSettings: { token: 'workbench-github-token' }, fetchImpl: fetchImpl as typeof fetch,
+      githubSettings: { token: 'workbench-github-token' }, fetchForPolicy: () => fetchImpl as typeof fetch,
     });
 
     expect(draft).toMatchObject({ source: 'GitHub', title: 'Fix connector permissions', description: 'Private issue context from GitHub.' });
     expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ headers: expect.objectContaining({ Authorization: 'Bearer workbench-github-token' }) });
+  });
+
+  it('does not hide an outbound policy error behind a generic source draft', async () => {
+    await expect(resolveSourceUrl('https://github.com/writer/workbench', {
+      fetchForPolicy: () => (async () => { throw new OutboundPolicyError('OUTBOUND_URL_BLOCKED', 'blocked'); }) as typeof fetch,
+    })).rejects.toMatchObject({ code: 'OUTBOUND_URL_BLOCKED' });
   });
 });

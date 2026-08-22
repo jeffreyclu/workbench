@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { createApp } from './app.js';
+import { createApp, oauthCallbackBase } from './app.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
+import { cancelAgentRun, isAgentRunActive } from './agent-runner.js';
 
 async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolveClose) => {
@@ -227,6 +228,11 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
       body: JSON.stringify({ kind: 'review', target: 'codex', instructions: '' }),
     });
     expect(response.status).toBe(202);
+    const { runs } = await response.json() as { runs: Array<{ id: string }> };
+    // This route intentionally starts work in the background. End the test's
+    // real run and wait for its process callback before closing its database.
+    expect(cancelAgentRun(repository, runs[0].id)).toBeTruthy();
+    await vi.waitFor(() => expect(isAgentRunActive(runs[0].id)).toBe(false));
   });
 });
 
@@ -402,6 +408,56 @@ describe('GET /api/shared/search', () => {
   });
 });
 
+describe('GET /api/shared/conversations/:id', () => {
+  let database: WorkbenchDatabase;
+  let repository: WorkItemRepository;
+  let server: Server;
+  let baseUrl: string;
+
+  beforeEach(async () => {
+    database = openDatabase(':memory:');
+    repository = new WorkItemRepository(database);
+    const app = createApp(database);
+    server = app.listen(0);
+    await new Promise<void>((resolveListen) => server.once('listening', () => resolveListen()));
+    const { port } = server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterEach(async () => {
+    await closeServer(server);
+    database.close();
+  });
+
+  it('returns a conversation by id even when it is archived', async () => {
+    const conversation = repository.createConversation('Deep-linked thread');
+    repository.setConversationArchived(conversation.id, true);
+
+    const response = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { conversation: { id: string; title: string } };
+    expect(body.conversation).toMatchObject({ id: conversation.id, title: 'Deep-linked thread' });
+  });
+
+  it('returns 404 for an unknown conversation id', async () => {
+    const response = await fetch(`${baseUrl}/api/shared/conversations/00000000-0000-4000-8000-000000000999`);
+    expect(response.status).toBe(404);
+  });
+
+  it('links and unlinks an existing conversation from a task', async () => {
+    const conversation = repository.createConversation('Manual thread');
+    const task = repository.create({ title: 'Link target', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    const linked = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/task`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workItemId: task.id }) });
+    expect(linked.status).toBe(200);
+    expect(await linked.json()).toEqual({ conversation: expect.objectContaining({ workItemId: task.id }) });
+
+    const unlinked = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/task`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workItemId: null }) });
+    expect(unlinked.status).toBe(200);
+    expect(await unlinked.json()).toEqual({ conversation: expect.objectContaining({ workItemId: null }) });
+  });
+});
+
 describe('queue explainability and undo routes', () => {
   let database: WorkbenchDatabase;
   let repository: WorkItemRepository;
@@ -471,7 +527,8 @@ describe('queue explainability and undo routes', () => {
 
     const planned = await fetch(`${baseUrl}/api/queue/plan`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     const { proposal } = await planned.json() as { proposal: { id: string; explanations: Array<{ itemId: string; score: number }> } };
-    expect(repository.list().map((entry) => entry.id)).toEqual([stale.id, fresh.id]);
+    // Planning is non-mutating. The proposed order is only applied by accept.
+    expect(repository.list().map((entry) => entry.id)).toEqual([fresh.id, stale.id]);
     expect(proposal.explanations).toHaveLength(2);
 
     const accepted = await fetch(`${baseUrl}/api/queue/proposals/${proposal.id}/accepted`, { method: 'POST' });
@@ -643,5 +700,42 @@ describe('GET /api/audit-log', () => {
   it('rejects a limit above the bounded maximum of 200', async () => {
     const response = await fetch(`${baseUrl}/api/audit-log?limit=5000`);
     expect(response.status).toBe(400);
+  });
+});
+
+describe('OAuth callback base origin', () => {
+  const originalAppApiOrigin = process.env.APP_API_ORIGIN;
+  const originalPort = process.env.PORT;
+
+  afterEach(() => {
+    if (originalAppApiOrigin === undefined) delete process.env.APP_API_ORIGIN;
+    else process.env.APP_API_ORIGIN = originalAppApiOrigin;
+    if (originalPort === undefined) delete process.env.PORT;
+    else process.env.PORT = originalPort;
+  });
+
+  it('never derives the callback origin from a client-supplied Host', () => {
+    // No request object is passed in at all — this asserts the function has no
+    // avenue back to request.protocol/request.get('host').
+    delete process.env.APP_API_ORIGIN;
+    process.env.PORT = '4317';
+    expect(oauthCallbackBase()).toBe('http://localhost:4317/api/source-connections');
+  });
+
+  it('uses a validated APP_API_ORIGIN when it is an absolute http(s) URL', () => {
+    process.env.APP_API_ORIGIN = 'https://workbench.example.com/api/source-connections';
+    expect(oauthCallbackBase()).toBe('https://workbench.example.com/api/source-connections');
+  });
+
+  it('falls back to the fixed local origin when APP_API_ORIGIN is malformed', () => {
+    process.env.APP_API_ORIGIN = 'not-a-url';
+    process.env.PORT = '4317';
+    expect(oauthCallbackBase()).toBe('http://localhost:4317/api/source-connections');
+  });
+
+  it('falls back to the fixed local origin when APP_API_ORIGIN uses a non-http(s) scheme', () => {
+    process.env.APP_API_ORIGIN = 'javascript:alert(1)';
+    process.env.PORT = '4317';
+    expect(oauthCallbackBase()).toBe('http://localhost:4317/api/source-connections');
   });
 });

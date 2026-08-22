@@ -17,6 +17,7 @@ import {
   createQueueProposalSchema,
   createSharedMessageSchema,
   createSharedConversationSchema,
+  setConversationTaskSchema,
   reorderQueueSchema,
   runKindSchema,
   resolveSourceUrlSchema,
@@ -49,8 +50,9 @@ import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage
 import { createAuthGate } from './auth.js';
 import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMessage } from './slack-notify.js';
 import { finishRemoteMcpOAuth, startRemoteMcpOAuth } from './remote-mcp.js';
+import { OutboundPolicyError } from './outbound-policy.js';
 import { contextForPrompt, listBrokerConnections, resolveBrokerUrl, searchBrokerSources } from './connection-broker.js';
-import { artifactContentHash, CloudflarePagesPublisher, createArtifactId } from './artifact-publisher.js';
+import { artifactContentHash, CloudflarePagesPublisher, createArtifactId, renderArtifactPage, repairLegacyArtifactSnapshots } from './artifact-publisher.js';
 import { ArtifactLibrary, artifactFeedbackConfig, createCommentRateLimiter } from './artifact-library.js';
 import { runDiscovery, shouldRunDiscoveryCatchUp } from './discovery.js';
 import { isRuntimeApproval, promoteRuntime } from './runtime-promotion.js';
@@ -60,6 +62,7 @@ import { isArtifactAllowed } from './artifact-access.js';
 import { LEASE_MS, OWNER_ID } from './scheduler.js';
 import { createWorkbenchMcpHandler, rejectUnsupportedMcpMethod } from './workbench-mcp.js';
 import { setAuditSink } from './audit-log.js';
+import { liveRuntimeCapabilities, type RuntimeCapabilities } from './runtime-capabilities.js';
 
 /**
  * Tagging Jeffrey as an owner claims the task for him, so no agent may execute it
@@ -70,6 +73,23 @@ function rejectSelfAssignedExecution(item: WorkItem, response: Response): boolea
   if (!isSelfAssigned(item.assignees)) return false;
   response.status(409).json({ error: SELF_ASSIGNED_EXECUTION_MESSAGE, code: 'SELF_ASSIGNED' });
   return true;
+}
+
+/**
+ * The request's Host header is client-controlled and must never seed a
+ * security-sensitive OAuth redirect URI. APP_API_ORIGIN is the only source for
+ * a public callback base, and only when it parses as an absolute http(s) URL;
+ * anything else falls back to a fixed local origin rather than trusting Host.
+ */
+export function oauthCallbackBase(): string {
+  const configured = process.env.APP_API_ORIGIN?.trim();
+  if (configured) {
+    try {
+      const url = new URL(configured);
+      if (url.protocol === 'http:' || url.protocol === 'https:') return configured;
+    } catch { /* falls through to the local origin */ }
+  }
+  return `http://localhost:${process.env.PORT ?? 4317}/api/source-connections`;
 }
 
 function rejectOpenPrerequisites(repository: WorkItemRepository, workItemId: string, response: Response): boolean {
@@ -83,12 +103,77 @@ function rejectOpenPrerequisites(repository: WorkItemRepository, workItemId: str
   return true;
 }
 
-export function createApp(database: WorkbenchDatabase) {
+export function rejectPreviewMutation(method: string, capabilities: RuntimeCapabilities): { error: string; code: string } | null {
+  if (capabilities.allowMutations || ['GET', 'HEAD', 'OPTIONS'].includes(method)) return null;
+  return { error: 'Preview is read-only. Run this action from the live Workbench.', code: 'PREVIEW_READ_ONLY' };
+}
+
+export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapabilities = liveRuntimeCapabilities) {
   const app = express();
   const repository = new WorkItemRepository(database);
+  repository.backfillConversationRunAdoptions();
   const artifactPublisher = new CloudflarePagesPublisher();
   const artifacts = new ArtifactLibrary(database);
   const allowComment = createCommentRateLimiter();
+  let artifactOperation = Promise.resolve();
+  const serializeArtifactOperation = <T>(work: () => Promise<T>): Promise<T> => {
+    const next = artifactOperation.then(work, work);
+    artifactOperation = next.then(() => undefined, () => undefined);
+    return next;
+  };
+  // Migration 015 introduced immutable rendered pages after artifacts already
+  // existed. Import the deployed pages once on a live startup before any publish
+  // attempts; preview remains read-only and never mutates the shared database.
+  if (capabilities.allowMutations) {
+    const repaired = repairLegacyArtifactSnapshots(process.env.ARTIFACT_OUTPUT_DIRECTORY ?? 'data/published', artifacts.listSnapshotCandidates(),
+      (artifactId, version, content) => artifacts.recordRenderedSnapshot(artifactId, version, content));
+    if (repaired.restored.length || repaired.missing.length) {
+      console.info(JSON.stringify({ event: 'artifact_snapshot_repair', restored: repaired.restored.length, missing: repaired.missing }));
+    }
+  }
+  // A process can die after Pages accepts the staged manifest but before the
+  // database commit. Replaying a staged whole-directory manifest is safe and
+  // deterministic, so recovery covers a crash immediately before *or* after
+  // the remote deploy call returns instead of guessing which side it reached.
+  if (capabilities.allowMutations) {
+    void (async () => {
+      for (const operation of artifacts.pendingDeploymentOperations()) {
+      try {
+        const manifest = JSON.parse(operation.manifest) as Record<string, unknown>;
+        if (operation.state === 'staged') {
+          if (operation.kind === 'revoke') {
+            const id = String(manifest.id);
+            await artifactPublisher.revoke(id, artifacts.listLive().filter((live) => live.id !== id), String(manifest.url));
+          } else {
+            const plan = manifest.plan as { id: string; version: number };
+            const input = manifest.input as { sourcePath: string; title: string };
+            await artifactPublisher.publish({
+              id: plan.id, title: input.title, sourcePath: input.sourcePath, version: plan.version,
+              renderedContent: String(manifest.renderedContent), publishedAt: String(manifest.publishedAt),
+            }, artifacts.listLive());
+          }
+          artifacts.updateDeploymentOperation(operation.id, 'deployed');
+        }
+        if (operation.kind === 'revoke') {
+          const id = String(manifest.id);
+          if (artifacts.get(id)?.revokedAt === null) artifacts.markRevoked(id);
+        } else {
+          const plan = manifest.plan as { id: string; version: number; kind: 'published' | 'republished' | 'restored' };
+          const input = manifest.input as { sourcePath: string; title: string; workItemId?: string | null; conversationId?: string | null };
+          artifacts.recordPublication({
+            id: plan.id, sourcePath: input.sourcePath, title: input.title,
+            url: artifactPublisher.publicUrl(plan.id), contentHash: String(manifest.contentHash),
+            renderedContent: String(manifest.renderedContent), version: plan.version,
+            workItemId: input.workItemId ?? null, conversationId: input.conversationId ?? null,
+          }, plan.kind);
+        }
+        artifacts.updateDeploymentOperation(operation.id, 'completed');
+      } catch (error) {
+        artifacts.updateDeploymentOperation(operation.id, 'failed', `Recovery failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+      }
+      }
+    })();
+  }
   setAuditSink((category, source, detail, workItemId) => repository.addAuditEntry(category, source, detail, workItemId ?? null));
   app.use(createAuthGate(undefined));
   // Attachments are transported as base64 JSON today. Ten 10 MB files can expand
@@ -97,7 +182,15 @@ export function createApp(database: WorkbenchDatabase) {
   app.use(express.json({ limit: '150mb' }));
 
   app.get('/api/health', (_request, response) => {
-    response.json({ ok: true });
+    response.json({ ok: true, mode: capabilities.mode });
+  });
+
+  // Some deployments use a read-only inspection runtime. The local preview is
+  // intentionally interactive so its candidate UI and agents can be tested.
+  app.use((request, response, next) => {
+    const rejection = rejectPreviewMutation(request.method, capabilities);
+    if (!rejection) return next();
+    response.status(403).json(rejection);
   });
 
   app.get('/api/runtime/preview-status', (_request, response) => {
@@ -158,10 +251,12 @@ export function createApp(database: WorkbenchDatabase) {
     response.json({ candidates: repository.resolveDiscoveryCandidates(input.ids, input.action) });
   });
 
-  setTimeout(() => {
-    const lastRun = repository.getDiscoveryInbox().lastRun?.completedAt ?? null;
-    if (shouldRunDiscoveryCatchUp(lastRun)) void runDiscovery(repository).catch((error) => console.error('Discovery catch-up failed:', error));
-  }, 1_500).unref();
+  if (capabilities.runDiscoveryCatchUp) {
+    setTimeout(() => {
+      const lastRun = repository.getDiscoveryInbox().lastRun?.completedAt ?? null;
+      if (shouldRunDiscoveryCatchUp(lastRun)) void runDiscovery(repository).catch((error) => console.error('Discovery catch-up failed:', error));
+    }, 1_500).unref();
+  }
 
   app.get('/api/artifacts/open', (request, response) => {
     const input = z.object({
@@ -247,26 +342,36 @@ export function createApp(database: WorkbenchDatabase) {
    * its own version snapshot.
    */
   async function publishArtifact(input: { sourcePath: string; title: string; workItemId?: string | null; conversationId?: string | null }) {
+    return serializeArtifactOperation(async () => {
     const contentHash = artifactContentHash(input.sourcePath, input.title);
     const plan = artifacts.planPublication(input.sourcePath, contentHash, createArtifactId());
     if (!plan.needsDeploy && plan.existing) {
       return { artifact: { id: plan.existing.id, title: plan.existing.title, url: plan.existing.url }, changed: false, published: false, kind: plan.kind };
     }
-    // Mark superseded rows revoked in the DB before touching local files, so a
-    // crash between the two never leaves the DB claiming a share is live when
-    // its files are already gone.
-    artifacts.supersede(plan.supersededIds);
-    for (const supersededId of plan.supersededIds) artifactPublisher.removeLocal(supersededId);
     const feedback = artifactFeedbackConfig();
-    const published = await artifactPublisher.publish({
-      id: plan.id, title: input.title, sourcePath: input.sourcePath, version: plan.version,
-      feedback: feedback ? { artifactId: plan.id, endpointOrigin: feedback.endpointOrigin } : null,
-    }, artifacts.listLive());
-    const summary = artifacts.recordPublication({
-      id: plan.id, sourcePath: input.sourcePath, title: input.title, url: published.url, contentHash,
-      version: plan.version, workItemId: input.workItemId ?? null, conversationId: input.conversationId ?? null,
-    }, plan.kind);
-    return { artifact: { id: summary.id, title: summary.title, url: summary.url }, changed: plan.kind === 'republished', published: true, kind: plan.kind, created: plan.kind === 'published' };
+    const publishedAt = new Date().toISOString();
+    const renderedContent = renderArtifactPage(input.sourcePath, input.title, {
+      version: plan.version, publishedAt, feedback: feedback ? { artifactId: plan.id, endpointOrigin: feedback.endpointOrigin } : null,
+    });
+    const operation = artifacts.beginDeploymentOperation('publish', JSON.stringify({ plan, input, contentHash, renderedContent, publishedAt }));
+    try {
+      const published = await artifactPublisher.publish({
+        id: plan.id, title: input.title, sourcePath: input.sourcePath, version: plan.version, renderedContent, publishedAt,
+        feedback: feedback ? { artifactId: plan.id, endpointOrigin: feedback.endpointOrigin } : null,
+      }, artifacts.listLive());
+      artifacts.updateDeploymentOperation(operation.id, 'deployed');
+      const summary = artifacts.recordPublication({
+        id: plan.id, sourcePath: input.sourcePath, title: input.title, url: published.url, contentHash, renderedContent,
+        version: plan.version, workItemId: input.workItemId ?? null, conversationId: input.conversationId ?? null,
+      }, plan.kind);
+      artifacts.supersede(plan.supersededIds);
+      artifacts.updateDeploymentOperation(operation.id, 'completed');
+      return { artifact: { id: summary.id, title: summary.title, url: summary.url }, changed: plan.kind === 'republished', published: true, kind: plan.kind, created: plan.kind === 'published' };
+    } catch (error) {
+      artifacts.updateDeploymentOperation(operation.id, 'failed', error instanceof Error ? error.message : 'Unknown deployment error');
+      throw error;
+    }
+    });
   }
 
   app.post('/api/artifacts/publish', async (request, response) => {
@@ -332,17 +437,22 @@ export function createApp(database: WorkbenchDatabase) {
 
   app.delete('/api/artifacts/:id', async (request, response) => {
     try {
+      await serializeArtifactOperation(async () => {
       const artifact = artifacts.get(request.params.id);
       if (!artifact) return response.status(404).json({ error: 'Published artifact not found.' });
-      // Mark the DB revoked before touching the deployment. If the deploy step
-      // below fails or the process dies mid-request, the DB already reflects
-      // "revoked" — the artifact is excluded from `listLive()` and every later
-      // publish/revoke reconciles it away, and this same request is safe to
-      // retry (it no longer 404s just because revokedAt is already set).
+      const operation = artifacts.beginDeploymentOperation('revoke', JSON.stringify({ id: artifact.id, url: artifact.url }));
+      try {
+      const result = await artifactPublisher.revoke(request.params.id, artifacts.listLive().filter((live) => live.id !== artifact.id), artifact.url);
+      artifacts.updateDeploymentOperation(operation.id, 'deployed');
       if (!artifact.revokedAt) artifacts.markRevoked(request.params.id);
-      const result = await artifactPublisher.revoke(request.params.id, artifacts.listLive(), artifact.url);
+      artifacts.updateDeploymentOperation(operation.id, 'completed');
       repository.addAuditEntry('destructive_action', 'workbench', `Revoked artifact ${request.params.id}${result.verified ? '' : ' (could not verify the public URL stopped serving)'}`, artifact.workItemId ?? null);
       response.json({ artifact: artifacts.get(request.params.id), verified: result.verified });
+      } catch (error) {
+        artifacts.updateDeploymentOperation(operation.id, 'failed', error instanceof Error ? error.message : 'Unknown deployment error');
+        throw error;
+      }
+      });
     } catch (error) {
       repository.addAuditEntry('destructive_action', 'workbench', `Revoke failed for artifact ${request.params.id}: ${error instanceof Error ? error.message : 'unknown error'}`);
       response.status(500).json({ error: error instanceof Error ? error.message : 'Could not revoke artifact.' });
@@ -398,6 +508,12 @@ export function createApp(database: WorkbenchDatabase) {
     response.json(repository.listConversationPage(limit, cursor, view));
   });
 
+  app.get('/api/shared/conversations/:id', (request, response) => {
+    const conversation = repository.getConversation(request.params.id);
+    if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
+    response.json({ conversation });
+  });
+
   app.get('/api/shared/conversations-unread-count', (_request, response) => {
     response.json({ count: repository.countUnreadConversations() });
   });
@@ -439,6 +555,13 @@ export function createApp(database: WorkbenchDatabase) {
     response.json({ conversation });
   });
 
+  app.patch('/api/shared/conversations/:id/task', (request, response) => {
+    const { workItemId } = setConversationTaskSchema.parse(request.body);
+    const conversation = repository.setConversationWorkItem(request.params.id, workItemId);
+    if (!conversation) return response.status(404).json({ error: workItemId ? 'Conversation or task not found.' : 'Conversation not found.' });
+    response.json({ conversation });
+  });
+
   app.post('/api/shared/conversations/:id/read', (request, response) => {
     const conversation = repository.markConversationRead(request.params.id);
     if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
@@ -465,8 +588,8 @@ export function createApp(database: WorkbenchDatabase) {
     // this process doesn't recognize as "active" would wrongly kill legitimate
     // work owned by another instance, and would fire on every request right
     // after a restart before the scheduler gets a chance to reclaim it properly.
-    if (conversationId) dispatchNextSharedTurn(repository, conversationId);
-    else {
+    if (capabilities.executeAgents && conversationId) dispatchNextSharedTurn(repository, conversationId);
+    else if (capabilities.executeAgents) {
       for (const queuedConversationId of repository.listQueuedConversationIds()) dispatchNextSharedTurn(repository, queuedConversationId);
     }
     const limit = z.coerce.number().int().min(1).max(200).default(100).parse(request.query.limit);
@@ -489,6 +612,12 @@ export function createApp(database: WorkbenchDatabase) {
       return { name: attachment.name, path, mimeType: attachment.mimeType, size: attachment.size };
     });
     if (isRuntimeApproval(input.body)) {
+      if (!capabilities.promoteRuntime) return response.status(403).json({ error: 'Preview cannot promote a runtime. Send this approval from the live Workbench.', code: 'PREVIEW_PROMOTION_UNAVAILABLE' });
+      const conversation = input.conversationId ? repository.getConversation(input.conversationId) : null;
+      const linkedItem = conversation?.workItemId ? repository.get(conversation.workItemId) : null;
+      if (!linkedItem || linkedItem.stack !== 'workbench') {
+        return response.status(403).json({ error: 'Runtime promotion is only available from a conversation linked to a Workbench-stack task.', code: 'PREVIEW_PROMOTION_WRONG_STACK' });
+      }
       const message = repository.createSharedMessage('jeffrey', input.body, 'completed', input.conversationId, attachments, 'none');
       const reply = repository.createSharedMessage('system', 'Approval received. Preparing the Workbench preview for promotion…', 'running', input.conversationId, [], 'promotion');
       // DB-backed rather than process-local: queued/running rows are the source of
@@ -681,7 +810,7 @@ export function createApp(database: WorkbenchDatabase) {
       const provider = z.enum(['confluence', 'slack', 'figma', 'gmail']).parse(request.params.provider);
       const defaultUrl = provider === 'confluence' ? 'https://mcp.atlassian.com/v1/mcp/authv2' : provider === 'slack' ? 'https://mcp.slack.com/mcp' : provider === 'figma' ? 'https://mcp.figma.com/mcp' : null;
       const serverUrl = z.string().url().parse(request.body?.serverUrl || defaultUrl);
-      const callbackBase = process.env.APP_API_ORIGIN ?? `${request.protocol}://${request.get('host')}/api/source-connections`;
+      const callbackBase = oauthCallbackBase();
       response.json({ url: await startRemoteMcpOAuth(provider, serverUrl, callbackBase) });
     } catch (error) { next(error); }
   });
@@ -1026,7 +1155,7 @@ export function createApp(database: WorkbenchDatabase) {
       const issues = await provider.fetchOpenIssues();
       const counts = { imported: 0, updated: 0, skipped: 0, conflicts: 0 };
       const conflictsBefore = repository.countProviderConflicts();
-      for (const issue of issues) counts[repository.upsertLinearItem(issue)] += 1;
+      for (const outcome of repository.upsertLinearItems(issues)) counts[outcome] += 1;
       counts.conflicts = repository.countProviderConflicts() - conflictsBefore;
       response.json({ ...counts, syncedAt: new Date().toISOString() });
     } catch (error) {
@@ -1085,11 +1214,21 @@ export function createApp(database: WorkbenchDatabase) {
   const clientPath = resolve(process.env.WORKBENCH_CLIENT_PATH ?? 'dist/client');
   if (existsSync(clientPath)) {
     app.use(express.static(clientPath));
-    app.get('*splat', (_request, response) => response.sendFile(resolve(clientPath, 'index.html')));
+    // Direct navigation to a client route must load the SPA entry point. The
+    // release gateway serves the built client through this Express process, so
+    // without this fallback `/conversations/:id` returns a server-side 404.
+    app.use((request, response, next) => {
+      if (request.method !== 'GET' || request.path.startsWith('/api/') || request.path === '/mcp') return next();
+      response.sendFile('index.html', { root: clientPath }, (error) => error ? next(error) : undefined);
+    });
   }
 
   const errorHandler: ErrorRequestHandler = (error, _request, response, _next) => {
     void _next;
+    if (error instanceof OutboundPolicyError) {
+      response.status(400).json({ error: error.message, code: error.code });
+      return;
+    }
     if (error instanceof ZodError) {
       response.status(400).json({ error: 'Invalid request.', details: error.issues });
       return;

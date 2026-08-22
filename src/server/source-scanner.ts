@@ -3,49 +3,50 @@ import { WorkItemRepository } from './repository.js';
 import { scanSlackMcp } from './slack-mcp.js';
 import { isMcpReauthenticationError, mcpAuthenticationMessage, scanRemoteMcp } from './remote-mcp.js';
 import { scanSlackWithCodex } from './slack-codex.js';
-import { recordAudit } from './audit-log.js';
+import { assertApprovedMcpServer, createOutboundFetch, type OutboundPolicyName } from './outbound-policy.js';
 
 export interface SourceSignal { provider: string; title: string; summary: string; url: string | null; occurredAt: string | null; }
 
-async function requestJson<T>(url: string, headers: Record<string, string>): Promise<T> {
-  recordAudit('outbound_call', 'source-scanner', `GET ${url}`);
-  const response = await fetch(url, { headers, signal: AbortSignal.timeout(20_000) });
+async function requestJson<T>(url: string, headers: Record<string, string>, fetchImpl: typeof fetch): Promise<T> {
+  const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(20_000) });
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
   return response.json() as Promise<T>;
 }
 
-async function scanGitHub(settings: Record<string, string>): Promise<SourceSignal[]> {
+type OutboundFetchFactory = (policy: OutboundPolicyName) => typeof fetch;
+
+async function scanGitHub(settings: Record<string, string>, fetchForPolicy: OutboundFetchFactory = createOutboundFetch): Promise<SourceSignal[]> {
   const query = (settings.query || 'is:open is:pr review-requested:@me').replace(/\b(?:org|user):(?:"[^"]+"|\S+)/gi, '').trim();
   const organizations = ['writer', 'WriterInternal', 'WriterColab'];
   const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${settings.token}`, 'User-Agent': 'workbench-local' };
   const responses = await Promise.all(organizations.map((organization) => requestJson<{ items: Array<{ title: string; body: string | null; html_url: string; updated_at: string; repository_url: string }> }>(
-    `https://api.github.com/search/issues?q=${encodeURIComponent(`${query} org:${organization}`)}&sort=updated&order=desc&per_page=15`, headers,
+    `https://api.github.com/search/issues?q=${encodeURIComponent(`${query} org:${organization}`)}&sort=updated&order=desc&per_page=15`, headers, fetchForPolicy('github-api'),
   )));
   const unique = new Map(responses.flatMap((response) => response.items).map((item) => [item.html_url, item]));
   return [...unique.values()].sort((left, right) => right.updated_at.localeCompare(left.updated_at)).slice(0, 30)
     .map((item) => ({ provider: 'github', title: item.title, summary: item.body?.slice(0, 1_000) || item.repository_url, url: item.html_url, occurredAt: item.updated_at }));
 }
 
-async function scanConfluence(settings: Record<string, string>): Promise<SourceSignal[]> {
+async function scanConfluence(settings: Record<string, string>, fetchForPolicy: OutboundFetchFactory = createOutboundFetch): Promise<SourceSignal[]> {
   const site = settings.siteUrl.replace(/\/$/, '');
   const cql = settings.cql || 'type in (page, blogpost) order by lastmodified desc';
   const auth = Buffer.from(`${settings.email}:${settings.token}`).toString('base64');
   const data = await requestJson<{ results: Array<{ title: string; excerpt?: string; url?: string; lastModified?: string; content?: { _links?: { webui?: string } } }> }>(
     `${site}/wiki/rest/api/search?limit=30&cql=${encodeURIComponent(cql)}`,
-    { Accept: 'application/json', Authorization: `Basic ${auth}` },
+    { Accept: 'application/json', Authorization: `Basic ${auth}` }, fetchForPolicy('atlassian-api'),
   );
   return data.results.map((result) => ({ provider: 'confluence', title: result.title, summary: result.excerpt ?? '', url: result.url ?? (result.content?._links?.webui ? `${site}/wiki${result.content._links.webui}` : null), occurredAt: result.lastModified ?? null }));
 }
 
-async function scanGmail(settings: Record<string, string>): Promise<SourceSignal[]> {
+async function scanGmail(settings: Record<string, string>, fetchForPolicy: OutboundFetchFactory = createOutboundFetch): Promise<SourceSignal[]> {
   const list = await requestJson<{ messages?: Array<{ id: string }> }>(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=30&q=${encodeURIComponent(settings.query || 'newer_than:1d')}`,
-    { Authorization: `Bearer ${settings.accessToken}` },
+    { Authorization: `Bearer ${settings.accessToken}` }, fetchForPolicy('gmail-api'),
   );
   return Promise.all((list.messages ?? []).map(async ({ id }) => {
     const message = await requestJson<{ snippet: string; internalDate?: string; payload?: { headers?: Array<{ name: string; value: string }> } }>(
       `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From`,
-      { Authorization: `Bearer ${settings.accessToken}` },
+      { Authorization: `Bearer ${settings.accessToken}` }, fetchForPolicy('gmail-api'),
     );
     const headers = message.payload?.headers ?? [];
     const subject = headers.find((header) => header.name.toLowerCase() === 'subject')?.value || 'Email';
@@ -54,13 +55,14 @@ async function scanGmail(settings: Record<string, string>): Promise<SourceSignal
   }));
 }
 
-const scanners: Partial<Record<SourceProvider, (settings: Record<string, string>) => Promise<SourceSignal[]>>> = { github: scanGitHub, slack: scanSlackMcp, confluence: scanConfluence, gmail: scanGmail };
+const scanners: Partial<Record<SourceProvider, (settings: Record<string, string>, fetchForPolicy?: OutboundFetchFactory) => Promise<SourceSignal[]>>> = { github: scanGitHub, slack: scanSlackMcp, confluence: scanConfluence, gmail: scanGmail };
 
-export function scanSource(provider: SourceProvider, settings: Record<string, string>): Promise<SourceSignal[]> {
-  if ((provider === 'slack' || provider === 'figma' || provider === 'confluence' || provider === 'gmail') && settings.serverUrl) return scanRemoteMcp(provider, settings);
+export function scanSource(provider: SourceProvider, settings: Record<string, string>, fetchForPolicy: OutboundFetchFactory = createOutboundFetch): Promise<SourceSignal[]> {
+  if (provider === 'gmail' && settings.serverUrl) return Promise.reject(assertApprovedMcpServer('gmail', settings.serverUrl));
+  if ((provider === 'slack' || provider === 'figma' || provider === 'confluence') && settings.serverUrl) return scanRemoteMcp(provider, settings);
   const scanner = scanners[provider];
   if (!scanner) throw new Error(`${provider} source settings are incomplete. Reconnect this source.`);
-  return scanner(settings);
+  return scanner(settings, fetchForPolicy);
 }
 
 export async function scanConnectedSources(repository: WorkItemRepository): Promise<{ signals: SourceSignal[]; errors: string[] }> {

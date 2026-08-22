@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { Info, LineChart, LoaderCircle } from 'lucide-react';
+import { Info, LineChart, LoaderCircle, Minus, TrendingDown, TrendingUp } from 'lucide-react';
 import { useState } from 'react';
 import { api } from './api';
-import type { RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsTokenUsage } from '../shared/contracts';
+import type { RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsCostByDay, RunInsightsTokenUsage } from '../shared/contracts';
 
 function InfoTooltip({ children }: { children: string }) {
   return (
@@ -39,6 +39,37 @@ function formatTokenCount(tokens: number): string {
   return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(tokens);
 }
 
+export function formatCostUsd(value: number | null): string {
+  if (value === null) return '—';
+  if (value === 0) return '$0.00';
+  // Individual runs land in fractions of a cent; four decimals keeps them from
+  // all rendering as "$0.00" while window totals stay readable.
+  if (value < 0.01) return `$${value.toFixed(4)}`;
+  if (value < 1) return `$${value.toFixed(3)}`;
+  return `$${value.toFixed(2)}`;
+}
+
+function CostTrend({ current, previous }: { current: number; previous: number | null }) {
+  if (previous === null || previous === 0) return <small>No comparable previous window.</small>;
+  const change = (current - previous) / previous;
+  const flat = Math.abs(change) < 0.05;
+  const direction = flat ? 'flat' : change > 0 ? 'up' : 'down';
+  const Icon = flat ? Minus : change > 0 ? TrendingUp : TrendingDown;
+  return <small className={`cost-trend cost-trend-${direction}`}>
+    <Icon size={12} /> {flat ? 'About flat' : `${formatPercent(Math.abs(change))} ${change > 0 ? 'higher' : 'lower'}`} than the previous window ({formatCostUsd(previous)}).
+  </small>;
+}
+
+function CostByDayChart({ rows }: { rows: RunInsightsCostByDay[] }) {
+  const peak = Math.max(...rows.map((row) => row.costUsd), 0);
+  return <div className="insight-cost-chart" role="img" aria-label={`Estimated cost by day: ${rows.map((row) => `${row.day} ${formatCostUsd(row.costUsd)}`).join(', ')}`}>
+    {rows.map((row) => <div className="insight-cost-bar" key={row.day} title={`${row.day} · ${formatCostUsd(row.costUsd)}`}>
+      <div className="insight-cost-bar-fill" style={{ height: peak === 0 ? '2px' : `${Math.max(2, Math.round((row.costUsd / peak) * 100))}%` }} />
+      <span className="insight-cost-bar-label">{row.day.slice(5)}</span>
+    </div>)}
+  </div>;
+}
+
 function RateBar({ label, value, count }: { label: string; value: number | null; count?: string }) {
   return (
     <div className="insight-bar-row">
@@ -65,6 +96,7 @@ function AgentInsightCard({ agent }: { agent: RunInsightsByAgent }) {
         <div><dt>Agent handoffs</dt><dd>{formatPercent(agent.fallbackRate)}</dd></div>
         <div><dt>Median duration</dt><dd>{formatDuration(agent.medianDurationMs)}</dd></div>
         <div><dt>P90 duration</dt><dd>{formatDuration(agent.p90DurationMs)}</dd></div>
+        <div><dt>Estimated cost</dt><dd>{formatCostUsd(agent.costUsd ?? 0)}</dd></div>
       </dl>
     </article>
   );
@@ -95,6 +127,7 @@ function TokenUsageRows({ rows }: { rows: RunInsightsTokenUsage[] }) {
         <div><dt>Input</dt><dd>{formatTokenCount(row.inputTokens)}</dd></div>
         <div><dt>Output</dt><dd>{formatTokenCount(row.outputTokens)}</dd></div>
         <div><dt>Total</dt><dd>{formatTokenCount(row.inputTokens + row.outputTokens)}</dd></div>
+        <div><dt>Cost</dt><dd>{(row.rateSource ?? null) === null ? <span title="No rate is configured for this model.">—</span> : formatCostUsd(row.costUsd)}</dd></div>
       </dl>
     </div>)}
   </div>;
@@ -188,6 +221,29 @@ export function InsightsView() {
                     {data.byKind.map((kind) => <KindInsightRow key={kind.kind} kind={kind} />)}
                   </div>
                 )}
+              </div>
+
+              <div className="insight-section insight-cost">
+                <h3>Cost <InfoTooltip>Estimated spend on agent runs created in this window. Claude runs use the provider's own reported total when it is available; everything else is tokens multiplied by the rate for that model. Rates come from deployment environment overrides when set, otherwise from a built-in list-price table.</InfoTooltip></h3>
+                <p className="insight-section-intro">What agent work cost in this window, which agent drove it, and whether it is rising.</p>
+                {(data.pricedRuns ?? 0) === 0 ? <p className="insight-empty-note">No priced runs in this window yet.</p> : <>
+                  <div className="insight-cost-summary">
+                    <div className="insight-cost-total">
+                      <span className="eyebrow">Estimated total</span>
+                      <strong>{formatCostUsd(data.costUsd ?? 0)}</strong>
+                      <CostTrend current={data.costUsd ?? 0} previous={data.previousCostUsd ?? null} />
+                    </div>
+                    <div className="insight-cost-split">
+                      {data.byAgent.filter((agent) => agent.total > 0).map((agent) => <div key={agent.agent}>
+                        <span>{agent.agent}</span>
+                        <strong>{formatCostUsd(agent.costUsd ?? 0)}</strong>
+                        <small>{formatPercent(data.costUsd > 0 ? (agent.costUsd ?? 0) / data.costUsd : null)} of spend</small>
+                      </div>)}
+                    </div>
+                  </div>
+                  {(data.costByDay ?? []).length > 0 && <CostByDayChart rows={data.costByDay} />}
+                  {(data.unpricedRuns ?? 0) > 0 && <p className="insight-empty-note">{data.unpricedRuns} run{data.unpricedRuns === 1 ? '' : 's'} reported tokens but had no rate for their model, so the total is understated.</p>}
+                </>}
               </div>
 
               <div className="insight-section">

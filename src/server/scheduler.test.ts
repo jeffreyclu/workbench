@@ -1,6 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
+import type { AgentRun } from '../shared/contracts.js';
+
+type ExecuteAgentRun = (repository: WorkItemRepository, run: AgentRun, ownerId?: string, leaseMs?: number, externalContext?: string) => Promise<void>;
+
+// executeAgentRun spawns a real Codex/Claude CLI subprocess; stub it so scheduler
+// dispatch tests exercise the claim/capacity logic without touching a real process.
+const executeAgentRunMock = vi.fn<ExecuteAgentRun>(async () => {});
+vi.mock('./agent-runner.js', () => ({
+  executeAgentRun: (...args: Parameters<ExecuteAgentRun>) => executeAgentRunMock(...args),
+}));
+
+const { startScheduler, MAX_CONCURRENT_RUNS, TICK_MS } = await import('./scheduler.js');
 
 describe('scheduler recovery semantics (integration-level, exercised via repository primitives)', () => {
   let database: WorkbenchDatabase;
@@ -100,5 +112,99 @@ describe('scheduler recovery semantics (integration-level, exercised via reposit
 
     expect(repository.getRun(run.id)?.status).toBe('failed');
     expect(repository.activeRunsForItem(item.id)).toHaveLength(0);
+  });
+});
+
+describe('scheduler capacity-limited dispatch', () => {
+  let database: WorkbenchDatabase;
+  let repository: WorkItemRepository;
+  let stop: () => void;
+
+  function readDiagnostics() {
+    return database.prepare(`SELECT event, detail FROM diagnostics ORDER BY created_at ASC`).all() as Array<{ event: string; detail: string }>;
+  }
+
+  function createQueuedRun() {
+    const item = repository.create({ title: 'Capacity task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    return repository.createRun(item.id, 'analysis', 'codex', 'codex', '');
+  }
+
+  beforeEach(() => {
+    database = openDatabase(':memory:');
+    repository = new WorkItemRepository(database);
+    executeAgentRunMock.mockClear();
+    // Simulate dispatch: claim the run (as real executeAgentRun does, occupying a
+    // capacity slot) then immediately mark it completed, without touching a real
+    // Codex/Claude subprocess.
+    executeAgentRunMock.mockImplementation(async (repo: WorkItemRepository, run: AgentRun) => {
+      repo.claimRun(run.id, 'test-owner', 60_000);
+      repo.updateRun(run.id, { status: 'completed' });
+    });
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    stop?.();
+    vi.useRealTimers();
+    database.close();
+  });
+
+  it('dispatches at most MAX_CONCURRENT_RUNS runs from a larger backlog, then more as capacity frees up', async () => {
+    const runs = Array.from({ length: MAX_CONCURRENT_RUNS + 3 }, () => createQueuedRun());
+
+    ({ stop } = startScheduler(repository));
+
+    await vi.advanceTimersByTimeAsync(TICK_MS);
+    expect(executeAgentRunMock).toHaveBeenCalledTimes(MAX_CONCURRENT_RUNS);
+    const dispatchedIds = executeAgentRunMock.mock.calls.map((call) => (call[1] as AgentRun).id);
+    expect(dispatchedIds).toEqual(runs.slice(0, MAX_CONCURRENT_RUNS).map((r) => r.id));
+
+    // The mock immediately marks dispatched runs completed, freeing capacity for
+    // subsequent ticks to pick up the remaining backlog, each still capped at the ceiling.
+    await vi.advanceTimersByTimeAsync(TICK_MS);
+    expect(executeAgentRunMock).toHaveBeenCalledTimes(Math.min(runs.length, 2 * MAX_CONCURRENT_RUNS));
+    await vi.advanceTimersByTimeAsync(TICK_MS);
+    expect(executeAgentRunMock).toHaveBeenCalledTimes(runs.length);
+    const allDispatchedIds = executeAgentRunMock.mock.calls.map((call) => (call[1] as AgentRun).id);
+    expect(allDispatchedIds).toEqual(runs.map((r) => r.id));
+  });
+
+  it('logs the queue-stalled diagnostic once per stall, not on every tick', async () => {
+    // Fill capacity with runs that never complete (mock does nothing for these ids).
+    const blockers = Array.from({ length: MAX_CONCURRENT_RUNS }, () => createQueuedRun());
+    executeAgentRunMock.mockImplementation(async (repo: WorkItemRepository, run: AgentRun) => {
+      repo.claimRun(run.id, 'test-owner', 60_000); // claims but never completes
+    });
+    const overflow = createQueuedRun();
+
+    ({ stop } = startScheduler(repository));
+
+    await vi.advanceTimersByTimeAsync(TICK_MS);
+    expect(executeAgentRunMock).toHaveBeenCalledTimes(blockers.length);
+
+    // Multiple further ticks, all still stalled at capacity.
+    await vi.advanceTimersByTimeAsync(TICK_MS * 3);
+
+    const stallLogs = readDiagnostics().filter((d) => d.detail.includes('stalled at capacity'));
+    expect(stallLogs).toHaveLength(1);
+    expect(overflow.id).toBeTruthy(); // overflow run stays queued, never dropped
+
+    // Free up capacity: the stall clears and the overflow run dispatches.
+    for (const blocker of blockers) repository.updateRun(blocker.id, { status: 'completed' });
+    await vi.advanceTimersByTimeAsync(TICK_MS);
+    expect(executeAgentRunMock.mock.calls.map((call) => (call[1] as AgentRun).id)).toContain(overflow.id);
+
+    // Recreate a stall from scratch: fresh runs occupy capacity indefinitely, plus one
+    // more queued behind them. This must be able to log again, since it's a new stall.
+    executeAgentRunMock.mockClear();
+    executeAgentRunMock.mockImplementation(async (repo: WorkItemRepository, run: AgentRun) => {
+      repo.claimRun(run.id, 'test-owner', 60_000);
+    });
+    Array.from({ length: MAX_CONCURRENT_RUNS }, () => createQueuedRun());
+    createQueuedRun();
+    await vi.advanceTimersByTimeAsync(TICK_MS * 2);
+
+    const stallLogsAfter = readDiagnostics().filter((d) => d.detail.includes('stalled at capacity'));
+    expect(stallLogsAfter.length).toBe(2);
   });
 });

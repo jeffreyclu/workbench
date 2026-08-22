@@ -3,7 +3,10 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
 const SOURCE_DIRECTORIES = ['src/client', 'src/server', 'src/shared', 'scripts'];
-const SOURCE_FILES = ['package.json', 'package-lock.json', 'vite.config.ts', 'tsconfig.json', 'tsconfig.app.json', 'tsconfig.node.json'];
+// These root files are deploy inputs as well as TypeScript source. Keep the
+// list explicit: changing one must make Preview pending rather than allowing a
+// release snapshot that cannot reproduce the client it was approved from.
+const SOURCE_FILES = ['index.html', 'package.json', 'package-lock.json', 'vite.config.ts', 'vitest.config.ts', 'eslint.config.js', 'tsconfig.json', 'tsconfig.app.json', 'tsconfig.node.json'];
 
 function runtimeSourceFiles(root: string) {
   const files: string[] = [];

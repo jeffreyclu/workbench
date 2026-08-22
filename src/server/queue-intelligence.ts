@@ -75,6 +75,7 @@ export function scoreItem(item: WorkItem, context: QueueContext, workInProgress:
   if (item.status === 'in_progress') signals.push(signal('status', 20, 'it is the work already in progress'));
   else if (item.status === 'ready') signals.push(signal('status', 4, 'it is ready to start'));
   else if (item.status === 'blocked') signals.push(signal('status', -8, 'it is blocked'));
+  else if (item.status === 'pinned') signals.push(signal('status', -100, 'Jeffrey put a pin in it for later'));
 
   if (item.agentOutcome === 'needs_attention') signals.push(signal('agent_outcome', 16, 'an agent run needs attention'));
   else if (item.agentOutcome === 'follow_ups') signals.push(signal('agent_outcome', 10, 'agent follow-ups are waiting for review'));

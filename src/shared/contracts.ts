@@ -5,12 +5,13 @@ export const workItemStatusSchema = z.enum([
   'ready',
   'in_progress',
   'blocked',
+  'pinned',
   'done',
   'canceled',
 ]);
 
 /** States a user can set while work is active. Completion is a lifecycle action. */
-export const activeWorkItemStatusSchema = z.enum(['backlog', 'ready', 'in_progress', 'blocked']);
+export const activeWorkItemStatusSchema = z.enum(['backlog', 'ready', 'in_progress', 'blocked', 'pinned']);
 
 /** A real calendar date, intentionally independent of an instant or timezone. */
 export const calendarDateSchema = z.string()
@@ -436,6 +437,7 @@ export interface AgentRun {
   workItemId: string;
   kind: z.infer<typeof runKindSchema>;
   requestedTarget: z.infer<typeof agentTargetSchema>;
+  requestedAgent: 'codex' | 'claude';
   agent: 'codex' | 'claude';
   status: z.infer<typeof runStatusSchema>;
   instructions: string;
@@ -659,6 +661,8 @@ export const updateArtifactSchema = z.object({
 export const artifactLibraryViewSchema = z.enum(['published', 'revoked', 'all']).catch('published');
 export interface SharedConversation { id: string; title: string; workItemId: string | null; forkedFromConversationId: string | null; archivedAt: string | null; preferredExecutionProfile?: AgentRun['executionProfile']; state?: 'working' | 'needs_attention' | 'waiting_approval' | 'finished' | null; isUnread?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
 
+export const setConversationTaskSchema = z.object({ workItemId: z.string().uuid().nullable() });
+
 export const createSharedMessageSchema = z.object({
   conversationId: z.string().uuid(),
   body: z.string().trim().max(50_000).default(''),
@@ -702,6 +706,13 @@ export interface RunInsights {
   fallbackRate: number | null;
   handoffCount: number;
   costByDay: RunInsightsCostByDay[];
+  /** Summed estimated cost of runs in this window, in USD. */
+  costUsd: number;
+  /** Same measure over the equally long window immediately before it; null when that window had no runs. */
+  previousCostUsd: number | null;
+  /** Runs carrying a cost, and runs that reported tokens but had no rate for their model. */
+  pricedRuns: number;
+  unpricedRuns: number;
   inputTokens: number;
   outputTokens: number;
   tokenUsageByModel: RunInsightsTokenUsage[];
@@ -743,6 +754,10 @@ export interface RunInsightsTokenUsage {
   model: string | null;
   inputTokens: number;
   outputTokens: number;
+  costUsd: number;
+  runs: number;
+  /** 'env' when a deployment rate override priced this model, 'default' when the built-in list price did. */
+  rateSource: 'env' | 'default' | null;
 }
 
 export interface RunInsightsByAgent {
@@ -755,6 +770,7 @@ export interface RunInsightsByAgent {
   fallbackRate: number | null;
   medianDurationMs: number | null;
   p90DurationMs: number | null;
+  costUsd: number;
 }
 
 export interface RunInsightsByKind {

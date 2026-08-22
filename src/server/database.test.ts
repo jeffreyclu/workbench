@@ -21,6 +21,12 @@ const EXPECTED_MIGRATIONS = [
   '007_work_item_review',
   '008_provider_sync_overrides',
   '009_remove_memories',
+  '010_durable_agent_run_cancellation',
+  '011_agent_run_requested_agent',
+  '012_work_item_links',
+  '014_queue_versions',
+  '015_durable_artifact_publication',
+  '016_conversation_run_adoption',
 ];
 
 describe('openDatabase', () => {
@@ -53,6 +59,30 @@ describe('openDatabase', () => {
     second.close();
   });
 
+  it('configures a bounded busy timeout and exposes write contention across two connections', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const first = openDatabase(path);
+    const second = openDatabase(path);
+    expect(first.prepare('PRAGMA busy_timeout').get()).toEqual({ timeout: 1000 });
+    first.exec('BEGIN IMMEDIATE');
+    second.exec('PRAGMA busy_timeout = 1');
+    expect(() => second.prepare("UPDATE queue_versions SET version = version + 1 WHERE stack = 'attention'").run()).toThrow(/busy|locked/i);
+    first.exec('ROLLBACK');
+    first.close();
+    second.close();
+  });
+
+  it('adds durable cancellation fields to agent runs', () => {
+    const database = openDatabase(':memory:');
+    const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string; notnull: number; dflt_value: string | null }>;
+    expect(columns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'cancel_requested', notnull: 1, dflt_value: '0' }),
+      expect.objectContaining({ name: 'cancel_requested_at', notnull: 0 }),
+    ]));
+    database.close();
+  });
+
   it('upgrades an unversioned legacy database before marking it current', () => {
     directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
     const path = join(directory, 'workbench.db');
@@ -69,6 +99,36 @@ describe('openDatabase', () => {
     const columns = upgraded.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>;
     expect(columns.map(({ name }) => name)).toEqual(expect.arrayContaining(['is_queued', 'workspace_path', 'archived_at', 'stack']));
     expect(upgraded.prepare('SELECT id FROM schema_migrations ORDER BY id').all()).toHaveLength(EXPECTED_MIGRATIONS.length);
+    upgraded.close();
+  });
+
+  it('creates the requested-agent column for durable routing identity', () => {
+    const database = openDatabase(':memory:');
+    const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+    expect(columns.map(({ name }) => name)).toContain('requested_agent');
+    database.close();
+  });
+
+  it('adds immutable artifact content and recoverable deployment-operation state on upgrade', () => {
+    const database = openDatabase(':memory:');
+    expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'artifact_rendered_versions'").get()).toBeTruthy();
+    expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'artifact_deployment_operations'").get()).toBeTruthy();
+    database.close();
+  });
+
+  it('upgrades a database recorded through the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE artifact_rendered_versions; DROP TABLE artifact_deployment_operations; DROP INDEX idx_agent_runs_adopted_conversation;');
+    current.prepare("DELETE FROM schema_migrations WHERE id IN ('015_durable_artifact_publication', '016_conversation_run_adoption')").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'artifact_rendered_versions'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '015_durable_artifact_publication'").get()).toBeTruthy();
+    expect((upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>).map((column) => column.name)).toContain('adopted_conversation_id');
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_agent_runs_adopted_conversation'").get()).toBeTruthy();
     upgraded.close();
   });
 

@@ -1,7 +1,7 @@
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { extname, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, extname, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { marked } from 'marked';
 import sanitizeHtml from 'sanitize-html';
@@ -21,6 +21,7 @@ export interface LiveArtifact {
   sourcePath: string;
   title: string;
   version: number;
+  snapshots: Array<{ version: number; content: string | null; contentHash?: string }>;
 }
 
 export interface ArtifactPageOptions {
@@ -38,6 +39,8 @@ export interface PublishInput {
   title: string;
   sourcePath: string;
   version: number;
+  renderedContent: string;
+  publishedAt: string;
   feedback?: { artifactId: string; endpointOrigin: string } | null;
 }
 
@@ -78,8 +81,10 @@ function injectFooter(page: string, footer: string): string {
 }
 
 export function renderArtifactPage(sourcePath: string, title: string, options: ArtifactPageOptions = {}): string {
-  const extension = extname(sourcePath).toLowerCase();
-  const source = readFileSync(sourcePath, 'utf8');
+  return renderArtifactContent(readFileSync(sourcePath, 'utf8'), extname(sourcePath).toLowerCase(), title, options);
+}
+
+function renderArtifactContent(source: string, extension: string, title: string, options: ArtifactPageOptions = {}): string {
   const footer = renderPageFooter(options);
   // Feedback is the only reason a shared page ever reaches the network, so the
   // connect-src opens for exactly one origin and only when it is configured.
@@ -111,6 +116,74 @@ export function renderArtifactPage(sourcePath: string, title: string, options: A
   return injectFooter(page, footer);
 }
 
+type SnapshotRepair = { restored: Array<{ id: string; version: number }>; missing: Array<{ id: string; version: number }> };
+
+function storedPage(path: string): string | null {
+  try {
+    const content = readFileSync(path, 'utf8');
+    return content ? content : null;
+  } catch { return null; }
+}
+
+function artifactDirectory(outputDirectory: string, id: string): string | null {
+  // IDs are generated as base64url. Keep a corrupt database row from turning a
+  // recovery read into a path outside the artifact output root.
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) return null;
+  return resolve(outputDirectory, id);
+}
+
+/**
+ * Last-resort recovery for a historical page omitted from the local deployment
+ * directory. Git content is accepted only when rendering it produces the exact
+ * hash recorded at publication; mutable working-tree files are never used.
+ */
+function historicalGitSnapshot(sourcePath: string, title: string, expectedHash?: string): string | null {
+  if (!expectedHash || !existsSync(sourcePath)) return null;
+  try {
+    const sourceDirectory = dirname(sourcePath);
+    const repository = execFileSync('git', ['-C', sourceDirectory, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 5_000 }).trim();
+    const repositoryPath = relative(repository, sourcePath);
+    if (!repository || repositoryPath.startsWith('..')) return null;
+    const revisions = execFileSync('git', ['-C', repository, 'log', '--format=%H', '--all', '--', repositoryPath], { encoding: 'utf8', timeout: 5_000, maxBuffer: 1_000_000 })
+      .trim().split('\n').filter(Boolean);
+    for (const revision of revisions) {
+      const source = execFileSync('git', ['-C', repository, 'show', `${revision}:${repositoryPath}`], { encoding: 'utf8', timeout: 5_000, maxBuffer: 2_000_000 });
+      const page = renderArtifactContent(source, extname(sourcePath).toLowerCase(), title);
+      if (createHash('sha256').update(page).digest('hex') === expectedHash) return page;
+    }
+  } catch { /* Git history is optional recovery material. */ }
+  return null;
+}
+
+/**
+ * Repairs rows created before rendered snapshots were persisted. The existing
+ * deployment directory is evidence of the exact public page, so it is imported
+ * verbatim. A historical Git reconstruction is accepted only after a hash
+ * check against the version record. Missing pages are intentionally reported,
+ * never regenerated from a mutable source checkout.
+ */
+export function repairLegacyArtifactSnapshots(
+  outputDirectory: string,
+  live: LiveArtifact[],
+  record: (artifactId: string, version: number, content: string) => boolean,
+): SnapshotRepair {
+  const result: SnapshotRepair = { restored: [], missing: [] };
+  for (const artifact of live) {
+    const directory = artifactDirectory(outputDirectory, artifact.id);
+    for (const snapshot of artifact.snapshots) {
+      if (snapshot.content) continue;
+      const versionPath = directory && resolve(directory, `v${snapshot.version}`, 'index.html');
+      const currentPath = snapshot.version === artifact.version && directory ? resolve(directory, 'index.html') : null;
+      const content = (versionPath && storedPage(versionPath))
+        ?? (currentPath && storedPage(currentPath))
+        ?? historicalGitSnapshot(artifact.sourcePath, artifact.title, snapshot.contentHash);
+      if (content && record(artifact.id, snapshot.version, content)) result.restored.push({ id: artifact.id, version: snapshot.version });
+      else result.missing.push({ id: artifact.id, version: snapshot.version });
+    }
+  }
+  return result;
+}
+
 /**
  * Cloudflare Pages deploys are whole-directory snapshots: every `wrangler
  * pages deploy` replaces the entire prior production deployment with exactly
@@ -128,15 +201,24 @@ export function renderArtifactPage(sourcePath: string, title: string, options: A
 export function reconcileArtifactDirectory(outputDirectory: string, live: LiveArtifact[]): { restored: string[]; missing: string[] } {
   const restored: string[] = [];
   const missing: string[] = [];
+  // The directory is a deploy artifact, never a source of truth. Rebuild it
+  // from the immutable manifest so an orphan from a failed/old operation is
+  // neither carried into the next whole-directory deploy nor made public.
+  rmSync(outputDirectory, { recursive: true, force: true });
+  mkdirSync(outputDirectory, { recursive: true });
   for (const artifact of live) {
     const artifactDirectory = resolve(outputDirectory, artifact.id);
-    if (existsSync(resolve(artifactDirectory, 'index.html'))) continue;
-    if (!existsSync(artifact.sourcePath)) { missing.push(artifact.id); continue; }
-    const versionDirectory = resolve(artifactDirectory, `v${artifact.version}`);
-    mkdirSync(versionDirectory, { recursive: true });
-    const publishedAt = new Date().toISOString();
-    writeFileSync(resolve(artifactDirectory, 'index.html'), renderArtifactPage(artifact.sourcePath, artifact.title, { version: artifact.version, publishedAt }));
-    writeFileSync(resolve(versionDirectory, 'index.html'), renderArtifactPage(artifact.sourcePath, artifact.title, { version: artifact.version, publishedAt, latestUrl: '../' }));
+    const current = artifact.snapshots.find((snapshot) => snapshot.version === artifact.version);
+    if (!current?.content || artifact.snapshots.some((snapshot) => !snapshot.content)) { missing.push(artifact.id); continue; }
+    mkdirSync(artifactDirectory, { recursive: true });
+    writeFileSync(resolve(artifactDirectory, 'index.html'), current.content);
+    for (const snapshot of artifact.snapshots) {
+      const content = snapshot.content;
+      if (!content) continue; // validated above; keeps the file-write input narrow.
+      const versionDirectory = resolve(artifactDirectory, `v${snapshot.version}`);
+      mkdirSync(versionDirectory, { recursive: true });
+      writeFileSync(resolve(versionDirectory, 'index.html'), content);
+    }
     restored.push(artifact.id);
   }
   return { restored, missing };
@@ -162,10 +244,10 @@ export class CloudflarePagesPublisher implements ArtifactPublisher {
     return { project: this.project, baseUrl: this.baseUrl };
   }
 
-  private async deploy(): Promise<void> {
+  private async deploy(directory = this.outputDirectory): Promise<void> {
     const { project } = this.configuration();
     recordAudit('outbound_call', 'cloudflare', `wrangler pages deploy --project-name ${project}`);
-    await execFileAsync('npx', ['--yes', 'wrangler', 'pages', 'deploy', this.outputDirectory, '--project-name', project, '--branch', 'main', '--commit-dirty=true'], {
+    await execFileAsync('npx', ['--yes', 'wrangler', 'pages', 'deploy', directory, '--project-name', project, '--branch', 'main', '--commit-dirty=true'], {
       env: process.env, timeout: 120_000, maxBuffer: 2_000_000,
     });
     await this.pruneOldDeployments(project);
@@ -197,21 +279,27 @@ export class CloudflarePagesPublisher implements ArtifactPublisher {
    */
   async publish(input: PublishInput, live: LiveArtifact[]): Promise<PublishedArtifact> {
     const { baseUrl } = this.configuration();
-    const { missing } = reconcileArtifactDirectory(this.outputDirectory, live.filter((artifact) => artifact.id !== input.id));
-    if (missing.length) throw new Error(`Cannot publish: ${missing.length} previously published artifact(s) are missing both locally and at their source (${missing.join(', ')}). Deploying now would take those links offline.`);
-    const artifactDirectory = resolve(this.outputDirectory, input.id);
+    const stagingDirectory = resolve(dirname(this.outputDirectory), `.published-stage-${randomBytes(8).toString('hex')}`);
+    rmSync(stagingDirectory, { recursive: true, force: true });
+    const { missing } = reconcileArtifactDirectory(stagingDirectory, live.filter((artifact) => artifact.id !== input.id));
+    if (missing.length) throw new Error(`Cannot publish: ${missing.length} previously published artifact version(s) have no immutable rendered snapshot (${missing.join(', ')}). Deploying now would take those links offline.`);
+    const artifactDirectory = resolve(stagingDirectory, input.id);
     const versionDirectory = resolve(artifactDirectory, `v${input.version}`);
     mkdirSync(versionDirectory, { recursive: true });
-    const publishedAt = new Date().toISOString();
-    const feedback = input.feedback ?? null;
-    writeFileSync(resolve(artifactDirectory, 'index.html'), renderArtifactPage(input.sourcePath, input.title, { version: input.version, publishedAt, feedback }));
-    writeFileSync(resolve(versionDirectory, 'index.html'), renderArtifactPage(input.sourcePath, input.title, { version: input.version, publishedAt, latestUrl: '../', feedback }));
-    await this.deploy();
+    writeFileSync(resolve(artifactDirectory, 'index.html'), input.renderedContent);
+    writeFileSync(resolve(versionDirectory, 'index.html'), input.renderedContent);
+    await this.deploy(stagingDirectory);
+    rmSync(this.outputDirectory, { recursive: true, force: true });
+    renameSync(stagingDirectory, this.outputDirectory);
     return { id: input.id, title: input.title, url: `${baseUrl}/${input.id}/` };
   }
 
   versionUrl(id: string, version: number): string {
     return `${this.configuration().baseUrl}/${id}/v${version}/`;
+  }
+
+  publicUrl(id: string): string {
+    return `${this.configuration().baseUrl}/${id}/`;
   }
 
   /**
@@ -222,10 +310,13 @@ export class CloudflarePagesPublisher implements ArtifactPublisher {
    */
   async revoke(id: string, live: LiveArtifact[], publicUrl: string): Promise<{ verified: boolean }> {
     this.configuration();
-    rmSync(resolve(this.outputDirectory, id), { recursive: true, force: true });
-    const { missing } = reconcileArtifactDirectory(this.outputDirectory, live);
-    if (missing.length) throw new Error(`Revoked locally, but ${missing.length} other published artifact(s) are missing both locally and at their source (${missing.join(', ')}) and cannot be safely redeployed. Publish them again to restore, then retry this revoke.`);
-    await this.deploy();
+    const stagingDirectory = resolve(dirname(this.outputDirectory), `.published-stage-${randomBytes(8).toString('hex')}`);
+    rmSync(stagingDirectory, { recursive: true, force: true });
+    const { missing } = reconcileArtifactDirectory(stagingDirectory, live);
+    if (missing.length) throw new Error(`Cannot revoke: ${missing.length} other published artifact version(s) have no immutable rendered snapshot (${missing.join(', ')}). Deploying now would take those links offline.`);
+    await this.deploy(stagingDirectory);
+    rmSync(this.outputDirectory, { recursive: true, force: true });
+    renameSync(stagingDirectory, this.outputDirectory);
     return { verified: await verifyRevoked(publicUrl) };
   }
 
