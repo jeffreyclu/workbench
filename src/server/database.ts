@@ -820,6 +820,57 @@ const schemaMigrations: readonly Migration[] = [
         ON agent_runs(adopted_conversation_id) WHERE adopted_conversation_id IS NOT NULL;`);
     },
   },
+  {
+    // Agent output is a scoped handoff ledger, not a generic long-term memory.
+    // It gives Codex and Claude the same durable prior work on later turns.
+    id: '017_durable_agent_handoffs',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS agent_handoffs (
+          id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL REFERENCES shared_conversations(id) ON DELETE CASCADE,
+          work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
+          message_id TEXT NOT NULL REFERENCES shared_messages(id) ON DELETE CASCADE,
+          author TEXT NOT NULL CHECK (author IN ('codex', 'claude', 'system')),
+          body TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(message_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_handoffs_scope
+          ON agent_handoffs(conversation_id, work_item_id, created_at DESC);
+      `);
+    },
+  },
+  {
+    id: '018_structured_shared_brief',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS shared_brief_entries (
+          id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL REFERENCES shared_conversations(id) ON DELETE CASCADE,
+          work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
+          message_id TEXT NOT NULL REFERENCES shared_messages(id) ON DELETE CASCADE,
+          author TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('decision', 'agent_handoff', 'synthesis')),
+          facts TEXT NOT NULL DEFAULT '',
+          decisions TEXT NOT NULL DEFAULT '',
+          blockers TEXT NOT NULL DEFAULT '',
+          evidence TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          UNIQUE(message_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_shared_brief_entries_scope
+          ON shared_brief_entries(conversation_id, work_item_id, created_at DESC);
+      `);
+    },
+  },
+  {
+    id: '019_editable_shared_brief',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'shared_brief')) database.exec("ALTER TABLE shared_conversations ADD COLUMN shared_brief TEXT NOT NULL DEFAULT '';");
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

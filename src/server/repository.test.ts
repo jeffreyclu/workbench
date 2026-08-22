@@ -49,6 +49,50 @@ describe('WorkItemRepository', () => {
     ]);
   });
 
+  it('shares durable Codex and Claude handoffs only within the conversation or linked task scope', () => {
+    const task = repository.create({ title: 'Durable handoff task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const linked = repository.createConversation('Linked handoff', task.id);
+    const other = repository.createConversation('Unrelated handoff');
+    const codex = repository.createSharedMessage('codex', 'Codex verified the first condition.', 'completed', linked.id);
+    const claude = repository.createSharedMessage('claude', 'Claude found the remaining edge case.', 'completed', linked.id);
+    const unrelated = repository.createSharedMessage('claude', 'This must not leak.', 'completed', other.id);
+    repository.recordAgentHandoff(linked.id, codex.id, 'codex', codex.body);
+    repository.recordAgentHandoff(linked.id, claude.id, 'claude', claude.body);
+    repository.recordAgentHandoff(other.id, unrelated.id, 'claude', unrelated.body);
+
+    const conversationContext = repository.getSharedContext(undefined, { conversationId: linked.id });
+    const taskContext = repository.getSharedContext(undefined, { workItemId: task.id });
+    expect(conversationContext).toContain('Codex verified the first condition.');
+    expect(conversationContext).toContain('Claude found the remaining edge case.');
+    expect(conversationContext).not.toContain('This must not leak.');
+    expect(taskContext).toContain('Codex verified the first condition.');
+    expect(taskContext).toContain('Claude found the remaining edge case.');
+    expect(taskContext).not.toContain('This must not leak.');
+  });
+
+  it('backfills a linked conversation brief into its task and removes that task scope on unlink', () => {
+    const task = repository.create({ title: 'Link brief history', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Previously manual');
+    const decision = repository.createSharedMessage('jeffrey', 'Use the existing API and do not change the database schema.', 'completed', conversation.id);
+    repository.recordSharedBriefEntry(conversation.id, decision.id, 'jeffrey', 'decision', decision.body);
+
+    repository.setConversationWorkItem(conversation.id, task.id);
+    expect(repository.getSharedContext(undefined, { workItemId: task.id })).toContain('Use the existing API');
+    repository.setConversationWorkItem(conversation.id, null);
+    expect(repository.getSharedContext(undefined, { workItemId: task.id })).not.toContain('Use the existing API');
+  });
+
+  it('retrieves shared history across messages, task activity, and prior runs', () => {
+    const task = repository.create({ title: 'Investigate memory retrieval', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Memory room', task.id);
+    repository.createSharedMessage('codex', 'The durable-memory marker appears in this message.', 'completed', conversation.id);
+    repository.addActivity(task.id, 'codex', 'progress', 'Recorded durable-memory evidence in activity.');
+    const run = repository.createRun(task.id, 'analysis', 'claude', 'claude', 'Search durable-memory history.');
+    repository.updateRun(run.id, { status: 'completed', output: 'durable-memory run result' });
+    const results = repository.searchActivityMemory('durable-memory');
+    expect(results.map((result) => result.source)).toEqual(expect.arrayContaining(['message', 'activity', 'run']));
+  });
+
   it('backfills cost for historical runs that recorded tokens but no cost, and does not overwrite an existing cost', () => {
     const item = repository.create({ title: 'Backfill cost', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const priced = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');

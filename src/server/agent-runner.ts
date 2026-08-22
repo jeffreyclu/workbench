@@ -132,6 +132,12 @@ Use available tools directly. Never ask Jeffrey to grant a filesystem permission
 Execution integrity:
 This is one foreground, tracked Workbench run. Do not start detached/background work or promise a later result. Finish the action and report only observed results. If a tool fails, include the exact command or tool, target path, and returned error. Do not infer a sandbox, session scope, or permission restriction without an observed tool error.
 
+Shared-brief acknowledgement:
+Before acting, explicitly identify the relevant decision, handoff, or blocker from the structured shared brief that you are continuing. If it conflicts with the task or observed repository state, say so before proceeding.
+
+Full Workbench activity memory:
+Both Codex and Claude share the complete durable Workbench history. Search it whenever prior work may matter with: curl -sG http://localhost:5173/api/activity-memory --data-urlencode 'q=<focused terms>' --data 'limit=40'. This is read-only retrieval over conversations, task activity, and prior run output; do not claim historical context you did not retrieve or receive in the brief.
+
 Live progress protocol:
 During execution, emit brief user-facing updates before and after meaningful steps. Explain what you are checking, why it matters, what you learned, and what comes next. Keep these updates concise. Provide reasoning summaries and decisions, not private chain-of-thought.
 
@@ -765,7 +771,10 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     }
     if (!repository.finishRun(run.id, ownerId, { agent: result.agent, status: 'completed', output, completedAt: new Date().toISOString(), ...telemetry })) return;
     if (executionPlan) repository.createExecutionPlan(item.id, executionPlan.summary, executionPlan.tasks);
-    if (run.messageId) repository.updateSharedMessage(run.messageId, { body: output, status: 'completed', ...telemetry });
+    if (run.messageId) {
+      repository.updateSharedMessage(run.messageId, { body: output, status: 'completed', ...telemetry });
+      if (run.conversationId) repository.recordAgentHandoff(run.conversationId, run.messageId, result.agent, output);
+    }
     // A decomposition can archive the parent while this process is winding
     // down. Never resurrect or reorder that historical parent from a late
     // completion callback.

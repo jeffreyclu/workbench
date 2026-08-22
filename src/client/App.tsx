@@ -4,6 +4,7 @@ import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, us
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import {
   ArrowUpRight,
+  ArrowDown,
   ArrowLeft,
   AlertTriangle,
   Bot,
@@ -43,7 +44,7 @@ import { api } from './api';
 import { ArtifactLibraryView, ArtifactNav } from './artifacts';
 import { ConfirmationDialog } from './confirmation-dialog';
 import { InsightsView, InsightsNav, formatCostUsd } from './insights';
-import { hideWorkbenchControlBlocks, humanizeRunOutput } from './run-output';
+import { hideWorkbenchControlBlocks, humanizeRunOutput, humanizeRunOutputBlocks } from './run-output';
 import { navigate, useRoute, type StackName } from './router';
 import { parseSnippet } from './search-snippet';
 import { Toaster } from './toast';
@@ -238,6 +239,26 @@ function readConversationModelProfiles(): Record<string, NonNullable<AgentRun['e
   } catch {
     return {};
   }
+}
+
+const LIVE_RUN_OUTPUT_PAGE_SIZE = 5;
+
+function LiveRunOutput({ output }: { output: string }) {
+  const [visibleCount, setVisibleCount] = useState(LIVE_RUN_OUTPUT_PAGE_SIZE);
+  const blocks = humanizeRunOutputBlocks(output);
+  if (blocks.length === 0) return null;
+  const hiddenCount = Math.max(0, blocks.length - visibleCount);
+  const visibleBlocks = blocks.slice(hiddenCount);
+  return (
+    <div className="live-run-output">
+      {hiddenCount > 0 && (
+        <button type="button" className="show-more-activity-button" onClick={() => setVisibleCount((current) => current + LIVE_RUN_OUTPUT_PAGE_SIZE)}>
+          Show earlier ({hiddenCount} more)
+        </button>
+      )}
+      <pre aria-live="polite">{visibleBlocks.join('\n\n')}</pre>
+    </div>
+  );
 }
 
 function AgentMessageBody({ body, running, conversationId, workItemId }: { body: string; running: boolean; conversationId?: string; workItemId?: string }) {
@@ -631,6 +652,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const conversationScrollRef = useRef<HTMLDivElement>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
   const isNearThreadBottomRef = useRef(true);
+  const THREAD_PAGE_SIZE = 5;
+  const [threadVisibleCount, setThreadVisibleCount] = useState(THREAD_PAGE_SIZE);
+  const [hasNewActivityBelow, setHasNewActivityBelow] = useState(false);
   const conversations = useInfiniteQuery({
     queryKey: ['shared-conversations', conversationView], queryFn: ({ pageParam }) => api.listSharedConversations(conversationView, pageParam),
     initialPageParam: undefined as string | undefined, getNextPageParam: (page) => page.nextCursor ?? undefined, refetchInterval: 1_000,
@@ -724,7 +748,13 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     queryKey: ['shared-messages', conversationId], queryFn: () => api.listSharedMessages(conversationId!), enabled: Boolean(conversationId),
     refetchInterval: (query) => query.state.data?.messages.some((message) => message.status === 'running' || message.status === 'queued') ? 750 : false,
   });
-  const conversationMessages = messages.data?.messages ?? [];
+  const allConversationMessages = messages.data?.messages ?? [];
+  // Keep the thread bounded to a handful of recent messages instead of an
+  // endless scroll; older history is revealed a page at a time on request.
+  const hasEarlierMessages = allConversationMessages.length > threadVisibleCount;
+  const conversationMessages = hasEarlierMessages
+    ? allConversationMessages.slice(allConversationMessages.length - threadVisibleCount)
+    : allConversationMessages;
   // Message cards are variable-height markdown, often with substantial agent
   // output. Rendering all of them makes the composer re-render painfully slow
   // on long threads, so measure only the visible cards and a small buffer.
@@ -1002,24 +1032,35 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   }, [conversationId, latestMessageLength, queryClient]);
   useEffect(() => {
     // Only follow new streaming output while the user is already near the
-    // bottom; once they scroll up to read history, stop yanking them back.
+    // bottom; once they scroll up to read history, stop yanking them back
+    // and instead flag that new activity is waiting below the fold.
     if (isNearThreadBottomRef.current) endRef.current?.scrollIntoView?.({ behavior: 'smooth' });
+    else setHasNewActivityBelow(true);
   }, [messages.data?.messages.length, latestMessageLength, proposedPlan]);
   useEffect(() => {
     // Switching conversations always lands the reader at the newest message.
     isNearThreadBottomRef.current = true;
+    setThreadVisibleCount(THREAD_PAGE_SIZE);
+    setHasNewActivityBelow(false);
   }, [conversationId]);
   useEffect(() => {
     const container = threadScrollRef.current;
     if (!container) return;
     const nearBottomThreshold = 120;
     const updateNearBottom = () => {
-      isNearThreadBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight <= nearBottomThreshold;
+      const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= nearBottomThreshold;
+      isNearThreadBottomRef.current = nearBottom;
+      if (nearBottom) setHasNewActivityBelow(false);
     };
     updateNearBottom();
     container.addEventListener('scroll', updateNearBottom, { passive: true });
     return () => container.removeEventListener('scroll', updateNearBottom);
   }, [conversationId]);
+  const jumpToLatest = () => {
+    isNearThreadBottomRef.current = true;
+    setHasNewActivityBelow(false);
+    endRef.current?.scrollIntoView?.({ behavior: 'smooth' });
+  };
   useEffect(() => {
     if (!railOpen) return;
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -1149,6 +1190,18 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           {messages.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading room…</div>}
           {messages.error && <div className="list-state compact-state error-message">Could not load shared messages: {messages.error.message} <button type="button" className="button secondary compact" onClick={() => messages.refetch()}>Retry</button></div>}
           {!messages.isLoading && !messages.error && !selectedConversationMissing && messages.data?.messages.length === 0 && <div className="list-state compact-state">No messages yet. Ask Codex or Claude to get started.</div>}
+          {hasEarlierMessages && (
+            <button
+              type="button"
+              className="show-more-history-button"
+              onClick={() => {
+                isNearThreadBottomRef.current = false;
+                setThreadVisibleCount((current) => current + THREAD_PAGE_SIZE);
+              }}
+            >
+              Show earlier messages ({allConversationMessages.length - threadVisibleCount} more)
+            </button>
+          )}
           <div className="thread-virtualizer" style={{ height: threadVirtualizer.getTotalSize() }}>
           {displayedThreadRows.map((row) => {
             const message = conversationMessages[row.index];
@@ -1192,6 +1245,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           {createTasks.error && createTasks.variables?.conversationId === conversationId && <div className="finding-progress error-message"><X size={15} /><span><strong>Could not create tasks</strong><small>{createTasks.error.message}</small></span></div>}
           <div ref={endRef} />
         </div>
+        {hasNewActivityBelow && <button type="button" className="jump-to-latest-button" onClick={jumpToLatest}><ArrowDown size={13} /> New activity · Jump to latest</button>}
         {conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <form className="shared-composer" onSubmit={submit}>
           {files.length > 0 && <div className="pending-files">{files.map((file) => <button type="button" key={`${file.name}-${file.size}`} onClick={() => setFiles((current) => current.filter((item) => item !== file))}><Paperclip size={11} /> {file.name} <X size={10} /></button>)}</div>}
           <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} onSubmit={() => {
@@ -1249,6 +1303,10 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const [selectedExecutionTaskIndexes, setSelectedExecutionTaskIndexes] = useState<Set<number>>(new Set());
   const [executionPlanArchivePromptOpen, setExecutionPlanArchivePromptOpen] = useState(false);
   const [executionProfile, setExecutionProfileState] = useState<AgentRun['executionProfile']>(() => readTaskModelProfiles()[id] ?? null);
+  const ACTIVITY_PAGE_SIZE = 20;
+  const [activityVisibleCount, setActivityVisibleCount] = useState(ACTIVITY_PAGE_SIZE);
+  const RUNS_PAGE_SIZE = 5;
+  const [runsVisibleCount, setRunsVisibleCount] = useState(RUNS_PAGE_SIZE);
   const setExecutionProfile = (profile: AgentRun['executionProfile']) => {
     setExecutionProfileState(profile);
     writeTaskModelProfile(id, profile);
@@ -1475,6 +1533,10 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
     setEditDescription(detail.data.item.description);
     setEditProjectName(detail.data.item.projectName ?? '');
   }, [detail.data?.item, editingField]);
+  useEffect(() => {
+    setActivityVisibleCount(ACTIVITY_PAGE_SIZE);
+    setRunsVisibleCount(RUNS_PAGE_SIZE);
+  }, [id]);
 
   if (detail.isLoading) return <div className="detail-empty"><LoaderCircle className="spin" /></div>;
   if (!detail.data) return <div className="detail-empty">Unable to load this item.</div>;
@@ -1678,7 +1740,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         <details className="detail-section task-collapsible runs-section" open>
           <summary><span>Agent runs</span><small>{detail.data.runs.length} run{detail.data.runs.length === 1 ? '' : 's'}</small></summary>
           <div className="task-collapsible-content">
-          {detail.data.runs.map((run, runIndex) => (
+          {detail.data.runs.slice(0, runsVisibleCount).map((run, runIndex) => (
             <article className="run-card" key={run.id}>
               <header>
                 <span className={`run-status run-${run.status}`}>{run.status === 'running' && <LoaderCircle className="spin" size={11} />}{run.status === 'queued' && run.attempt > 0 ? `Retrying (attempt ${run.attempt + 1} of ${run.maxAttempts})…` : run.status}</span>
@@ -1689,13 +1751,22 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
               </header>
               {run.instructions && <p className="run-prompt">{run.instructions}</p>}
               {run.status === 'running' && !run.conversationId && <div className="live-output-label"><span /> Live activity & reasoning summaries</div>}
-              {run.output && run.status !== 'completed' && !run.conversationId && <pre aria-live="polite">{humanizeRunOutput(run.output)}</pre>}
+              {run.output && run.status !== 'completed' && !run.conversationId && <LiveRunOutput output={run.output} />}
               {run.model && <span className="model-badge" title={formatRunTelemetry(run)}>{run.model} · {formatRunBadge(run)}</span>}
               {run.status === 'completed' && run.output && <div className="run-summary"><span className="section-label">Agent summary</span><AgentMessageBody body={run.output} running={false} workItemId={item.id} /></div>}
               {run.error && <p className="error-message">{run.error}</p>}
               {run.conversationId && <button className="open-run-chat" onClick={() => onOpenConversation(run.conversationId!)}><MessageCircle size={13} /> Open execution chat</button>}
             </article>
           ))}
+          {detail.data.runs.length > runsVisibleCount && (
+            <button
+              type="button"
+              className="show-more-activity-button"
+              onClick={() => setRunsVisibleCount((current) => current + RUNS_PAGE_SIZE)}
+            >
+              Show more ({detail.data.runs.length - runsVisibleCount} more)
+            </button>
+          )}
           </div>
         </details>
       )}
@@ -1821,7 +1892,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
             that the routing, model, and fallback choices are recorded in here. */}
         <summary><span>Activity</span><small>{activity.length} event{activity.length === 1 ? '' : 's'}{decisionCount > 0 && ` · ${decisionCount} agent decision${decisionCount === 1 ? '' : 's'}`}</small></summary>
         <div className="task-collapsible-content">
-        {activity.length === 0 ? <p className="muted">No activity yet.</p> : activity.map((entry) => (
+        {activity.length === 0 ? <p className="muted">No activity yet.</p> : activity.slice(0, activityVisibleCount).map((entry) => (
           <div className={`activity${agentDecisionKinds.has(entry.kind) ? ' decision' : ''}`} key={entry.id}>
             <span className="activity-dot" />
             <div>
@@ -1831,6 +1902,15 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
             </div>
           </div>
         ))}
+        {activity.length > activityVisibleCount && (
+          <button
+            type="button"
+            className="show-more-activity-button"
+            onClick={() => setActivityVisibleCount((current) => current + ACTIVITY_PAGE_SIZE)}
+          >
+            Show more ({activity.length - activityVisibleCount} more)
+          </button>
+        )}
         </div>
       </details>
     </section>

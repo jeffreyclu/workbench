@@ -27,6 +27,9 @@ const EXPECTED_MIGRATIONS = [
   '014_queue_versions',
   '015_durable_artifact_publication',
   '016_conversation_run_adoption',
+  '017_durable_agent_handoffs',
+  '018_structured_shared_brief',
+  '019_editable_shared_brief',
 ];
 
 describe('openDatabase', () => {

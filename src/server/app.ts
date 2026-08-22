@@ -18,6 +18,7 @@ import {
   createSharedMessageSchema,
   createSharedConversationSchema,
   setConversationTaskSchema,
+  updateSharedBriefSchema,
   reorderQueueSchema,
   runKindSchema,
   resolveSourceUrlSchema,
@@ -572,6 +573,13 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     response.json({ conversation });
   });
 
+  app.patch('/api/shared/conversations/:id/brief', (request, response) => {
+    const { brief } = updateSharedBriefSchema.parse(request.body);
+    const conversation = repository.setConversationSharedBrief(request.params.id, brief);
+    if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
+    response.json({ conversation });
+  });
+
   app.patch('/api/shared/conversations/:id/task', (request, response) => {
     const { workItemId } = setConversationTaskSchema.parse(request.body);
     const conversation = repository.setConversationWorkItem(request.params.id, workItemId);
@@ -596,6 +604,14 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     if (!query) return response.status(400).json({ error: 'Query parameter "q" is required.' });
     const limit = z.coerce.number().int().min(1).max(100).default(20).parse(request.query.limit);
     response.json({ results: repository.searchShared(query, limit) });
+  });
+
+  // This is intentionally read-only. Both CLI agents can retrieve the full
+  // durable Workbench record instead of relying on their private chat memory.
+  app.get('/api/activity-memory', (request, response) => {
+    const query = z.string().trim().min(2).max(500).parse(request.query.q);
+    const limit = z.coerce.number().int().min(1).max(100).default(40).parse(request.query.limit);
+    response.json({ results: repository.searchActivityMemory(query, limit) });
   });
 
   app.get('/api/shared/messages', (request, response) => {

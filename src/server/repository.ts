@@ -377,7 +377,7 @@ export class WorkItemRepository {
       ORDER BY is_working DESC, updated_at DESC
     `).all(view, view, view) as Array<Record<string, string | number | null>>).map((row) => this.withConversationState({
       id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
-      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
+      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
     }));
   }
 
@@ -409,7 +409,7 @@ export class WorkItemRepository {
     const hasMore = rows.length > safeLimit;
     const conversations = rows.slice(0, safeLimit).map((row) => this.withConversationState({
       id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
-      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
+      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
     }));
     const last = conversations.at(-1);
     return { conversations, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ isWorking: last.state === 'working', updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null,
@@ -419,11 +419,16 @@ export class WorkItemRepository {
   createConversation(title = 'New conversation', workItemId: string | null = null): SharedConversation {
     const id = randomUUID(); const now = new Date().toISOString();
     this.database.prepare('INSERT INTO shared_conversations (id, title, work_item_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, title, workItemId, now, now);
-    return { id, title, workItemId, forkedFromConversationId: null, archivedAt: null, preferredExecutionProfile: null, isUnread: false, createdAt: now, updatedAt: now, isActive: false };
+    return { id, title, workItemId, forkedFromConversationId: null, archivedAt: null, sharedBrief: '', preferredExecutionProfile: null, isUnread: false, createdAt: now, updatedAt: now, isActive: false };
   }
 
   markConversationRead(id: string): SharedConversation | null {
     const changed = this.database.prepare('UPDATE shared_conversations SET last_read_at = ? WHERE id = ?').run(new Date().toISOString(), id).changes;
+    return changed ? this.getConversation(id) : null;
+  }
+
+  setConversationSharedBrief(id: string, brief: string): SharedConversation | null {
+    const changed = this.database.prepare('UPDATE shared_conversations SET shared_brief = ?, updated_at = ? WHERE id = ?').run(brief, new Date().toISOString(), id).changes;
     return changed ? this.getConversation(id) : null;
   }
 
@@ -487,9 +492,15 @@ export class WorkItemRepository {
       if (!changed) { this.database.exec('ROLLBACK'); return null; }
       if (before.workItemId && before.workItemId !== workItemId) {
         this.database.prepare('DELETE FROM agent_runs WHERE work_item_id = ? AND adopted_conversation_id = ?').run(before.workItemId, id);
+        this.database.prepare('UPDATE agent_handoffs SET work_item_id = NULL WHERE conversation_id = ?').run(id);
+        this.database.prepare('UPDATE shared_brief_entries SET work_item_id = NULL WHERE conversation_id = ?').run(id);
         this.addActivity(before.workItemId, 'jeffrey', 'conversation_unlinked', `Unlinked conversation “${before.title}” and removed its adopted agent-run history.`);
       }
       if (workItemId) {
+        // Linking must carry the existing chat's decisions and handoffs into
+        // the task scope; unlinking above is the exact inverse.
+        this.database.prepare('UPDATE agent_handoffs SET work_item_id = ? WHERE conversation_id = ?').run(workItemId, id);
+        this.database.prepare('UPDATE shared_brief_entries SET work_item_id = ? WHERE conversation_id = ?').run(workItemId, id);
         const adopted = this.adoptConversationAgentRuns(workItemId, id);
         if (before.workItemId !== workItemId || adopted) this.addActivity(workItemId, 'jeffrey', 'conversation_linked', `Linked conversation “${before.title}” and adopted ${adopted} agent ${adopted === 1 ? 'run' : 'runs'} as task execution history.`);
       }
@@ -766,6 +777,26 @@ export class WorkItemRepository {
     return results.slice(0, safeLimit);
   }
 
+  /** Read-only retrieval over the complete durable Workbench record for agents. */
+  searchActivityMemory(query: string, limit = 40): Array<{ source: 'message' | 'activity' | 'run'; title: string; body: string; createdAt: string }> {
+    const needle = `%${query.trim().replace(/[%_]/g, '')}%`;
+    if (query.trim().length < 2) return [];
+    const safeLimit = Math.max(1, Math.min(100, limit));
+    const rows = this.database.prepare(`
+      SELECT 'message' AS source, COALESCE(c.title, 'Conversation') AS title, m.body AS body, m.created_at AS created_at
+        FROM shared_messages m LEFT JOIN shared_conversations c ON c.id = m.conversation_id
+        WHERE m.body LIKE ? AND (c.deleted_at IS NULL OR c.id IS NULL)
+      UNION ALL
+      SELECT 'activity', w.title, a.body, a.created_at FROM activities a JOIN work_items w ON w.id = a.work_item_id
+        WHERE a.body LIKE ? OR w.title LIKE ?
+      UNION ALL
+      SELECT 'run', w.title, COALESCE(r.output, r.instructions, r.error), r.created_at FROM agent_runs r JOIN work_items w ON w.id = r.work_item_id
+        WHERE r.output LIKE ? OR r.instructions LIKE ? OR r.error LIKE ? OR w.title LIKE ?
+      ORDER BY created_at DESC LIMIT ?
+    `).all(needle, needle, needle, needle, needle, needle, needle, safeLimit) as Array<{ source: 'message' | 'activity' | 'run'; title: string; body: string; created_at: string }>;
+    return rows.map((row) => ({ source: row.source, title: row.title, body: row.body.slice(0, 4_000), createdAt: row.created_at }));
+  }
+
   listQueuedConversationIds(): string[] {
     const rows = this.database.prepare("SELECT DISTINCT conversation_id FROM shared_messages WHERE status = 'queued'").all() as Array<{ conversation_id: string | null }>;
     return rows.map((row) => row.conversation_id).filter((id): id is string => id !== null);
@@ -830,13 +861,63 @@ export class WorkItemRepository {
     return this.getSharedMessageById(id);
   }
 
-  /** Excludes the current conversation so a reply does not quote itself. */
-  getSharedContext(excludeConversationId?: string, scope?: { workItemId?: string; conversationId?: string }): string {
-    const messages = this.listSharedMessages(120).messages.filter((message) => message.conversationId !== excludeConversationId);
-    const recent = messages.filter((message) => message.status === 'completed' && message.body).slice(-2);
-    const format = (message: SharedMessage) => `${message.author}: ${message.body.slice(0, 600)}`;
-    const recentText = recent.map(format).join('\n');
-    return ['Recent shared room:', recentText || 'No recent conversation.'].join('\n');
+  /**
+   * Persists a completed agent result as a scoped handoff. This is deliberately
+   * separate from the transcript: the next Codex or Claude process gets the
+   * same bounded, durable record even after a restart or a task continuation.
+   */
+  recordAgentHandoff(conversationId: string, messageId: string, author: 'codex' | 'claude' | 'system', body: string): void {
+    const text = body.trim();
+    if (!text) return;
+    const conversation = this.listConversations('all').find((item) => item.id === conversationId);
+    this.database.prepare(`INSERT INTO agent_handoffs (id, conversation_id, work_item_id, message_id, author, body, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(message_id) DO UPDATE SET author = excluded.author, body = excluded.body, created_at = excluded.created_at`)
+      .run(randomUUID(), conversationId, conversation?.workItemId ?? null, messageId, author, text.slice(0, 4_000), new Date().toISOString());
+    this.recordSharedBriefEntry(conversationId, messageId, author, author === 'system' ? 'synthesis' : 'agent_handoff', text);
+  }
+
+  /** A concise, structured ledger of user decisions and agent evidence. */
+  recordSharedBriefEntry(conversationId: string, messageId: string, author: string, kind: 'decision' | 'agent_handoff' | 'synthesis', body: string): void {
+    const text = body.trim().slice(0, 4_000);
+    if (!text) return;
+    const conversation = this.listConversations('all').find((item) => item.id === conversationId);
+    const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+    const matching = (expression: RegExp) => lines.filter((line) => expression.test(line)).slice(0, 12).join('\n');
+    const facts = kind === 'decision' ? '' : text;
+    const decisions = kind === 'decision' ? text : matching(/\b(?:decid|will |should |must |approved?|use |do not|don't)\b/i);
+    const blockers = matching(/\b(?:blocked|blocker|cannot|can't|unable|failed|missing|error)\b/i);
+    const evidence = matching(/\b(?:verified|test(?:ed|s)?|passed|ran |build|changed|edited|fixed)\b/i);
+    this.database.prepare(`INSERT INTO shared_brief_entries (id, conversation_id, work_item_id, message_id, author, kind, facts, decisions, blockers, evidence, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(message_id) DO UPDATE SET author = excluded.author, kind = excluded.kind, facts = excluded.facts, decisions = excluded.decisions, blockers = excluded.blockers, evidence = excluded.evidence, created_at = excluded.created_at`)
+      .run(randomUUID(), conversationId, conversation?.workItemId ?? null, messageId, author, kind, facts, decisions, blockers, evidence, new Date().toISOString());
+  }
+
+  /**
+   * Returns only handoffs relevant to this conversation or its linked task.
+   * Scope is explicit so unrelated rooms cannot leak context into an agent run.
+   */
+  getSharedContext(_excludeConversationId?: string, scope?: { workItemId?: string; conversationId?: string }): string {
+    // Compatibility-only diagnostic path. Agent runners always provide a
+    // scope; never use this global scrape to build an agent prompt.
+    if (!scope?.conversationId && !scope?.workItemId) {
+      const recent = this.listSharedMessages(120).messages.filter((message) => message.status === 'completed' && message.body).slice(-2);
+      return ['Recent shared room:', recent.map((message) => `${message.author}: ${message.body.slice(0, 600)}`).join('\n') || 'No recent conversation.'].join('\n');
+    }
+    const rows = this.database.prepare(`SELECT author, kind, facts, decisions, blockers, evidence, created_at FROM shared_brief_entries
+      WHERE (? IS NOT NULL AND conversation_id = ?) OR (? IS NOT NULL AND work_item_id = ?)
+      ORDER BY created_at DESC LIMIT 10`)
+      .all(scope.conversationId ?? null, scope.conversationId ?? null, scope.workItemId ?? null, scope.workItemId ?? null) as Array<{ author: string; kind: string; facts: string; decisions: string; blockers: string; evidence: string; created_at: string }>;
+    const entries = rows.reverse().map((row) => [
+      `- ${row.kind} from ${row.author}:`,
+      row.facts ? `  Facts: ${row.facts.slice(0, 1_200)}` : '',
+      row.decisions ? `  Decisions: ${row.decisions.slice(0, 700)}` : '',
+      row.blockers ? `  Blockers: ${row.blockers.slice(0, 700)}` : '',
+      row.evidence ? `  Evidence: ${row.evidence.slice(0, 700)}` : '',
+    ].filter(Boolean).join('\n'));
+    const editableBrief = scope.conversationId ? this.getConversation(scope.conversationId)?.sharedBrief?.trim() : '';
+    return ['Structured shared brief for Codex and Claude:', editableBrief ? `Jeffrey's maintained brief:\n${editableBrief}` : '', entries.length ? entries.join('\n\n') : 'No completed handoffs or decisions yet.'].filter(Boolean).join('\n\n');
   }
 
   list(): WorkItem[] {
@@ -2244,7 +2325,10 @@ export class WorkItemRepository {
     const changed = this.database.prepare(`
       UPDATE shared_messages SET status = 'completed' WHERE id = ? AND status = 'queued' AND author = 'jeffrey'
     `).run(id).changes;
-    return Number(changed) > 0;
+    if (!Number(changed)) return false;
+    const message = this.getSharedMessageById(id);
+    if (message) this.recordSharedBriefEntry(message.conversationId, message.id, 'jeffrey', 'decision', message.body);
+    return true;
   }
 
   renewLeases(ownerId: string, leaseMs: number): void {

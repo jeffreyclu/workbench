@@ -1,4 +1,4 @@
-export function humanizeRunOutput(output: string): string {
+export function humanizeRunOutputBlocks(output: string): string[] {
   const seen = new Set<string>();
   return output.split(/\n\n+/).flatMap((block) => {
     const trimmed = block.trim();
@@ -17,7 +17,11 @@ export function humanizeRunOutput(output: string): string {
     if (seen.has(trimmed)) return [];
     seen.add(trimmed);
     return [trimmed];
-  }).join('\n\n');
+  });
+}
+
+export function humanizeRunOutput(output: string): string {
+  return humanizeRunOutputBlocks(output).join('\n\n');
 }
 
 export function hideWorkbenchControlBlocks(output: string): string {
