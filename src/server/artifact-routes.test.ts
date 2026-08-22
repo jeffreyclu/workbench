@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApp } from './app.js';
 import { ArtifactLibrary } from './artifact-library.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
@@ -101,5 +104,28 @@ describe('artifact library API', () => {
     });
 
     expect(response.status).toBe(400);
+  });
+
+  it('repairs legacy snapshots on demand without deploying artifacts', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-repair-'));
+    const previousOutputDirectory = process.env.ARTIFACT_OUTPUT_DIRECTORY;
+    process.env.ARTIFACT_OUTPUT_DIRECTORY = directory;
+    try {
+      const artifactDirectory = join(directory, 'abc123');
+      // The legacy deployment directory is the immutable evidence to import.
+      mkdirSync(artifactDirectory, { recursive: true });
+      writeFileSync(join(artifactDirectory, 'index.html'), '<!doctype html><p>legacy page</p>');
+
+      const response = await fetch(`${baseUrl}/api/artifacts/repair-snapshots`, { method: 'POST' });
+      const body = await response.json() as { restored: Array<{ id: string; version: number }>; missing: unknown[] };
+
+      expect(response.status).toBe(200);
+      expect(body).toEqual({ restored: [{ id: 'abc123', version: 1 }], missing: [] });
+      expect(artifacts.listSnapshotCandidates(false)[0]?.snapshots[0]?.content).toBe('<!doctype html><p>legacy page</p>');
+    } finally {
+      if (previousOutputDirectory === undefined) delete process.env.ARTIFACT_OUTPUT_DIRECTORY;
+      else process.env.ARTIFACT_OUTPUT_DIRECTORY = previousOutputDirectory;
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

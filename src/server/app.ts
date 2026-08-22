@@ -407,6 +407,25 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     }
   });
 
+  /**
+   * Repairs immutable rendered snapshots left blank by the pre-migration
+   * publisher. This deliberately does not deploy anything: callers can see
+   * exactly which historical pages were restored or remain unrecoverable
+   * before attempting a publish that would replace the Pages directory.
+   */
+  app.post('/api/artifacts/repair-snapshots', async (_request, response) => {
+    try {
+      const result = await serializeArtifactOperation(async () => repairLegacyArtifactSnapshots(
+        process.env.ARTIFACT_OUTPUT_DIRECTORY ?? 'data/published',
+        artifacts.listSnapshotCandidates(),
+        (artifactId, version, content) => artifacts.recordRenderedSnapshot(artifactId, version, content),
+      ));
+      response.json(result);
+    } catch (error) {
+      response.status(500).json({ error: error instanceof Error ? error.message : 'Could not repair artifact snapshots.' });
+    }
+  });
+
   app.get('/api/artifacts/status', (request, response) => {
     try {
       const input = artifactPathSchema.parse(request.query);

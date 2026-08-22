@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -13,11 +13,9 @@ import {
   Cloud,
   Command,
   FileText,
-  GitPullRequest,
   LoaderCircle,
   Menu,
   MessageCircle,
-  MessageSquare,
   MessageSquarePlus,
   MoreHorizontal,
   Link2,
@@ -39,538 +37,25 @@ import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from './markdown-composer.js';
 import { MarkdownCode, MarkdownPre } from './markdown-code.js';
 import { isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAGE, SELF_ASSIGNED_OWNER_MESSAGE } from '../shared/contracts';
-import type { AgentRun, Assignee, BrokerConnection, BrokerSourceId, DiscoveryCandidate, ExecutionPlan, ProviderSyncConflict, QueueItemExplanation, SharedConversation, SharedMessage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../shared/contracts';
+import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SharedConversation, SharedMessage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../shared/contracts';
 import { api } from './api';
 import { ArtifactLibraryView, ArtifactNav } from './artifacts';
 import { ConfirmationDialog } from './confirmation-dialog';
-import { InsightsView, InsightsNav, formatCostUsd } from './insights';
-import { hideWorkbenchControlBlocks, humanizeRunOutput, humanizeRunOutputBlocks } from './run-output';
+import { InsightsView, InsightsNav } from './insights';
 import { navigate, useRoute, type StackName } from './router';
 import { parseSnippet } from './search-snippet';
 import { Toaster } from './toast';
 import { toast, toastError } from './toast-store';
 import { SortableQueueItem as TaskQueueItem, TaskClassificationSelect } from './task-queue';
-
-function ReferenceTypeIcon({ type }: { type: WorkItemReferenceType }) {
-  if (type === 'linear_issue') return <Cloud size={13} />;
-  if (type === 'pull_request') return <GitPullRequest size={13} />;
-  if (type === 'slack_thread') return <MessageSquare size={13} />;
-  if (type === 'document') return <FileText size={13} />;
-  return <Link2 size={13} />;
-}
-
-function ConversationOriginBadge({ workItemId }: Pick<SharedConversation, 'workItemId'>) {
-  const isTaskLinked = Boolean(workItemId);
-  return <span
-    className={`conversation-origin conversation-origin-${isTaskLinked ? 'task' : 'manual'}`}
-    title={isTaskLinked ? 'Created automatically for a task' : 'Created manually'}
-  >
-    {isTaskLinked ? <Bot size={10} aria-hidden="true" /> : <User size={10} aria-hidden="true" />}
-    {isTaskLinked ? 'Task-linked' : 'Manual'}
-  </span>;
-}
-
-function sourceLinkLabel(sourceUrl: string): string {
-  try {
-    const host = new URL(sourceUrl).hostname;
-    if (host.includes('slack.com')) return 'Open in Slack';
-    if (host.includes('github.com')) return 'Open in GitHub';
-    if (host.includes('atlassian.net')) return 'Open in Atlassian';
-    if (host.includes('figma.com')) return 'Open in Figma';
-    if (host.includes('linear.app')) return 'Open in Linear';
-  } catch { /* Use the generic label for malformed legacy URLs. */ }
-  return 'Open source';
-}
-
-function sourceReferenceType(sourceUrl: string): WorkItemReferenceType {
-  try {
-    const host = new URL(sourceUrl).hostname.toLowerCase();
-    if (host.includes('slack.com')) return 'slack_thread';
-    if (host.includes('github.com') && /\/pull\/\d+(?:\/|$)/.test(sourceUrl)) return 'pull_request';
-    if (host.includes('linear.app')) return 'linear_issue';
-    if (host.includes('atlassian.net') || host.includes('confluence')) return 'document';
-  } catch { /* The normal source link still supports legacy malformed URLs. */ }
-  return 'other';
-}
-
-function sourceReferenceTitle(sourceUrl: string): string {
-  try {
-    return new URL(sourceUrl).hostname;
-  } catch {
-    return sourceUrl;
-  }
-}
-
-function taskDetailSaveFeedback(input: UpdateWorkItemInput): { success: string; error: string } {
-  if ('title' in input) return { success: 'Title saved.', error: 'Could not save the title.' };
-  if ('description' in input) return { success: 'Description saved.', error: 'Could not save the description.' };
-  if ('assignees' in input) return { success: 'Owners saved.', error: 'Could not save the owners.' };
-  if ('blockedByIds' in input) return { success: 'Prerequisites saved.', error: 'Could not save the prerequisites.' };
-  return { success: 'Task details saved.', error: 'Could not save the task details.' };
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1_024) return `${bytes} B`;
-  if (bytes < 1_024 * 1_024) return `${(bytes / 1_024).toFixed(1)} KB`;
-  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`;
-}
-
-/**
- * The activity log mixes Workbench's own routing decisions with Jeffrey's edits.
- * Labelling each entry keeps both scannable without opening a run.
- */
-const activityKindLabels: Record<string, string> = {
-  agent_fallback: 'fallback',
-  archived: 'archive',
-  chat_completed: 'chat',
-  chat_started: 'chat',
-  classification: 'task type',
-  completed: 'done',
-  edited: 'edit',
-  execution_retried: 'retry',
-  execution_started: 'routing',
-  model_selected: 'model',
-  model_preference: 'model pref',
-  provider_conflict_resolved: 'sync',
-  queue_moved: 'queue',
-  reference_added: 'link',
-  restored: 'restore',
-  stack_changed: 'stack',
-};
-
-const agentDecisionKinds = new Set(['agent_fallback', 'classification', 'execution_retried', 'execution_started', 'model_selected']);
-
-function activityKindLabel(kind: string): string {
-  return activityKindLabels[kind] ?? kind.replace(/_/g, ' ');
-}
-
-function selectBalancedVisibleAgent(messages: Array<{ author: string }>): 'codex' | 'claude' {
-  const codexCount = messages.filter((message) => message.author === 'codex').length;
-  const claudeCount = messages.filter((message) => message.author === 'claude').length;
-  return codexCount <= claudeCount ? 'codex' : 'claude';
-}
-
-function formatRunTelemetry(entry: Pick<AgentRun | SharedMessage, 'executionProfile' | 'inputTokens' | 'outputTokens' | 'estimatedCostUsd' | 'fallbackFrom' | 'fallbackReason' | 'createdAt' | 'completedAt'> & { startedAt?: string | null }): string {
-  const started = entry.startedAt ?? entry.createdAt;
-  const duration = entry.completedAt ? Math.max(0, new Date(entry.completedAt).getTime() - new Date(started).getTime()) : null;
-  const running = !entry.completedAt;
-  const tokenText = running
-    ? entry.outputTokens === null ? 'counting tokens…' : `~${entry.outputTokens.toLocaleString()} out · live estimate`
-    : entry.inputTokens === null && entry.outputTokens === null ? 'tokens not reported' : `${entry.inputTokens?.toLocaleString() ?? '—'} in · ${entry.outputTokens?.toLocaleString() ?? '—'} out`;
-  const durationText = duration === null ? '' : ` · ${(duration / 1_000).toFixed(duration < 10_000 ? 1 : 0)}s`;
-  const fallbackText = entry.fallbackFrom ? ` · fallback from ${entry.fallbackFrom}${entry.fallbackReason ? ` (${entry.fallbackReason})` : ''}` : '';
-  const costText = entry.estimatedCostUsd === null ? '' : ` · ${formatCostUsd(entry.estimatedCostUsd)}${running ? ' so far' : ' estimated'}`;
-  return `${entry.executionProfile ?? 'unrouted'} · ${tokenText}${costText}${durationText}${fallbackText}`;
-}
-
-function compactTokenCount(value: number): string {
-  return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
-}
-
-function formatRunBadge(entry: Pick<AgentRun | SharedMessage, 'inputTokens' | 'outputTokens' | 'estimatedCostUsd' | 'completedAt'>): string {
-  // Cost is the number Jeffrey actually reads at a glance, so it leads the badge
-  // when it is known; raw token counts stay in the hover title.
-  const cost = entry.estimatedCostUsd === null ? '' : formatCostUsd(entry.estimatedCostUsd);
-  if (!entry.completedAt) {
-    if (cost) return `${cost} so far`;
-    return entry.outputTokens && entry.outputTokens > 0 ? `~${compactTokenCount(entry.outputTokens)} out` : 'counting…';
-  }
-  if (entry.inputTokens === null && entry.outputTokens === null) return cost || 'usage unavailable';
-  const input = entry.inputTokens === null ? '—' : compactTokenCount(entry.inputTokens);
-  const output = entry.outputTokens === null ? '—' : compactTokenCount(entry.outputTokens);
-  return `${cost ? `${cost} · ` : ''}${input} in · ${output} out`;
-}
-
-function ModelProfileSelect({ value, onChange, className = '' }: { value: AgentRun['executionProfile']; onChange: (value: AgentRun['executionProfile']) => void; className?: string }) {
-  return <select className={className} value={value ?? 'auto'} onChange={(event) => onChange(event.target.value === 'auto' ? null : event.target.value as NonNullable<AgentRun['executionProfile']>)} aria-label="Model choice">
-    <option value="auto">Auto model</option>
-    <option value="economy">Fast · Haiku / Luna</option>
-    <option value="standard">Balanced · Sonnet / Terra</option>
-    <option value="deep">Powerful · Opus / Sol</option>
-  </select>;
-}
-
-const conversationModelStorageKey = 'workbench:conversation-model-profiles';
-const taskModelStorageKey = 'workbench:task-model-profiles';
-const conversationDraftStorageKey = 'workbench:conversation-drafts';
-function readTaskModelProfiles(): Record<string, NonNullable<AgentRun['executionProfile']>> {
-  try {
-    const value = JSON.parse(window.localStorage.getItem(taskModelStorageKey) ?? '{}') as Record<string, unknown>;
-    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, NonNullable<AgentRun['executionProfile']>] => ['economy', 'standard', 'deep'].includes(String(entry[1]))));
-  } catch {
-    return {};
-  }
-}
-
-function writeTaskModelProfile(taskId: string, profile: AgentRun['executionProfile']): void {
-  const profiles = readTaskModelProfiles();
-  if (profile) profiles[taskId] = profile;
-  else delete profiles[taskId];
-  window.localStorage.setItem(taskModelStorageKey, JSON.stringify(profiles));
-}
-
-function readConversationDrafts(): Record<string, string> {
-  try {
-    const value = JSON.parse(window.localStorage.getItem(conversationDraftStorageKey) ?? '{}') as Record<string, unknown>;
-    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
-  } catch {
-    return {};
-  }
-}
-
-function writeConversationDraft(conversationId: string, body: string): void {
-  const drafts = readConversationDrafts();
-  if (body) drafts[conversationId] = body;
-  else delete drafts[conversationId];
-  window.localStorage.setItem(conversationDraftStorageKey, JSON.stringify(drafts));
-}
-
-function clearSentConversationDraft(conversationId: string, sentBody: string): void {
-  const drafts = readConversationDrafts();
-  if ((drafts[conversationId] ?? '') !== sentBody) return;
-  delete drafts[conversationId];
-  window.localStorage.setItem(conversationDraftStorageKey, JSON.stringify(drafts));
-}
-
-function readConversationModelProfiles(): Record<string, NonNullable<AgentRun['executionProfile']>> {
-  try {
-    const value = JSON.parse(window.localStorage.getItem(conversationModelStorageKey) ?? '{}') as Record<string, unknown>;
-    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, NonNullable<AgentRun['executionProfile']>] => ['economy', 'standard', 'deep'].includes(String(entry[1]))));
-  } catch {
-    return {};
-  }
-}
-
-const LIVE_RUN_OUTPUT_PAGE_SIZE = 5;
-
-function LiveRunOutput({ output }: { output: string }) {
-  const [visibleCount, setVisibleCount] = useState(LIVE_RUN_OUTPUT_PAGE_SIZE);
-  const blocks = humanizeRunOutputBlocks(output);
-  if (blocks.length === 0) return null;
-  const hiddenCount = Math.max(0, blocks.length - visibleCount);
-  const visibleBlocks = blocks.slice(hiddenCount);
-  return (
-    <div className="live-run-output">
-      {hiddenCount > 0 && (
-        <button type="button" className="show-more-activity-button" onClick={() => setVisibleCount((current) => current + LIVE_RUN_OUTPUT_PAGE_SIZE)}>
-          Show earlier ({hiddenCount} more)
-        </button>
-      )}
-      <pre aria-live="polite">{visibleBlocks.join('\n\n')}</pre>
-    </div>
-  );
-}
-
-function AgentMessageBody({ body, running, conversationId, workItemId }: { body: string; running: boolean; conversationId?: string; workItemId?: string }) {
-  const visibleBody = hideWorkbenchControlBlocks(running ? humanizeRunOutput(body) : body);
-  if (!visibleBody) return null;
-  return <div className="agent-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-    code: MarkdownCode,
-    pre: MarkdownPre,
-    a: ({ href = '', children, ...props }) => {
-      const external = /^(?:(?!file:)[a-z][a-z0-9+.-]*:|#)/i.test(href);
-      const artifactHref = external ? href : `/api/artifacts/open?path=${encodeURIComponent(href)}${conversationId ? `&conversationId=${encodeURIComponent(conversationId)}` : ''}${workItemId ? `&workItemId=${encodeURIComponent(workItemId)}` : ''}`;
-      return <a {...props} href={artifactHref} target="_blank" rel="noreferrer">{children}</a>;
-    },
-  }}>{visibleBody}</ReactMarkdown></div>;
-}
-
-/** Per-task score breakdown backing a queue proposal or the "why this order" explain view. */
-function QueueExplanationList({ explanations }: { explanations: QueueItemExplanation[] }) {
-  if (!explanations.length) return <p className="explanation-empty">No score breakdown is available yet.</p>;
-  return <ol className="queue-explanations">
-    {explanations.map((explanation) => {
-      const moved = explanation.proposedPosition - explanation.previousPosition;
-      return <li key={explanation.itemId} className="queue-explanation">
-        <div className="queue-explanation-head">
-          <span className="queue-explanation-rank">{String(explanation.proposedPosition + 1).padStart(2, '0')}</span>
-          <strong>{explanation.title}</strong>
-          {moved !== 0 && <span className={`queue-explanation-move ${moved < 0 ? 'up' : 'down'}`}>{moved < 0 ? `↑ ${Math.abs(moved)}` : `↓ ${moved}`}</span>}
-        </div>
-        {explanation.signals.length > 0 && <ul className="queue-signal-list">
-          {explanation.signals.map((signal, index) => <li key={`${explanation.itemId}-${signal.key}-${index}`} className={signal.delta >= 0 ? 'positive' : 'negative'}>
-            <span className="queue-signal-delta">{signal.delta >= 0 ? '+' : ''}{signal.delta}</span> {signal.detail}
-          </li>)}
-        </ul>}
-      </li>;
-    })}
-  </ol>;
-}
-
-function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { onClose: () => void; onCreated: (item: WorkItem) => void; defaultProjectName?: string }) {
-  const queryClient = useQueryClient();
-  const [mode, setMode] = useState<'search' | 'link' | 'ai' | 'manual'>('search');
-  const [sourceQuery, setSourceQuery] = useState('');
-  const [submittedSourceQuery, setSubmittedSourceQuery] = useState('');
-  const [sourceUrl, setSourceUrl] = useState('');
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [aiDraftReady, setAiDraftReady] = useState(false);
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [projectName, setProjectName] = useState(defaultProjectName);
-  const closeBeforeShowingCreatedTask = async () => {
-    // Let the dialog leave the tree before invalidating the list. Otherwise the
-    // new card begins its enter animation behind the dialog and it is invisible.
-    onClose();
-    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-  };
-  const createManual = useMutation({
-    mutationFn: api.createWorkItem,
-    onSuccess: async ({ item }) => {
-      await closeBeforeShowingCreatedTask();
-      await queryClient.invalidateQueries({ queryKey: ['work-items'] });
-      onCreated(item);
-    },
-  });
-  const searchedSources: BrokerSourceId[] = ['linear', 'github', 'atlassian', 'slack'];
-  const sourceSearches = useQueries({
-    queries: searchedSources.map((source) => ({
-      queryKey: ['source-search', source, submittedSourceQuery],
-      queryFn: ({ signal }) => api.searchSources(submittedSourceQuery, [source], signal),
-      enabled: mode === 'search' && submittedSourceQuery.length >= 2,
-    })),
-  });
-  const searchIsFetching = sourceSearches.some((search) => search.isFetching);
-  const searchResults = sourceSearches.flatMap((search) => search.data?.results ?? []);
-  async function startSourceSearch() {
-    const query = sourceQuery.trim();
-    if (query.length < 2) return;
-    await queryClient.cancelQueries({ queryKey: ['source-search'] });
-    setSubmittedSourceQuery(query);
-  }
-  async function cancelSourceSearch() {
-    await queryClient.cancelQueries({ queryKey: ['source-search'] });
-    queryClient.removeQueries({ queryKey: ['source-search'] });
-    setSubmittedSourceQuery('');
-  }
-  const addSearchResult = useMutation({
-    mutationFn: (result: { title: string; summary: string; url: string | null }) => api.createWorkItem({ title: result.title.replace(/^[^·]+ · /, ''), description: result.summary, projectName: defaultProjectName || null, status: 'backlog', dueDate: null, sourceUrl: result.url, workspacePath: null }),
-    onSuccess: async ({ item }) => {
-      toast.success('Task added to queue.', { description: item.title });
-      await closeBeforeShowingCreatedTask();
-      await queryClient.invalidateQueries({ queryKey: ['work-items'] });
-      onCreated(item);
-    },
-    onError: (error) => toastError('Could not add the task from search.', error),
-  });
-  const resolveLink = useMutation({
-    mutationFn: api.resolveSourceUrl,
-    onSuccess: ({ draft }) => { setTitle(draft.title); setDescription(draft.description); setSourceUrl(draft.sourceUrl); },
-  });
-  const generateDraft = useMutation({
-    mutationFn: api.generateTaskDraft,
-    onSuccess: ({ draft }) => {
-      setTitle(draft.title); setDescription(draft.description); setProjectName(defaultProjectName || draft.projectName || ''); setAiDraftReady(true);
-    },
-  });
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    createManual.mutate({
-      title,
-      description,
-      projectName: projectName || null,
-      status: 'backlog',
-      dueDate: null,
-      sourceUrl: sourceUrl || null,
-      workspacePath: null,
-    });
-  }
-
-  return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <div className="dialog add-task-dialog" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="dialog-header">
-          <div>
-            <span className="eyebrow">Add to queue</span>
-            <h2>Choose your next task</h2>
-          </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
-            <X size={17} />
-          </button>
-        </div>
-        <div className="task-mode-tabs four-tabs" role="tablist">
-          <button className={mode === 'search' ? 'active' : ''} onClick={() => setMode('search')}><Search size={14} /> From search</button>
-          <button className={mode === 'link' ? 'active' : ''} onClick={() => setMode('link')}><ArrowUpRight size={14} /> Paste link</button>
-          <button className={mode === 'ai' ? 'active' : ''} onClick={() => setMode('ai')}><Sparkles size={14} /> Describe to AI</button>
-          <button className={mode === 'manual' ? 'active' : ''} onClick={() => setMode('manual')}><Plus size={14} /> Manual task</button>
-        </div>
-
-        {mode === 'search' ? (
-          <div className="linear-picker">
-            <form className="linear-search" onSubmit={(event) => { event.preventDefault(); void startSourceSearch(); }}><Search size={16} /><input autoFocus value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} placeholder="Search Linear, Slack, Atlassian, and GitHub…" />{searchIsFetching && <button type="button" className="button secondary compact" onClick={() => void cancelSourceSearch()}>Cancel</button>}<button className="button primary compact" disabled={sourceQuery.trim().length < 2}>Search</button></form>
-            <div className="linear-results">
-              {submittedSourceQuery && <div className="source-search-progress">{searchedSources.map((source, index) => <span key={source} className={sourceSearches[index].isFetching ? 'searching' : sourceSearches[index].data || sourceSearches[index].error ? 'done' : ''}>{sourceSearches[index].isFetching && <LoaderCircle className="spin" size={10} />}{source}</span>)}</div>}
-              {sourceSearches.map((search, index) => search.error ? <p key={searchedSources[index]} className="source-search-error"><strong>{searchedSources[index]}</strong> · {search.error.message}</p> : search.data ? Object.entries(search.data.errors).map(([source, error]) => <p key={source} className="source-search-error"><strong>{source}</strong> · {error}</p>) : null)}
-              {!searchIsFetching && submittedSourceQuery.length >= 2 && searchResults.length === 0 && (
-                <div className="list-state compact-state">No matching work found.</div>
-              )}
-              {searchResults.map((result, index) => (
-                <button className="linear-result" key={`${result.source}-${result.url ?? index}`} onClick={() => addSearchResult.mutate(result)} disabled={addSearchResult.isPending}>
-                  <span className="source-result-badge">{result.source}</span>
-                  <span className="source-result-copy"><strong>{result.title}</strong><small>{result.summary}</small></span>
-                  <span className="add-result">Add</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : mode === 'link' ? (
-          <form onSubmit={submit}>
-            <label>Source URL<div className="resolve-row"><input autoFocus value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="Slack, GitHub, Linear, Confluence, or Gmail URL" /><button type="button" className="button secondary" onClick={() => resolveLink.mutate(sourceUrl)} disabled={!sourceUrl || resolveLink.isPending}>{resolveLink.isPending ? <LoaderCircle className="spin" size={14} /> : 'Resolve'}</button></div></label>
-            <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Generated from the source" /></label>
-            <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Generated description remains editable" rows={5} /></label>
-            {resolveLink.error && <p className="error-message">{resolveLink.error.message}</p>}
-            <div className="dialog-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button className="button primary" disabled={!title.trim() || createManual.isPending}><Plus size={16} /> Add to stack</button></div>
-          </form>
-        ) : mode === 'ai' ? (
-          <form onSubmit={submit} className="ai-task-form">
-            {!aiDraftReady ? <>
-              <label>Describe the task<textarea autoFocus value={aiPrompt} onChange={(event) => setAiPrompt(event.target.value)} placeholder="Paste rough notes, links, constraints, or the outcome you want…" rows={9} /></label>
-              <p className="ai-draft-help">AI will turn this into one self-contained, executable task. You can edit everything before adding it.</p>
-              {generateDraft.error && <p className="error-message">{generateDraft.error.message}</p>}
-              <div className="dialog-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button type="button" className="button primary" onClick={() => generateDraft.mutate(aiPrompt)} disabled={aiPrompt.trim().length < 3 || generateDraft.isPending}>{generateDraft.isPending ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />} {generateDraft.isPending ? 'Writing task…' : 'Create draft'}</button></div>
-            </> : <>
-              <div className="ai-draft-banner"><Sparkles size={14} /><span><strong>AI draft</strong><small>Review and edit before adding it to the stack.</small></span><button type="button" onClick={() => setAiDraftReady(false)}>Start over</button></div>
-              <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-              <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={9} /></label>
-              <label>Project<input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Optional" /></label>
-              {createManual.error && <p className="error-message">{createManual.error.message}</p>}
-              <div className="dialog-actions"><button type="button" className="button secondary" onClick={() => setAiDraftReady(false)}>Back</button><button className="button primary" disabled={!title.trim() || createManual.isPending}><Plus size={16} /> Add to stack</button></div>
-            </>}
-          </form>
-        ) : (
-          <form onSubmit={submit}>
-            <label>
-              Title
-              <input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="What needs to happen?" />
-            </label>
-            <label>
-              Description
-              <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Notes, constraints, links…" rows={5} />
-            </label>
-            <label>
-              Project
-              <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Personal" />
-            </label>
-            {createManual.error && <p className="error-message">{createManual.error.message}</p>}
-            <div className="dialog-actions">
-              <button type="button" className="button secondary" onClick={onClose}>Cancel</button>
-              <button className="button primary" disabled={!title.trim() || createManual.isPending}>
-                {createManual.isPending ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}
-                Add to queue
-              </button>
-            </div>
-          </form>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SourceConnectionCard({ connection }: { connection: BrokerConnection }) {
-  const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const provider = connection.id;
-  const reconnecting = connection.state === 'error' || connection.state === 'reauth_required';
-  const disconnect = useMutation({
-    mutationFn: () => api.disconnectSource(provider === 'atlassian' ? 'confluence' : provider === 'slack' || provider === 'figma' ? provider : 'github'),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['source-connections'] }),
-  });
-  const mcpConnect = useMutation({
-    mutationFn: async () => {
-      // `codex mcp login figma` opens the provider's browser window itself.
-      // Opening a Workbench popup as well duplicates the authorization window.
-      if (provider === 'figma') {
-        await api.startManagedFigmaOAuth();
-        return;
-      }
-      const popup = window.open('about:blank', `workbench-${provider}-oauth`, 'popup,width=720,height=760');
-      if (!popup) throw new Error('Popup blocked. Allow popups for Workbench and try again.');
-      popup.document.write('<title>Connecting MCP</title><body style="margin:0;background:#10100f;color:#ddd;font:16px system-ui;display:grid;place-items:center;min-height:100vh">Preparing secure MCP authorization…</body>');
-      try {
-        if (provider === 'slack') {
-          popup.location.replace('https://chatgpt.com/#settings/Connectors');
-          return;
-        }
-        const oauthProvider = provider === 'atlassian' ? 'confluence' : null;
-        if (!oauthProvider) throw new Error(`${connection.name} does not support MCP authorization here.`);
-        if (reconnecting) await api.disconnectSource(oauthProvider);
-        const { url } = await api.startMcpOAuth(oauthProvider); popup.location.replace(url);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Could not start MCP authorization.';
-        popup.document.body.textContent = `Connection failed: ${message}`;
-        throw error;
-      }
-    },
-  });
-  useEffect(() => {
-    const receiveOAuth = (event: MessageEvent) => {
-      if (event.data?.type === 'workbench:slack-connected' || event.data?.type === 'workbench:mcp-connected') {
-        void queryClient.invalidateQueries({ queryKey: ['source-connections'] });
-        setOpen(false);
-      }
-    };
-    window.addEventListener('message', receiveOAuth);
-    return () => window.removeEventListener('message', receiveOAuth);
-  }, [queryClient]);
-  const connected = connection.state === 'connected';
-  useEffect(() => {
-    if (provider === 'figma' && connected) setOpen(false);
-  }, [connected, provider]);
-  const disabled = connection.state === 'disabled';
-  const canAuthorize = provider === 'atlassian' || provider === 'slack' || provider === 'figma';
-  return <div className={`connection-card ${connected ? 'connected' : ''} ${disabled ? 'unavailable' : ''}`}>
-    <div className="connection-summary"><span><strong>{connection.name}</strong><small>{connection.detail}</small></span>
-      {canAuthorize && connected && provider !== 'slack' ? <button className="button secondary compact" onClick={() => disconnect.mutate()}>Disconnect</button> : canAuthorize ? <button className="button secondary compact" onClick={() => setOpen((value) => !value)}>{open ? 'Cancel' : provider === 'slack' ? 'Manage connection' : reconnecting ? 'Reconnect MCP' : 'Connect MCP'}</button> : <span className="mcp-required">{disabled ? 'Awaiting IT approval' : connected ? 'Connected' : 'Not connected'}</span>}
-    </div>
-    <div className="connection-meta">{connection.host === 'workbench' ? 'Workbench' : 'Managed connector'}<span>·</span>{connection.capabilities.map((capability) => capability.replace('_', ' ')).join(' · ') || 'Unavailable'}</div>
-    {connection.lastError && <p className="error-message">{connection.lastError}</p>}
-    {open && canAuthorize && <div className="connection-form mcp-connection-form">
-      <button className="button primary" onClick={() => mcpConnect.mutate()} disabled={mcpConnect.isPending}>{mcpConnect.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />} {provider === 'slack' ? 'Open ChatGPT connections' : 'Authorize MCP'}</button>
-      {provider === 'figma' && mcpConnect.isSuccess && <p className="muted">Complete authorization in the Figma window that just opened.</p>}
-      {mcpConnect.error && <p className="error-message">Connection failed: {mcpConnect.error.message}</p>}
-    </div>}
-  </div>;
-}
-
-function SourcesDialog({ onClose }: { onClose: () => void }) {
-  const connections = useQuery({ queryKey: ['source-connections'], queryFn: api.listSourceConnections, refetchInterval: 2_000 });
-  const linearConnection = connections.data?.connections.find((connection) => connection.id === 'linear');
-  const linearConfigured = linearConnection?.state === 'connected';
-
-  return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="dialog sources-dialog" onMouseDown={(event) => event.stopPropagation()} aria-label="Workbench connections">
-        <div className="dialog-header">
-          <div><span className="eyebrow">Workbench</span><h2>Connections</h2></div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={17} /></button>
-        </div>
-        <p className="dialog-description">Workbench uses these connections to resolve links and give agents source context without sending you through their authentication dialogs.</p>
-        <div className="connection-list">
-          <div className={`connection-card ${linearConfigured ? 'connected' : ''}`}>
-            <div className="connection-summary"><span><strong>Linear</strong><small>{linearConfigured ? 'Connected · issues and project context' : 'Add LINEAR_API_KEY to .env to connect'}</small></span>
-              <span className="mcp-required">{linearConfigured ? 'Connected' : 'Not connected'}</span>
-            </div>
-          </div>
-          {connections.data?.connections.filter((connection) => connection.id !== 'linear').map((connection) => <SourceConnectionCard key={connection.id} connection={connection} />)}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function FollowUpArchiveDialog({ count, onChoose, onClose, pending }: { count: number; onChoose: (archiveParent: boolean) => void; onClose: () => void; pending: boolean }) {
-  return <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
-    <section className="dialog follow-up-archive-dialog" role="dialog" aria-modal="true" aria-labelledby="follow-up-archive-title" onMouseDown={(event) => event.stopPropagation()}>
-      <div className="dialog-header"><div><span className="eyebrow">Create follow-ups</span><h2 id="follow-up-archive-title">What should happen to the original?</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={17} /></button></div>
-      <p className="dialog-description">Create {count} selected follow-up task{count === 1 ? '' : 's'}, then choose whether the original task and conversation stay active.</p>
-      <div className="follow-up-archive-actions">
-        <button type="button" className="button primary" disabled={pending} onClick={() => onChoose(false)}>Create and keep open</button>
-        <button type="button" className="button secondary" disabled={pending} onClick={() => onChoose(true)}><Archive size={14} /> Create and archive original</button>
-      </div>
-    </section>
-  </div>;
-}
+import { AgentMessageBody, LiveRunOutput } from './agent-message';
+import { ConversationOriginBadge, ModelProfileSelect, ReferenceTypeIcon } from './badges';
+import { CreateTask } from './create-task-dialog';
+import { DiscoveryInboxView, DiscoveryNav } from './discovery';
+import { FollowUpArchiveDialog } from './follow-up-archive-dialog';
+import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from './formatters';
+import { clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeTaskModelProfile } from './preferences';
+import { QueueExplanationList } from './queue-explanations';
+import { SourcesDialog } from './sources-dialog';
 
 export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectConversation }: { initialConversationId?: string | null; onOpenTask?: (taskId: string) => void; onSelectConversation?: (conversationId: string | null) => void }) {
   const queryClient = useQueryClient();
@@ -618,7 +103,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       const next = { ...current };
       if (profile) next[targetConversationId] = profile;
       else delete next[targetConversationId];
-      window.localStorage.setItem(conversationModelStorageKey, JSON.stringify(next));
+      writeConversationModelProfiles(next);
       return next;
     });
     updateConversationPreferences.mutate({ conversationId: targetConversationId, profile });
@@ -712,7 +197,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     setConversationModelProfiles((current) => {
       if (current[selectedConversation.id] === profile) return current;
       const next = { ...current, [selectedConversation.id]: profile };
-      window.localStorage.setItem(conversationModelStorageKey, JSON.stringify(next));
+      writeConversationModelProfiles(next);
       return next;
     });
   }, [selectedConversation?.id, selectedConversation?.preferredExecutionProfile]);
@@ -1177,8 +662,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               ?? (pendingSelectedConversation?.id === conversationId ? pendingSelectedConversation.title
                 : conversationDetail.isLoading ? 'Loading conversation…'
                   : selectedConversationMissing ? 'Conversation not found'
-                    : 'New conversation')}</h2>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={12} /> Back to task</button>}</div>{conversationId && selectedConversation && <div className="conversation-window-actions">{!selectedConversation.workItemId && <label className="conversation-task-picker" title="Link this conversation to a task"><Link2 size={13} /><select aria-label="Link conversation to task" defaultValue="" disabled={linkableTasks.isLoading || setConversationTask.isPending} onChange={(event) => { if (event.target.value) setConversationTask.mutate(event.target.value); event.currentTarget.value = ''; }}><option value="">Link task…</option>{(linkableTasks.data?.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}{selectedConversation.workItemId && <button type="button" className="conversation-unlink-task" onClick={() => setConversationTask.mutate(null)} disabled={setConversationTask.isPending} title="Unlink task"><Link2 size={13} /> Unlink</button>}{linkedWorkItem.data?.item && <button type="button" className="complete-task-button" disabled={linkedTaskCompleted || completeLinkedTask.isPending} onClick={() => completeLinkedTask.mutate()} aria-label={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'}>{completeLinkedTask.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}<span>{completeLinkedTask.isPending ? 'Completing…' : linkedTaskCompleted ? 'Completed' : 'Complete task'}</span></button>}<button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<span className={`conversation-delete-control ${selectedConversation.workItemId ? 'is-disabled' : ''}`} tabIndex={selectedConversation.workItemId ? 0 : undefined}><button className="icon-button delete-conversation-button" disabled={Boolean(selectedConversation.workItemId)} onClick={() => setDeleteConversationPromptOpen(true)} aria-label="Delete conversation" aria-describedby={selectedConversation.workItemId ? 'linked-conversation-delete-help' : undefined} title={selectedConversation.workItemId ? undefined : 'Delete permanently'}><Trash2 size={14} /></button>{selectedConversation.workItemId && <span id="linked-conversation-delete-help" className="action-tooltip" role="tooltip">Delete the related task to delete this conversation.</span>}</span></div>}</header>
-        {linkedWorkItem.data?.item && <div className="thread-filter-bar"><TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} /><button type="button" className="button secondary compact" onClick={() => toggleLinkedTaskPin.mutate()} disabled={toggleLinkedTaskPin.isPending}><Pin size={13} /> {linkedWorkItem.data.item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'}</button></div>}
+                    : 'New conversation')}</h2>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={12} /> Back to task</button>}</div>{conversationId && selectedConversation && <div className="conversation-window-actions">{!selectedConversation.workItemId && <label className="conversation-task-picker" title="Link this conversation to a task"><Link2 size={13} /><select aria-label="Link conversation to task" defaultValue="" disabled={linkableTasks.isLoading || setConversationTask.isPending} onChange={(event) => { if (event.target.value) setConversationTask.mutate(event.target.value); event.currentTarget.value = ''; }}><option value="">Link task…</option>{(linkableTasks.data?.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}{selectedConversation.workItemId && <button type="button" className="icon-button conversation-unlink-task" onClick={() => setConversationTask.mutate(null)} disabled={setConversationTask.isPending} title="Unlink task" aria-label="Unlink task"><Link2 size={13} /></button>}{linkedWorkItem.data?.item && <button type="button" className="icon-button complete-task-button" disabled={linkedTaskCompleted || completeLinkedTask.isPending} onClick={() => completeLinkedTask.mutate()} aria-label={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'} title={linkedTaskCompleted ? 'Task completed' : 'Complete task'}>{completeLinkedTask.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}</button>}<button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<span className={`conversation-delete-control ${selectedConversation.workItemId ? 'is-disabled' : ''}`} tabIndex={selectedConversation.workItemId ? 0 : undefined}><button className="icon-button delete-conversation-button" disabled={Boolean(selectedConversation.workItemId)} onClick={() => setDeleteConversationPromptOpen(true)} aria-label="Delete conversation" aria-describedby={selectedConversation.workItemId ? 'linked-conversation-delete-help' : undefined} title={selectedConversation.workItemId ? undefined : 'Delete permanently'}><Trash2 size={14} /></button>{selectedConversation.workItemId && <span id="linked-conversation-delete-help" className="action-tooltip" role="tooltip">Delete the related task to delete this conversation.</span>}</span></div>}</header>
+        {linkedWorkItem.data?.item && <div className="thread-filter-bar"><TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} /><button type="button" className="icon-button" onClick={() => toggleLinkedTaskPin.mutate()} disabled={toggleLinkedTaskPin.isPending} aria-label={linkedWorkItem.data.item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'} title={linkedWorkItem.data.item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'}><Pin size={13} /></button></div>}
         <div className="shared-thread" ref={threadScrollRef}>
           {conversationDetail.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading conversation…</div>}
           {selectedConversationMissing && (
@@ -1607,7 +1092,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       </section>}
       <div className="task-lifecycle-actions">
         <button type="button" className="button secondary compact" onClick={() => setShowFollowUp((value) => !value)}><Plus size={14} /> Follow-up</button>
-        <button type="button" className="button secondary compact" onClick={() => togglePin.mutate()} disabled={togglePin.isPending}><Pin size={14} /> {item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'}</button>
+        <button type="button" className="icon-button" onClick={() => togglePin.mutate()} disabled={togglePin.isPending} aria-label={item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'} title={item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'}><Pin size={14} /></button>
         {item.archivedAt ? <><span className={`archive-state ${item.completionStatus}`}>{item.completionStatus === 'completed' ? 'Completed & archived' : 'Archived incomplete'}</span><button type="button" className="button secondary compact" onClick={() => lifecycle.mutate('restore')} disabled={lifecycle.isPending}><Archive size={14} /> Restore</button></> : <>
           <button type="button" className="button secondary compact" onClick={() => lifecycle.mutate('archive')} disabled={lifecycle.isPending}><Archive size={14} /> Archive</button>
           <button type="button" className="button primary compact" onClick={() => lifecycle.mutate('complete')} disabled={lifecycle.isPending}><Check size={14} /> Complete</button>
@@ -1915,92 +1400,6 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       </details>
     </section>
   );
-}
-
-function DiscoveryNav({ active, onClick }: { active: boolean; onClick: () => void }) {
-  const inbox = useQuery({ queryKey: ['discovery', 'pending'], queryFn: () => api.getDiscoveryInbox('pending'), refetchInterval: 5_000 });
-  return <button className={`nav-item ${active ? 'active' : ''}`} onClick={onClick}><Search size={16} /> Discoveries <span>{inbox.data?.pendingCount ?? '…'}</span></button>;
-}
-
-function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (id: string) => void; onOpenStack: () => void }) {
-  const queryClient = useQueryClient();
-  const [inboxView, setInboxView] = useState<'pending' | 'reviewed'>('pending');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const inbox = useQuery({ queryKey: ['discovery', inboxView], queryFn: () => api.getDiscoveryInbox(inboxView), refetchInterval: 2_000 });
-  const activeTasks = useQuery({ queryKey: ['discovery-merge-targets'], queryFn: () => api.listWorkItems('active', '') });
-  const scan = useMutation({ mutationFn: api.scanDiscovery, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['discovery'] }) });
-  const resolveCandidate = useMutation({
-    mutationFn: ({ candidate, action }: { candidate: DiscoveryCandidate; action: 'convert' | 'dismiss' | 'snooze' }) => api.resolveDiscovery(candidate.id, action),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['discovery'] });
-      void queryClient.invalidateQueries({ queryKey: ['work-items'] });
-      void queryClient.invalidateQueries({ queryKey: ['work-item-counts'] });
-    },
-  });
-  const bulkResolve = useMutation({
-    mutationFn: (action: 'convert' | 'dismiss' | 'snooze') => api.bulkResolveDiscovery([...selected], action),
-    onSuccess: () => {
-      setSelected(new Set());
-      void queryClient.invalidateQueries({ queryKey: ['discovery'] });
-      void queryClient.invalidateQueries({ queryKey: ['work-items'] });
-      void queryClient.invalidateQueries({ queryKey: ['work-item-counts'] });
-    },
-  });
-  const restore = useMutation({ mutationFn: api.restoreDiscovery, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['discovery'] }); } });
-  const lastRun = inbox.data?.lastRun;
-  // The scan endpoint returns as soon as the background job is accepted. Keep
-  // the button visibly busy during that handoff as well as for the job itself.
-  const isScanning = scan.isPending || Boolean(inbox.data?.running);
-  return <section className="discovery-workspace">
-    <header className="discovery-header">
-      <div><span className="eyebrow">Morning review</span><h2>Discovered overnight</h2><p>Nothing enters your stack until you approve it.</p></div>
-      <button className="button secondary compact" onClick={() => scan.mutate()} disabled={isScanning}>
-        {isScanning ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} {isScanning ? 'Scanning sources…' : 'Scan now'}
-      </button>
-    </header>
-    <div className="discovery-status">
-      <strong>{inbox.data?.pendingCount ?? 0} to review</strong>
-      <span>{lastRun?.completedAt ? `Last scan ${new Date(lastRun.completedAt).toLocaleString()}` : 'No completed scan yet'}</span>
-      {lastRun?.errors.map((error) => <span className="error-message" key={error}>{error}</span>)}
-    </div>
-    {inbox.data?.queueProposal && <div className="morning-proposal"><span><Sparkles size={15} /><strong>Morning stack proposal ready</strong><small>{inbox.data.queueProposal.rationale}</small></span><button className="button primary compact" onClick={onOpenStack}>Review reorder</button></div>}
-    <div className="discovery-tabs"><button className={inboxView === 'pending' ? 'active' : ''} onClick={() => { setInboxView('pending'); setSelected(new Set()); }}>Pending <span>{inbox.data?.pendingCount ?? '…'}</span></button><button className={inboxView === 'reviewed' ? 'active' : ''} onClick={() => { setInboxView('reviewed'); setSelected(new Set()); }}>Reviewed <span>{inbox.data?.reviewedCount ?? '…'}</span></button></div>
-    {inboxView === 'pending' && !!inbox.data?.candidates.length && <div className="discovery-bulkbar">
-      <label><input type="checkbox" checked={selected.size === inbox.data.candidates.length} onChange={(event) => setSelected(event.target.checked ? new Set(inbox.data!.candidates.map((candidate) => candidate.id)) : new Set())} /> Select all</label>
-      <span>{selected.size ? `${selected.size} selected` : 'Select items for bulk review'}</span>
-      <button disabled={!selected.size || bulkResolve.isPending} onClick={() => bulkResolve.mutate('snooze')}>Tomorrow</button>
-      <button disabled={!selected.size || bulkResolve.isPending} onClick={() => bulkResolve.mutate('dismiss')}>Dismiss</button>
-      <button className="accept" disabled={!selected.size || bulkResolve.isPending} onClick={() => bulkResolve.mutate('convert')}>Add / update</button>
-    </div>}
-    <div className="discovery-list">
-      {inbox.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading discoveries…</div>}
-      {!inbox.isLoading && !inbox.data?.candidates.length && <div className="discovery-empty"><Search size={26} /><h3>{inboxView === 'pending' ? 'Inbox clear' : 'No reviewed discoveries'}</h3><p>{inboxView === 'pending' ? 'The 5:00 AM scan will put new signals here for review.' : 'Decisions you make in the inbox will appear here.'}</p></div>}
-      {inboxView === 'reviewed' ? inbox.data?.candidates.map((candidate) => <article className="discovery-card reviewed" key={candidate.id}><div className="discovery-source"><label><span>{candidate.provider}</span><em className={`decision-${candidate.status}`}>{candidate.status}</em></label><time>{new Date(candidate.updatedAt).toLocaleString()}</time></div><h3>{candidate.title}</h3>{candidate.description && <p>{candidate.description}</p>}<div className="discovery-actions">{candidate.sourceUrl && <a className="button secondary compact" href={candidate.sourceUrl} target="_blank" rel="noreferrer"><ArrowUpRight size={13} /> Source</a>}{candidate.workItemId && <button className="button secondary compact" onClick={() => onOpenTask(candidate.workItemId!)}>Open task</button>}{(candidate.status === 'dismissed' || candidate.status === 'snoozed') && <button className="button primary compact" disabled={restore.isPending} onClick={() => restore.mutate(candidate.id)}><RefreshCw size={13} /> Restore to inbox</button>}</div></article>) : inbox.data?.candidates.map((candidate) => <DiscoveryCard key={candidate.id} candidate={candidate} selected={selected.has(candidate.id)} tasks={activeTasks.data?.items ?? []}
-        onSelected={(checked) => setSelected((current) => { const next = new Set(current); if (checked) next.add(candidate.id); else next.delete(candidate.id); return next; })}
-        onResolve={(action, workItemId) => action === 'merge' ? api.resolveDiscovery(candidate.id, action, workItemId).then(() => { void queryClient.invalidateQueries({ queryKey: ['discovery'] }); }) : resolveCandidate.mutate({ candidate, action })} />)}
-    </div>
-  </section>;
-}
-
-function DiscoveryCard({ candidate, selected, tasks, onSelected, onResolve }: { candidate: DiscoveryCandidate; selected: boolean; tasks: WorkItem[]; onSelected: (checked: boolean) => void; onResolve: (action: 'convert' | 'dismiss' | 'snooze' | 'merge', workItemId?: string) => void }) {
-  const queryClient = useQueryClient();
-  const [editing, setEditing] = useState(false);
-  const [title, setTitle] = useState(candidate.title);
-  const [description, setDescription] = useState(candidate.description);
-  const [mergeTarget, setMergeTarget] = useState('');
-  const suggestedTask = tasks.find((task) => task.id === candidate.suggestedWorkItemId);
-  const update = useMutation({ mutationFn: () => api.updateDiscovery(candidate.id, { title: title.trim(), description }), onSuccess: () => { setEditing(false); void queryClient.invalidateQueries({ queryKey: ['discovery'] }); } });
-  return <article className={`discovery-card ${selected ? 'selected' : ''}`}>
-    <div className="discovery-source"><label><input type="checkbox" checked={selected} onChange={(event) => onSelected(event.target.checked)} /><span>{candidate.provider}</span>{candidate.relevance === 2 && <em>Focus</em>}</label><time>{new Date(candidate.occurredAt ?? candidate.discoveredAt).toLocaleString()}</time></div>
-    {editing ? <div className="discovery-editor"><input value={title} onChange={(event) => setTitle(event.target.value)} /><textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={5} /><div><button className="button secondary compact" onClick={() => { setTitle(candidate.title); setDescription(candidate.description); setEditing(false); }}>Cancel</button><button className="button primary compact" disabled={!title.trim() || update.isPending} onClick={() => update.mutate()}><Check size={13} /> Save</button></div></div> : <><button className="discovery-copy" onClick={() => setEditing(true)} title="Edit before adding"><h3>{candidate.title}</h3>{candidate.description && <p>{candidate.description}</p>}</button>
-    <div className="discovery-actions">
-      {candidate.sourceUrl && <a className="button secondary compact" href={candidate.sourceUrl} target="_blank" rel="noreferrer"><ArrowUpRight size={13} /> Source</a>}
-      {suggestedTask ? <span className="discovery-match"><small>Already tracked as</small><strong>{suggestedTask.title}</strong><button className="button primary compact" onClick={() => onResolve('merge', suggestedTask.id)}>Add update</button></span> : !!tasks.length && <span className="discovery-merge"><select value={mergeTarget} onChange={(event) => setMergeTarget(event.target.value)}><option value="">Merge into task…</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select><button className="button secondary compact" disabled={!mergeTarget} onClick={() => onResolve('merge', mergeTarget)}>Merge</button></span>}
-      <button className="button secondary compact" onClick={() => onResolve('snooze')}>Tomorrow</button>
-      <button className="button secondary compact" onClick={() => onResolve('dismiss')}>Dismiss</button>
-      <button className={`button ${suggestedTask ? 'secondary' : 'primary'} compact`} onClick={() => onResolve('convert')}>{suggestedTask ? 'Add separately' : 'Add to stack'}</button>
-    </div></>}
-  </article>;
 }
 
 export function App() {
