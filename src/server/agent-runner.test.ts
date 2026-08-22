@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { backoffDelayMs, buildPrompt, cancelAgentRun, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 
@@ -86,6 +86,15 @@ describe('classifyExecution', () => {
     expect(commandFor('claude', '/tmp/project', 'standard', 'execute').args).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions']));
   });
 
+  it('detects imaginary Claude scope claims and states the concrete fresh-session contract', () => {
+    expect(hasUnsupportedClaudeScopeClaim('This session is read-only and my allowed directory is fixed elsewhere.')).toBe(true);
+    expect(hasUnsupportedClaudeScopeClaim('The GitHub credential is unavailable.')).toBe(false);
+    const recovery = claudeScopeRecoveryPrompt('Fix the component.', '/Users/jeffrey.lu/dev/writer-monorepo');
+    expect(recovery).toContain('freshly spawned Claude CLI invocation');
+    expect(recovery).toContain('/Users/jeffrey.lu/dev/writer-monorepo');
+    expect(recovery).toContain('bypassed permission checks');
+  });
+
   it('does not fall back when a successful short answer mentions rate limit and capacity', async () => {
     const answer = 'A short answer about rate limit and capacity.';
     const { directory, log } = fakeAgentDirectory(
@@ -114,6 +123,26 @@ describe('classifyExecution', () => {
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['codex', 'claude']);
     expect(repository.getRun(run.id)).toEqual(expect.objectContaining({
       status: 'completed', requestedAgent: 'codex', agent: 'claude', fallbackFrom: 'codex', fallbackReason: expect.stringContaining('429'),
+    }));
+    database.close();
+  });
+
+  it('hands an invalid Claude sandbox claim to Codex in the same tracked run', async () => {
+    const { directory, log } = fakeAgentDirectory(
+      `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Codex fixed it and ran the focused test.' } })}'`,
+      `printf '%s\\n' '${JSON.stringify({ type: 'result', result: 'I cannot write because this session is read-only and sandboxed to another directory.' })}'`,
+    );
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Fix the scoped file', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Fix it.');
+
+    await executeAgentRun(repository, run, 'test-owner', 60_000);
+
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['claude', 'codex']);
+    expect(repository.getRun(run.id)).toEqual(expect.objectContaining({
+      status: 'completed', requestedAgent: 'claude', agent: 'codex', fallbackFrom: 'claude', fallbackReason: expect.stringContaining('sandbox or read-only'),
+      output: 'Codex fixed it and ran the focused test.',
     }));
     database.close();
   });

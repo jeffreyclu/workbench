@@ -724,6 +724,22 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     queryKey: ['shared-messages', conversationId], queryFn: () => api.listSharedMessages(conversationId!), enabled: Boolean(conversationId),
     refetchInterval: (query) => query.state.data?.messages.some((message) => message.status === 'running' || message.status === 'queued') ? 750 : false,
   });
+  const conversationMessages = messages.data?.messages ?? [];
+  // Message cards are variable-height markdown, often with substantial agent
+  // output. Rendering all of them makes the composer re-render painfully slow
+  // on long threads, so measure only the visible cards and a small buffer.
+  const threadVirtualizer = useVirtualizer({
+    count: conversationMessages.length,
+    getScrollElement: () => threadScrollRef.current,
+    estimateSize: () => 220,
+    getItemKey: (index) => conversationMessages[index]?.id ?? index,
+    overscan: 4,
+    initialRect: { width: 900, height: 700 },
+  });
+  const threadRows = threadVirtualizer.getVirtualItems();
+  const displayedThreadRows = threadRows.length
+    ? threadRows
+    : conversationMessages.map((_, index) => ({ index, start: index * 220 }));
   useEffect(() => {
     if (!conversationId || dispatchInitializedConversationId.current === conversationId || !messages.data) return;
     if (linkedWorkItemId) {
@@ -1036,7 +1052,6 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     }
   }
 
-  const conversationMessages = messages.data?.messages ?? [];
   const latestAgentMessageId = [...conversationMessages].reverse().find((message) => message.author === 'codex' || message.author === 'claude')?.id ?? null;
   const previewStatus = useQuery({ queryKey: ['runtime-preview-status'], queryFn: api.getRuntimePreviewStatus, refetchInterval: 2_000 });
   const promotionInFlight = conversationMessages.some((message) =>
@@ -1134,8 +1149,12 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           {messages.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading room…</div>}
           {messages.error && <div className="list-state compact-state error-message">Could not load shared messages: {messages.error.message} <button type="button" className="button secondary compact" onClick={() => messages.refetch()}>Retry</button></div>}
           {!messages.isLoading && !messages.error && !selectedConversationMissing && messages.data?.messages.length === 0 && <div className="list-state compact-state">No messages yet. Ask Codex or Claude to get started.</div>}
-          {conversationMessages.map((message) => (
-            <article className={`shared-message shared-${message.author}`} key={message.id}>
+          <div className="thread-virtualizer" style={{ height: threadVirtualizer.getTotalSize() }}>
+          {displayedThreadRows.map((row) => {
+            const message = conversationMessages[row.index];
+            if (!message) return null;
+            return <div key={message.id} ref={threadVirtualizer.measureElement} data-index={row.index} className="thread-virtual-row" style={{ transform: `translateY(${row.start}px)` }}>
+            <article className={`shared-message shared-${message.author}`}>
               <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                 {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
                 {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{message.executionProfile === 'routing' ? 'routing' : message.model} · {formatRunBadge(message)}</span>}
@@ -1162,7 +1181,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               {message.error && <p className="error-message">{message.error}</p>}
               {message.status === 'completed' && message.author !== 'jeffrey' && message.author !== 'system' && selectedConversation?.workItemId && <div className="message-actions"><button onClick={() => createTasks.mutate({ messageId: message.id, conversationId: conversationId! })} disabled={createTasks.isPending && createTasks.variables?.conversationId === conversationId}>{createTasks.isPending && createTasks.variables?.messageId === message.id && createTasks.variables.conversationId === conversationId ? <><LoaderCircle className="spin" size={12} /> Extracting findings…</> : <><Plus size={12} /> Turn findings into tasks</>}</button></div>}
             </article>
-          ))}
+            </div>;
+          })}
+          </div>
           {completionPromptAvailable && <div className="completion-prompt" role="status"><span><strong>Preview approved successfully.</strong><small>Complete the linked task?</small></span><div><button type="button" className="button secondary compact" onClick={() => setDismissedCompletionPromptPromotionId(latestSuccessfulPromotion!.id)}>Not yet</button><button type="button" className="button primary compact" onClick={() => completeLinkedTask.mutate()} disabled={completeLinkedTask.isPending}>{completeLinkedTask.isPending ? <><LoaderCircle className="spin" size={12} /> Completing…</> : <><Check size={12} /> Complete task</>}</button></div></div>}
           {previewApprovalAvailable && <div className="preview-approval"><span><strong>Workbench preview has unpublished changes</strong><small>Review them on port 5174, then promote this source snapshot to live.</small></span><button className="button primary compact" onClick={() => approvePreview.mutate()} disabled={approvePreview.isPending}>{approvePreview.isPending ? <LoaderCircle className="spin" size={12} /> : <Check size={12} />} {approvePreview.isPending ? 'Approving…' : 'Approve preview'}</button></div>}
           {previewApprovalAvailable && approvePreview.error && <p className="error-message">Could not approve preview: {approvePreview.error.message}</p>}
@@ -1959,7 +1980,11 @@ export function App() {
   const pinnedReminder = useQuery({ queryKey: ['pinned-reminder'], queryFn: () => api.listWorkItems('active', ''), staleTime: 60_000 });
   const totalConversationCount = useQuery({ queryKey: ['conversation-count'], queryFn: api.getConversationCount, refetchInterval: 1_500 });
   const notificationConversations = useQuery({ queryKey: ['notification-conversations'], queryFn: () => api.listSharedConversations('active'), refetchInterval: 1_000 });
+  // This query deliberately shares the Discovery tab's cache key. It lets scans
+  // surface new inbox items wherever Jeffrey is working without a second request.
+  const discoveryNotifications = useQuery({ queryKey: ['discovery', 'pending'], queryFn: () => api.getDiscoveryInbox('pending'), refetchInterval: 5_000 });
   const previousConversationStates = useRef<Map<string, SharedConversation['state']> | null>(null);
+  const knownDiscoveryIds = useRef<Set<string> | null>(null);
   const syncedConversationId = useRef<string | null>(route.name === 'conversations' ? route.conversationId : null);
   function openConversation(conversationId: string) {
     navigate({ name: 'conversations', conversationId });
@@ -1989,6 +2014,24 @@ export function App() {
     window.localStorage.setItem(key, today);
     toast.info(`${count} pinned task${count === 1 ? '' : 's'} waiting for you.`, { action: () => navigate({ name: 'stack', stack: 'active' }), actionLabel: 'Open pinned' });
   }, [pinnedReminder.data]);
+  useEffect(() => {
+    const candidates = discoveryNotifications.data?.candidates;
+    if (!candidates) return;
+    const nextIds = new Set(candidates.map((candidate) => candidate.id));
+    const previousIds = knownDiscoveryIds.current;
+    knownDiscoveryIds.current = nextIds;
+    // The first load is the baseline, not a new discovery notification.
+    if (!previousIds) return;
+    const newCandidates = candidates.filter((candidate) => !previousIds.has(candidate.id));
+    if (!newCandidates.length) return;
+    const titles = newCandidates.slice(0, 2).map((candidate) => candidate.title);
+    const remainder = newCandidates.length - titles.length;
+    toast.info(`${newCandidates.length} new discover${newCandidates.length === 1 ? 'y' : 'ies'} ready to review.`, {
+      description: `${titles.join(' · ')}${remainder > 0 ? ` · +${remainder} more` : ''}`,
+      action: () => navigate({ name: 'discovery' }),
+      actionLabel: 'Review discoveries',
+    });
+  }, [discoveryNotifications.data?.candidates]);
   useEffect(() => {
     if (route.name !== 'task' || resolvedTaskId === route.taskId) return;
     const taskId = route.taskId;

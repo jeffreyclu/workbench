@@ -446,12 +446,17 @@ export class WorkItemRepository {
   }
 
   private withConversationState(conversation: SharedConversation): SharedConversation {
+    const hasLiveWork = Boolean(this.database.prepare(`
+      SELECT 1 FROM shared_messages
+      WHERE conversation_id = ? AND status IN ('queued', 'running')
+      LIMIT 1
+    `).get(conversation.id));
     const latest = this.database.prepare(`
       SELECT status FROM shared_messages
       WHERE conversation_id = ? AND author IN ('codex', 'claude')
       ORDER BY created_at DESC, rowid DESC LIMIT 1
     `).get(conversation.id) as { status: SharedMessage['status'] } | undefined;
-    if (conversation.isActive || latest?.status === 'running' || latest?.status === 'queued') return { ...conversation, state: 'working' };
+    if (hasLiveWork || conversation.isActive || latest?.status === 'running' || latest?.status === 'queued') return { ...conversation, state: 'working' };
     if (latest?.status === 'failed' || latest?.status === 'canceled') return { ...conversation, state: 'needs_attention' };
     if (conversation.workItemId && this.getPendingExecutionPlan(conversation.workItemId)) return { ...conversation, state: 'waiting_approval' };
     if (latest?.status === 'completed') return { ...conversation, state: 'finished' };
@@ -2576,13 +2581,39 @@ export class WorkItemRepository {
         AND started_at IS NOT NULL AND completed_at IS NOT NULL
       GROUP BY work_item_id
     `).all(since) as Array<{ work_item_id: string; duration_ms: number | null }>).flatMap((row) => row.duration_ms === null ? [] : [row.duration_ms]);
-    const cursing = summarizeCursing(this.database.prepare(`
-      SELECT body, created_at FROM shared_messages
-      WHERE author = 'jeffrey' AND created_at >= ?
+    const cursingMessages = this.database.prepare(`
+      SELECT jeffrey.body, jeffrey.created_at,
+        (
+          SELECT COALESCE(agent.model, agent.author)
+          FROM shared_messages agent
+          WHERE agent.conversation_id = jeffrey.conversation_id
+            AND agent.author IN ('codex', 'claude')
+            AND (agent.created_at < jeffrey.created_at OR (agent.created_at = jeffrey.created_at AND agent.rowid < jeffrey.rowid))
+          ORDER BY agent.created_at DESC, agent.rowid DESC
+          LIMIT 1
+        ) AS prior_model
+      FROM shared_messages jeffrey
+      WHERE jeffrey.author = 'jeffrey' AND jeffrey.created_at >= ?
     `).all(since).map((row) => ({
       body: String((row as { body: string }).body),
       createdAt: String((row as { created_at: string }).created_at),
-    })));
+      model: (row as { prior_model: string | null }).prior_model,
+    }));
+    const cursingSummary = summarizeCursing(cursingMessages);
+    const cursingByModel = new Map<string, Array<{ body: string; createdAt: string }>>();
+    for (const message of cursingMessages) {
+      if (!message.model) continue;
+      const messages = cursingByModel.get(message.model) ?? [];
+      messages.push(message);
+      cursingByModel.set(message.model, messages);
+    }
+    const cursing = {
+      ...cursingSummary,
+      byModel: [...cursingByModel.entries()].map(([model, messages]) => {
+        const summary = summarizeCursing(messages);
+        return { model, count: summary.total, messagesWithCurses: summary.messagesWithCurses, messagesAnalyzed: summary.messagesAnalyzed, instancesPer100Messages: summary.instancesPer100Messages };
+      }).filter((row) => row.count > 0).sort((left, right) => right.count - left.count || left.model.localeCompare(right.model)),
+    };
 
     const costByDay: Record<string, number> = {};
     const costByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };

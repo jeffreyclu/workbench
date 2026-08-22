@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { createApp, oauthCallbackBase } from './app.js';
+import { createApp, oauthCallbackBase, parseFollowUpPlan } from './app.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { cancelAgentRun, isAgentRunActive } from './agent-runner.js';
@@ -737,5 +737,20 @@ describe('OAuth callback base origin', () => {
     process.env.APP_API_ORIGIN = 'javascript:alert(1)';
     process.env.PORT = '4317';
     expect(oauthCallbackBase()).toBe('http://localhost:4317/api/source-connections');
+  });
+});
+
+describe('follow-up task plan parsing', () => {
+  const rawPlan = JSON.stringify({
+    summary: 'Establish the baseline.',
+    tasks: [{ title: 'Investigate q14', description: 'Determine the root cause and record it.', workspacePath: null }],
+  });
+
+  it('accepts a valid unwrapped JSON plan from the agent', () => {
+    expect(parseFollowUpPlan(rawPlan)).toEqual(JSON.parse(rawPlan));
+  });
+
+  it('continues to accept the requested workbench-plan wrapper', () => {
+    expect(parseFollowUpPlan(`<workbench-plan>${rawPlan}</workbench-plan>`)).toEqual(JSON.parse(rawPlan));
   });
 });

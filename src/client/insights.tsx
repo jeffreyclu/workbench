@@ -142,9 +142,10 @@ function CursingInsight({ data }: { data: RunInsights['cursing'] }) {
     const characters = [...term];
     return characters.length < 2 ? '*' : `${characters[0]}${'*'.repeat(characters.length - 1)}`;
   };
+  const cursedModels = data.byModel ?? [];
   return <div className="insight-section cursing-insight">
     <div className="cursing-insight-header">
-      <div><h3>Jeffrey cursing <InfoTooltip>Scans Jeffrey’s submitted shared-room messages in this window for whole-word matches and common one-edit typos. Frequency is instances per 100 messages analyzed.</InfoTooltip></h3><p className="insight-section-intro">Submitted messages from Jeffrey in this window. Counts update as soon as a message is sent.</p></div>
+      <div><h3>Jeffrey cursing <InfoTooltip>Scans Jeffrey’s submitted shared-room messages in this window for whole-word matches and common one-edit typos. Model attribution uses the most recent agent reply before each message, so it shows which model you were responding to. Frequency is instances per 100 attributed messages.</InfoTooltip></h3><p className="insight-section-intro">Submitted messages from Jeffrey in this window. Counts update as soon as a message is sent.</p></div>
       <strong aria-label={`${data.total} curse instances`}>{data.total}</strong>
     </div>
     <div className="cursing-insight-stats">
@@ -152,8 +153,11 @@ function CursingInsight({ data }: { data: RunInsights['cursing'] }) {
       <div><span>Frequency</span><b>{data.instancesPer100Messages.toFixed(1)} per 100</b></div>
       <div><span>Angriest day</span><b>{angriestDay ? `${angriestDay.count} · ${angriestDay.day}` : '—'}</b></div>
     </div>
-    {data.byTerm.length === 0 ? <p className="insight-empty-note">No curse words found in this window.</p> : <div className="cursing-term-list" aria-label="Curse count by term">
-      {data.byTerm.map(({ term, count }) => <span key={term}><b aria-label="Censored curse term">{censorTerm(term)}</b><em>{count}</em></span>)}
+    {cursedModels.length > 0 && <div className="cursing-model-list" aria-label="Curse count by responding model">
+      {cursedModels.map(({ model, count, instancesPer100Messages }) => <span key={model}><b>{model}</b><em>{count} · {instancesPer100Messages.toFixed(1)}/100</em></span>)}
+    </div>}
+    {data.byTerm.length === 0 ? <p className="insight-empty-note">No curse words found in this window.</p> : <div className="cursing-term-list" aria-label="Top three curse terms">
+      {data.byTerm.slice(0, 3).map(({ term, count }) => <span key={term}><b aria-label="Censored curse term">{censorTerm(term)}</b><em>{count}</em></span>)}
     </div>}
   </div>;
 }

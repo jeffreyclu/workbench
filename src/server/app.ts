@@ -75,6 +75,23 @@ function rejectSelfAssignedExecution(item: WorkItem, response: Response): boolea
   return true;
 }
 
+const followUpPlanSchema = z.object({
+  summary: z.string().trim().min(1).max(20_000),
+  tasks: z.array(z.object({
+    title: z.string().trim().min(1).max(300),
+    description: z.string().max(20_000),
+    workspacePath: z.string().trim().max(1_000).nullable(),
+  })).min(1).max(100),
+});
+
+/** Agents sometimes omit the requested XML wrapper but still return valid JSON. */
+export function parseFollowUpPlan(output: string): z.infer<typeof followUpPlanSchema> {
+  const wrapped = output.match(/<workbench-plan>([\s\S]*?)<\/workbench-plan>/)?.[1];
+  const fenced = output.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+  const candidate = (wrapped ?? fenced ?? output).trim();
+  return followUpPlanSchema.parse(JSON.parse(candidate));
+}
+
 /**
  * The request's Host header is client-controlled and must never seed a
  * security-sensitive OAuth redirect URI. APP_API_ORIGIN is the only source for
@@ -682,11 +699,9 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
       const existingJob = repository.listSharedMessages(100, null, conversation.id).messages.find((entry) => entry.status === 'running' && entry.author === 'system' && entry.body.startsWith('Turning findings into tasks'));
       if (existingJob) return response.status(202).json({ jobMessage: existingJob });
       const jobMessage = repository.createSharedMessage('system', 'Turning findings into tasks…', 'running', conversation.id);
-      void runSharedBackgroundJob(repository, jobMessage.id, async (signal, onProgress) => {
-        const { output } = await runAgentCommandWithFallback('claude', process.cwd(), `Convert this agent report into independently executable follow-up tasks for Jeffrey's attention stack. Preserve concrete findings, affected files, constraints, and verification in each task. Order tasks by attention. Do not create vague coordination tasks.\n\nOriginal task: ${item.title}\n${item.description}\n\nReport:\n${message.body}\n\nReturn exactly <workbench-plan>{"summary":"...","tasks":[{"title":"...","description":"...","workspacePath":${JSON.stringify(item.workspacePath)}}]}</workbench-plan>`, onProgress, signal);
-        const match = output.match(/<workbench-plan>([\s\S]*?)<\/workbench-plan>/);
-        if (!match) throw new Error('Agent did not return a valid follow-up task plan.');
-        const parsed = JSON.parse(match[1]) as { summary: string; tasks: Array<{ title: string; description: string; workspacePath: string | null }> };
+      void runSharedBackgroundJob(repository, jobMessage.id, async (signal) => {
+        const { output } = await runAgentCommandWithFallback('claude', process.cwd(), `Convert this agent report into independently executable follow-up tasks for Jeffrey's attention stack. Preserve concrete findings, affected files, constraints, and verification in each task. Order tasks by attention. Do not create vague coordination tasks.\n\nOriginal task: ${item.title}\n${item.description}\n\nReport:\n${message.body}\n\nReturn exactly <workbench-plan>{"summary":"...","tasks":[{"title":"...","description":"...","workspacePath":${JSON.stringify(item.workspacePath)}}]}</workbench-plan>`, undefined, signal);
+        const parsed = parseFollowUpPlan(output);
         repository.createExecutionPlan(item.id, parsed.summary, parsed.tasks);
         return `Follow-up task proposal ready: ${parsed.summary}`;
       });

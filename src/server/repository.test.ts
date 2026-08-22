@@ -33,6 +33,22 @@ describe('WorkItemRepository', () => {
     });
   });
 
+  it('attributes cursing to the model that most recently replied in the conversation', () => {
+    const conversation = repository.createConversation('Model attribution');
+    const claudeReply = repository.createSharedMessage('claude', 'Here is the first answer.', 'completed', conversation.id);
+    repository.updateSharedMessage(claudeReply.id, { model: 'sonnet' });
+    repository.createSharedMessage('jeffrey', 'This is fucking wrong.', 'completed', conversation.id);
+    const codexReply = repository.createSharedMessage('codex', 'Here is the revised answer.', 'completed', conversation.id);
+    repository.updateSharedMessage(codexReply.id, { model: 'gpt-5.6-terra' });
+    repository.createSharedMessage('jeffrey', 'Still shit.', 'completed', conversation.id);
+    repository.createSharedMessage('jeffrey', 'What the fuck?', 'completed', conversation.id);
+
+    expect(repository.getRunInsights().cursing.byModel).toEqual([
+      expect.objectContaining({ model: 'gpt-5.6-terra', count: 2, messagesWithCurses: 2 }),
+      expect.objectContaining({ model: 'sonnet', count: 1, messagesWithCurses: 1 }),
+    ]);
+  });
+
   it('backfills cost for historical runs that recorded tokens but no cost, and does not overwrite an existing cost', () => {
     const item = repository.create({ title: 'Backfill cost', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const priced = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');

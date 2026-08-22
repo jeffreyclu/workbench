@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import type { AgentRun, SharedMessage, WorkItem } from '../shared/contracts.js';
-import { buildPrompt, classifyExecution, judgeExecutionProfile, modelFor, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile } from './agent-runner.js';
+import { buildPrompt, claudeScopeRecoveryPrompt, classifyExecution, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -14,6 +14,17 @@ function connectionSearchQuery(message: string): string {
 }
 
 export const connectionContextForPrompt = contextForPrompt;
+
+/**
+ * Workbench has no durable handle for a process an agent detaches from its CLI.
+ * Treat a promise to report after this response as a protocol violation, rather
+ * than falsely marking the conversation finished while that untracked work runs.
+ */
+export function hasUntrackedContinuationClaim(output: string): boolean {
+  return /\b(?:i['’]ll|i will|will)\s+report\b[\s\S]{0,180}\b(?:when|once|after|the moment)\b[\s\S]{0,100}\b(?:finish(?:es|ed)?|complete(?:s|d)?|land(?:s|ed)?)\b/i.test(output)
+    || /\b(?:background|detached)\b[\s\S]{0,100}\b(?:run|process|job|bench|monitor)\b/i.test(output)
+    || /\b(?:run|bench|monitor)\b[\s\S]{0,100}\b(?:in progress|still running)\b[\s\S]{0,160}\b(?:i['’]ll|i will|will)\s+report\b/i.test(output);
+}
 
 export function classificationForLinkedItem(repository: WorkItemRepository, item: WorkItem) {
   return repository.getClassification(item.id) ?? repository.setClassification(item.id, classifyExecution(item));
@@ -66,7 +77,7 @@ ${connectionContext}
 Current conversation:
 ${compactConversationHistory(thread)}
 
-Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential. Do not claim that background work, a subagent, or a benchmark will continue after this response. Keep the Workbench run open until delegated work has returned and you can report its observed result; otherwise state that the work is blocked or incomplete.`;
+Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential. Never launch detached/background work (including &, nohup, tmux, screen, or a subagent you will report on later): Workbench cannot track it after this CLI turn exits. Keep every command and delegated action foreground until its observed result is available, then report it in this response. If that is not possible, state that the work is blocked or incomplete.`;
 }
 
 export function linearContextForPrompt(repository: WorkItemRepository, message: string): string {
@@ -122,7 +133,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
 }
 
 function settleLinkedTask(repository: WorkItemRepository, conversationId: string, reason: string): void {
-  if (repository.listAllSharedMessages(conversationId).some((message) => message.status === 'running')) return;
+  if (repository.listAllSharedMessages(conversationId).some((message) => message.status === 'queued' || message.status === 'running')) return;
   const conversation = repository.listConversations().find((item) => item.id === conversationId);
   if (!conversation?.workItemId) return;
   const item = repository.get(conversation.workItemId);
@@ -209,7 +220,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     repository.updateSharedMessage(messageId, { model: modelFor(agent, profile), executionProfile: profile });
     if (runId) repository.updateRun(runId, { model: modelFor(agent, profile), executionProfile: profile });
     repository.setConversationExecutionProfile(target.conversationId, profile);
-    const result = await runAgentCommandWithFallback(agent, cwd, guardedPrompt, (partial) => {
+    let result = await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       repository.updateSharedMessage(messageId, { body: partial });
       if (runId) repository.updateRun(runId, { output: partial });
     }, controller.signal, (fallback, reason) => {
@@ -220,7 +231,30 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       repository.updateSharedMessage(messageId, telemetry);
       if (runId) repository.updateRun(runId, telemetry);
     }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis');
+    if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
+      const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the turn to Codex.';
+      if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'agent_fallback', reason);
+      repository.updateSharedMessage(messageId, { body: '● Claude reported an invalid workspace-scope blocker. Handing this tracked turn to Codex…', fallbackFrom: 'claude', fallbackReason: reason });
+      const recovered = await runAgentCommandWithFallback('codex', cwd, `${guardedPrompt}\n\nRecovery handoff: Claude incorrectly claimed it lacked workspace access. Complete the original request directly. Do not repeat that claim; report only observed commands, files changed, verification, and concrete blockers.`, (partial) => {
+        repository.updateSharedMessage(messageId, { body: partial });
+        if (runId) repository.updateRun(runId, { output: partial });
+      }, controller.signal, undefined, profile, (usage) => {
+        const telemetry = { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd };
+        repository.updateSharedMessage(messageId, telemetry);
+        if (runId) repository.updateRun(runId, telemetry);
+      }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis');
+      result = { ...recovered, fallbackFrom: 'claude', fallbackReason: reason };
+      repository.updateSharedMessage(messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
+      if (runId) repository.updateRun(runId, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
+    }
     const telemetry = { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, estimatedCostUsd: result.usage.estimatedCostUsd, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
+    if (hasUntrackedContinuationClaim(result.output)) {
+      const error = 'Agent claimed background or later-reported work. Workbench cannot track detached actions; the response was not marked finished.';
+      repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'failed', error, ...telemetry });
+      if (runId) repository.updateRun(runId, { agent: result.agent, output: result.output, status: 'failed', error, completedAt: new Date().toISOString(), ...telemetry });
+      if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'blocker', error);
+      return;
+    }
     repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'completed', ...telemetry });
     if (runId) repository.updateRun(runId, { agent: result.agent, output: result.output, status: 'completed', completedAt: new Date().toISOString(), ...telemetry });
   } catch (error) {

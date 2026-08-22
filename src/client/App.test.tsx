@@ -32,6 +32,32 @@ describe('primary navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Insights' }));
     expect(await screen.findByRole('heading', { name: 'Insights' })).toBeTruthy();
   });
+
+  it('notifies once when a scan adds discoveries and opens the Discovery inbox from the toast', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.startsWith('/api/discovery')
+        ? { candidates: [], pendingCount: 0, reviewedCount: 0, lastRun: null, running: false, queueProposal: null }
+        : url.includes('/api/work-items/counts')
+          ? { active: 0, workbench: 0, archive: 0 }
+          : url.includes('/api/shared/conversations')
+            ? { conversations: [] }
+            : { items: [], proposal: null, nextCursor: null };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    await waitFor(() => expect(client.getQueryData(['discovery', 'pending'])).toBeTruthy());
+    act(() => client.setQueryData(['discovery', 'pending'], {
+      candidates: [{ id: 'discovery-1', provider: 'github', title: 'Fix search results', description: '', sourceUrl: null, occurredAt: null, status: 'pending', discoveredAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', snoozedUntil: null, workItemId: null, relevance: 1, suggestedWorkItemId: null }],
+      pendingCount: 1, reviewedCount: 0, lastRun: null, running: false, queueProposal: null,
+    }));
+
+    expect(await screen.findByText('1 new discovery ready to review.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Review discoveries: 1 new discovery ready to review/i }));
+    expect(await screen.findByRole('heading', { name: 'Discovered overnight' })).toBeTruthy();
+  });
 });
 
 describe('shared room', () => {

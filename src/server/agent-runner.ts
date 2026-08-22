@@ -129,6 +129,9 @@ ${compactPromptSection(sharedContext || 'No shared context yet.', 6_000)}
 Non-interactive Workbench environment:
 Use available tools directly. Never ask Jeffrey to grant a filesystem permission, approve a terminal prompt, or look at a dialog: those controls are not exposed in Workbench. If required access is unavailable, state the exact missing integration or credential and continue with everything that can be done without it.
 
+Execution integrity:
+This is one foreground, tracked Workbench run. Do not start detached/background work or promise a later result. Finish the action and report only observed results. If a tool fails, include the exact command or tool, target path, and returned error. Do not infer a sandbox, session scope, or permission restriction without an observed tool error.
+
 Live progress protocol:
 During execution, emit brief user-facing updates before and after meaningful steps. Explain what you are checking, why it matters, what you learned, and what comes next. Keep these updates concise. Provide reasoning summaries and decisions, not private chain-of-thought.
 
@@ -596,6 +599,29 @@ export function isAgentCapacityError(value: unknown): boolean {
   return /(?:\b429\b|credit|usage limit|session limit|rate limit|quota|too many requests|hit (?:your|the) limit|limit resets?|capacity)/i.test(message);
 }
 
+/**
+ * A Claude process launched by Workbench is a fresh, permission-bypassing CLI
+ * invocation. A model occasionally confuses context from another session with
+ * this one and reports an imaginary read-only/sandbox boundary instead of
+ * attempting the work. Treat that as a recoverable routing failure, not an
+ * answer Jeffrey has to manually unwind.
+ */
+export function hasUnsupportedClaudeScopeClaim(output: string): boolean {
+  const denial = /\b(?:cannot|can['’]t|unable|blocked|denied|rejected|read[- ]only)\b/i;
+  const scope = /\b(?:sandbox|read[- ]only|allowed directory|filesystem|write access|permission(?:s)?|working directory)\b/i;
+  return denial.test(output) && scope.test(output);
+}
+
+export function claudeScopeRecoveryPrompt(prompt: string, cwd: string): string {
+  return `${prompt}
+
+Workbench execution facts (do not contradict these without quoting an actual tool error):
+- This is a freshly spawned Claude CLI invocation; no prior session sandbox is reused.
+- Your task working directory is ${cwd}.
+- Workbench invoked you with bypassed permission checks and allowlisted both that directory and ${homedir()}.
+- Complete the requested work now. If a tool genuinely fails, report its exact error and target path; do not substitute a general claim that your session is read-only or scoped elsewhere.`;
+}
+
 export async function runAgentCommandWithFallback(
   primary: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void,
   signal?: AbortSignal, onFallback?: (agent: AgentRun['agent'], reason: string) => void,
@@ -689,7 +715,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // The model and effort tier are picked for Jeffrey, not by him. Record the
     // choice and its reason so the activity log explains what actually ran.
     repository.addActivity(item.id, 'system', 'model_selected', describeModelSelection({ agent: run.agent, kind: run.kind, model, profile, source: decision.source }));
-    const result = await runAgentCommandWithFallback(run.agent, cwd, prompt, (partialOutput) => {
+    let result = await runAgentCommandWithFallback(run.agent, cwd, run.agent === 'claude' ? claudeScopeRecoveryPrompt(prompt, cwd) : prompt, (partialOutput) => {
       repository.updateRun(run.id, { output: partialOutput });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
     }, controller.signal, (fallback, reason) => {
@@ -704,6 +730,26 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     }, (entries, producingAgent) => {
       for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
     }, run.kind);
+    if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
+      const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the run to Codex.';
+      repository.addActivity(item.id, 'system', 'agent_fallback', reason);
+      repository.updateRun(run.id, { output: '● Claude reported an invalid workspace-scope blocker. Handing this tracked run to Codex…', fallbackFrom: 'claude', fallbackReason: reason });
+      if (run.messageId) repository.updateSharedMessage(run.messageId, { body: '● Claude reported an invalid workspace-scope blocker. Handing this tracked run to Codex…', fallbackFrom: 'claude', fallbackReason: reason });
+      const recovered = await runAgentCommandWithFallback('codex', cwd, `${prompt}\n\nRecovery handoff: Claude incorrectly claimed it lacked workspace access. Complete the original task directly. Do not repeat that claim; report only observed commands, files changed, verification, and concrete blockers.`, (partialOutput) => {
+        repository.updateRun(run.id, { output: partialOutput });
+        if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
+      }, controller.signal, undefined, profile, (usage) => {
+        const telemetry = { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd };
+        repository.updateRun(run.id, telemetry);
+        if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
+      }, (entries, producingAgent) => {
+        for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
+      }, run.kind);
+      result = { ...recovered, fallbackFrom: 'claude', fallbackReason: reason };
+      repository.updateRun(run.id, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
+      if (run.messageId) repository.updateSharedMessage(run.messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
+      if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [result.agent]);
+    }
     const { output } = result;
     const telemetry = { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, estimatedCostUsd: result.usage.estimatedCostUsd, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
     let executionPlan: { summary: string; tasks: Array<{ title: string; description: string; workspacePath: string | null }> } | null = null;

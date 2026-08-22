@@ -53,7 +53,9 @@ export function SortableQueueItem({ item, index, selected, focused, draggable, o
   const hasFollowUps = (item.lineage?.followUpCount ?? 0) > 0;
   const isFollowUp = Boolean(item.parentWorkItemId && item.lineage?.parentTitle);
   const color = hasFollowUps || isFollowUp ? taskColor(item) : null;
-  const style = { transform: CSS.Transform.toString(transform), transition, ...(color ? { '--task-accent': color.accent, '--task-tint': color.tint, '--task-border': color.border } : {}) } as CSSProperties;
+  // Sortable's full transform includes scale values when neighboring slots
+  // have different dimensions. A queue card should move, never morph.
+  const style = { transform: CSS.Translate.toString(transform), transition, ...(color ? { '--task-accent': color.accent, '--task-tint': color.tint, '--task-border': color.border } : {}) } as CSSProperties;
   const isHumanOnly = !item.agentOutcome && item.assignees.length === 1 && item.assignees[0] === 'jeffrey';
   const openDependencies = (item.blockedBy ?? []).filter((dependency) => dependency.isOpen);
   return <div ref={setNodeRef} data-work-item-id={item.id} style={style} role="listitem" tabIndex={focused ? 0 : -1} className={`queue-item ${item.agentOutcome ? `outcome-${item.agentOutcome}` : ''} ${isHumanOnly ? 'human-only' : ''} ${hasFollowUps || isFollowUp ? 'relationship-family' : ''} ${selected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}`} onClick={onSelect} onFocus={onFocus} onKeyDown={onKeyDown}>

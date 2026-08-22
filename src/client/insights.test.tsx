@@ -56,14 +56,16 @@ describe('InsightsView', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
       medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
-      cursing: { total: 2, messagesAnalyzed: 1, messagesWithCurses: 1, instancesPer100Messages: 200, byTerm: [{ term: 'clusterfuck', count: 2 }], byDay: [] },
+      cursing: { total: 5, messagesAnalyzed: 1, messagesWithCurses: 1, instancesPer100Messages: 500, byTerm: [{ term: 'clusterfuck', count: 2 }, { term: 'fuck', count: 1 }, { term: 'shit', count: 1 }, { term: 'damn', count: 1 }], byDay: [], byModel: [{ model: 'sonnet', count: 5, messagesWithCurses: 1, messagesAnalyzed: 1, instancesPer100Messages: 500 }] },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
     render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
 
-    expect((await screen.findByLabelText('Censored curse term')).textContent).toBe('c**********');
+    expect((await screen.findAllByLabelText('Censored curse term'))[0].textContent).toBe('c**********');
     expect(screen.queryByText('clusterfuck')).toBeNull();
+    expect(screen.getAllByLabelText('Censored curse term')).toHaveLength(3);
+    expect(screen.getByText('sonnet')).toBeTruthy();
   });
 
   it('shows the day with the most curse instances, not simply the latest day', async () => {

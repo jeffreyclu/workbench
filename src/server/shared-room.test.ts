@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { buildSharedReplyPrompt, classificationForLinkedItem, compactConversationHistory, resolveSharedReplyWorkingDirectory } from './shared-room.js';
+import { buildSharedReplyPrompt, classificationForLinkedItem, compactConversationHistory, hasUntrackedContinuationClaim, resolveSharedReplyWorkingDirectory } from './shared-room.js';
 
 function message(index: number, body: string): SharedMessage {
   return {
@@ -31,6 +31,12 @@ function message(index: number, body: string): SharedMessage {
 }
 
 describe('compactConversationHistory', () => {
+  it('rejects a reply that promises to report after untracked background work', () => {
+    expect(hasUntrackedContinuationClaim("q09 is running in the background; I'll report when it finishes.")).toBe(true);
+    expect(hasUntrackedContinuationClaim("The rewritten q09 fixture is now running; I'll report the pass/fail the moment it lands.")).toBe(true);
+    expect(hasUntrackedContinuationClaim('The command completed with 18 passing checks.')).toBe(false);
+  });
+
   it('keeps the newest turns, compacts older turns, and respects its prompt budget', () => {
     const messages = Array.from({ length: 14 }, (_, index) => message(index, `turn-${index} ${'x'.repeat(2_000)}`));
     const history = compactConversationHistory(messages, 8_000);

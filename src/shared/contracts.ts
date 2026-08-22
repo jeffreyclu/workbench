@@ -733,6 +733,8 @@ export interface CurseInsight {
   instancesPer100Messages: number;
   byTerm: Array<{ term: string; count: number }>;
   byDay: Array<{ day: string; count: number }>;
+  /** Attribution is the model on the most recent agent reply before Jeffrey's message. */
+  byModel?: Array<{ model: string; count: number; messagesWithCurses: number; messagesAnalyzed: number; instancesPer100Messages: number }>;
 }
 
 export interface RunInsightsAgentFit {
