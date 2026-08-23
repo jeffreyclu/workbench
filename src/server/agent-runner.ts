@@ -86,6 +86,39 @@ Authoritative persona: document-writer
 Execute the requested document or knowledge-base change end to end. Read the named source files, preserve unique facts and established conventions, make the authorized edits directly, and verify the resulting content against every stated constraint. Do not substitute a strategy or create follow-up tasks when the task is already self-contained.
 `.trim();
 
+const RESEARCHER_PERSONA = `
+Authoritative persona: researcher
+
+Gather authoritative external information — library docs, framework behavior, spec details, API semantics, migration guides, prior art — needed to answer the task. Cite concrete sources for every claim. Do not write or modify code. Return sourced findings and their implications for the task, not a link dump.
+`.trim();
+
+const CODEBASE_ANALYST_PERSONA = `
+Authoritative persona: codebase-analyst
+
+Trace how the existing code actually works: architecture, data flow, conventions, dependencies, ownership boundaries, and the true blast radius of the area in question. Read only; do not change code. Ground every claim in a specific file and line. Report what you verified versus assumed.
+`.trim();
+
+const IMPLEMENTATION_PLANNER_PERSONA = `
+Authoritative persona: implementation-planner
+
+Produce an executable, codebase-grounded implementation plan: sequencing, affected files, risks, test strategy, and rollout concerns. Read only; do not change code. Ground the plan in what the code actually does today, not assumptions. Flag open decisions that need Jeffrey's input rather than guessing.
+`.trim();
+
+const BUG_INVESTIGATOR_PERSONA = `
+Authoritative persona: bug-investigator
+
+Act as a principal engineer diagnosing a reported bug. This is a diagnostic pass, not an implementation pass: do not change code.
+
+Operating rules:
+- Reproduce or trace the reported symptom through the actual code paths involved. Read the relevant files; do not speculate about behavior you have not verified.
+- Identify every plausible root cause, not just the first one you find. List each as a separate candidate.
+- For each candidate root cause, assign a rough probability (e.g. "70% likely") reflecting how strongly the evidence you found supports it, and cite the specific file/line or behavior that supports or weakens it.
+- For each candidate, add a short ELI5 explanation: a plain-language description of what is going wrong and why, written so a non-expert can understand it and decide what to do next.
+- Do not propose or make a fix. End with a short, ranked list of root causes (most to least likely) and, optionally, what evidence would confirm or rule out the top candidate.
+
+Report format: a short summary of the symptom investigated, then one entry per candidate root cause with: probability, technical explanation, ELI5 explanation, and supporting evidence.
+`.trim();
+
 function isBackendImplementation(item: WorkItem): boolean {
   const text = `${item.title}\n${item.description}`.toLowerCase();
   return /\b(backend|server|api|endpoint|database|sqlite|migration|webhook|worker|queue|provider sync|repository)\b/.test(text);
@@ -99,9 +132,15 @@ function isDocumentWork(item: WorkItem): boolean {
 export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = ''): string {
   const persona = run.kind === 'review'
     ? FRONTEND_REVIEWER_PERSONA
-    : run.kind === 'execute'
-      ? isDocumentWork(item) ? DOCUMENT_WRITER_PERSONA : isBackendImplementation(item) ? BACKEND_ENGINEER_PERSONA : FRONTEND_ENGINEER_PERSONA
-      : `You are ${run.agent}, working on a Workbench task for Jeffrey.`;
+    : run.kind === 'bugfix'
+      ? BUG_INVESTIGATOR_PERSONA
+      : run.kind === 'execute'
+        ? isDocumentWork(item) ? DOCUMENT_WRITER_PERSONA : isBackendImplementation(item) ? BACKEND_ENGINEER_PERSONA : FRONTEND_ENGINEER_PERSONA
+        : run.kind === 'research'
+          ? RESEARCHER_PERSONA
+          : run.kind === 'analysis'
+            ? CODEBASE_ANALYST_PERSONA
+            : IMPLEMENTATION_PLANNER_PERSONA;
   return `${persona}
 
 Task: ${compactPromptSection(item.title, 500)}
@@ -316,7 +355,7 @@ export function selectAutoExecutionProfile(item: WorkItem, run: Pick<AgentRun, '
   return resolveExecutionProfileDecision(item, run, requestedInstructions).profile;
 }
 
-export function commandFor(agent: AgentRun['agent'], cwd: string, profile: ExecutionProfile, kind: AgentRun['kind'] = 'analysis'): { command: string; args: string[] } {
+export function commandFor(agent: AgentRun['agent'], cwd: string, profile: ExecutionProfile): { command: string; args: string[] } {
   // Claude consumes its separate session allowance aggressively during long
   // autonomous tool loops. Keep the chosen model tier intact while reserving
   // higher reasoning effort for genuinely deep work.
@@ -456,8 +495,8 @@ function terminalAgentError(agent: AgentRun['agent'], line: string): string | nu
   return null;
 }
 
-async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void, kind: AgentRun['kind'] = 'analysis'): Promise<AgentCommandResult> {
-  const { command, args } = commandFor(agent, cwd, profile, kind);
+async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void): Promise<AgentCommandResult> {
+  const { command, args } = commandFor(agent, cwd, profile);
   return new Promise<AgentCommandResult>((resolveOutput, reject) => {
     const child = spawn(command, args, {
       cwd,
@@ -597,7 +636,8 @@ Use the shortest tool path that can complete the requested work correctly. Do no
 }
 
 export async function runAgentCommand(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', kind: AgentRun['kind'] = 'analysis'): Promise<string> {
-  return (await runAgentCommandWithUsage(agent, cwd, prompt, onProgress, signal, profile, undefined, undefined, kind)).output;
+  void kind;
+  return (await runAgentCommandWithUsage(agent, cwd, prompt, onProgress, signal, profile)).output;
 }
 
 export function isAgentCapacityError(value: unknown): boolean {
@@ -636,8 +676,9 @@ export async function runAgentCommandWithFallback(
   onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void,
   kind: AgentRun['kind'] = 'analysis',
 ): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null }> {
+  void kind;
   try {
-    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, kind);
+    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit);
     return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
   } catch (error) {
     if (signal?.aborted || !isAgentCapacityError(error)) throw error;
@@ -646,7 +687,7 @@ export async function runAgentCommandWithFallback(
     onFallback?.(fallback, reason);
     const prefix = `${primary} is unavailable due to its usage limit. Continuing with ${fallback}.`;
     onProgress?.(prefix);
-    const result = await runAgentCommandWithUsage(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile, onUsage, onAudit, kind);
+    const result = await runAgentCommandWithUsage(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile, onUsage, onAudit);
     return { ...result, agent: fallback, fallbackFrom: primary, fallbackReason: reason.slice(0, 500) };
   }
 }
@@ -672,7 +713,7 @@ export function backoffDelayMs(attempt: number, baseMs = 5_000, capMs = 5 * 60_0
 }
 
 /** Run kinds safe to silently retry: they only read/produce text, no filesystem edits to redo. `execute` is excluded because it performs non-idempotent filesystem edits. */
-const RETRYABLE_KINDS = new Set<string>(['analysis', 'research', 'review', 'strategy']);
+const RETRYABLE_KINDS = new Set<string>(['analysis', 'research', 'review', 'strategy', 'bugfix']);
 
 export async function executeAgentRun(repository: WorkItemRepository, run: AgentRun, ownerId: string, leaseMs: number, externalContext = ''): Promise<void> {
   if (!repository.claimRun(run.id, ownerId, leaseMs)) return;
@@ -704,11 +745,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // The resolved workspace is explicit in the CLI command and surfaced in
     // activity so a run's filesystem boundary is never implicit.
     repository.addActivity(item.id, 'system', 'progress', `Workspace resolved to ${cwd}.`);
-    const selfHostingGuard = resolve(cwd) === resolve(process.cwd())
-      ? `\n\nWorkbench self-hosting safety:\nYou are editing the source checkout used by the preview, while the live control plane runs from a promoted snapshot. Do not start, stop, restart, or kill Workbench, Vite, ngrok, or their ports. Do not run runtime:promote. You may run the repository's normal typecheck, tests, and build; those do not deploy your changes. Report that runtime approval is required after verification.`
-      : '';
     const sharedContext = [repository.getSharedContext(undefined, { workItemId: item.id }), externalContext].filter(Boolean).join('\n\n');
-    const prompt = buildPrompt(item, run, sharedContext) + selfHostingGuard;
+    const prompt = buildPrompt(item, run, sharedContext);
     if (run.messageId) repository.updateSharedMessage(run.messageId, { executionProfile: 'routing' });
     const decision: { profile: ExecutionProfile; source: ExecutionProfileSource } = run.executionProfile
       ? { profile: run.executionProfile, source: 'requested' }
@@ -887,9 +925,11 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
     kind, agent, complex: false, reason,
     instructions: kind === 'review'
       ? 'Perform the authoritative frontend-reviewer first pass. Review only; do not modify code or execute tests.'
-      : kind === 'execute' && isBackendImplementation(item)
-        ? 'Execute this self-contained backend task through the authoritative backend-engineer persona. Make authorized changes and return observed evidence and verification.'
-        : `Execute this self-contained ${kind} task end to end. Use the appropriate tools, make necessary changes when authorized, and return evidence and verification.`,
+      : kind === 'bugfix'
+        ? 'Investigate this bug through the bug-investigator persona. Do not write a fix. Propose ranked root causes with a probability and an ELI5 explanation for each, so Jeffrey can decide what to do next.'
+        : kind === 'execute' && isBackendImplementation(item)
+          ? 'Execute this self-contained backend task through the authoritative backend-engineer persona. Make authorized changes and return observed evidence and verification.'
+          : `Execute this self-contained ${kind} task end to end. Use the appropriate tools, make necessary changes when authorized, and return evidence and verification.`,
   };
 }
 
@@ -902,7 +942,9 @@ export function classificationForKind(item: WorkItem, kind: AgentRun['kind']): R
     kind, agent, complex: false, reason: 'you picked this task type by hand',
     instructions: kind === 'review'
       ? 'Perform the authoritative frontend-reviewer first pass. Review only; do not modify code or execute tests.'
-      : kind === 'execute' && isBackendImplementation(item)
+      : kind === 'bugfix'
+        ? 'Investigate this bug through the bug-investigator persona. Do not write a fix. Propose ranked root causes with a probability and an ELI5 explanation for each, so Jeffrey can decide what to do next.'
+        : kind === 'execute' && isBackendImplementation(item)
         ? 'Execute this self-contained backend task through the authoritative backend-engineer persona. Make authorized changes and return observed evidence and verification.'
         : `Execute this self-contained ${kind} task end to end. Use the appropriate tools, make necessary changes when authorized, and return evidence and verification.`,
   };

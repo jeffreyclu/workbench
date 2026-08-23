@@ -992,6 +992,19 @@ describe('WorkItemRepository', () => {
     expect(repository.listConversationPage(30, null).conversations.map((conversation) => conversation.id)).toEqual([working.id, idle.id]);
   });
 
+  it('surfaces and prioritizes the existing pinned linked-task state in conversation stacks', () => {
+    const pinnedTask = repository.create({ title: 'Pinned task', description: '', priority: 2, status: 'pinned', projectName: null, workspacePath: null, dueDate: null });
+    const unpinnedTask = repository.create({ title: 'Ready task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const pinnedConversation = repository.createConversation('Pinned conversation', pinnedTask.id);
+    const unpinnedConversation = repository.createConversation('Ready conversation', unpinnedTask.id);
+
+    const conversations = repository.listConversationPage(30, null).conversations;
+
+    expect(conversations.map((conversation) => conversation.id)).toEqual([pinnedConversation.id, unpinnedConversation.id]);
+    expect(conversations[0]?.linkedWorkItemPinned).toBe(true);
+    expect(conversations[1]?.linkedWorkItemPinned).toBe(false);
+  });
+
   it('reports active and archive counts independently of pagination', () => {
     repository.create({ title: 'Active', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const archived = repository.create({ title: 'Archived', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
@@ -1465,11 +1478,6 @@ describe('task dependencies', () => {
   });
 
   afterEach(() => database.close());
-
-  const makeTask = (title: string) => repository.create({
-    title, description: 'Original brief.', priority: 1, status: 'ready',
-    projectName: 'Workbench', workspacePath: null, dueDate: null,
-  });
 
     const make = (title: string) => repository.create({
       title, description: '', priority: 2, status: 'ready',

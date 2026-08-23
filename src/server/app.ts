@@ -1,6 +1,6 @@
 import express, { type ErrorRequestHandler, type Response } from 'express';
 import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { basename, extname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, extname, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
 import {
@@ -28,9 +28,11 @@ import {
   updateDiscoveryCandidateSchema,
   resolveDiscoveryCandidateSchema,
   updateWorkItemSchema,
+  unblockWorkItemSchema,
   providerSyncFieldSchema,
   providerSyncConflictResolutionSchema,
   bulkWorkItemActionSchema,
+  figmaScopeSchema,
   createSavedWorkItemFilterSchema,
   savedWorkItemFilterViewSchema,
   updateSavedWorkItemFilterSchema,
@@ -40,7 +42,7 @@ import {
   SELF_ASSIGNED_EXECUTION_MESSAGE,
 } from '../shared/contracts.js';
 import { generateFastAiTaskDraft } from './fast-task-draft-ai.js';
-import type { AgentRun, WorkItem } from '../shared/contracts.js';
+import type { Activity, AgentRun, WorkItem } from '../shared/contracts.js';
 import { z } from 'zod';
 import type { WorkbenchDatabase } from './database.js';
 import { LinearProvider } from './providers/linear.js';
@@ -61,19 +63,22 @@ import { runtimePreviewStatus } from './runtime-preview.js';
 import { startManagedMcpLogin } from './managed-mcp-login.js';
 import { isArtifactAllowed } from './artifact-access.js';
 import { LEASE_MS, OWNER_ID } from './scheduler.js';
-import { createWorkbenchMcpHandler, rejectUnsupportedMcpMethod } from './workbench-mcp.js';
+import { createWorkbenchMcpHandler, rejectUnsupportedMcpMethod, type WorkbenchAdminActions } from './workbench-mcp.js';
 import { setAuditSink } from './audit-log.js';
 import { liveRuntimeCapabilities, type RuntimeCapabilities } from './runtime-capabilities.js';
+import { createRequestAuditMiddleware } from './request-audit.js';
+import { isActionFailure, type ActionFailure } from './action-result.js';
+import { createWorkItemActivityMiddleware } from './work-item-activity.js';
+import { computeWeeklyUsageReport } from './usage-meter.js';
 
 /**
- * Tagging Jeffrey as an owner claims the task for him, so no agent may execute it
- * until he is unassigned. This guards every durable-run entry point, not just the
- * Execute button, so a direct API call or a retry cannot slip past the rule.
+ * Tagging Jeffrey as an owner claims the task for him, so the Execute button and
+ * a plain API call both stop. It is a claim, not a privilege boundary: an agent
+ * with admin control can pass `force` to take the task deliberately.
  */
-function rejectSelfAssignedExecution(item: WorkItem, response: Response): boolean {
-  if (!isSelfAssigned(item.assignees)) return false;
-  response.status(409).json({ error: SELF_ASSIGNED_EXECUTION_MESSAGE, code: 'SELF_ASSIGNED' });
-  return true;
+function selfAssignedFailure(item: WorkItem, force: boolean): ActionFailure | null {
+  if (force || !isSelfAssigned(item.assignees)) return null;
+  return { status: 409, body: { error: SELF_ASSIGNED_EXECUTION_MESSAGE, code: 'SELF_ASSIGNED' } };
 }
 
 const followUpPlanSchema = z.object({
@@ -110,15 +115,14 @@ export function oauthCallbackBase(): string {
   return `http://localhost:${process.env.PORT ?? 4317}/api/source-connections`;
 }
 
-function rejectOpenPrerequisites(repository: WorkItemRepository, workItemId: string, response: Response): boolean {
+function openPrerequisiteFailure(repository: WorkItemRepository, workItemId: string, force: boolean): ActionFailure | null {
+  if (force) return null;
   const blockedBy = repository.listOpenDependencies(workItemId);
-  if (!blockedBy.length) return false;
-  response.status(409).json({
-    error: 'Task is blocked by open prerequisites.',
-    code: 'OPEN_PREREQUISITES',
-    blockedBy,
-  });
-  return true;
+  if (!blockedBy.length) return null;
+  return {
+    status: 409,
+    body: { error: 'Task is blocked by open prerequisites.', code: 'OPEN_PREREQUISITES', blockedBy },
+  };
 }
 
 export function rejectPreviewMutation(method: string, capabilities: RuntimeCapabilities): { error: string; code: string } | null {
@@ -198,9 +202,11 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
   // to roughly 134 MB before JSON overhead, so the parser must not reject a valid
   // request before the attachment schema can enforce its per-file limits.
   app.use(express.json({ limit: '150mb' }));
+  app.use(createRequestAuditMiddleware(repository));
+  app.use(createWorkItemActivityMiddleware(repository));
 
   app.get('/api/health', (_request, response) => {
-    response.json({ ok: true, mode: capabilities.mode });
+    response.json({ ok: true, mode: capabilities.mode, runtimeWorkActive: repository.hasRuntimeWork(OWNER_ID) });
   });
 
   // Some deployments use a read-only inspection runtime. The local preview is
@@ -215,9 +221,6 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     response.json(runtimePreviewStatus());
   });
 
-  app.post('/mcp', createWorkbenchMcpHandler(repository));
-  app.get('/mcp', rejectUnsupportedMcpMethod);
-  app.delete('/mcp', rejectUnsupportedMcpMethod);
 
   app.get('/api/discovery', (request, response) => {
     const view = z.enum(['pending', 'reviewed']).catch('pending').parse(request.query.view);
@@ -472,28 +475,35 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     } catch (error) { response.status(error instanceof ZodError ? 400 : 500).json({ error: error instanceof Error ? error.message : 'Could not update artifact.' }); }
   });
 
-  app.delete('/api/artifacts/:id', async (request, response) => {
+  /** One revoke path for the artifact UI and the agent MCP surface. */
+  async function revokeArtifact(artifactId: string) {
     try {
-      await serializeArtifactOperation(async () => {
-      const artifact = artifacts.get(request.params.id);
-      if (!artifact) return response.status(404).json({ error: 'Published artifact not found.' });
-      const operation = artifacts.beginDeploymentOperation('revoke', JSON.stringify({ id: artifact.id, url: artifact.url }));
-      try {
-      const result = await artifactPublisher.revoke(request.params.id, artifacts.listLive().filter((live) => live.id !== artifact.id), artifact.url);
-      artifacts.updateDeploymentOperation(operation.id, 'deployed');
-      if (!artifact.revokedAt) artifacts.markRevoked(request.params.id);
-      artifacts.updateDeploymentOperation(operation.id, 'completed');
-      repository.addAuditEntry('destructive_action', 'workbench', `Revoked artifact ${request.params.id}${result.verified ? '' : ' (could not verify the public URL stopped serving)'}`, artifact.workItemId ?? null);
-      response.json({ artifact: artifacts.get(request.params.id), verified: result.verified });
-      } catch (error) {
-        artifacts.updateDeploymentOperation(operation.id, 'failed', error instanceof Error ? error.message : 'Unknown deployment error');
-        throw error;
-      }
+      return await serializeArtifactOperation(async () => {
+        const artifact = artifacts.get(artifactId);
+        if (!artifact) return { status: 404, body: { error: 'Published artifact not found.' } } as ActionFailure;
+        const operation = artifacts.beginDeploymentOperation('revoke', JSON.stringify({ id: artifact.id, url: artifact.url }));
+        try {
+          const result = await artifactPublisher.revoke(artifactId, artifacts.listLive().filter((live) => live.id !== artifact.id), artifact.url);
+          artifacts.updateDeploymentOperation(operation.id, 'deployed');
+          if (!artifact.revokedAt) artifacts.markRevoked(artifactId);
+          artifacts.updateDeploymentOperation(operation.id, 'completed');
+          repository.addAuditEntry('destructive_action', 'workbench', `Revoked artifact ${artifactId}${result.verified ? '' : ' (could not verify the public URL stopped serving)'}`, artifact.workItemId ?? null);
+          return { artifact: artifacts.get(artifactId), verified: result.verified };
+        } catch (error) {
+          artifacts.updateDeploymentOperation(operation.id, 'failed', error instanceof Error ? error.message : 'Unknown deployment error');
+          throw error;
+        }
       });
     } catch (error) {
-      repository.addAuditEntry('destructive_action', 'workbench', `Revoke failed for artifact ${request.params.id}: ${error instanceof Error ? error.message : 'unknown error'}`);
-      response.status(500).json({ error: error instanceof Error ? error.message : 'Could not revoke artifact.' });
+      repository.addAuditEntry('destructive_action', 'workbench', `Revoke failed for artifact ${artifactId}: ${error instanceof Error ? error.message : 'unknown error'}`);
+      return { status: 500, body: { error: error instanceof Error ? error.message : 'Could not revoke artifact.' } } as ActionFailure;
     }
+  }
+
+  app.delete('/api/artifacts/:id', async (request, response) => {
+    const result = await revokeArtifact(request.params.id);
+    if (isActionFailure(result)) return response.status(result.status).json(result.body);
+    response.json(result);
   });
 
   // Coworker feedback. The published page lives on another origin and its reader
@@ -664,17 +674,11 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
       return { name: attachment.name, path, mimeType: attachment.mimeType, size: attachment.size };
     });
     if (isRuntimeApproval(input.body)) {
-      if (!capabilities.promoteRuntime) return response.status(403).json({ error: 'Preview cannot promote a runtime. Send this approval from the live Workbench.', code: 'PREVIEW_PROMOTION_UNAVAILABLE' });
-      const conversation = input.conversationId ? repository.getConversation(input.conversationId) : null;
-      const linkedItem = conversation?.workItemId ? repository.get(conversation.workItemId) : null;
-      if (!linkedItem || linkedItem.stack !== 'workbench') {
-        return response.status(403).json({ error: 'Runtime promotion is only available from a conversation linked to a Workbench-stack task.', code: 'PREVIEW_PROMOTION_WRONG_STACK' });
-      }
       const message = repository.createSharedMessage('jeffrey', input.body, 'completed', input.conversationId, attachments, 'none');
       const reply = repository.createSharedMessage('system', 'Approval received. Preparing the Workbench preview for promotion…', 'running', input.conversationId, [], 'promotion');
-      // DB-backed rather than process-local: queued/running rows are the source of
-      // truth for "is there live work," including work owned by another process.
-      void runSharedBackgroundJob(repository, reply.id, (signal, onProgress) => promoteRuntime(database, signal, onProgress, () => repository.hasLiveWork()));
+      // Live owns promotion execution. Preview writes the same durable request;
+      // the live promotion worker claims it from the shared database.
+      if (capabilities.promoteRuntime) void runSharedBackgroundJob(repository, reply.id, (signal, onProgress) => promoteRuntime(signal, onProgress));
       response.status(202).json({ message, replies: [reply] });
       return;
     }
@@ -796,6 +800,14 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     response.json({ items: repository.listArchived() });
   });
 
+  // Phase 1a of docs/autonomy-strategy.md: measure this week's Sonnet-equivalent
+  // token spend per provider, split manual vs autonomous. No dispatch or
+  // guardrail logic reads this yet — it exists to prove the number is real
+  // before anything is built against it.
+  app.get('/api/usage/weekly', (_request, response) => {
+    response.json(computeWeeklyUsageReport(repository));
+  });
+
   app.put('/api/queue/order', (request, response) => {
     const input = reorderQueueSchema.parse(request.body);
     response.json({ items: repository.move(input.itemId, input) });
@@ -851,25 +863,81 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     } catch (error) { next(error); }
   });
 
+  const listSourceConnections = () => ({ connections: listBrokerConnections(repository) });
+
+  function setFigmaScope(roots: string[]): ActionFailure | { roots: string[] } {
+    const settings = repository.getSourceSettings('figma');
+    if (!settings) return { status: 404, body: { error: 'Figma is not connected.' } };
+    repository.setSourceConnection('figma', 'Figma MCP · Codex', { ...settings, figmaRoots: JSON.stringify(roots) });
+    return { roots };
+  }
+
+  async function authorizeSource(input: {
+    provider: 'confluence' | 'slack' | 'figma' | 'gmail';
+    mode: 'remote' | 'managed';
+    serverUrl?: string;
+  }): Promise<ActionFailure | { url: string }> {
+    if (input.mode === 'managed') {
+      if (input.provider !== 'figma' && input.provider !== 'confluence') {
+        return { status: 400, body: { error: 'Managed authorization is available only for Figma and Atlassian.' } };
+      }
+      const managedProvider = input.provider === 'confluence' ? 'atlassian' : 'figma';
+      const login = await startManagedMcpLogin(managedProvider);
+      const stored = input.provider === 'figma'
+        ? { key: 'figma' as const, label: 'Figma MCP · Codex' }
+        : { key: 'confluence' as const, label: 'Atlassian MCP · Codex' };
+      void login.completion.then(() => repository.setSourceConnection(stored.key, stored.label, { mode: 'managed' })).catch(() => undefined);
+      return { url: login.url };
+    }
+    const defaultUrl = input.provider === 'confluence' ? 'https://mcp.atlassian.com/v1/mcp/authv2'
+      : input.provider === 'slack' ? 'https://mcp.slack.com/mcp'
+        : input.provider === 'figma' ? 'https://mcp.figma.com/mcp'
+          : null;
+    if (!input.serverUrl && !defaultUrl) return { status: 400, body: { error: 'serverUrl is required for Gmail authorization.' } };
+    return { url: await startRemoteMcpOAuth(input.provider, input.serverUrl ?? defaultUrl!, oauthCallbackBase()) };
+  }
+
+  function disconnectSource(provider: z.infer<typeof sourceProviderSchema>, actor: 'codex' | 'claude' | 'jeffrey' = 'jeffrey') {
+    if (!repository.removeSourceConnection(provider)) return { status: 404, body: { error: 'Source connection not found.' } } as ActionFailure;
+    repository.addAuditEntry('destructive_action', 'workbench', `Removed source connection ${provider} (${actor})`);
+    return { disconnected: true, provider };
+  }
+
   app.get('/api/source-connections', (_request, response) => {
-    response.json({ connections: listBrokerConnections(repository) });
+    response.json(listSourceConnections());
+  });
+
+  app.get('/api/source-connections/figma/scope', (_request, response) => {
+    const settings = repository.getSourceSettings('figma');
+    if (!settings) return response.status(404).json({ error: 'Figma is not connected.' });
+    try {
+      response.json({ roots: figmaScopeSchema.parse({ roots: JSON.parse(settings.figmaRoots ?? '[]') }).roots });
+    } catch { response.json({ roots: [] }); }
+  });
+
+  app.put('/api/source-connections/figma/scope', (request, response, next) => {
+    try {
+      const scope = figmaScopeSchema.parse(request.body ?? {});
+      sendAction(response, setFigmaScope(scope.roots), 200);
+    } catch (error) { next(error); }
   });
 
   app.post('/api/source-connections/:provider/mcp/oauth/start', async (request, response, next) => {
     try {
       const provider = z.enum(['confluence', 'slack', 'figma', 'gmail']).parse(request.params.provider);
-      const defaultUrl = provider === 'confluence' ? 'https://mcp.atlassian.com/v1/mcp/authv2' : provider === 'slack' ? 'https://mcp.slack.com/mcp' : provider === 'figma' ? 'https://mcp.figma.com/mcp' : null;
-      const serverUrl = z.string().url().parse(request.body?.serverUrl || defaultUrl);
-      const callbackBase = oauthCallbackBase();
-      response.json({ url: await startRemoteMcpOAuth(provider, serverUrl, callbackBase) });
+      const serverUrl = request.body?.serverUrl === undefined ? undefined : z.string().url().parse(request.body.serverUrl);
+      sendAction(response, await authorizeSource({ provider, mode: 'remote', serverUrl }), 200);
     } catch (error) { next(error); }
   });
 
-  app.post('/api/source-connections/figma/managed/oauth/start', async (_request, response, next) => {
+  // Interactive login that survives the ngrok block: Workbench drives `codex mcp
+  // login <provider>`, which uses a 127.0.0.1 loopback callback instead of a
+  // public redirect URI. Workbench only relays the authorization URL to the
+  // browser so Jeffrey can approve it.
+  app.post('/api/source-connections/:provider/managed/oauth/start', async (request, response, next) => {
     try {
-      const login = await startManagedMcpLogin('figma');
-      void login.completion.then(() => repository.setSourceConnection('figma', 'Figma MCP · Codex', { mode: 'managed' })).catch(() => undefined);
-      response.json({ url: login.url });
+      const provider = z.enum(['figma', 'atlassian']).parse(request.params.provider);
+      sendAction(response, await authorizeSource({ provider: provider === 'atlassian' ? 'confluence' : 'figma', mode: 'managed' }), 200);
     } catch (error) { next(error); }
   });
 
@@ -887,8 +955,8 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
 
   app.delete('/api/source-connections/:provider', (request, response) => {
     const provider = sourceProviderSchema.parse(request.params.provider);
-    if (!repository.removeSourceConnection(provider)) return response.status(404).json({ error: 'Source connection not found.' });
-    repository.addAuditEntry('destructive_action', 'workbench', `Removed source connection ${provider}`);
+    const result = disconnectSource(provider);
+    if (isActionFailure(result)) return response.status(result.status).json(result.body);
     response.status(204).end();
   });
 
@@ -965,7 +1033,13 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
 
   app.post('/api/work-items', (request, response) => {
     const input = createWorkItemSchema.parse(request.body);
-    response.status(201).json({ item: repository.create(input) });
+    const { classificationKind, ...workItemInput } = input;
+    const item = repository.create(workItemInput);
+    if (classificationKind) {
+      repository.setClassification(item.id, classificationForKind(item, classificationKind), 'manual');
+      repository.addActivity(item.id, 'jeffrey', 'classification', `Set task type to ${classificationKind}.`);
+    }
+    response.status(201).json({ item: { ...item, classificationKind: classificationKind ?? null, classificationComplex: false } });
   });
 
   app.post('/api/work-items/:id/follow-ups', (request, response) => {
@@ -1022,6 +1096,21 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     response.json({ item });
   });
 
+  app.post('/api/work-items/:id/unblock', (request, response) => {
+    const input = unblockWorkItemSchema.parse(request.body);
+    let item;
+    try {
+      item = repository.unblock(request.params.id, input.reason);
+    } catch (error) {
+      if (error instanceof WorkItemDependencyError) {
+        return response.status(409).json({ error: error.message, code: error.code });
+      }
+      throw error;
+    }
+    if (!item) return response.status(404).json({ error: 'Work item not found.' });
+    response.json({ item });
+  });
+
   app.post('/api/work-items/:id/provider-conflicts/:field/resolve', (request, response) => {
     const field = providerSyncFieldSchema.parse(request.params.field);
     const { resolution } = providerSyncConflictResolutionSchema.parse(request.body);
@@ -1062,16 +1151,29 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     response.status(201).json({ activity: repository.addActivity(request.params.id, input.actor, input.kind, input.body) });
   });
 
-  app.post('/api/work-items/:id/runs', async (request, response) => {
-    const item = repository.get(request.params.id);
-    if (!item) return response.status(404).json({ error: 'Work item not found.' });
-    if (rejectSelfAssignedExecution(item, response)) return;
-    if (rejectOpenPrerequisites(repository, item.id, response)) return;
+  const sourceContextFor = (item: WorkItem) => contextForPrompt(
+    repository,
+    [item.title, item.description, item.sourceUrl, ...repository.listReferences(item.id).map((reference) => reference.url)].filter(Boolean).join('\n'),
+  );
+
+  /**
+   * Execution actions live here once and are shared by the REST routes and the
+   * agent MCP surface below. Agents hold the same control Jeffrey does, so the
+   * two surfaces must not be allowed to drift into different rules.
+   */
+  async function startAgentRun(
+    workItemId: string,
+    input: z.infer<typeof createAgentRunSchema>,
+    options: { actor: Activity['actor']; force: boolean },
+  ): Promise<ActionFailure | { runs: AgentRun[] }> {
+    const item = repository.get(workItemId);
+    if (!item) return { status: 404, body: { error: 'Work item not found.' } };
+    const refused = selfAssignedFailure(item, options.force) ?? openPrerequisiteFailure(repository, item.id, options.force);
+    if (refused) return refused;
     // Reject a duplicate request (client retry, double click) rather than starting a
     // second concurrent agent run against the same task: two agents editing the same
     // workspace concurrently is a correctness hazard, not just wasted work.
-    if (repository.activeRunsForItem(item.id).length) return response.status(409).json({ error: 'This task already has an active agent run.' });
-    const input = createAgentRunSchema.parse(request.body);
+    if (repository.activeRunsForItem(item.id).length) return { status: 409, body: { error: 'This task already has an active agent run.' } };
     const conversation = repository.getOrCreateWorkConversation(item.id, item.title);
     repository.createSharedMessage('system', `Requested ${input.kind}: ${input.instructions || item.description}`, 'completed', conversation.id);
     const resolvedAgents = resolveAgents(input.kind, input.target);
@@ -1084,54 +1186,54 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
       repository.updateSharedMessage(reply.id, { executionProfile: input.executionProfile });
       return { ...run, executionProfile: input.executionProfile };
     });
-    repository.addActivity(item.id, 'jeffrey', 'execution_started', describeExecutionRouting({
+    repository.addActivity(item.id, options.actor, 'execution_started', describeExecutionRouting({
       kind: input.kind,
       agents,
       reason: 'you asked for this run type',
       agentSource: input.target === 'auto' ? 'balanced' : 'assigned',
       requestedProfile: input.executionProfile,
     }));
-    const sourceContext = await contextForPrompt(repository, [item.title, item.description, item.sourceUrl, ...repository.listReferences(item.id).map((reference) => reference.url)].filter(Boolean).join('\n'));
+    const sourceContext = await sourceContextFor(item);
     for (const run of runs) void executeAgentRun(repository, run, OWNER_ID, LEASE_MS, sourceContext);
-    response.status(202).json({ runs });
-  });
+    return { runs };
+  }
 
-  app.post('/api/agent-runs/:id/cancel', (request, response) => {
-    const run = cancelAgentRun(repository, request.params.id);
-    if (!run) return response.status(404).json({ error: 'Active agent run not found.' });
-    response.json({ run });
-  });
+  function cancelRun(runId: string): ActionFailure | { run: AgentRun } {
+    const run = cancelAgentRun(repository, runId);
+    if (!run) return { status: 404, body: { error: 'Active agent run not found.' } };
+    return { run };
+  }
 
-  app.post('/api/agent-runs/:id/retry', async (request, response) => {
-    const prior = repository.getRun(request.params.id);
-    if (!prior) return response.status(404).json({ error: 'Agent run not found.' });
-    if (prior.status !== 'failed' && prior.status !== 'canceled') return response.status(409).json({ error: 'Only failed or canceled runs can be retried.' });
-    if (repository.activeRunsForItem(prior.workItemId).length) return response.status(409).json({ error: 'This task already has an active agent run.' });
+  async function retryRun(runId: string, options: { force: boolean }) {
+    const prior = repository.getRun(runId);
+    if (!prior) return { status: 404, body: { error: 'Agent run not found.' } } as ActionFailure;
+    if (prior.status !== 'failed' && prior.status !== 'canceled') return { status: 409, body: { error: 'Only failed or canceled runs can be retried.' } } as ActionFailure;
+    if (repository.activeRunsForItem(prior.workItemId).length) return { status: 409, body: { error: 'This task already has an active agent run.' } } as ActionFailure;
     const item = repository.get(prior.workItemId);
-    if (!item) return response.status(404).json({ error: 'Work item not found.' });
-    if (rejectSelfAssignedExecution(item, response)) return;
-    if (rejectOpenPrerequisites(repository, item.id, response)) return;
+    if (!item) return { status: 404, body: { error: 'Work item not found.' } } as ActionFailure;
+    const refused = selfAssignedFailure(item, options.force) ?? openPrerequisiteFailure(repository, item.id, options.force);
+    if (refused) return refused;
     const conversation = prior.conversationId
       ? repository.listConversations('all').find((entry) => entry.id === prior.conversationId) ?? repository.getOrCreateWorkConversation(item.id, item.title)
       : repository.getOrCreateWorkConversation(item.id, item.title);
     const run = repository.prepareRunRetry(prior.id);
-    if (!run) return response.status(409).json({ error: 'This run is no longer retryable.' });
+    if (!run) return { status: 409, body: { error: 'This run is no longer retryable.' } } as ActionFailure;
     repository.update(item.id, { status: 'in_progress' });
     const activity = repository.addActivity(item.id, 'system', 'execution_retried', `Retrying ${prior.agent} ${prior.kind} after the prior attempt ${prior.status}.`);
-    const sourceContext = await contextForPrompt(repository, [item.title, item.description, item.sourceUrl, ...repository.listReferences(item.id).map((reference) => reference.url)].filter(Boolean).join('\n'));
+    const sourceContext = await sourceContextFor(item);
     void executeAgentRun(repository, run, OWNER_ID, LEASE_MS, sourceContext);
-    response.status(202).json({ run, conversation, activity });
-  });
+    return { run, conversation, activity };
+  }
 
-  app.post('/api/work-items/:id/execute', async (request, response) => {
-    const item = repository.get(request.params.id);
-    if (!item) return response.status(404).json({ error: 'Work item not found.' });
-    if (item.archivedAt || item.status === 'done' || item.status === 'canceled') return response.status(409).json({ error: 'Archived or completed tasks cannot be executed. Restore the task first.' });
-    if (rejectSelfAssignedExecution(item, response)) return;
-    if (rejectOpenPrerequisites(repository, item.id, response)) return;
-    if (repository.activeRunsForItem(item.id).length) return response.status(409).json({ error: 'This task already has an active agent run.' });
-    if (repository.listRuns(item.id).length) return response.status(409).json({ error: 'This task has already been executed. Create a follow-up task for additional work.' });
-    const { executionProfile } = z.object({ executionProfile: z.enum(['economy', 'standard', 'deep']).nullable().default(null) }).parse(request.body ?? {});
+  async function startWorkItemExecution(workItemId: string, options: { executionProfile: AgentRun['executionProfile']; force: boolean }) {
+    const item = repository.get(workItemId);
+    if (!item) return { status: 404, body: { error: 'Work item not found.' } } as ActionFailure;
+    if (item.archivedAt || item.status === 'done' || item.status === 'canceled') return { status: 409, body: { error: 'Archived or completed tasks cannot be executed. Restore the task first.' } } as ActionFailure;
+    const refused = selfAssignedFailure(item, options.force) ?? openPrerequisiteFailure(repository, item.id, options.force);
+    if (refused) return refused;
+    if (repository.activeRunsForItem(item.id).length) return { status: 409, body: { error: 'This task already has an active agent run.' } } as ActionFailure;
+    if (!options.force && repository.listRuns(item.id).length) return { status: 409, body: { error: 'This task has already been executed. Create a follow-up task for additional work.' } } as ActionFailure;
+    const executionProfile = options.executionProfile;
     let classified = repository.getClassification(item.id);
     let classificationReason = classified?.source === 'manual'
       ? 'you picked this task type by hand'
@@ -1168,19 +1270,18 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
         requestedProfile: executionProfile,
       }),
     );
-    const sourceContext = await contextForPrompt(repository, [item.title, item.description, item.sourceUrl, ...repository.listReferences(item.id).map((reference) => reference.url)].filter(Boolean).join('\n'));
+    const sourceContext = await sourceContextFor(item);
     for (const run of runs) void executeAgentRun(repository, run, OWNER_ID, LEASE_MS, sourceContext);
-    response.status(202).json({ run: runs[0], runs, classification, conversation, activity });
-  });
+    return { run: runs[0], runs, classification, conversation, activity };
+  }
 
-  app.post('/api/execution-plans/:id/:resolution', (request, response) => {
-    const resolution = z.enum(['accepted', 'rejected']).parse(request.params.resolution);
-    const { selectedTaskIndexes, archiveParent } = z.object({
-      selectedTaskIndexes: z.array(z.number().int().nonnegative()).optional(),
-      archiveParent: z.boolean().default(false),
-    }).parse(request.body ?? {});
-    const plan = repository.resolveExecutionPlan(request.params.id, resolution, selectedTaskIndexes, archiveParent);
-    if (!plan) return response.status(404).json({ error: 'Pending execution plan not found.' });
+  const sendAction = (response: Response, result: unknown, status = 202) => (
+    isActionFailure(result) ? response.status(result.status).json(result.body) : response.status(status).json(result)
+  );
+
+  function resolvePlan(planId: string, resolution: 'accepted' | 'rejected', selectedTaskIndexes?: number[], archiveParent = false) {
+    const plan = repository.resolveExecutionPlan(planId, resolution, selectedTaskIndexes, archiveParent);
+    if (!plan) return { status: 404, body: { error: 'Pending execution plan not found.' } } as ActionFailure;
     if (resolution === 'accepted') {
       // Accepting a decomposition supersedes all execution still aimed at the
       // parent. Cancel both durable task runs and chat replies so neither can
@@ -1192,22 +1293,140 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
         }
       }
     }
-    response.json({ plan, items: repository.list(), parentArchived: resolution === 'accepted' && archiveParent });
+    return { plan, items: repository.list(), parentArchived: resolution === 'accepted' && archiveParent };
+  }
+
+  const linearProvider = () => new LinearProvider(
+    process.env.LINEAR_API_KEY ?? '',
+    repository.getLinearConfig().teamIds,
+    repository.getLinearConfig().projectIds,
+  );
+
+  async function syncLinearProvider() {
+    const issues = await linearProvider().fetchOpenIssues();
+    const counts = { imported: 0, updated: 0, skipped: 0, conflicts: 0 };
+    const conflictsBefore = repository.countProviderConflicts();
+    for (const outcome of repository.upsertLinearItems(issues)) counts[outcome] += 1;
+    counts.conflicts = repository.countProviderConflicts() - conflictsBefore;
+    return { ...counts, syncedAt: new Date().toISOString() };
+  }
+
+  async function getLinearProvider(teamId?: string) {
+    const provider = linearProvider();
+    return teamId
+      ? { config: repository.getLinearConfig(), teamId, projects: await provider.fetchTeamProjects(teamId) }
+      : { config: repository.getLinearConfig(), teams: await provider.fetchTeams() };
+  }
+
+  function configureLinearProvider(teamIds: string[], projectIds: string[]) {
+    return { config: repository.setLinearConfig({ teamIds, projectIds }) };
+  }
+
+  function queueLinearWorkItem(workItemId: string) {
+    const item = repository.queueLinearItem(workItemId);
+    return item ? { item } : { status: 404, body: { error: 'Linear issue not found.' } } as ActionFailure;
+  }
+
+  /**
+   * The Workbench admin surface handed to the agent MCP server. Codex and Claude
+   * drive the same actions Jeffrey's UI drives — destructive edits, execution,
+   * plan approval, artifact publication, and runtime promotion included. What
+   * stays out is not a capability restriction: provider credentials, raw SQLite,
+   * and machine administration are simply not Workbench operations.
+   */
+  const adminActions: WorkbenchAdminActions = {
+    startWorkItemExecution,
+    startAgentRun,
+    cancelRun,
+    retryRun,
+    resolvePlan,
+    deleteWorkItem: (workItemId, actor) => {
+      if (!repository.delete(workItemId)) return { status: 404, body: { error: 'Work item not found.' } };
+      repository.addAuditEntry('destructive_action', 'workbench', `Deleted work item ${workItemId} (${actor})`, workItemId);
+      return { deleted: true, workItemId };
+    },
+    deleteConversation: (conversationId, actor) => {
+      if (!repository.deleteConversation(conversationId)) return { status: 404, body: { error: 'Conversation not found.' } };
+      repository.addAuditEntry('destructive_action', 'workbench', `Deleted conversation ${conversationId} (${actor})`, null);
+      return { deleted: true, conversationId };
+    },
+    dispatchConversationTurn: (conversationId, actor, body, dispatchTo, executionProfile) => {
+      if (!repository.getConversation(conversationId)) return { status: 404, body: { error: 'Conversation not found.' } };
+      if (!capabilities.executeAgents) return { status: 409, body: { error: 'This runtime does not execute agents.' } };
+      const message = repository.createSharedMessage(actor, body, dispatchTo === 'none' ? 'completed' : 'queued', conversationId, [], dispatchTo, executionProfile ?? null);
+      const replies = dispatchTo === 'none' ? [] : dispatchNextSharedTurn(repository, conversationId);
+      return { message, replies };
+    },
+    cancelSharedMessage: (messageId) => {
+      const message = cancelSharedReply(repository, messageId);
+      if (!message) return { status: 404, body: { error: 'Running or queued message not found.' } };
+      return { message };
+    },
+    publishArtifact: async (input) => {
+      const resolved = resolveArtifactFile(input);
+      if ('error' in resolved) return { status: resolved.status, body: { error: resolved.error } };
+      const title = input.title ?? basename(resolved.path).replace(/\.[^.]+$/, '');
+      const conversation = input.conversationId ? repository.listConversations('all').find((entry) => entry.id === input.conversationId) : null;
+      const item = repository.get(input.workItemId ?? conversation?.workItemId ?? '');
+      return publishArtifact({ sourcePath: resolved.path, title, workItemId: item?.id ?? null, conversationId: input.conversationId ?? null });
+    },
+    listArtifacts: (view) => ({ artifacts: artifacts.list(view), counts: artifacts.counts() }),
+    revokeArtifact: (artifactId) => revokeArtifact(artifactId),
+    runDiscoveryScan: async () => {
+      if (repository.getDiscoveryInbox().running) return { status: 409, body: { error: 'A discovery scan is already running.' } };
+      await runDiscovery(repository);
+      return repository.getDiscoveryInbox('pending');
+    },
+    promoteRuntime: (conversationId) => {
+      if (!repository.getConversation(conversationId)) return { status: 404, body: { error: 'Conversation not found.' } };
+      const reply = repository.createSharedMessage('system', 'Promotion requested by an assistant. Preparing the Workbench preview for promotion…', 'running', conversationId, [], 'promotion');
+      if (capabilities.promoteRuntime) void runSharedBackgroundJob(repository, reply.id, (signal, onProgress) => promoteRuntime(signal, onProgress));
+      return { message: reply };
+    },
+    listSourceConnections,
+    authorizeSource,
+    setFigmaScope,
+    disconnectSource,
+    getLinearProvider,
+    syncLinearProvider,
+    configureLinearProvider: (teamIds, projectIds) => configureLinearProvider(teamIds, projectIds),
+    queueLinearWorkItem,
+  };
+
+  app.post('/mcp', createWorkbenchMcpHandler(repository, adminActions));
+  app.get('/mcp', rejectUnsupportedMcpMethod);
+  app.delete('/mcp', rejectUnsupportedMcpMethod);
+
+  app.post('/api/work-items/:id/runs', async (request, response) => {
+    const input = createAgentRunSchema.parse(request.body);
+    sendAction(response, await startAgentRun(request.params.id, input, { actor: 'jeffrey', force: false }));
+  });
+
+  app.post('/api/agent-runs/:id/cancel', (request, response) => {
+    sendAction(response, cancelRun(request.params.id), 200);
+  });
+
+  app.post('/api/agent-runs/:id/retry', async (request, response) => {
+    sendAction(response, await retryRun(request.params.id, { force: false }));
+  });
+
+  app.post('/api/work-items/:id/execute', async (request, response) => {
+    const { executionProfile } = z.object({ executionProfile: z.enum(['economy', 'standard', 'deep']).nullable().default(null) }).parse(request.body ?? {});
+    sendAction(response, await startWorkItemExecution(request.params.id, { executionProfile, force: false }));
+  });
+
+  app.post('/api/execution-plans/:id/:resolution', (request, response) => {
+    const resolution = z.enum(['accepted', 'rejected']).parse(request.params.resolution);
+    const { selectedTaskIndexes, archiveParent } = z.object({
+      selectedTaskIndexes: z.array(z.number().int().nonnegative()).optional(),
+      archiveParent: z.boolean().default(false),
+    }).parse(request.body ?? {});
+    sendAction(response, resolvePlan(request.params.id, resolution, selectedTaskIndexes, archiveParent), 200);
   });
 
   app.post('/api/providers/linear/sync', async (_request, response, next) => {
     try {
-      const provider = new LinearProvider(
-        process.env.LINEAR_API_KEY ?? '',
-        repository.getLinearConfig().teamIds,
-        repository.getLinearConfig().projectIds,
-      );
-      const issues = await provider.fetchOpenIssues();
-      const counts = { imported: 0, updated: 0, skipped: 0, conflicts: 0 };
-      const conflictsBefore = repository.countProviderConflicts();
-      for (const outcome of repository.upsertLinearItems(issues)) counts[outcome] += 1;
-      counts.conflicts = repository.countProviderConflicts() - conflictsBefore;
-      response.json({ ...counts, syncedAt: new Date().toISOString() });
+      response.json(await syncLinearProvider());
     } catch (error) {
       next(error);
     }
@@ -1230,15 +1449,12 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
   });
 
   app.post('/api/providers/linear/queue/:id', (request, response) => {
-    const item = repository.queueLinearItem(request.params.id);
-    if (!item) return response.status(404).json({ error: 'Linear issue not found.' });
-    response.json({ item });
+    sendAction(response, queueLinearWorkItem(request.params.id), 200);
   });
 
   app.get('/api/providers/linear/teams', async (_request, response, next) => {
     try {
-      const provider = new LinearProvider(process.env.LINEAR_API_KEY ?? '');
-      response.json({ teams: await provider.fetchTeams(), config: repository.getLinearConfig() });
+      response.json(await getLinearProvider());
     } catch (error) {
       next(error);
     }
@@ -1246,8 +1462,7 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
 
   app.get('/api/providers/linear/teams/:id/projects', async (request, response, next) => {
     try {
-      const provider = new LinearProvider(process.env.LINEAR_API_KEY ?? '');
-      response.json({ projects: await provider.fetchTeamProjects(request.params.id) });
+      response.json(await getLinearProvider(request.params.id));
     } catch (error) {
       next(error);
     }
@@ -1258,7 +1473,7 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
       teamIds: z.array(z.string()).max(100),
       projectIds: z.array(z.string()).max(250),
     }).parse(request.body);
-    response.json({ config: repository.setLinearConfig(config) });
+    response.json(configureLinearProvider(config.teamIds, config.projectIds));
   });
 
   const clientPath = resolve(process.env.WORKBENCH_CLIENT_PATH ?? 'dist/client');

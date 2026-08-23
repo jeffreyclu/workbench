@@ -1,4 +1,3 @@
-import type { WorkbenchDatabase } from './database.js';
 import type { WorkItemRepository } from './repository.js';
 import { promoteRuntime } from './runtime-promotion.js';
 import { runSharedBackgroundJob } from './shared-room.js';
@@ -10,18 +9,14 @@ const POLL_MS = 1_000;
  * progress message live in SQLite; the in-memory worker is disposable.
  */
 export function startRuntimePromotionWorker(
-  database: WorkbenchDatabase,
   repository: WorkItemRepository,
 ): { stop: () => void } {
   const dispatch = () => {
-    const rows = database.prepare(`SELECT id FROM shared_messages
-      WHERE author = 'system' AND dispatch_target = 'promotion' AND status = 'running'
-      ORDER BY created_at ASC`).all() as Array<{ id: string }>;
-    for (const { id } of rows) {
+    for (const id of repository.listRunningPromotionMessageIds()) {
       void runSharedBackgroundJob(
         repository,
         id,
-        (signal, onProgress) => promoteRuntime(database, signal, onProgress, () => repository.hasLiveWork()),
+        (signal, onProgress) => promoteRuntime(signal, onProgress),
       );
     }
   };

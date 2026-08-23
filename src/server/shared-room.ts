@@ -1,4 +1,3 @@
-import { resolve } from 'node:path';
 import type { AgentRun, SharedMessage, WorkItem } from '../shared/contracts.js';
 import { buildPrompt, claudeScopeRecoveryPrompt, classifyExecution, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
@@ -23,7 +22,13 @@ export const connectionContextForPrompt = contextForPrompt;
 export function hasUntrackedContinuationClaim(output: string): boolean {
   return /\b(?:i['’]ll|i will|will)\s+report\b[\s\S]{0,180}\b(?:when|once|after|the moment)\b[\s\S]{0,100}\b(?:finish(?:es|ed)?|complete(?:s|d)?|land(?:s|ed)?)\b/i.test(output)
     || /\b(?:background|detached)\b[\s\S]{0,100}\b(?:run|process|job|bench|monitor)\b/i.test(output)
-    || /\b(?:run|bench|monitor)\b[\s\S]{0,100}\b(?:in progress|still running)\b[\s\S]{0,160}\b(?:i['’]ll|i will|will)\s+report\b/i.test(output);
+    || /\b(?:run|bench|monitor)\b[\s\S]{0,100}\b(?:in progress|still running)\b[\s\S]{0,160}\b(?:i['’]ll|i will|will)\s+report\b/i.test(output)
+    // Claude's actual bad completion was: "Waiting for the background probe to
+    // complete before continuing analysis." It omitted both "run" and "report",
+    // so the narrower rules above let Workbench falsely close the turn.
+    || /\b(?:waiting|wait|continue|continuing|resume|resuming)\b[\s\S]{0,180}\b(?:background|detached|subagent|child\s+agent)\b/i.test(output)
+    || /\b(?:background|detached)\s+(?:run|process|job|bench|monitor|probe)\b/i.test(output)
+    || /\b(?:subagent|child\s+agent)\b[\s\S]{0,180}\b(?:still\s+running|in\s+progress|finish(?:es|ed)?|complete(?:s|d)?|report)\b/i.test(output);
 }
 
 export function classificationForLinkedItem(repository: WorkItemRepository, item: WorkItem) {
@@ -209,11 +214,8 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       thread,
       linkedRun && linkedItem ? { item: linkedItem, run: linkedRun } : undefined,
     );
-    const selfHostingGuard = resolve(cwd) === resolve(process.cwd())
-      ? `\n\nWorkbench self-hosting safety:\nThis conversation is running inside the live Workbench control plane. Source edits appear in the preview at http://localhost:5174; the approved live release stays at http://localhost:5173. Never run runtime:promote, start, stop, restart, or kill Workbench, Vite, ngrok, or their ports from an agent response. Never claim either environment is down without an actual HTTP health check. If Jeffrey reports a preview bug, inspect and fix the source, verify it, and ask him to review the preview. Promotion happens only through Workbench's explicit preview-approval command after all agent work finishes.`
-      : '';
     repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
-    const guardedPrompt = prompt + selfHostingGuard;
+    const guardedPrompt = prompt;
     const profile = target.executionProfile && target.executionProfile !== 'routing'
       ? target.executionProfile
       : await judgeExecutionProfile(latestUserMessage || guardedPrompt, cwd, controller.signal);

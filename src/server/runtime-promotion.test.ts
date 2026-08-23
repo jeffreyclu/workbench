@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeAgentCount, isRuntimeApproval } from './runtime-promotion.js';
+import { isRuntimeApproval } from './runtime-promotion.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 
@@ -24,15 +24,21 @@ describe('isRuntimeApproval', () => {
   });
 });
 
-describe('activeAgentCount', () => {
-  it('detects running agent messages and ignores system promotion progress', () => {
+describe('runtime drain state', () => {
+  it('keeps the old runtime alive for both agent work and system promotion progress', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);
     const conversation = repository.ensureDefaultConversation();
-    repository.createSharedMessage('system', 'Promoting…', 'running', conversation.id);
-    expect(activeAgentCount(database)).toBe(0);
-    repository.createSharedMessage('codex', 'Working…', 'running', conversation.id);
-    expect(activeAgentCount(database)).toBe(1);
+    const ownerId = 'old-runtime';
+    expect(repository.hasRuntimeWork(ownerId)).toBe(false);
+    const promotion = repository.createSharedMessage('system', 'Promoting…', 'running', conversation.id);
+    expect(repository.claimSharedMessage(promotion.id, ownerId, 60_000)).toBe(true);
+    expect(repository.hasRuntimeWork(ownerId)).toBe(true);
+    const agent = repository.createSharedMessage('codex', 'Working…', 'running', conversation.id);
+    expect(repository.claimSharedMessage(agent.id, 'new-runtime', 60_000)).toBe(true);
+    expect(repository.hasRuntimeWork(ownerId)).toBe(true);
+    repository.updateSharedMessage(promotion.id, { status: 'completed' });
+    expect(repository.hasRuntimeWork(ownerId)).toBe(false);
     database.close();
   });
 });

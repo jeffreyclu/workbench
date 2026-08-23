@@ -32,10 +32,14 @@ describe('source URL resolution', () => {
   });
 
   it('uses the Workbench GitHub credential to resolve a private issue link', async () => {
-    const fetchImpl = vi.fn(async (..._args: Parameters<typeof fetch>) => new Response(JSON.stringify({
+    const fetchImpl = vi.fn(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      void input;
+      void init;
+      return new Response(JSON.stringify({
       title: 'Fix connector permissions', body: 'Private issue context from GitHub.',
       html_url: 'https://github.com/writer/connectors/issues/42',
-    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
 
     const draft = await resolveSourceUrl('https://github.com/writer/connectors/issues/42', {
       githubSettings: { token: 'workbench-github-token' }, fetchForPolicy: () => fetchImpl as typeof fetch,

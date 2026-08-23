@@ -12,6 +12,7 @@ export const workItemStatusSchema = z.enum([
 
 /** States a user can set while work is active. Completion is a lifecycle action. */
 export const activeWorkItemStatusSchema = z.enum(['backlog', 'ready', 'in_progress', 'blocked', 'pinned']);
+export const runKindSchema = z.enum(['research', 'analysis', 'strategy', 'execute', 'review', 'bugfix']);
 
 /** A real calendar date, intentionally independent of an instant or timezone. */
 export const calendarDateSchema = z.string()
@@ -84,7 +85,7 @@ export const workItemSchema = z.object({
   completedAt: z.string().nullable(),
   parentWorkItemId: z.string().nullable(),
   completionStatus: z.enum(['incomplete', 'completed']),
-  agentOutcome: z.enum(['finished', 'follow_ups', 'needs_attention']).nullable(),
+  agentOutcome: z.enum(['finished', 'follow_ups', 'needs_attention', 'promoting']).nullable(),
   classificationKind: z.string().nullable().optional(),
   classificationComplex: z.boolean().optional(),
   sourceIdentifier: z.string().nullable(),
@@ -222,6 +223,7 @@ export const createWorkItemSchema = z.object({
   workspacePath: z.string().trim().max(1_000).nullable().default(null),
   dueDate: calendarDateSchema.nullable().default(null),
   sourceUrl: z.string().url().nullable().default(null),
+  classificationKind: runKindSchema.optional(),
 });
 
 export const generateTaskDraftSchema = z.object({ prompt: z.string().trim().min(3).max(50_000) });
@@ -311,6 +313,17 @@ export const sourceConnectionInputSchema = z.object({
   settings: z.record(z.string(), z.string().max(10_000)),
 });
 
+// Figma's authenticated connector can open a known design URL, but cannot
+// enumerate a workspace. These roots define the explicit design surface that
+// Discovery is allowed to inspect.
+export const figmaScopeSchema = z.object({
+  roots: z.array(z.string().url().max(4_000).refine((value) => {
+    try { return new URL(value).hostname.endsWith('figma.com'); }
+    catch { return false; }
+  }, 'Each scope must be a Figma URL.')).max(20),
+});
+export type FigmaScope = z.infer<typeof figmaScopeSchema>;
+
 export const updateWorkItemSchema = z.object({
   title: z.string().trim().min(1).max(300).optional(),
   description: z.string().max(20_000).optional(),
@@ -327,6 +340,11 @@ export const updateWorkItemSchema = z.object({
   blockedByIds: z.array(z.string().uuid()).max(200).optional(),
 });
 export type UpdateWorkItemInput = z.infer<typeof updateWorkItemSchema>;
+
+export const unblockWorkItemSchema = z.object({
+  reason: z.string().trim().min(1).max(2_000),
+});
+export type UnblockWorkItemInput = z.infer<typeof unblockWorkItemSchema>;
 
 export const activitySchema = z.object({
   id: z.string(),
@@ -420,7 +438,6 @@ export interface ExecutionPlan {
   resolvedAt: string | null;
 }
 
-export const runKindSchema = z.enum(['research', 'analysis', 'strategy', 'execute', 'review']);
 export const agentTargetSchema = z.enum(['auto', 'codex', 'claude', 'both']);
 export const runStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'canceled']);
 export const executionProfileOverrideSchema = z.enum(['economy', 'standard', 'deep']).nullable().default(null);
@@ -458,6 +475,8 @@ export interface AgentRun {
   attempt: number;
   maxAttempts: number;
   nextAttemptAt: string | null;
+  /** How this run was dispatched: a direct human action, or (once phase 3 ships) the autonomy governor. */
+  origin: 'manual' | 'autonomous';
 }
 
 export interface LinearSyncResult {
@@ -659,7 +678,7 @@ export const updateArtifactSchema = z.object({
 });
 
 export const artifactLibraryViewSchema = z.enum(['published', 'revoked', 'all']).catch('published');
-export interface SharedConversation { id: string; title: string; workItemId: string | null; forkedFromConversationId: string | null; archivedAt: string | null; sharedBrief?: string; preferredExecutionProfile?: AgentRun['executionProfile']; state?: 'working' | 'needs_attention' | 'waiting_approval' | 'finished' | null; isUnread?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
+export interface SharedConversation { id: string; title: string; workItemId: string | null; forkedFromConversationId: string | null; archivedAt: string | null; sharedBrief?: string; preferredExecutionProfile?: AgentRun['executionProfile']; state?: 'working' | 'needs_attention' | 'waiting_approval' | 'promoting' | 'finished' | null; isUnread?: boolean; linkedWorkItemPinned?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
 
 export const setConversationTaskSchema = z.object({ workItemId: z.string().uuid().nullable() });
 export const updateSharedBriefSchema = z.object({ brief: z.string().trim().max(12_000) });
@@ -786,10 +805,10 @@ export interface RunInsightsByKind {
 // --- Audit log ---------------------------------------------------------------
 //
 // Append-only record of outbound calls to third parties, agent file
-// reads/writes/tool use, and destructive actions taken through the API, so
-// external, agent, and destructive activity all leave a trace.
+// reads/writes/tool use, and every completed state-changing API request, so
+// external, agent, and API activity all leave a trace.
 
-export const auditCategorySchema = z.enum(['outbound_call', 'agent_file_read', 'agent_file_write', 'agent_tool_use', 'destructive_action']);
+export const auditCategorySchema = z.enum(['outbound_call', 'agent_file_read', 'agent_file_write', 'agent_tool_use', 'destructive_action', 'api_mutation']);
 
 export interface AuditLogEntry {
   id: string;

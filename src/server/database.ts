@@ -871,6 +871,47 @@ const schemaMigrations: readonly Migration[] = [
       if (!columns.some((column) => column.name === 'shared_brief')) database.exec("ALTER TABLE shared_conversations ADD COLUMN shared_brief TEXT NOT NULL DEFAULT '';");
     },
   },
+  {
+    // Request middleware records every completed state-changing API request.
+    // SQLite requires a table rebuild to extend the existing CHECK constraint.
+    id: '020_api_mutation_audit',
+    apply(database) {
+      const auditLogSchema = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'audit_log'").get() as { sql: string } | undefined;
+      if (auditLogSchema && !auditLogSchema.sql.includes('api_mutation')) {
+        database.exec(`
+          CREATE TABLE audit_log_new (
+            id TEXT PRIMARY KEY,
+            category TEXT NOT NULL CHECK (category IN ('outbound_call', 'agent_file_read', 'agent_file_write', 'agent_tool_use', 'destructive_action', 'api_mutation')),
+            source TEXT NOT NULL,
+            detail TEXT NOT NULL,
+            work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL
+          );
+          INSERT INTO audit_log_new SELECT id, category, source, detail, work_item_id, created_at FROM audit_log;
+          DROP TABLE audit_log;
+          ALTER TABLE audit_log_new RENAME TO audit_log;
+          CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_audit_log_category ON audit_log(category, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_audit_log_work_item ON audit_log(work_item_id, created_at DESC);
+        `);
+      }
+    },
+  },
+  {
+    // The usage meter (SET spent per provider, this week) needs to split manual
+    // dispatch from autonomous dispatch. Nothing autonomous exists yet — every
+    // current creation path is a direct human action — so backfilled and future
+    // rows default to 'manual' until the phase-3 governor starts passing
+    // 'autonomous' explicitly.
+    id: '021_agent_run_origin',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'origin')) {
+        database.exec("ALTER TABLE agent_runs ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual' CHECK (origin IN ('manual', 'autonomous'));");
+        database.exec('CREATE INDEX IF NOT EXISTS idx_agent_runs_origin_created ON agent_runs(origin, created_at DESC);');
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

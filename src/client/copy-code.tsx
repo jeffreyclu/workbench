@@ -1,20 +1,6 @@
 import { Check, Copy } from 'lucide-react';
 import { useState } from 'react';
-
-export async function copyText(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.append(textarea);
-  textarea.select();
-  document.execCommand('copy');
-  textarea.remove();
-}
+import { copyText } from './clipboard';
 
 export function CopyCodeButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);

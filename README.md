@@ -41,7 +41,7 @@ source checkout (/dev/workbench) ── agent edits ──> preview (localhost:5
 - **Live (`5173`):** a stable gateway serves an immutable, promoted snapshot. It keeps working while an agent edits the source checkout.
 - **State:** database, attachments, published artifact metadata, and logs live under `data/` by default and are not committed.
 
-Promotion builds the current checkout, snapshots the built client and server, then switches the gateway only after a health check. It deliberately refuses to promote while a Workbench agent is actively editing the source checkout, so a deployment cannot interrupt the run that produced it.
+Promotion builds the current checkout, snapshots the built client and server, then switches the gateway only after a health check.
 
 ## Requirements
 
@@ -124,7 +124,7 @@ Codex and Claude can access the same canonical Workbench state through the Strea
 http://localhost:5173/mcp
 ```
 
-For non-loopback use, authenticate with `Authorization: Bearer <WORKBENCH_TOKEN>`. The MCP API exposes tasks, stack ordering, discoveries, conversations, execution plans, and immutable agent-run results. It does not expose provider credentials or direct SQLite access.
+For non-loopback use, authenticate with `Authorization: Bearer <WORKBENCH_TOKEN>`. The MCP API gives Codex and Claude the same admin control Jeffrey has in the UI: tasks and stack ordering, discoveries and scans, conversations and agent dispatch, execution plans and their approval, artifact publication and revocation, and runtime promotion. It does not expose provider credentials or direct SQLite access — those are not Workbench operations.
 
 ## Nightly discovery
 

@@ -107,11 +107,23 @@ describe('artifact snapshots', () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-output-'));
     const result = reconcileArtifactDirectory(directory, [{
       id: 'report', sourcePath: '/source/missing.md', title: 'Report', version: 2,
-      snapshots: [{ version: 1, content: null }, { version: 2, content: '<h1>Version two</h1>' }],
+      snapshots: [{ version: 1, contentHash: 'expected-immutable-content', content: null }, { version: 2, content: '<h1>Version two</h1>' }],
     }]);
 
     expect(result).toEqual({ restored: [], missing: ['report'] });
     expect(existsSync(join(directory, 'report/index.html'))).toBe(false);
+  });
+
+  it('does not block a deployment on a non-current root-only history row created before version URLs existed', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-output-'));
+    const result = reconcileArtifactDirectory(directory, [{
+      id: 'report', sourcePath: '/source/legacy.md', title: 'Report', version: 2,
+      snapshots: [{ version: 1, content: null }, { version: 2, contentHash: 'current-hash', content: '<h1>Version two</h1>' }],
+    }]);
+
+    expect(result).toEqual({ restored: ['report'], missing: [] });
+    expect(existsSync(join(directory, 'report/v1/index.html'))).toBe(false);
+    expect(readFileSync(join(directory, 'report/v2/index.html'), 'utf8')).toContain('Version two');
   });
 
   it('imports legacy deployed pages without re-rendering mutable source files', () => {

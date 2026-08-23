@@ -34,6 +34,8 @@ describe('compactConversationHistory', () => {
   it('rejects a reply that promises to report after untracked background work', () => {
     expect(hasUntrackedContinuationClaim("q09 is running in the background; I'll report when it finishes.")).toBe(true);
     expect(hasUntrackedContinuationClaim("The rewritten q09 fixture is now running; I'll report the pass/fail the moment it lands.")).toBe(true);
+    expect(hasUntrackedContinuationClaim('Waiting for the background probe to complete before continuing analysis.')).toBe(true);
+    expect(hasUntrackedContinuationClaim('My subagent is still running; I will report when it finishes.')).toBe(true);
     expect(hasUntrackedContinuationClaim('The command completed with 18 passing checks.')).toBe(false);
   });
 

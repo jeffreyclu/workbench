@@ -3,7 +3,8 @@ export type RuntimeMode = 'live' | 'preview';
 /**
  * Runtime responsibilities are opt-in. Preview exercises candidate source
  * against the live local state, including normal user and agent actions, but
- * never owns background scheduling or release promotion.
+ * never owns background scheduling or promotion execution. A preview promotion
+ * request is durable and the live worker claims it.
  */
 export interface RuntimeCapabilities {
   mode: RuntimeMode;

@@ -32,6 +32,40 @@ function healthy(port: number): Promise<boolean> {
   });
 }
 
+function runtimeWorkActive(port: number): Promise<boolean | null> {
+  return new Promise((resolveStatus) => {
+    const request = httpGet({ hostname: '127.0.0.1', port, path: '/api/health', timeout: 750 }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => { body = `${body}${chunk}`.slice(-4_000); });
+      response.on('end', () => {
+        try {
+          const status = JSON.parse(body) as { runtimeWorkActive?: boolean };
+          resolveStatus(typeof status.runtimeWorkActive === 'boolean' ? status.runtimeWorkActive : null);
+        } catch { resolveStatus(null); }
+      });
+    });
+    request.on('timeout', () => request.destroy());
+    request.on('error', () => resolveStatus(null));
+  });
+}
+
+async function stopAfterDrain(runtime: Runtime): Promise<void> {
+  let reported = false;
+  while (runtime.child.exitCode === null) {
+    const activeWork = await runtimeWorkActive(runtime.port);
+    if (activeWork === false) {
+      runtime.child.kill('SIGTERM');
+      return;
+    }
+    if (activeWork && !reported) {
+      reported = true;
+      console.log(`Workbench backend on port ${runtime.port} is draining in-flight work before shutdown.`);
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  }
+}
+
 async function waitForHealth(port: number, child: ChildProcess): Promise<void> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
@@ -77,7 +111,7 @@ async function deploy(releasePath = currentRelease()): Promise<void> {
       }, 250).unref();
     });
     console.log(`Workbench live runtime switched to ${releasePath.split('/').at(-1)}.`);
-    if (previous) setTimeout(() => previous.child.kill('SIGTERM'), 2_000).unref();
+    if (previous) void stopAfterDrain(previous);
   } catch (error) {
     child.kill('SIGTERM');
     throw error;

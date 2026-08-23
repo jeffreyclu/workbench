@@ -18,6 +18,10 @@ function fetchFactory(responseFor: (url: string) => unknown) {
 }
 
 describe('source scanners outbound transport', () => {
+  it('requires configured roots before scanning a managed Figma connection', () => {
+    expect(() => scanSource('figma', { mode: 'managed' })).toThrow('Figma Discovery needs at least one scoped file, page, or node');
+  });
+
   it('uses the shared policy factory for GitHub, Atlassian, and Gmail API requests', async () => {
     const github = fetchFactory(() => ({ items: [] }));
     await scanSource('github', { token: 'test' }, github.factory);

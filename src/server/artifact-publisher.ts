@@ -24,6 +24,15 @@ export interface LiveArtifact {
   snapshots: Array<{ version: number; content: string | null; contentHash?: string }>;
 }
 
+/**
+ * Migration 015 created version history for older, mutable root-only shares.
+ * Those backfilled rows have no content hash and, if they are no longer the
+ * current version, never had a public immutable URL to keep alive.
+ */
+function isPreVersionedHistoricalSnapshot(artifact: LiveArtifact, snapshot: LiveArtifact['snapshots'][number]): boolean {
+  return snapshot.version !== artifact.version && !snapshot.contentHash;
+}
+
 export interface ArtifactPageOptions {
   /** Version badge shown to coworkers. Omitted for a bare render. */
   version?: number;
@@ -209,7 +218,10 @@ export function reconcileArtifactDirectory(outputDirectory: string, live: LiveAr
   for (const artifact of live) {
     const artifactDirectory = resolve(outputDirectory, artifact.id);
     const current = artifact.snapshots.find((snapshot) => snapshot.version === artifact.version);
-    if (!current?.content || artifact.snapshots.some((snapshot) => !snapshot.content)) { missing.push(artifact.id); continue; }
+    if (!current?.content || artifact.snapshots.some((snapshot) => !snapshot.content && !isPreVersionedHistoricalSnapshot(artifact, snapshot))) {
+      missing.push(artifact.id);
+      continue;
+    }
     mkdirSync(artifactDirectory, { recursive: true });
     writeFileSync(resolve(artifactDirectory, 'index.html'), current.content);
     for (const snapshot of artifact.snapshots) {

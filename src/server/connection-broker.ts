@@ -3,7 +3,7 @@ import type { WorkItemRepository } from './repository.js';
 import { resolveSourceUrl as resolveGenericSourceUrl } from './source-resolver.js';
 import { isMcpReauthenticationError, mcpAuthenticationMessage, scanRemoteMcp } from './remote-mcp.js';
 import { searchSlackWithCodex } from './slack-codex.js';
-import { searchFigmaWithCodex } from './managed-connector.js';
+import { searchAtlassianWithCodex, searchFigmaWithCodex } from './managed-connector.js';
 import { scanSource, type SourceSignal } from './source-scanner.js';
 
 const cache = new Map<string, { expires: number; value: Promise<SourceSignal[]> }>();
@@ -14,6 +14,11 @@ function cached(key: string, load: () => Promise<SourceSignal[]>): Promise<Sourc
   const value = load().catch((error) => { cache.delete(key); throw error; });
   cache.set(key, { expires: Date.now() + 60_000, value });
   return value;
+}
+
+/** Atlassian is readable either through Codex's own OAuth (managed) or Workbench-stored MCP tokens. */
+function scanAtlassian(settings: Record<string, string>, query: string, signal?: AbortSignal): Promise<SourceSignal[]> {
+  return settings.mode === 'managed' ? searchAtlassianWithCodex(query, signal) : scanRemoteMcp('confluence', settings, query);
 }
 
 function legacyConnection(repository: WorkItemRepository, provider: SourceProvider) {
@@ -81,7 +86,7 @@ export async function contextForPrompt(repository: WorkItemRepository, message: 
         blocks.push(`GitHub link context supplied by Workbench:\n- ${draft.title}\n  URL: ${draft.sourceUrl}\n  Context: ${draft.description.slice(0, 4_000)}`);
         continue;
       }
-      const signals = await cached(`${provider}:${providerQuery}`, () => provider === 'slack' ? (!settings || settings.mode === 'managed' ? searchSlackWithCodex(providerQuery) : scanRemoteMcp(provider, settings, providerQuery)) : provider === 'confluence' ? scanRemoteMcp(provider, settings!, providerQuery) : scanSource('github', settings ?? { token: process.env.GITHUB_TOKEN ?? '', query: providerQuery }));
+      const signals = await cached(`${provider}:${providerQuery}`, () => provider === 'slack' ? (!settings || settings.mode === 'managed' ? searchSlackWithCodex(providerQuery) : scanRemoteMcp(provider, settings, providerQuery)) : provider === 'confluence' ? scanAtlassian(settings!, providerQuery) : scanSource('github', settings ?? { token: process.env.GITHUB_TOKEN ?? '', query: providerQuery }));
       const terms = query.toLowerCase().split(/\s+/).filter((term) => term.length > 2);
       const matches = terms.length ? signals.filter((signal) => terms.some((term) => `${signal.title}\n${signal.summary}\n${signal.url ?? ''}`.toLowerCase().includes(term))) : signals;
       blocks.push(matches.length ? format(label, matches) : `Workbench found no ${label} matches for ${query ? `“${query}”` : 'this request'}.`);
@@ -96,7 +101,7 @@ export async function resolveBrokerUrl(repository: WorkItemRepository, value: st
     const settings = repository.getSourceSettings('confluence');
     if (!settings) return resolveGenericSourceUrl(value);
     let signals: SourceSignal[];
-    try { signals = await scanRemoteMcp('confluence', settings, value); }
+    try { signals = await scanAtlassian(settings, value); }
     catch (error) { throw recoverAuthentication(repository, 'confluence', error); }
     const signal = signals[0];
     if (signal) return { source: 'Atlassian', sourceUrl: signal.url ?? value, title: signal.title, description: signal.summary || `Context from Atlassian: ${value}` };
@@ -118,7 +123,7 @@ export async function searchBrokerSources(repository: WorkItemRepository, query:
       if (source === 'atlassian') {
         const settings = repository.getSourceSettings('confluence');
         if (!settings) throw new Error('Atlassian is not connected.');
-        return cached(`atlassian:search:${query}`, () => scanRemoteMcp('confluence', settings, query));
+        return cached(`atlassian:search:${query}`, () => scanAtlassian(settings, query, signal));
       }
       const settings = repository.getSourceSettings('github') ?? (process.env.GITHUB_TOKEN ? { token: process.env.GITHUB_TOKEN } : null);
       if (!settings) throw new Error('GitHub is not connected.');

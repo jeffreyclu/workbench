@@ -1,5 +1,12 @@
-import { formatCostUsd } from './insights';
 import type { AgentRun, SharedMessage, UpdateWorkItemInput, WorkItemReferenceType } from '../shared/contracts';
+
+export function formatCostUsd(value: number | null): string {
+  if (value === null) return '—';
+  if (value === 0) return '$0.00';
+  if (value < 0.01) return `$${value.toFixed(4)}`;
+  if (value < 1) return `$${value.toFixed(3)}`;
+  return `$${value.toFixed(2)}`;
+}
 
 export function sourceLinkLabel(sourceUrl: string): string {
   try {

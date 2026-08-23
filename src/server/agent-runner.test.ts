@@ -76,14 +76,12 @@ describe('classifyExecution', () => {
   });
 
   it('grants agents full home access while retaining the task workspace as cwd', () => {
-    for (const kind of ['analysis', 'research', 'review', 'strategy'] as const) {
-      const codex = commandFor('codex', '/tmp/project', 'economy', kind).args;
-      const claude = commandFor('claude', '/tmp/project', 'economy', kind).args;
-      expect(codex).toContain('--dangerously-bypass-approvals-and-sandbox');
-      expect(claude).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--forward-subagent-text']));
-      expect(claude).toEqual(expect.arrayContaining(['--add-dir', '/tmp/project', homedir()]));
-    }
-    expect(commandFor('claude', '/tmp/project', 'standard', 'execute').args).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions']));
+    const codex = commandFor('codex', '/tmp/project', 'economy').args;
+    const claude = commandFor('claude', '/tmp/project', 'economy').args;
+    expect(codex).toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(claude).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--forward-subagent-text']));
+    expect(claude).toEqual(expect.arrayContaining(['--add-dir', '/tmp/project', homedir()]));
+    expect(commandFor('claude', '/tmp/project', 'standard').args).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions']));
   });
 
   it('detects imaginary Claude scope claims and states the concrete fresh-session contract', () => {
@@ -371,6 +369,18 @@ describe('classifyExecution', () => {
   it('honors a manually selected task type without invoking classification heuristics', () => {
     expect(classificationForKind(item('Implement a connector'), 'research')).toEqual(expect.objectContaining({ kind: 'research', complex: false }));
     expect(classificationForKind(item('Summarize a proposal'), 'execute')).toEqual(expect.objectContaining({ kind: 'execute', complex: false }));
+    expect(classificationForKind(item('The task-type dropdown is missing Bug fix'), 'bugfix')).toEqual(expect.objectContaining({ kind: 'bugfix', complex: false }));
+  });
+
+  it('uses a dedicated persona for every run kind', () => {
+    const expectedPersonas = {
+      research: 'researcher', analysis: 'codebase-analyst', strategy: 'implementation-planner',
+      execute: 'frontend-engineer', review: 'frontend-reviewer', bugfix: 'bug-investigator',
+    } as const;
+    for (const [kind, persona] of Object.entries(expectedPersonas)) {
+      expect(buildPrompt(item('Inspect the task type UI'), { agent: 'codex', kind, instructions: '' } as AgentRun))
+        .toContain(`Authoritative persona: ${persona}`);
+    }
   });
 
   it('makes frontend-reviewer the only entry point for every review run', () => {

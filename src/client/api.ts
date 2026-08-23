@@ -37,7 +37,6 @@ import type {
   ProviderSyncField,
   ProviderSyncConflictResolution,
 } from '../shared/contracts';
-import type { z } from 'zod';
 
 /** Mirrors the server's QueuePlan (queue-intelligence.ts), which is not part of the shared contract. */
 export interface QueuePlan {
@@ -52,6 +51,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   });
   if (response.status === 204) return undefined as T;
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    const body = (await response.text()).replace(/\s+/g, ' ').trim();
+    if (!response.ok) {
+      throw new Error(`Request failed (${response.status}): ${body || response.statusText || 'The API endpoint is unavailable.'}`);
+    }
+    throw new Error('The API returned an invalid response. Refresh the preview and try again.');
+  }
   const payload = (await response.json()) as T & { error?: string };
   if (!response.ok) throw new Error(payload.error ?? `Request failed (${response.status}).`);
   return payload;
@@ -103,6 +110,7 @@ export const api = {
     dueDate: string | null;
     sourceUrl?: string | null;
     workspacePath?: string | null;
+    classificationKind?: AgentRun['kind'];
   }) => request<{ item: WorkItem }>('/api/work-items', { method: 'POST', body: JSON.stringify(input) }),
   createFollowUp: (id: string, title: string, description: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/follow-ups`, { method: 'POST', body: JSON.stringify({ title, description }) }),
   addTaskLink: (id: string, linkedWorkItemId: string) =>
@@ -120,6 +128,8 @@ export const api = {
     request<{ item: WorkItem }>(`/api/work-items/${id}`, { method: 'PATCH', body: JSON.stringify(input) }),
   resolveProviderConflict: (id: string, field: ProviderSyncField, resolution: ProviderSyncConflictResolution) =>
     request<{ item: WorkItem; providerConflicts: WorkItemDetail['providerConflicts'] }>(`/api/work-items/${id}/provider-conflicts/${field}/resolve`, { method: 'POST', body: JSON.stringify({ resolution }) }),
+  unblockWorkItem: (id: string, reason: string) =>
+    request<{ item: WorkItem }>(`/api/work-items/${id}/unblock`, { method: 'POST', body: JSON.stringify({ reason }) }),
   archiveWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/archive`, { method: 'POST' }),
   restoreWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/restore`, { method: 'POST' }),
   completeWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/complete`, { method: 'POST' }),
@@ -165,8 +175,10 @@ export const api = {
       body: JSON.stringify(config),
     }),
   listSourceConnections: () => request<{ connections: BrokerConnection[] }>('/api/source-connections'),
+  getFigmaScope: () => request<{ roots: string[] }>('/api/source-connections/figma/scope'),
+  updateFigmaScope: (roots: string[]) => request<{ roots: string[] }>('/api/source-connections/figma/scope', { method: 'PUT', body: JSON.stringify({ roots }) }),
   startMcpOAuth: (provider: 'confluence' | 'slack' | 'figma' | 'gmail', serverUrl?: string) => request<{ url: string }>(`/api/source-connections/${provider}/mcp/oauth/start`, { method: 'POST', body: JSON.stringify({ serverUrl }) }),
-  startManagedFigmaOAuth: () => request<{ url: string }>('/api/source-connections/figma/managed/oauth/start', { method: 'POST' }),
+  startManagedMcpOAuth: (provider: 'figma' | 'atlassian') => request<{ url: string }>(`/api/source-connections/${provider}/managed/oauth/start`, { method: 'POST' }),
   disconnectSource: (provider: 'confluence' | 'slack' | 'figma' | 'gmail' | 'github') => request<void>(`/api/source-connections/${provider}`, { method: 'DELETE' }),
   listSharedConversations: (view: 'active' | 'archive', cursor?: string) => {
     const params = new URLSearchParams({ limit: '30', view });

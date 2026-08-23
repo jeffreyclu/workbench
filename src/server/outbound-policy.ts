@@ -40,7 +40,11 @@ const rules: Record<OutboundPolicyName, HostRule[]> = {
   'mcp-slack': [{ hostname: 'mcp.slack.com', path: '/mcp' }, { hostname: 'slack.com' }],
   'mcp-figma': [{ hostname: 'mcp.figma.com', path: '/mcp' }, { hostname: 'www.figma.com' }, { hostname: 'api.figma.com' }],
   'mcp-atlassian': [
-    { hostname: 'mcp.atlassian.com', path: '/v1/mcp/authv2' }, { hostname: 'auth.atlassian.com' }, { hostname: 'api.atlassian.com' },
+    // No path restriction on mcp.atlassian.com: the SDK's OAuth discovery flow
+    // fetches /.well-known/oauth-protected-resource/<mcp-path> and
+    // /.well-known/oauth-authorization-server on this same host before the
+    // transport call to /v1/mcp/authv2, so a fixed-path rule blocks discovery.
+    { hostname: 'mcp.atlassian.com' }, { hostname: 'auth.atlassian.com' }, { hostname: 'api.atlassian.com' },
   ],
 };
 
@@ -155,8 +159,8 @@ export function createOutboundFetch(name: OutboundPolicyName, dependencies: Outb
   return (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     let url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
     let method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
-    let body = init?.body;
-    let headers = new Headers(input instanceof Request ? input.headers : undefined);
+    const body = init?.body;
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
     new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
 
     for (let redirects = 0; ; redirects += 1) {

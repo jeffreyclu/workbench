@@ -5,6 +5,7 @@ import { api } from './api';
 import { versionUrl } from './artifact-url';
 import { ConfirmationDialog } from './confirmation-dialog';
 import { toast, toastError } from './toast-store';
+import { MarkdownComposer } from './markdown-composer.js';
 import type { ArtifactComment, ArtifactEvent, ArtifactSummary, ArtifactVersion } from '../shared/contracts';
 
 type LibraryView = 'published' | 'revoked' | 'all';
@@ -114,7 +115,7 @@ function CommentThread({ artifactId, comments }: { artifactId: string; comments:
         </div>
       ))}
       <form className="artifact-comment-form" onSubmit={submit}>
-        <textarea value={body} rows={2} onChange={(event) => setBody(event.target.value)} placeholder="Add your own note about this artifact…" aria-label="Add a note about this artifact" />
+        <MarkdownComposer conversationId={`artifact-comment-${artifactId}`} value={body} onChange={setBody} placeholder="Add your own note about this artifact…" ariaLabel="Add a note about this artifact" />
         <button className="button secondary compact" disabled={!body.trim() || add.isPending}>{add.isPending ? <LoaderCircle className="spin" size={13} /> : <MessageSquare size={13} />} Add note</button>
       </form>
       {add.error && <p className="error-message">{add.error.message}</p>}

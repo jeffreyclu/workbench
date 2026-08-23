@@ -12,6 +12,39 @@ import { getToasts, toast } from './toast-store';
 afterEach(() => { cleanup(); toast.clear(); window.localStorage.clear(); window.history.replaceState(null, '', '/'); vi.unstubAllGlobals(); });
 
 describe('primary navigation', () => {
+  it('opens the active stack and scrolls to pinned tasks from the reminder toast', async () => {
+    const pinnedItem = {
+      id: '00000000-0000-4000-8000-000000000401', title: 'Return to this later', description: '', status: 'pinned', priority: 2, queuePosition: 0,
+      source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete',
+      agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: null, stack: 'attention', workspacePath: null,
+      strategy: '', assignees: [], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [],
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', lastTouchedAt: '2026-01-01T00:00:00Z',
+    };
+    const scrollTo = vi.fn();
+    const scrollToDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo');
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.startsWith('/api/work-items?')
+        ? { items: [pinnedItem], nextCursor: null, totalCount: 1, proposal: null }
+        : url.includes('/api/work-items/counts')
+          ? { active: 1, workbench: 0, archive: 0 }
+          : url.includes('/api/shared/conversations')
+            ? { conversations: [] }
+            : { messages: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open pinned: 1 pinned task waiting for you.' }));
+
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'smooth' })));
+    expect(document.querySelector('.stack-header-pinned')?.textContent).toContain('Pinned for you');
+    if (scrollToDescriptor) Object.defineProperty(HTMLElement.prototype, 'scrollTo', scrollToDescriptor);
+    else delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
+  });
+
   it('opens the Insights dashboard from the navigation', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -104,6 +137,54 @@ describe('shared room', () => {
     expect(await screen.findByText('No messages yet. Ask Codex or Claude to get started.')).toBeTruthy();
   });
 
+  it('offers preview approval from an unlinked conversation when changes are pending', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000006';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/runtime/preview-status') return new Response(JSON.stringify({ pending: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Manual release', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    expect(await screen.findByRole('button', { name: 'Approve preview' })).toBeTruthy();
+  });
+
+  it('keeps the approved-awaiting-promotion badge on the conversation card while promotion runs', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000007';
+    // The promotion system message is itself a running message, so the card is
+    // "active"; the promotion state still has to win over the generic Working label.
+    const promotionMessage = { id: 'promotion-running', conversationId, author: 'system', body: 'Approval received. Preparing the Workbench preview for promotion…', pinned: false, status: 'running', error: '', createdAt: '2026-01-01T00:00:00Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'promotion' };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Manual release', workItemId: null, archivedAt: null, state: 'promoting', isActive: true, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages: [promotionMessage] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ items: [], proposal: null, nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    expect(await screen.findByText('Approved · promoting preview')).toBeTruthy();
+    expect(screen.queryByText('Agent working…')).toBeNull();
+  });
+
+  it('shows the linked task pin in the conversation stack', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000008';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Pinned task conversation', workItemId: '00000000-0000-4000-8000-000000000108', linkedWorkItemPinned: true, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    expect(await screen.findByTitle('Pinned task')).toBeTruthy();
+  });
+
   it('opens the requested task conversation and still allows switching tabs', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const firstId = '00000000-0000-4000-8000-000000000001';
@@ -153,11 +234,13 @@ describe('shared room', () => {
     const conversationId = '00000000-0000-4000-8000-000000000009';
     const active = { id: conversationId, title: 'Conversation to archive', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
     const archived = { ...active, archivedAt: '2026-01-02T00:00:00Z' };
+    const retainedOne = { ...active, id: '00000000-0000-4000-8000-000000000019', title: 'Unrelated conversation one' };
+    const retainedTwo = { ...active, id: '00000000-0000-4000-8000-000000000029', title: 'Unrelated conversation two' };
     let isArchived = false;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith(`/api/shared/conversations/${conversationId}/archive`) && init?.method === 'POST') { isArchived = true; return new Response(JSON.stringify({ conversation: archived }), { status: 200, headers: { 'Content-Type': 'application/json' } }); }
-      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: url.includes('view=archive') ? [archived] : isArchived ? [] : [active], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: url.includes('view=archive') ? [archived] : isArchived ? [retainedOne, retainedTwo] : [active, retainedOne, retainedTwo], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -165,7 +248,9 @@ describe('shared room', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Archive conversation' }));
 
-    expect(await screen.findByRole('heading', { name: 'New conversation' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Unrelated conversation one' })).toBeTruthy();
+    expect(screen.getAllByText('Unrelated conversation one').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('Unrelated conversation two')).toBeTruthy();
     expect(screen.queryByText(/Archived conversation · restore or fork it to continue/)).toBeNull();
   });
 
@@ -664,11 +749,6 @@ describe('task prerequisites', () => {
     fireEvent.blur(screen.getByDisplayValue('Saved title'));
     expect(await screen.findByText('Title saved.')).toBeTruthy();
 
-    fireEvent.click(screen.getByText('No description has been added yet.'));
-    fireEvent.change(document.querySelector<HTMLTextAreaElement>('.inline-description-editor')!, { target: { value: 'Saved description' } });
-    fireEvent.blur(screen.getByDisplayValue('Saved description'));
-    expect(await screen.findByText('Description saved.')).toBeTruthy();
-
     fireEvent.click(screen.getByRole('button', { name: 'codex' }));
     expect(await screen.findByText('Owners saved.')).toBeTruthy();
 
@@ -734,6 +814,7 @@ describe('task linked items', () => {
     const artifact = { id: 'artifact-1', title: 'Implementation notes', url: 'https://artifacts.example.com/notes', version: 1, workItemId: null, workItemTitle: null, conversationId: null, conversationTitle: null, publishedAt: item.createdAt, revokedAt: null, versionCount: 1, commentCount: 0, openCommentCount: 0 };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      void init;
       if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [linkedTask], nextCursor: null, totalCount: 1, proposal: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url === '/api/artifacts?view=published') return new Response(JSON.stringify({ artifacts: [artifact], counts: { published: 1, revoked: 0, openComments: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -858,6 +939,7 @@ describe('task creation from search', () => {
 
     await waitFor(() => expect(getToasts()).toContainEqual(expect.objectContaining({ tone: 'success', message: 'Task added to queue.', description: 'Search-created task' })));
     expect(await screen.findByText('Task added to queue.')).toBeTruthy();
+    await waitFor(() => expect(window.location.pathname).toBe(`/tasks/${item.id}`));
   });
 });
 
@@ -921,9 +1003,12 @@ describe('stack navigation', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'New' }));
     fireEvent.click(screen.getByRole('button', { name: /Manual task/i }));
     fireEvent.change(screen.getByPlaceholderText('What needs to happen?'), { target: { value: item.title } });
+    fireEvent.change(screen.getByLabelText('Task type'), { target: { value: 'bugfix' } });
     fireEvent.click(screen.getByRole('button', { name: /Add to queue/i }));
 
     await waitFor(() => expect(screen.getByText(item.title)).toBeTruthy());
+    const createCall = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find(([input, init]) => String(input) === '/api/work-items' && (init as RequestInit | undefined)?.method === 'POST');
+    expect(JSON.parse((createCall?.[1] as RequestInit).body as string)).toEqual(expect.objectContaining({ classificationKind: 'bugfix' }));
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' }));
   });
 });

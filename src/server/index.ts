@@ -20,7 +20,7 @@ const repository = new WorkItemRepository(database);
 const backfilledCosts = repository.backfillEstimatedCosts();
 if (backfilledCosts > 0) console.log(`Backfilled estimated cost for ${backfilledCosts} historical rows.`);
 if (liveRuntimeCapabilities.ownScheduler) startScheduler(repository);
-if (liveRuntimeCapabilities.promoteRuntime) startRuntimePromotionWorker(database, repository);
+if (liveRuntimeCapabilities.promoteRuntime) startRuntimePromotionWorker(repository);
 warmFastTaskDraftModel();
 
 app.listen(port, () => {

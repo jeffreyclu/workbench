@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import type { ViteDevServer } from 'vite';
 import { authGatePlugin } from '../../vite.config.js';
 
 describe('Vite auth gate', () => {
   it('uses the configured trusted proxies rather than Host when handling tunnel traffic', () => {
-    let middleware: ((request: any, response: any, next: () => void) => void) | undefined;
+    type Middleware = (request: { url: string; headers: Record<string, string>; socket: { remoteAddress: string } }, response: { statusCode: number; setHeader: (name: string, value: string) => void; end: () => void }, next: () => void) => void;
+    let middleware: Middleware | undefined;
     const plugin = authGatePlugin('test-token', {
       WORKBENCH_TRUSTED_PROXIES: '127.0.0.1/32,::1/128',
     });
     if (typeof plugin.configureServer !== 'function') throw new Error('Vite auth plugin must configure the dev server');
     plugin.configureServer.call({} as never, {
-      middlewares: { use(handler: any) { middleware = handler; } },
-    } as any);
+      middlewares: { use(handler: Middleware) { middleware = handler; } },
+    } as unknown as ViteDevServer);
 
     const response = {
       statusCode: 200,

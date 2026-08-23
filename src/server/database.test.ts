@@ -30,6 +30,8 @@ const EXPECTED_MIGRATIONS = [
   '017_durable_agent_handoffs',
   '018_structured_shared_brief',
   '019_editable_shared_brief',
+  '020_api_mutation_audit',
+  '021_agent_run_origin',
 ];
 
 describe('openDatabase', () => {
@@ -164,6 +166,74 @@ describe('openDatabase', () => {
       expect(columns).toContain('deleted_at');
     }
     database.close();
+  });
+
+  it('upgrades the audit constraint from the preceding migration set for API mutation records', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec(`
+      DROP TABLE audit_log;
+      CREATE TABLE audit_log (
+        id TEXT PRIMARY KEY,
+        category TEXT NOT NULL CHECK (category IN ('outbound_call', 'agent_file_read', 'agent_file_write', 'agent_tool_use', 'destructive_action')),
+        source TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_audit_log_created ON audit_log(created_at DESC);
+      CREATE INDEX idx_audit_log_category ON audit_log(category, created_at DESC);
+      CREATE INDEX idx_audit_log_work_item ON audit_log(work_item_id, created_at DESC);
+    `);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '020_api_mutation_audit'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(() => upgraded.prepare(`
+      INSERT INTO audit_log (id, category, source, detail, work_item_id, created_at)
+      VALUES ('api-1', 'api_mutation', 'workbench_api', 'POST /api/work-items → 201', NULL, '2026-01-01T00:00:00.000Z')
+    `).run()).not.toThrow();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '020_api_mutation_audit'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds the origin column to agent_runs on upgrade from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    // Simulate a database recorded through migration 020: rebuild agent_runs
+    // exactly as it was before 021 added the origin column, then drop the
+    // migration record so the next open() must re-run 021 for real.
+    current.exec(`
+      CREATE TABLE agent_runs_pre_origin AS SELECT
+        id, work_item_id, kind, requested_target, requested_agent, agent, status,
+        instructions, output, error, started_at, completed_at, created_at,
+        conversation_id, message_id, model, execution_profile, input_tokens,
+        output_tokens, estimated_cost_usd, fallback_from, fallback_reason,
+        cancel_requested, cancel_requested_at
+      FROM agent_runs;
+      DROP TABLE agent_runs;
+      ALTER TABLE agent_runs_pre_origin RENAME TO agent_runs;
+    `);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '021_agent_run_origin'").run();
+    current.close();
+
+    const raw = new DatabaseSync(path);
+    const columnsBefore = (raw.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columnsBefore).not.toContain('origin');
+    raw.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toContain('origin');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '021_agent_run_origin'").get()).toBeTruthy();
+    upgraded.prepare(`
+      INSERT INTO agent_runs (id, work_item_id, kind, requested_target, requested_agent, agent, status, instructions, created_at)
+      VALUES ('r1', 'w1', 'analysis', 'claude', 'claude', 'claude', 'queued', '', '2026-01-01T00:00:00.000Z')
+    `).run();
+    expect(upgraded.prepare("SELECT origin FROM agent_runs WHERE id = 'r1'").get()).toEqual({ origin: 'manual' });
+    upgraded.close();
   });
 
   it('rejects a database created by a newer Workbench build', () => {

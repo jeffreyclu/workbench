@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
-import type { WorkbenchDatabase } from './database.js';
 
 const MAX_OUTPUT = 20_000;
 
@@ -8,28 +7,10 @@ export function isRuntimeApproval(message: string): boolean {
   return /^\s*(?:approve|publish|promote|deploy|ship)(?:\s+(?:the\s+)?)?(?:workbench\s+)?preview[.!]?\s*$/i.test(message);
 }
 
-export function activeAgentCount(database: WorkbenchDatabase): number {
-  const runs = database.prepare("SELECT COUNT(*) AS count FROM agent_runs WHERE status IN ('queued', 'running')").get() as { count: number };
-  const replies = database.prepare("SELECT COUNT(*) AS count FROM shared_messages WHERE status = 'running' AND author IN ('codex', 'claude')").get() as { count: number };
-  return Number(runs.count) + Number(replies.count);
-}
-
 export async function promoteRuntime(
-  database: WorkbenchDatabase,
   signal: AbortSignal,
   onProgress: (body: string) => void,
-  isAgentWorkActive: () => boolean = () => activeAgentCount(database) > 0,
 ): Promise<string> {
-  let waitingReported = false;
-  while (isAgentWorkActive()) {
-    if (signal.aborted) throw new Error('Preview approval canceled.');
-    if (!waitingReported) {
-      waitingReported = true;
-      onProgress('Approval received. Waiting for active agent work to finish before promoting the preview…');
-    }
-    await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
-  }
-
   onProgress('Building and verifying the approved Workbench preview…');
   const root = process.cwd();
   const command = join(root, 'node_modules/.bin/tsx');

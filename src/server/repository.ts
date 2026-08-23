@@ -371,13 +371,16 @@ export class WorkItemRepository {
           WHERE shared_messages.conversation_id = shared_conversations.id
             AND shared_messages.author IN ('codex', 'claude')
             AND shared_messages.created_at > COALESCE(shared_conversations.last_read_at, '')
-        ) AS is_unread
+        ) AS is_unread,
+        CASE WHEN (
+          SELECT status FROM work_items WHERE work_items.id = shared_conversations.work_item_id
+        ) = 'pinned' THEN 1 ELSE 0 END AS linked_work_item_pinned
       FROM shared_conversations
       WHERE deleted_at IS NULL AND (? = 'all' OR (? = 'active' AND archived_at IS NULL) OR (? = 'archive' AND archived_at IS NOT NULL))
-      ORDER BY is_working DESC, updated_at DESC
+      ORDER BY linked_work_item_pinned DESC, is_working DESC, updated_at DESC
     `).all(view, view, view) as Array<Record<string, string | number | null>>).map((row) => this.withConversationState({
       id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
-      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
+      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), linkedWorkItemPinned: Boolean(row.linked_work_item_pinned), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
     }));
   }
 
@@ -387,32 +390,33 @@ export class WorkItemRepository {
 
   listConversationPage(limit: number, cursor: string | null, view: 'active' | 'archive' = 'active'): ConversationPage {
     const safeLimit = Math.max(1, Math.min(100, limit));
-    let cursorValues: { isWorking: boolean; updatedAt: string; id: string } | null = null;
+    let cursorValues: { isPinned: boolean; isWorking: boolean; updatedAt: string; id: string } | null = null;
     if (cursor) {
-      try { cursorValues = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { isWorking: boolean; updatedAt: string; id: string }; }
+      try { cursorValues = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { isPinned: boolean; isWorking: boolean; updatedAt: string; id: string }; }
       catch { throw new Error('Invalid conversation cursor.'); }
-      if (!cursorValues?.updatedAt || !cursorValues.id || typeof cursorValues.isWorking !== 'boolean') throw new Error('Invalid conversation cursor.');
+      if (!cursorValues?.updatedAt || !cursorValues.id || typeof cursorValues.isPinned !== 'boolean' || typeof cursorValues.isWorking !== 'boolean') throw new Error('Invalid conversation cursor.');
     }
     const rows = this.database.prepare(`
       WITH conversations AS (
         SELECT shared_conversations.*,
         EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.status = 'running') AS is_active,
         EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.status IN ('queued', 'running')) AS is_working,
-        EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.author IN ('codex', 'claude') AND shared_messages.created_at > COALESCE(shared_conversations.last_read_at, '')) AS is_unread
+        EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.author IN ('codex', 'claude') AND shared_messages.created_at > COALESCE(shared_conversations.last_read_at, '')) AS is_unread,
+        CASE WHEN (SELECT status FROM work_items WHERE work_items.id = shared_conversations.work_item_id) = 'pinned' THEN 1 ELSE 0 END AS linked_work_item_pinned
         FROM shared_conversations
       )
       SELECT * FROM conversations
       WHERE deleted_at IS NULL AND ((? = 'active' AND archived_at IS NULL) OR (? = 'archive' AND archived_at IS NOT NULL))
-        AND (? IS NULL OR is_working < ? OR (is_working = ? AND (updated_at < ? OR (updated_at = ? AND id < ?))))
-      ORDER BY is_working DESC, updated_at DESC, id DESC LIMIT ?
-    `).all(view, view, cursorValues?.id ?? null, Number(cursorValues?.isWorking ?? false), Number(cursorValues?.isWorking ?? false), cursorValues?.updatedAt ?? null, cursorValues?.updatedAt ?? null, cursorValues?.id ?? null, safeLimit + 1) as Array<Record<string, string | number | null>>;
+        AND (? IS NULL OR linked_work_item_pinned < ? OR (linked_work_item_pinned = ? AND (is_working < ? OR (is_working = ? AND (updated_at < ? OR (updated_at = ? AND id < ?))))))
+      ORDER BY linked_work_item_pinned DESC, is_working DESC, updated_at DESC, id DESC LIMIT ?
+    `).all(view, view, cursorValues?.id ?? null, Number(cursorValues?.isPinned ?? false), Number(cursorValues?.isPinned ?? false), Number(cursorValues?.isWorking ?? false), Number(cursorValues?.isWorking ?? false), cursorValues?.updatedAt ?? null, cursorValues?.updatedAt ?? null, cursorValues?.id ?? null, safeLimit + 1) as Array<Record<string, string | number | null>>;
     const hasMore = rows.length > safeLimit;
     const conversations = rows.slice(0, safeLimit).map((row) => this.withConversationState({
       id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
-      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
+      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), linkedWorkItemPinned: Boolean(row.linked_work_item_pinned), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
     }));
     const last = conversations.at(-1);
-    return { conversations, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ isWorking: last.state === 'working', updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null,
+    return { conversations, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ isPinned: Boolean(last.linkedWorkItemPinned), isWorking: last.state === 'working', updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null,
       totalCount: Number((this.database.prepare(`SELECT COUNT(*) AS count FROM shared_conversations WHERE deleted_at IS NULL AND (${view === 'active' ? 'archived_at IS NULL' : 'archived_at IS NOT NULL'})`).get() as { count: number }).count) };
   }
 
@@ -451,6 +455,15 @@ export class WorkItemRepository {
   }
 
   private withConversationState(conversation: SharedConversation): SharedConversation {
+    const promoting = Boolean(this.database.prepare(`
+      SELECT 1 FROM shared_messages
+      WHERE conversation_id = ? AND author = 'system' AND dispatch_target = 'promotion' AND status = 'running'
+      LIMIT 1
+    `).get(conversation.id));
+    // The approval to promote the preview has already landed; the conversation is
+    // still "working" only because the build/promotion step (or the agent work it
+    // waits behind) hasn't finished yet. Surface that distinctly from generic work.
+    if (promoting) return { ...conversation, state: 'promoting' };
     const hasLiveWork = Boolean(this.database.prepare(`
       SELECT 1 FROM shared_messages
       WHERE conversation_id = ? AND status IN ('queued', 'running')
@@ -778,22 +791,25 @@ export class WorkItemRepository {
   }
 
   /** Read-only retrieval over the complete durable Workbench record for agents. */
-  searchActivityMemory(query: string, limit = 40): Array<{ source: 'message' | 'activity' | 'run'; title: string; body: string; createdAt: string }> {
-    const needle = `%${query.trim().replace(/[%_]/g, '')}%`;
+  searchActivityMemory(query: string, limit = 40): Array<{ source: 'message' | 'activity' | 'run' | 'audit'; title: string; body: string; createdAt: string }> {
     if (query.trim().length < 2) return [];
+    const needle = `%${query.trim().replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
     const safeLimit = Math.max(1, Math.min(100, limit));
     const rows = this.database.prepare(`
       SELECT 'message' AS source, COALESCE(c.title, 'Conversation') AS title, m.body AS body, m.created_at AS created_at
         FROM shared_messages m LEFT JOIN shared_conversations c ON c.id = m.conversation_id
-        WHERE m.body LIKE ? AND (c.deleted_at IS NULL OR c.id IS NULL)
+        WHERE m.body LIKE ? ESCAPE '\\' AND (c.deleted_at IS NULL OR c.id IS NULL)
       UNION ALL
       SELECT 'activity', w.title, a.body, a.created_at FROM activities a JOIN work_items w ON w.id = a.work_item_id
-        WHERE a.body LIKE ? OR w.title LIKE ?
+        WHERE a.body LIKE ? ESCAPE '\\' OR w.title LIKE ? ESCAPE '\\'
       UNION ALL
       SELECT 'run', w.title, COALESCE(r.output, r.instructions, r.error), r.created_at FROM agent_runs r JOIN work_items w ON w.id = r.work_item_id
-        WHERE r.output LIKE ? OR r.instructions LIKE ? OR r.error LIKE ? OR w.title LIKE ?
+        WHERE r.output LIKE ? ESCAPE '\\' OR r.instructions LIKE ? ESCAPE '\\' OR r.error LIKE ? ESCAPE '\\' OR w.title LIKE ? ESCAPE '\\'
+      UNION ALL
+      SELECT 'audit', COALESCE(w.title, 'Workbench API'), a.category || ': ' || a.detail, a.created_at FROM audit_log a LEFT JOIN work_items w ON w.id = a.work_item_id
+        WHERE a.detail LIKE ? ESCAPE '\\' OR a.source LIKE ? ESCAPE '\\' OR a.category LIKE ? ESCAPE '\\' OR w.title LIKE ? ESCAPE '\\'
       ORDER BY created_at DESC LIMIT ?
-    `).all(needle, needle, needle, needle, needle, needle, needle, safeLimit) as Array<{ source: 'message' | 'activity' | 'run'; title: string; body: string; created_at: string }>;
+    `).all(needle, needle, needle, needle, needle, needle, needle, needle, needle, needle, needle, safeLimit) as Array<{ source: 'message' | 'activity' | 'run' | 'audit'; title: string; body: string; created_at: string }>;
     return rows.map((row) => ({ source: row.source, title: row.title, body: row.body.slice(0, 4_000), createdAt: row.created_at }));
   }
 
@@ -1127,6 +1143,16 @@ export class WorkItemRepository {
     return this.listDependencies(workItemId);
   }
 
+  /** Clears every prerequisite link so a blocked task can proceed; the reason is recorded on the activity feed. */
+  unblock(workItemId: string, reason: string, actor: Activity['actor'] = 'jeffrey'): WorkItem | null {
+    const item = this.get(workItemId);
+    if (!item) return null;
+    if (!this.listOpenDependencies(workItemId).length) throw new WorkItemDependencyError('This task has no open prerequisites to unblock.');
+    this.replaceDependencies(workItemId, []);
+    this.addActivity(workItemId, actor, 'unblocked', reason);
+    return this.get(workItemId);
+  }
+
   /** Adds compact relationship context without changing queue order. */
   private withLineage(items: WorkItem[]): WorkItem[] {
     if (!items.length) return items;
@@ -1168,6 +1194,15 @@ export class WorkItemRepository {
       classificationKind: classification?.kind ?? null,
       classificationComplex: classification?.complex ?? false,
     };
+    // Promotion has been approved and is only waiting on the build/agent work
+    // ahead of it; that's distinct from a task still actively being worked.
+    const promoting = Boolean(this.database.prepare(`
+      SELECT 1 FROM shared_messages sm
+      JOIN shared_conversations sc ON sc.id = sm.conversation_id
+      WHERE sc.work_item_id = ? AND sm.author = 'system' AND sm.dispatch_target = 'promotion' AND sm.status = 'running'
+      LIMIT 1
+    `).get(item.id));
+    if (promoting) return { ...item, agentOutcome: 'promoting' };
     if (!latest) return item;
     const recentStatuses = this.database.prepare(`
       SELECT status FROM agent_runs
@@ -1697,7 +1732,7 @@ export class WorkItemRepository {
         else if (input.action === 'set_stack') this.update(item.id, { stack: input.stack }, true);
         else this.logBulkEdit(item, this.update(item.id, { projectName: input.projectName }, true));
       }
-      const restored = eligible.filter((item) => input.action === 'restore');
+      const restored = input.action === 'restore' ? eligible : [];
       for (const stack of ['attention', 'workbench'] as const) {
         const restoredIds = restored.filter((item) => item.stack === stack).map((item) => item.id);
         if (!restoredIds.length) continue;
@@ -1917,6 +1952,7 @@ export class WorkItemRepository {
           fallbackFrom: row.fallback_from as AgentRun['fallbackFrom'] ?? null, fallbackReason: row.fallback_reason,
           attempt: Number(row.attempt ?? 0), maxAttempts: Number(row.max_attempts ?? 3),
           nextAttemptAt: row.next_attempt_at ?? null,
+          origin: (row.origin ?? 'manual') as AgentRun['origin'],
         };
       });
   }
@@ -1942,13 +1978,13 @@ export class WorkItemRepository {
     return row ? this.getRun(row.id) : null;
   }
 
-  createRun(workItemId: string, kind: AgentRun['kind'], requestedTarget: AgentRun['requestedTarget'], agent: AgentRun['agent'], instructions: string, conversationId: string | null = null, messageId: string | null = null): AgentRun {
+  createRun(workItemId: string, kind: AgentRun['kind'], requestedTarget: AgentRun['requestedTarget'], agent: AgentRun['agent'], instructions: string, conversationId: string | null = null, messageId: string | null = null, origin: AgentRun['origin'] = 'manual'): AgentRun {
     const id = randomUUID();
     const createdAt = new Date().toISOString();
     this.database.prepare(`
-      INSERT INTO agent_runs (id, work_item_id, kind, requested_target, requested_agent, agent, status, instructions, created_at, conversation_id, message_id)
-      VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
-    `).run(id, workItemId, kind, requestedTarget, agent, agent, instructions, createdAt, conversationId, messageId);
+      INSERT INTO agent_runs (id, work_item_id, kind, requested_target, requested_agent, agent, status, instructions, created_at, conversation_id, message_id, origin)
+      VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
+    `).run(id, workItemId, kind, requestedTarget, agent, agent, instructions, createdAt, conversationId, messageId, origin);
     return this.listRuns(workItemId).find((run) => run.id === id)!;
   }
 
@@ -2517,8 +2553,39 @@ export class WorkItemRepository {
     return Number(row.runs) + Number(row.messages) > 0;
   }
 
+  /**
+   * Work that must finish in the serving process before a promoted runtime can
+   * be drained. This is deliberately broader than hasLiveWork(): system jobs
+   * such as promotion must persist their own terminal message before the old
+   * backend exits too.
+   */
+  hasRuntimeWork(ownerId: string): boolean {
+    const row = this.database.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM agent_runs WHERE status = 'running' AND owner_id = ?) AS runs,
+        (SELECT COUNT(*) FROM shared_messages WHERE status = 'running' AND owner_id = ?) AS messages
+    `).get(ownerId, ownerId) as { runs: number; messages: number };
+    return Number(row.runs) + Number(row.messages) > 0;
+  }
+
+  listRunningPromotionMessageIds(): string[] {
+    return (this.database.prepare(`SELECT id FROM shared_messages
+      WHERE author = 'system' AND dispatch_target = 'promotion' AND status = 'running'
+      ORDER BY created_at ASC`).all() as Array<{ id: string }>).map(({ id }) => id);
+  }
+
   activeRunsForItem(workItemId: string): AgentRun[] {
     return this.listRuns(workItemId).filter((run) => run.status === 'queued' || run.status === 'running');
+  }
+
+  /** Token usage for every run created since `sinceIso`, for the usage meter. Not scoped to one work item. */
+  listAgentRunUsageSince(sinceIso: string): Array<{ agent: AgentRun['agent']; origin: AgentRun['origin']; model: string | null; inputTokens: number | null; outputTokens: number | null }> {
+    return (this.database.prepare(`
+      SELECT agent, origin, model, input_tokens, output_tokens
+      FROM agent_runs
+      WHERE created_at >= ?
+    `).all(sinceIso) as Array<{ agent: AgentRun['agent']; origin: AgentRun['origin']; model: string | null; input_tokens: number | null; output_tokens: number | null }>)
+      .map((row) => ({ agent: row.agent, origin: row.origin, model: row.model, inputTokens: row.input_tokens, outputTokens: row.output_tokens }));
   }
 
   // --- Audit log -----------------------------------------------------------
@@ -2772,6 +2839,7 @@ export class WorkItemRepository {
       strategy: { completed: 0, failed: 0 },
       execute: { completed: 0, failed: 0 },
       review: { completed: 0, failed: 0 },
+      bugfix: { completed: 0, failed: 0 },
     };
     for (const run of runs) {
       if (run.status === 'completed') byKind[run.kind].completed += 1;

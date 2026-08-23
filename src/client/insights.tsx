@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Info, LineChart, LoaderCircle, Minus, TrendingDown, TrendingUp } from 'lucide-react';
 import { useState } from 'react';
 import { api } from './api';
+import { formatCostUsd } from './formatters';
 import type { RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsCostByDay, RunInsightsTokenUsage } from '../shared/contracts';
 
 function InfoTooltip({ children }: { children: string }) {
@@ -37,16 +38,6 @@ function formatDuration(ms: number | null): string {
 
 function formatTokenCount(tokens: number): string {
   return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(tokens);
-}
-
-export function formatCostUsd(value: number | null): string {
-  if (value === null) return '—';
-  if (value === 0) return '$0.00';
-  // Individual runs land in fractions of a cent; four decimals keeps them from
-  // all rendering as "$0.00" while window totals stay readable.
-  if (value < 0.01) return `$${value.toFixed(4)}`;
-  if (value < 1) return `$${value.toFixed(3)}`;
-  return `$${value.toFixed(2)}`;
 }
 
 function CostTrend({ current, previous }: { current: number; previous: number | null }) {

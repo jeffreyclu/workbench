@@ -8,19 +8,25 @@ import { OnChangePlugin } from '@lexical/react/LexicalOnChangePlugin';
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
 import { $convertFromMarkdownString, $convertToMarkdownString, TRANSFORMERS } from '@lexical/markdown';
-import { INSERT_ORDERED_LIST_COMMAND, INSERT_UNORDERED_LIST_COMMAND, ListNode, ListItemNode } from '@lexical/list';
-import { HeadingNode, QuoteNode } from '@lexical/rich-text';
-import { CodeNode } from '@lexical/code-core';
+import { INSERT_ORDERED_LIST_COMMAND, INSERT_UNORDERED_LIST_COMMAND, $isListItemNode, ListNode, ListItemNode } from '@lexical/list';
+import { $createQuoteNode, $isQuoteNode, HeadingNode, QuoteNode } from '@lexical/rich-text';
+import { $isCodeNode, CodeNode } from '@lexical/code-core';
 import { LinkNode } from '@lexical/link';
-import { $getRoot, FORMAT_TEXT_COMMAND, KEY_ENTER_COMMAND, type EditorState, COMMAND_PRIORITY_HIGH } from 'lexical';
+import { $getRoot, $getSelection, $isRangeSelection, FORMAT_TEXT_COMMAND, KEY_ENTER_COMMAND, type EditorState, type LexicalNode, COMMAND_PRIORITY_HIGH } from 'lexical';
 import { Bold, Code2, Italic, List, ListOrdered, Quote } from 'lucide-react';
-import { copyText } from './copy-code.js';
+import { copyText } from './clipboard.js';
 
 type MarkdownComposerProps = {
   conversationId: string | null;
   value: string;
   onChange: (markdown: string) => void;
-  onSubmit: () => void;
+  /** Enter submits only where the surrounding UI explicitly opts into it. */
+  onSubmit?: () => void;
+  onBlur?: () => void;
+  placeholder?: string;
+  ariaLabel?: string;
+  autoFocus?: boolean;
+  className?: string;
   disabled?: boolean;
 };
 
@@ -28,6 +34,15 @@ function SubmitOnEnter({ onSubmit }: { onSubmit: () => void }) {
   const [editor] = useLexicalComposerContext();
   useEffect(() => editor.registerCommand(KEY_ENTER_COMMAND, (event) => {
     if (event?.shiftKey || event?.altKey || event?.ctrlKey || event?.metaKey || event?.isComposing) return false;
+    const selection = $getSelection();
+    if ($isRangeSelection(selection)) {
+      let node: LexicalNode | null = selection.anchor.getNode();
+      // Enter continues structured blocks. Only an ordinary paragraph sends.
+      while (node) {
+        if ($isListItemNode(node) || $isQuoteNode(node) || $isCodeNode(node)) return false;
+        node = node.getParent();
+      }
+    }
     event?.preventDefault();
     onSubmit();
     return true;
@@ -38,6 +53,15 @@ function SubmitOnEnter({ onSubmit }: { onSubmit: () => void }) {
 function MarkdownToolbar() {
   const [editor] = useLexicalComposerContext();
   const format = (formatType: 'bold' | 'italic' | 'code') => editor.dispatchCommand(FORMAT_TEXT_COMMAND, formatType);
+  const quote = () => editor.update(() => {
+    const selection = $getSelection();
+    if (!$isRangeSelection(selection)) return;
+    const block = selection.anchor.getNode().getTopLevelElement();
+    if (!block || $isQuoteNode(block)) return;
+    const quoteNode = $createQuoteNode();
+    block.replace(quoteNode);
+    quoteNode.append(block);
+  });
   return <div className="markdown-format-toolbar" aria-label="Format message">
     <button type="button" title="Bold" aria-label="Bold" onMouseDown={(event) => event.preventDefault()} onClick={() => format('bold')}><Bold size={13} /></button>
     <button type="button" title="Italic" aria-label="Italic" onMouseDown={(event) => event.preventDefault()} onClick={() => format('italic')}><Italic size={13} /></button>
@@ -45,7 +69,7 @@ function MarkdownToolbar() {
     <span />
     <button type="button" title="Bulleted list" aria-label="Bulleted list" onMouseDown={(event) => event.preventDefault()} onClick={() => editor.dispatchCommand(INSERT_UNORDERED_LIST_COMMAND, undefined)}><List size={13} /></button>
     <button type="button" title="Numbered list" aria-label="Numbered list" onMouseDown={(event) => event.preventDefault()} onClick={() => editor.dispatchCommand(INSERT_ORDERED_LIST_COMMAND, undefined)}><ListOrdered size={13} /></button>
-    <button type="button" title="Quote (type > at the start of a line)" aria-label="Quote hint" onMouseDown={(event) => event.preventDefault()} onClick={() => editor.focus()}><Quote size={13} /></button>
+    <button type="button" title="Quote" aria-label="Quote" onMouseDown={(event) => event.preventDefault()} onClick={quote}><Quote size={13} /></button>
   </div>;
 }
 
@@ -101,17 +125,16 @@ function CopyCodeBlocksPlugin() {
   return null;
 }
 
-function MarkdownEditor({ value, onChange, onSubmit, disabled }: Pick<MarkdownComposerProps, 'value' | 'onChange' | 'onSubmit' | 'disabled'>) {
-  return <>
+function MarkdownEditor({ value, onChange, onSubmit, onBlur, disabled, placeholder = 'Write in Markdown…', ariaLabel = 'Markdown editor', autoFocus = false, className }: Pick<MarkdownComposerProps, 'value' | 'onChange' | 'onSubmit' | 'onBlur' | 'disabled' | 'placeholder' | 'ariaLabel' | 'autoFocus' | 'className'>) {
+  return <div className={['markdown-composer', className].filter(Boolean).join(' ')}>
     <RichTextPlugin
       contentEditable={<ContentEditable
         className="markdown-contenteditable"
-        aria-label="Message Codex or Claude"
-        // Lexical's update listener is canonical; this keeps the controlled
-        // draft current across browser/IME input events before that cycle ends.
-        onInput={(event) => onChange(event.currentTarget.textContent ?? '')}
+        aria-label={ariaLabel}
+        autoFocus={autoFocus}
+        onBlur={onBlur}
       />}
-      placeholder={<div className="markdown-placeholder">Message Codex or Claude…</div>}
+      placeholder={<div className="markdown-placeholder">{placeholder}</div>}
       ErrorBoundary={LexicalErrorBoundary}
     />
     <HistoryPlugin />
@@ -120,13 +143,13 @@ function MarkdownEditor({ value, onChange, onSubmit, disabled }: Pick<MarkdownCo
     <SyncMarkdownValue value={value} />
     <SyncEditorEditable disabled={Boolean(disabled)} />
     <CopyCodeBlocksPlugin />
-    {!disabled && <SubmitOnEnter onSubmit={onSubmit} />}
+    {!disabled && onSubmit && <SubmitOnEnter onSubmit={onSubmit} />}
     <MarkdownToolbar />
-  </>;
+  </div>;
 }
 
 /** A Lexical editor that stores Markdown, keeping messages agent-readable. */
-export function MarkdownComposer({ conversationId, value, onChange, onSubmit, disabled = false }: MarkdownComposerProps) {
+export function MarkdownComposer({ conversationId, value, onChange, onSubmit, onBlur, placeholder, ariaLabel, autoFocus, className, disabled = false }: MarkdownComposerProps) {
   const initialConfig = useMemo(() => ({
     namespace: `workbench-markdown-${conversationId ?? 'new'}`,
     // Keep this in sync with `TRANSFORMERS`: MarkdownShortcutPlugin validates
@@ -135,9 +158,12 @@ export function MarkdownComposer({ conversationId, value, onChange, onSubmit, di
     editable: !disabled,
     onError: (error: Error) => { throw error; },
     editorState: () => { if (value) $convertFromMarkdownString(value, TRANSFORMERS); },
+  // This configuration is intentionally initialized once per conversation;
+  // changing draft text or the disabled state must not recreate the editor.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [conversationId]);
 
   return <LexicalComposer key={conversationId ?? 'new'} initialConfig={initialConfig}>
-    <MarkdownEditor value={value} onChange={onChange} onSubmit={onSubmit} disabled={disabled} />
+    <MarkdownEditor value={value} onChange={onChange} onSubmit={onSubmit} onBlur={onBlur} placeholder={placeholder} ariaLabel={ariaLabel} autoFocus={autoFocus} className={className} disabled={disabled} />
   </LexicalComposer>;
 }

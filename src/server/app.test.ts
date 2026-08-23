@@ -5,6 +5,8 @@ import { createApp, oauthCallbackBase, parseFollowUpPlan } from './app.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { cancelAgentRun, isAgentRunActive } from './agent-runner.js';
+import { OWNER_ID } from './scheduler.js';
+import { previewRuntimeCapabilities } from './runtime-capabilities.js';
 
 async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolveClose) => {
@@ -32,6 +34,30 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
   afterEach(async () => {
     await closeServer(server);
     database.close();
+  });
+
+  it('reports only work owned by this backend in its runtime drain health', async () => {
+    const idle = await fetch(`${baseUrl}/api/health`);
+    expect(await idle.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: false });
+
+    const conversation = repository.ensureDefaultConversation();
+    const promotion = repository.createSharedMessage('system', 'Promoting…', 'running', conversation.id, [], 'promotion');
+    expect(repository.claimSharedMessage(promotion.id, OWNER_ID, 60_000)).toBe(true);
+    const active = await fetch(`${baseUrl}/api/health`);
+    expect(await active.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: true });
+  });
+
+  it('persists a manually selected bug-fix type when creating a task', async () => {
+    const response = await fetch(`${baseUrl}/api/work-items`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Investigate missing task type', description: '', priority: 2, status: 'backlog', projectName: null, workspacePath: null, dueDate: null, sourceUrl: null, classificationKind: 'bugfix' }),
+    });
+
+    expect(response.status).toBe(201);
+    const { item } = await response.json() as { item: { id: string; classificationKind: string | null } };
+    expect(item.classificationKind).toBe('bugfix');
+    expect(repository.getClassification(item.id)).toEqual(expect.objectContaining({ kind: 'bugfix', source: 'manual' }));
   });
 
   it('rejects a second /execute while a run is already active for the task (409)', async () => {
@@ -233,6 +259,40 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     // real run and wait for its process callback before closing its database.
     expect(cancelAgentRun(repository, runs[0].id)).toBeTruthy();
     await vi.waitFor(() => expect(isAgentRunActive(runs[0].id)).toBe(false));
+  });
+});
+
+describe('preview promotion delegation', () => {
+  let database: WorkbenchDatabase;
+  let repository: WorkItemRepository;
+  let server: Server;
+  let baseUrl: string;
+
+  beforeEach(async () => {
+    database = openDatabase(':memory:');
+    repository = new WorkItemRepository(database);
+    server = createApp(database, previewRuntimeCapabilities).listen(0);
+    await new Promise<void>((resolveListen) => server.once('listening', () => resolveListen()));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await closeServer(server);
+    database.close();
+  });
+
+  it('durably queues preview approval for the live promotion worker instead of permission-refusing it', async () => {
+    const conversation = repository.ensureDefaultConversation();
+    const response = await fetch(`${baseUrl}/api/shared/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ body: 'promote preview', conversationId: conversation.id, attachments: [], dispatchTo: 'none' }),
+    });
+
+    expect(response.status).toBe(202);
+    const body = await response.json() as { replies: Array<{ status: string; dispatchTarget: string }> };
+    expect(body.replies).toEqual([expect.objectContaining({ status: 'running', dispatchTarget: 'promotion' })]);
+    expect(repository.listRunningPromotionMessageIds()).toHaveLength(1);
   });
 });
 
@@ -635,6 +695,34 @@ describe('destructive operations soft-delete instead of hard-deleting', () => {
     expect(response.status).toBe(404);
   });
 
+  it('rejects managed MCP authorization for a provider Codex login does not cover', async () => {
+    const response = await fetch(`${baseUrl}/api/source-connections/github/managed/oauth/start`, { method: 'POST' });
+    expect(response.status).toBe(400);
+  });
+
+  it('reports Atlassian as connected once a managed Codex login is stored', async () => {
+    repository.setSourceConnection('confluence', 'Atlassian MCP · Codex', { mode: 'managed' });
+
+    const response = await fetch(`${baseUrl}/api/source-connections`);
+    const body = (await response.json()) as { connections: Array<{ id: string; state: string }> };
+    expect(body.connections.find((connection) => connection.id === 'atlassian')?.state).toBe('connected');
+  });
+
+  it('persists Figma Discovery roots without replacing the managed connection settings', async () => {
+    repository.setSourceConnection('figma', 'Figma MCP · Codex', { mode: 'managed' });
+    const roots = ['https://www.figma.com/design/abc123/Workbench?node-id=1-2'];
+
+    const saved = await fetch(`${baseUrl}/api/source-connections/figma/scope`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ roots }),
+    });
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toEqual({ roots });
+    expect(repository.getSourceSettings('figma')).toEqual({ mode: 'managed', figmaRoots: JSON.stringify(roots) });
+
+    const loaded = await fetch(`${baseUrl}/api/source-connections/figma/scope`);
+    expect(await loaded.json()).toEqual({ roots });
+  });
+
   it('lets reconnecting a soft-deleted source restore it to the active listing', async () => {
     repository.setSourceConnection('github', 'Work GitHub', { token: 'secret-token' });
     repository.removeSourceConnection('github');
@@ -703,6 +791,49 @@ describe('GET /api/audit-log', () => {
   });
 });
 
+describe('API mutation audit middleware', () => {
+  let database: WorkbenchDatabase;
+  let repository: WorkItemRepository;
+  let server: Server;
+  let baseUrl: string;
+
+  beforeEach(async () => {
+    database = openDatabase(':memory:');
+    repository = new WorkItemRepository(database);
+    const app = createApp(database);
+    server = app.listen(0);
+    await new Promise<void>((resolveListen) => server.once('listening', () => resolveListen()));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await closeServer(server);
+    database.close();
+  });
+
+  it('records every completed mutating request without recording its body', async () => {
+    const item = repository.create({ title: 'Audited through middleware', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ description: 'private request body' }),
+    });
+    expect(response.status).toBe(200);
+
+    const audit = repository.listAuditLog(10, null, 'api_mutation', item.id);
+    expect(audit.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: 'workbench_api', detail: 'PATCH /api/work-items/:id → 200', workItemId: item.id }),
+    ]));
+    expect(audit.entries.some((entry) => entry.detail.includes('private request body'))).toBe(false);
+  });
+
+  it('makes middleware audit entries available through activity memory', async () => {
+    const response = await fetch(`${baseUrl}/api/work-items`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Middleware memory task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null }),
+    });
+    expect(response.status).toBe(201);
+    expect(repository.searchActivityMemory('api_mutation').some((entry) => entry.source === 'audit' && entry.body === 'api_mutation: POST /api/work-items → 201')).toBe(true);
+  });
+});
+
 describe('OAuth callback base origin', () => {
   const originalAppApiOrigin = process.env.APP_API_ORIGIN;
   const originalPort = process.env.PORT;
@@ -737,6 +868,120 @@ describe('OAuth callback base origin', () => {
     process.env.APP_API_ORIGIN = 'javascript:alert(1)';
     process.env.PORT = '4317';
     expect(oauthCallbackBase()).toBe('http://localhost:4317/api/source-connections');
+  });
+});
+
+describe('work-item activity logging middleware', () => {
+  let database: WorkbenchDatabase;
+  let repository: WorkItemRepository;
+  let server: Server;
+  let baseUrl: string;
+
+  beforeEach(async () => {
+    database = openDatabase(':memory:');
+    repository = new WorkItemRepository(database);
+    const app = createApp(database);
+    server = app.listen(0);
+    await new Promise<void>((resolveListen) => server.once('listening', () => resolveListen()));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await closeServer(server);
+    database.close();
+  });
+
+  // Previously-unlogged routes: the middleware must fill these gaps.
+
+  it('logs an activity when a task link is removed', async () => {
+    const first = repository.create({ title: 'First task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const second = repository.create({ title: 'Second task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.addTaskLink(first.id, second.id);
+    const activityCountBeforeRemoval = repository.listActivity(first.id).length;
+
+    const response = await fetch(`${baseUrl}/api/work-items/${first.id}/linked-tasks/${second.id}`, { method: 'DELETE' });
+    expect(response.status).toBe(204);
+
+    const activity = repository.listActivity(first.id);
+    expect(activity).toHaveLength(activityCountBeforeRemoval + 1);
+    expect(activity[0]).toMatchObject({ kind: 'task_unlinked', actor: 'jeffrey', body: expect.stringContaining('Second task') });
+  });
+
+  it('logs an activity when a reference is removed', async () => {
+    const item = repository.create({ title: 'Task with a reference', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const reference = repository.addReference(item.id, { type: 'document', url: 'https://example.com/doc', title: 'Design doc' });
+    const activityCountBeforeRemoval = repository.listActivity(item.id).length;
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}/references/${reference.id}`, { method: 'DELETE' });
+    expect(response.status).toBe(204);
+
+    const activity = repository.listActivity(item.id);
+    expect(activity).toHaveLength(activityCountBeforeRemoval + 1);
+    expect(activity[0]).toMatchObject({ kind: 'reference_removed', actor: 'jeffrey', body: expect.stringContaining(reference.id) });
+  });
+
+  it('logs an activity when a work item is deleted', async () => {
+    const item = repository.create({ title: 'Task to delete', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}`, { method: 'DELETE' });
+    expect(response.status).toBe(204);
+
+    // The item is soft-deleted, so it no longer resolves through the normal
+    // get() path, but the activities row still exists directly.
+    const activity = repository.listActivity(item.id);
+    expect(activity).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'deleted', actor: 'jeffrey', body: expect.stringContaining(item.id) })]));
+    // The pre-existing destructive_action audit entry must still be written too.
+    const audit = repository.listAuditLog(10, null, 'destructive_action');
+    expect(audit.entries).toEqual(expect.arrayContaining([expect.objectContaining({ detail: expect.stringContaining(item.id) })]));
+  });
+
+  it('does not write an activity for a failed (404) request', async () => {
+    const item = repository.create({ title: 'Solo task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}/linked-tasks/00000000-0000-0000-0000-000000000000`, { method: 'DELETE' });
+    expect(response.status).toBe(404);
+    expect(repository.listActivity(item.id).some((entry) => entry.kind === 'task_unlinked')).toBe(false);
+  });
+
+  // Routes that already log a richer, dynamic activity entry elsewhere (in the
+  // handler or deeper inside the repository) must not get a second, duplicate
+  // entry from this middleware.
+
+  it('does not duplicate the activity entry when archiving a task', async () => {
+    const item = repository.create({ title: 'Archive me', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}/archive`, { method: 'POST' });
+    expect(response.status).toBe(200);
+
+    const activity = repository.listActivity(item.id);
+    expect(activity.filter((entry) => entry.kind === 'archived')).toHaveLength(1);
+  });
+
+  it('does not duplicate the activity entry when adding a reference', async () => {
+    const item = repository.create({ title: 'Task with a reference', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}/references`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'document', url: 'https://example.com/doc', title: 'Design doc' }),
+    });
+    expect(response.status).toBe(201);
+
+    const activity = repository.listActivity(item.id);
+    expect(activity.filter((entry) => entry.kind === 'reference_added')).toHaveLength(1);
+  });
+
+  it('does not duplicate the activity entry when linking two tasks', async () => {
+    const first = repository.create({ title: 'First task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const second = repository.create({ title: 'Second task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    const response = await fetch(`${baseUrl}/api/work-items/${first.id}/linked-tasks`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ linkedWorkItemId: second.id }),
+    });
+    expect(response.status).toBe(201);
+
+    const activity = repository.listActivity(first.id);
+    expect(activity.filter((entry) => entry.kind === 'task_linked')).toHaveLength(1);
   });
 });
 

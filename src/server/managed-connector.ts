@@ -1,17 +1,42 @@
 import { runAgentCommand } from './agent-runner.js';
 import type { SourceSignal } from './source-scanner.js';
 
-export async function searchFigmaWithCodex(query: string, signal?: AbortSignal): Promise<SourceSignal[]> {
-  const output = await runAgentCommand('codex', process.cwd(), `Use only the authenticated Figma connector to search for files, pages, components, or design nodes matching: ${JSON.stringify(query)}
+type ManagedSearchProvider = 'figma' | 'confluence';
 
-Do not use web search and do not guess. Return at most 20 useful results. If Figma search is unavailable through the connector, state that in the error field.
+const DESCRIPTIONS: Record<ManagedSearchProvider, { label: string; connector: string; scope: string }> = {
+  figma: { label: 'Figma', connector: 'Figma', scope: 'files, pages, components, or design nodes' },
+  confluence: { label: 'Atlassian', connector: 'Atlassian', scope: 'Jira issues or Confluence pages' },
+};
+
+/**
+ * Searches a provider through the acting Codex agent's own authenticated MCP
+ * connection instead of Workbench-stored OAuth tokens. This is the path used
+ * when a connection was made with `codex mcp login`.
+ */
+async function searchWithCodexConnector(provider: ManagedSearchProvider, query: string, signal?: AbortSignal): Promise<SourceSignal[]> {
+  const { label, connector, scope } = DESCRIPTIONS[provider];
+  const output = await runAgentCommand('codex', process.cwd(), `Use only the authenticated ${connector} connector to search for ${scope} matching: ${JSON.stringify(query)}
+
+Do not use web search and do not guess. Return at most 20 useful results. If ${label} search is unavailable through the connector, state that in the error field.
 
 Return exactly one block and no other text:
-<figma-result>{"results":[{"title":"result name","summary":"file/page/node context","url":"Figma URL or null"}],"error":null}</figma-result>`, undefined, signal, 'economy');
-  const match = output.match(/<figma-result>([\s\S]*?)<\/figma-result>/);
-  if (!match) throw new Error('Figma connector returned no machine-readable search result.');
+<connector-result>{"results":[{"title":"result name","summary":"result context","url":"${label} URL or null"}],"error":null}</connector-result>`, undefined, signal, 'economy');
+  const match = output.match(/<connector-result>([\s\S]*?)<\/connector-result>/) ?? output.match(/<figma-result>([\s\S]*?)<\/figma-result>/);
+  if (!match) throw new Error(`${label} connector returned no machine-readable search result.`);
   const parsed = JSON.parse(match[1]) as { results?: Array<{ title?: unknown; summary?: unknown; url?: unknown }>; error?: unknown };
   if (typeof parsed.error === 'string' && parsed.error) throw new Error(parsed.error);
-  if (!Array.isArray(parsed.results)) throw new Error('Figma connector returned malformed search results.');
-  return parsed.results.slice(0, 20).flatMap((result) => typeof result.title === 'string' && typeof result.summary === 'string' ? [{ provider: 'figma', title: result.title.slice(0, 240), summary: result.summary.slice(0, 12_000), url: typeof result.url === 'string' ? result.url : null, occurredAt: null }] : []);
+  if (!Array.isArray(parsed.results)) throw new Error(`${label} connector returned malformed search results.`);
+  return parsed.results.slice(0, 20).flatMap((result) => typeof result.title === 'string' && typeof result.summary === 'string' ? [{ provider, title: result.title.slice(0, 240), summary: result.summary.slice(0, 12_000), url: typeof result.url === 'string' ? result.url : null, occurredAt: null }] : []);
+}
+
+export function searchFigmaWithCodex(query: string, signal?: AbortSignal): Promise<SourceSignal[]> {
+  return searchWithCodexConnector('figma', query, signal);
+}
+
+export function scanFigmaRootsWithCodex(roots: string[], signal?: AbortSignal): Promise<SourceSignal[]> {
+  return searchWithCodexConnector('figma', `the configured Figma roots below. Inspect only these files, pages, or nodes and identify recent changes relevant to my open work. Do not search the wider Figma workspace.\n\n${roots.map((root) => `- ${root}`).join('\n')}`, signal);
+}
+
+export function searchAtlassianWithCodex(query: string, signal?: AbortSignal): Promise<SourceSignal[]> {
+  return searchWithCodexConnector('confluence', query, signal);
 }

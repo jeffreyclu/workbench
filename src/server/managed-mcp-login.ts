@@ -1,6 +1,14 @@
 import { spawn } from 'node:child_process';
 
-export function startManagedMcpLogin(provider: 'figma'): Promise<{ url: string; completion: Promise<void> }> {
+/**
+ * Providers Workbench can authorize by driving Codex's own OAuth. Codex runs a
+ * loopback callback on 127.0.0.1, so this path never needs a public tunnel —
+ * the reason it survives the ngrok domain block that killed Workbench's own
+ * remote-MCP broker.
+ */
+export type ManagedMcpProvider = 'figma' | 'atlassian';
+
+export function startManagedMcpLogin(provider: ManagedMcpProvider): Promise<{ url: string; completion: Promise<void> }> {
   const command = process.env.CODEX_BIN?.trim() || 'codex';
   const child = spawn(command, ['mcp', 'login', provider], { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';

@@ -6,6 +6,7 @@ data/*.db-*
 data/*.log
 data/attachments/
 data/published/
+data/.published-stage-*/
 data/logs/
 data/backups/
 .env
