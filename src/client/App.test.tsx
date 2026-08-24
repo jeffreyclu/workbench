@@ -500,6 +500,51 @@ describe('shared room', () => {
     }
   });
 
+  // On phones the conversation list is a drawer over the console. Switching the
+  // Active/Archive rail used to remount the workspace, and the drawer's open
+  // state lived inside that remount, so the list Jeffrey was browsing slid shut
+  // on every switch and he had to reopen it to pick the next conversation.
+  it('keeps the conversation drawer open while switching the Active/Archive rail', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const active = { id: '00000000-0000-4000-8000-000000000071', title: 'Active drawer conversation', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const archived = { ...active, id: '00000000-0000-4000-8000-000000000072', title: 'Archived drawer conversation', archivedAt: '2026-01-02T00:00:00Z' };
+    window.history.replaceState(null, '', `/conversations/${active.id}`);
+    window.localStorage.setItem('workbench:last-opened-conversation', active.id);
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes('/api/shared/conversations?')
+        ? { conversations: url.includes('view=archive') ? [archived] : [active], nextCursor: null }
+        : { ok: true, mode: 'live', runtimeWorkActive: false, buildId: 'test', items: [], conversations: [], messages: [], active: 0, workbench: 0, archive: 1, count: 0, pending: false, proposal: null, nextCursor: null };
+      return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+    const workspace = () => container.querySelector('.shared-workspace')!;
+    const drawerOpen = () => workspace().classList.contains('rail-open');
+    const viewTabs = () => screen.getByRole('group', { name: 'Conversation view' });
+    const tab = (name: 'Active' | 'Archive') => within(viewTabs()).getByRole('button', { name });
+
+    expect(await screen.findByRole('heading', { name: active.title })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Show conversations' }));
+    expect(drawerOpen()).toBe(true);
+
+    for (const _step of [1, 2, 3]) {
+      fireEvent.click(tab('Archive'));
+      await waitFor(() => expect(tab('Archive').getAttribute('aria-pressed')).toBe('true'), { timeout: 3000 });
+      await screen.findByRole('heading', { name: archived.title });
+      expect(drawerOpen()).toBe(true);
+
+      fireEvent.click(tab('Active'));
+      await waitFor(() => expect(tab('Active').getAttribute('aria-pressed')).toBe('true'), { timeout: 3000 });
+      await screen.findByRole('heading', { name: active.title });
+      expect(drawerOpen()).toBe(true);
+    }
+
+    // Picking a conversation is still a commit, so the drawer gets out of the way.
+    fireEvent.click(screen.getByRole('button', { name: /Active drawer conversation/i }));
+    await waitFor(() => expect(drawerOpen()).toBe(false));
+  });
+
   it('distinguishes manual conversations from task-linked conversations', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const manualId = '00000000-0000-4000-8000-000000000010';

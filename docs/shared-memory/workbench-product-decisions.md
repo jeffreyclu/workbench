@@ -120,3 +120,12 @@ Mac is Kandji-managed so the inbound firewall cannot be changed, and Jeffrey doe
 not want his personal phone enrolled in the Writer Tailscale tailnet. That leaves
 outbound public tunnels plus Workbench's own shared-secret auth gate as the only
 workable shape.
+
+Third, a mobile drawer that replaced a hidden region must stay open until
+Jeffrey commits to something inside it. On 2026-08-24 he asked for the
+conversation rail — the panel holding the Active/Archive switch — to persist
+while he switches between those two tabs on a phone, because a drawer that
+closes on every switch forces him to reopen it before he can pick a
+conversation. The rule generalizes: switching a filter or a tab *within* a
+drawer is browsing and must leave it open; selecting the item the drawer exists
+to select is a commit and may close it.

@@ -81,8 +81,14 @@ export function useRoute(): Route {
   useEffect(() => {
     // An unknown or non-canonical address still renders something sensible;
     // rewriting it keeps the visible URL honest about what is on screen.
-    const canonical = routePath(route);
-    if (canonical !== window.location.pathname) window.history.replaceState(null, '', canonical);
+    //
+    // Rewrite what the address bar actually holds, not this render's route. A
+    // child effect can call navigate() after this render was produced, so
+    // `route` here is sometimes one address behind the live one; rewriting to
+    // that stale address silently undid the navigation that just happened.
+    const live = window.location.pathname;
+    const canonical = routePath(parseRoute(live));
+    if (canonical !== live) window.history.replaceState(null, '', canonical);
   }, [route]);
   return route;
 }
