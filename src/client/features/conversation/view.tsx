@@ -68,6 +68,10 @@ import { conversationData, conversationQueryKeys } from './data';
 import { useDebouncedValue } from './hooks';
 
 const CONVERSATION_ROW_GAP = 6;
+// Stack cards and task cards share an 88px minimum height. Keeping the
+// virtualizer's initial estimate in sync prevents a newly rendered group
+// header from being positioned over a card before ResizeObserver measures it.
+const CONVERSATION_CARD_ESTIMATE = 88;
 
 type ConversationDispatchTarget = 'both' | 'codex' | 'claude';
 
@@ -259,9 +263,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       ...group.rows,
     ]);
   }, [activeConversationIds, conversationList, conversationView, fallbackConversationStates]);
-  const conversationVirtualizer = useVirtualizer({ count: conversationStackRows.length, getScrollElement: () => conversationScrollRef.current, estimateSize: (index) => (conversationStackRows[index]?.type === 'header' ? 38 : 58) + CONVERSATION_ROW_GAP, overscan: 5, initialRect: { width: 250, height: 600 } });
+  const conversationVirtualizer = useVirtualizer({ count: conversationStackRows.length, getScrollElement: () => conversationScrollRef.current, estimateSize: (index) => (conversationStackRows[index]?.type === 'header' ? 38 : CONVERSATION_CARD_ESTIMATE) + CONVERSATION_ROW_GAP, overscan: 5, initialRect: { width: 250, height: 600 } });
   const conversationRows = conversationVirtualizer.getVirtualItems();
-  const displayedConversationRows = conversationRows.length ? conversationRows : conversationStackRows.map((row, index) => ({ index, start: conversationStackRows.slice(0, index).reduce((total, item) => total + (item.type === 'header' ? 38 : 58) + CONVERSATION_ROW_GAP, 0) }));
+  const displayedConversationRows = conversationRows.length ? conversationRows : conversationStackRows.map((row, index) => ({ index, start: conversationStackRows.slice(0, index).reduce((total, item) => total + (item.type === 'header' ? 38 : CONVERSATION_CARD_ESTIMATE) + CONVERSATION_ROW_GAP, 0) }));
   useEffect(() => {
     // Group headers change the virtual row geometry as conversations move
     // between stacks, so recalculate instead of waiting for a scroll event.

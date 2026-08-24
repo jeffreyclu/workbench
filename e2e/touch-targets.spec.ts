@@ -118,4 +118,26 @@ test.describe('phone-viewport touch targets', () => {
     await archiveView.click();
     await expect(archiveView).toHaveAttribute('aria-pressed', 'true');
   });
+
+  test('conversation stack rows never overlap when cards use their shared height', async ({ page, request }, testInfo) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const suffix = `${testInfo.project.name}-${Date.now().toString(36)}`;
+    const titles = Array.from({ length: 4 }, (_, index) => `A deliberately long conversation title ${index + 1} ${suffix} that wraps to two lines`);
+    const created = await Promise.all(titles.map(async (title) => {
+      const response = await request.post('/api/shared/conversations', { data: { title } });
+      expect(response.ok()).toBe(true);
+      return response.json() as Promise<{ conversation: { id: string } }>;
+    }));
+
+    await page.goto(`/conversations/${created[0].conversation.id}`);
+    await expect(page.locator('.conversation-tabs').getByText('Attention stack', { exact: true })).toBeVisible();
+
+    const overlaps = await page.locator('.conversation-tabs .virtual-row').evaluateAll((rows) => rows.slice(0, -1).map((row, index) => {
+      const current = row.getBoundingClientRect();
+      const next = rows[index + 1].getBoundingClientRect();
+      return { currentBottom: current.bottom, nextTop: next.top };
+    }).filter(({ currentBottom, nextTop }) => nextTop < currentBottom));
+
+    expect(overlaps).toEqual([]);
+  });
 });
