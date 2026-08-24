@@ -18,7 +18,7 @@ import {
 } from '../shared/contracts.js';
 import { isActionFailure } from './action-result.js';
 import { summarizeWorkItemChanges } from './activity-log.js';
-import { WorkItemDependencyError } from './repository.js';
+import { WorkItemDependencyError, WorkItemVersionConflictError } from './repository.js';
 import type { WorkItemRepository } from './repository.js';
 
 const actorSchema = z.enum(['codex', 'claude']).describe('Which assistant is acting. This is attribution, not permission: both actors hold identical, complete Workbench admin rights. Jeffrey and system are excluded only so the log never misreports who acted.');
@@ -258,12 +258,17 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
         .describe('Owners of the task. Jeffrey is exclusive: he cannot be listed alongside codex or claude.'),
       blockedByIds: z.array(z.string().uuid()).max(200).optional()
         .describe('Full replacement set of prerequisite task ids. An empty array clears them. Cycles and self-references are rejected.'),
+      expectedVersion: z.number().int().optional()
+        .describe('The `version` last read for this task. When set, the update is rejected as a CONFLICT if the task changed since then, instead of silently overwriting a concurrent edit.'),
       actor: actorSchema.optional().describe('Optional. Attributes the resulting activity-log entry to the calling assistant instead of the system.'),
     },
     annotations: mutationAnnotations(true),
   }, async ({ workItemId, actor, ...changes }) => runTool('update_work_item', () => {
     const item = requireWorkItem(repository, workItemId);
-    if (Object.values(changes).every((value) => value === undefined)) throw new ToolFailure('INVALID_ARGUMENT', 'Provide at least one locally owned field to update.');
+    // expectedVersion is a precondition on the write, not itself a field to
+    // change, so it doesn't count toward "at least one field" below.
+    const hasFieldChange = Object.entries(changes).some(([key, value]) => key !== 'expectedVersion' && value !== undefined);
+    if (!hasFieldChange) throw new ToolFailure('INVALID_ARGUMENT', 'Provide at least one locally owned field to update.');
     try {
       const updated = repository.update(workItemId, changes);
       // Every field change an assistant makes shows up in the same activity log
@@ -272,6 +277,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       if (updated && edits.length) repository.addActivity(workItemId, actor ?? 'system', 'edited', `${edits.join(' · ')}.`);
       return { item: updated };
     } catch (error) {
+      if (error instanceof WorkItemVersionConflictError) throw new ToolFailure('CONFLICT', error.message);
       // Graph rejections are the caller's fault, not a server fault, so they
       // surface as CONFLICT rather than a generic INTERNAL_ERROR.
       if (error instanceof WorkItemDependencyError) throw new ToolFailure('CONFLICT', error.message);

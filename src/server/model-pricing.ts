@@ -33,11 +33,12 @@ const defaultModelRates: Record<string, { input: number; output: number }> = {
   sonnet: { input: 3, output: 15 },
   opus: { input: 15, output: 75 },
   fable: { input: 3, output: 15 },
-  // OpenAI / Codex. The gpt-5.6 tiers are priced from the gpt-5 published list
-  // prices; confirm against the current price sheet before trusting the totals.
-  'gpt-5.6-luna': { input: 0.25, output: 2 },
-  'gpt-5.6-terra': { input: 1.25, output: 10 },
-  'gpt-5.6-sol': { input: 1.25, output: 10 },
+  // OpenAI / Codex. Uncached, short-context list prices as of 2026-08-23.
+  // Actual bills can differ because cached input, cache writes, and long
+  // contexts have separate rates. Insights labels these values as estimates.
+  'gpt-5.6-luna': { input: 0.2, output: 1.2 },
+  'gpt-5.6-terra': { input: 2, output: 12 },
+  'gpt-5.6-sol': { input: 4, output: 20 },
   'gpt-5': { input: 1.25, output: 10 },
 };
 

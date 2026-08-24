@@ -32,3 +32,13 @@ export const previewRuntimeCapabilities: RuntimeCapabilities = {
   promoteRuntime: false,
   executeAgents: true,
 };
+
+/** Backs the Playwright e2e server: an isolated database with no background work or agent dispatch. */
+export const e2eRuntimeCapabilities: RuntimeCapabilities = {
+  mode: 'preview',
+  allowMutations: true,
+  runDiscoveryCatchUp: false,
+  ownScheduler: false,
+  promoteRuntime: false,
+  executeAgents: false,
+};

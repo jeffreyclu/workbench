@@ -45,7 +45,6 @@ import { ArtifactLibraryView, ArtifactNav } from './artifacts';
 import { ConfirmationDialog } from './confirmation-dialog';
 import { InsightsView, InsightsNav } from './insights';
 import { navigate, parseRoute, useRoute, type StackName } from './router';
-import { parseSnippet } from './search-snippet';
 import { ListRowSkeleton } from './skeleton';
 import { Toaster } from './toast';
 import { toast, toastError } from './toast-store';
@@ -55,7 +54,7 @@ import { ConversationOriginBadge, ModelProfileSelect, ReferenceTypeIcon } from '
 import { CreateTask } from './create-task-dialog';
 import { DiscoveryInboxView, DiscoveryNav } from './discovery';
 import { FollowUpArchiveDialog } from './follow-up-archive-dialog';
-import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from './formatters';
+import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from './formatters';
 import { clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from './preferences';
 import { QueueExplanationList } from './queue-explanations';
 import { ProjectColorDot } from './project-color';
@@ -148,8 +147,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     return () => window.clearTimeout(timeout);
   }, [conversationSearch]);
   const conversationSearchResults = useQuery({
-    queryKey: ['shared-search', debouncedConversationSearch],
-    queryFn: () => api.searchShared(debouncedConversationSearch),
+    queryKey: ['memory-search', debouncedConversationSearch],
+    queryFn: () => api.searchMemory(debouncedConversationSearch, 40),
     enabled: debouncedConversationSearch.length > 0,
   });
   const [pendingSelectedConversation, setPendingSelectedConversation] = useState<{ id: string; title: string } | null>(null);
@@ -174,6 +173,16 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     queryKey: ['shared-conversations', conversationView], queryFn: ({ pageParam }) => api.listSharedConversations(conversationView, pageParam),
     initialPageParam: undefined as string | undefined, getNextPageParam: (page) => page.nextCursor ?? undefined, refetchInterval: 1_000,
   });
+  const selectConversationView = (view: 'active' | 'archive') => {
+    if (view === conversationView) {
+      // Keep the open conversation intact. A repeat tap is a refresh, not a
+      // request to blank the console behind the rail.
+      void conversations.refetch();
+      return;
+    }
+    setConversationId(null);
+    setConversationView(view);
+  };
   const conversationList = useMemo(() => conversations.data?.pages.flatMap((page) => page.conversations) ?? [], [conversations.data?.pages]);
   const nextConversationIdAfterRemoval = (removedId: string, view: 'active' | 'archive' = conversationView) => {
     const cached = queryClient.getQueryData<{ pages: Array<{ conversations: SharedConversation[] }> }>(['shared-conversations', view]);
@@ -572,6 +581,14 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     },
   });
   const latestMessageLength = messages.data?.messages.at(-1)?.body.length ?? 0;
+  const scrollThreadToLatest = (behavior: ScrollBehavior) => {
+    const container = threadScrollRef.current;
+    if (!container) return;
+    // scrollIntoView also scrolls hidden ancestors. In the conversation layout
+    // that moved the console header and view switch above the viewport.
+    if (typeof container.scrollTo === 'function') container.scrollTo({ top: container.scrollHeight, behavior });
+    else container.scrollTop = container.scrollHeight;
+  };
   useEffect(() => {
     if (!conversationId) return;
     setLocallyReadConversationIds((current) => current.has(conversationId) ? current : new Set(current).add(conversationId));
@@ -586,7 +603,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     // Only follow new streaming output while the user is already near the
     // bottom; once they scroll up to read history, stop yanking them back
     // and instead flag that new activity is waiting below the fold.
-    if (isNearThreadBottomRef.current) endRef.current?.scrollIntoView?.({ behavior: 'smooth' });
+    if (isNearThreadBottomRef.current) scrollThreadToLatest('smooth');
     else setHasNewActivityBelow(true);
   }, [messages.data?.messages.length, latestMessageLength, proposedPlan]);
   useEffect(() => {
@@ -611,7 +628,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const jumpToLatest = () => {
     isNearThreadBottomRef.current = true;
     setHasNewActivityBelow(false);
-    endRef.current?.scrollIntoView?.({ behavior: 'smooth' });
+    scrollThreadToLatest('smooth');
   };
   useEffect(() => {
     if (!railOpen) return;
@@ -673,7 +690,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
             aria-label="Search conversations"
             value={conversationSearch}
             onChange={(event) => setConversationSearch(event.target.value)}
-            placeholder="Search all conversations…"
+            placeholder="Search everything…"
           />
           {conversationSearch && <button type="button" className="icon-button" aria-label="Clear search" onClick={() => setConversationSearch('')}><X size={13} /></button>}
         </div>
@@ -685,13 +702,20 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               <div className="page-state">No matches for “{debouncedConversationSearch}”.</div>
             )}
             {conversationSearchResults.data?.results.map((result) => (
-              <div key={`${result.type}-${result.conversationId}-${result.messageId ?? 'title'}`} className="virtual-row" style={{ position: 'static' }}>
+              <div key={`${result.source}-${result.sourceId}`} className="virtual-row" style={{ position: 'static' }}>
                 <button
                   className={result.conversationId === conversationId ? 'active' : ''}
-                  onClick={() => { setConversationId(result.conversationId); setPendingSelectedConversation({ id: result.conversationId, title: result.conversationTitle }); setConversationSearch(''); setRailOpen(false); }}
+                  disabled={!result.conversationId}
+                  onClick={() => {
+                    if (!result.conversationId) return;
+                    setConversationId(result.conversationId);
+                    setPendingSelectedConversation({ id: result.conversationId, title: result.title });
+                    setConversationSearch('');
+                    setRailOpen(false);
+                  }}
                 >
-                  <span className="conversation-tab-title"><strong>{result.conversationTitle}</strong></span>
-                  <small>{parseSnippet(result.snippet).map((part, index) => part.highlighted ? <mark key={index}>{part.text}</mark> : <span key={index}>{part.text}</span>)}</small>
+                  <span className="conversation-tab-title"><small className="memory-source-tag">{memorySourceLabel(result.source)}</small> <strong>{result.title}</strong></span>
+                  <small>{result.snippet}</small>
                 </button>
               </div>
             ))}
@@ -699,8 +723,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
         ) : (
           <>
             <div className="conversation-view-tabs" role="group" aria-label="Conversation view">
-              <button type="button" className={conversationView === 'active' ? 'active' : ''} aria-pressed={conversationView === 'active'} onClick={() => { setConversationView('active'); setConversationId(null); }}>Active</button>
-              <button type="button" className={conversationView === 'archive' ? 'active' : ''} aria-pressed={conversationView === 'archive'} onClick={() => { setConversationView('archive'); setConversationId(null); }}>Archive</button>
+              <button type="button" className={conversationView === 'active' ? 'active' : ''} aria-pressed={conversationView === 'active'} onClick={() => selectConversationView('active')}>Active</button>
+              <button type="button" className={conversationView === 'archive' ? 'active' : ''} aria-pressed={conversationView === 'archive'} onClick={() => selectConversationView('archive')}>Archive</button>
             </div>
             <div ref={conversationScrollRef} className="conversation-tabs">
               <div className="virtual-list" style={{ height: conversationVirtualizer.getTotalSize() }}>
@@ -1557,7 +1581,13 @@ export function App() {
   function openPrimaryStack(stack: Extract<StackName, 'active' | 'workbench'>) {
     const surface = stack === 'active' ? 'attention' : 'workbench';
     const taskId = readLastOpenedItem(surface);
-    navigate(taskId ? { name: 'task', taskId } : { name: 'stack', stack });
+    // These navigations happen in one event, so React may only render the final
+    // task route. Set the close destination directly instead of relying on the
+    // stack-route effect to observe the intermediate history entry.
+    setTaskStack(stack);
+    // Keep the stack route behind the task for the mobile back gesture.
+    navigate({ name: 'stack', stack });
+    if (taskId) navigate({ name: 'task', taskId });
   }
   function openConversations() {
     navigate({ name: 'conversations', conversationId: readLastOpenedItem('conversation') });
@@ -1624,7 +1654,7 @@ export function App() {
   });
   const resolveProposal = useMutation({
     mutationFn: ({ id, resolution }: { id: string; resolution: 'accepted' | 'rejected' }) => api.resolveQueueProposal(id, resolution),
-    onSuccess: ({ proposal }, variables) => {
+    onSuccess: (_result, variables) => {
       navigate({ name: 'stack', stack: 'active' });
       toast.success(variables.resolution === 'accepted' ? 'Proposed stack accepted.' : 'Proposed stack rejected.');
       void queryClient.invalidateQueries({ queryKey: ['work-items'] });

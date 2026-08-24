@@ -75,5 +75,6 @@ describe('task status badges', () => {
     expect(badge.className).toContain(className);
     expect(badge.parentElement?.className).toContain('queue-item');
     expect(container.querySelector('.item-copy .agent-outcome')).toBeNull();
+    expect(container.querySelectorAll('.queue-item > .agent-outcome')).toHaveLength(1);
   });
 });

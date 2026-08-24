@@ -8,19 +8,17 @@ import { cancelAgentRun, isAgentRunActive } from './agent-runner.js';
 import { OWNER_ID } from './scheduler.js';
 import { previewRuntimeCapabilities } from './runtime-capabilities.js';
 import type { ProjectSummary, WorkItem } from '../shared/contracts.js';
-
-async function closeServer(server: Server): Promise<void> {
-  await new Promise<void>((resolveClose) => {
-    server.close(() => resolveClose());
-    server.closeAllConnections();
-  });
-}
+import { setEmbedder } from './memory-index.js';
+import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
+import { closeTestServer as closeServer } from './test-http-harness.js';
+import { fakeAgentDirectory } from './test-fake-agent.js';
 
 describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
   let database: WorkbenchDatabase;
   let repository: WorkItemRepository;
   let server: Server;
   let baseUrl: string;
+  const originalPath = process.env.PATH;
 
   beforeEach(async () => {
     database = openDatabase(':memory:');
@@ -33,6 +31,7 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
   });
 
   afterEach(async () => {
+    process.env.PATH = originalPath;
     await closeServer(server);
     database.close();
   });
@@ -77,6 +76,24 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     const { item } = await response.json() as { item: { id: string; classificationKind: string | null } };
     expect(item.classificationKind).toBe('bugfix');
     expect(repository.getClassification(item.id)).toEqual(expect.objectContaining({ kind: 'bugfix', source: 'manual' }));
+  });
+
+  it('rejects a PATCH whose expectedVersion is stale with a 409 carrying the current item (VERSION_CONFLICT)', async () => {
+    const item = repository.create({ title: 'Racing edit', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    // Simulate a concurrent writer landing first, so the version the client
+    // read is no longer current by the time its own PATCH arrives.
+    repository.update(item.id, { title: 'Won the race' });
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Lost the race', expectedVersion: item.version }),
+    });
+
+    expect(response.status).toBe(409);
+    const body = await response.json() as { error: string; code: string; item: WorkItem };
+    expect(body.code).toBe('VERSION_CONFLICT');
+    expect(body.item).toEqual(expect.objectContaining({ id: item.id, title: 'Won the race' }));
   });
 
   it('rejects a second /execute while a run is already active for the task (409)', async () => {
@@ -264,6 +281,9 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
   });
 
   it('allows a fresh /runs request once the prior run has completed', async () => {
+    // A real codex/claude binary must never be spawned from this suite: point PATH at a
+    // fake that just hangs until SIGTERM, so cancellation below is fast and deterministic.
+    fakeAgentDirectory(`trap 'exit 143' TERM\nwhile true; do /bin/sleep 0.1; done`, 'exit 1');
     const item = repository.create({ title: 'Dedup guard task 3', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const priorRun = repository.createRun(item.id, 'review', 'codex', 'codex', '');
     repository.updateRun(priorRun.id, { status: 'completed', completedAt: new Date().toISOString() });
@@ -824,11 +844,15 @@ describe('API mutation audit middleware', () => {
     server = app.listen(0);
     await new Promise<void>((resolveListen) => server.once('listening', () => resolveListen()));
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    // searchActivityMemory refreshes memory-index.ts before every search;
+    // stub the embedder so tests never download or run the real model.
+    setEmbedder(deterministicTestEmbedder);
   });
 
   afterEach(async () => {
     await closeServer(server);
     database.close();
+    setEmbedder(null);
   });
 
   it('records every completed mutating request without recording its body', async () => {
@@ -850,7 +874,8 @@ describe('API mutation audit middleware', () => {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Middleware memory task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null }),
     });
     expect(response.status).toBe(201);
-    expect(repository.searchActivityMemory('api_mutation').some((entry) => entry.source === 'audit' && entry.body === 'api_mutation: POST /api/work-items → 201')).toBe(true);
+    const results = await repository.searchActivityMemory('api_mutation');
+    expect(results.some((entry) => entry.source === 'audit' && entry.body === 'api_mutation: POST /api/work-items → 201')).toBe(true);
   });
 });
 

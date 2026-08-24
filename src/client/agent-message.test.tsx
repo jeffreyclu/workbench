@@ -2,7 +2,8 @@
 import '@testing-library/jest-dom/vitest';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { AgentMessageBody, splitAgentResponse } from './agent-message';
+import { AgentMessageBody } from './agent-message';
+import { splitAgentResponse } from './agent-message-logic';
 
 describe('splitAgentResponse', () => {
   it('uses authored top-level headings as report sections', () => {

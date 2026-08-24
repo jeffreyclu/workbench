@@ -31,6 +31,7 @@ const baseSchemaStatements = [
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       last_touched_at TEXT,
+      version INTEGER NOT NULL DEFAULT 1,
       UNIQUE(source, source_identifier)
     );
 
@@ -77,6 +78,7 @@ const baseSchemaStatements = [
       ,input_tokens INTEGER
       ,output_tokens INTEGER
       ,estimated_cost_usd REAL
+      ,cost_source TEXT CHECK (cost_source IN ('provider', 'estimated'))
       ,fallback_from TEXT
       ,fallback_reason TEXT
       ,cancel_requested INTEGER NOT NULL DEFAULT 0
@@ -130,6 +132,7 @@ const baseSchemaStatements = [
       ,input_tokens INTEGER
       ,output_tokens INTEGER
       ,estimated_cost_usd REAL
+      ,cost_source TEXT CHECK (cost_source IN ('provider', 'estimated'))
       ,fallback_from TEXT
       ,fallback_reason TEXT
       ,completed_at TEXT
@@ -1097,6 +1100,113 @@ const schemaMigrations: readonly Migration[] = [
         insertProject.run(`project-${key}`, canonical, key, now, now, spellings[0].lastUsed ?? now);
         for (const spelling of spellings) relabel.run(canonical, key, spelling.raw);
       }
+    },
+  },
+  {
+    // A dollar amount without its provenance is not safe to call spend: Claude
+    // can report a billed total while Codex currently only reports tokens. Keep
+    // legacy values unclassified rather than guessing how they were produced.
+    id: '028_agent_run_cost_provenance',
+    apply(database) {
+      const runColumns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+      if (!runColumns.some((column) => column.name === 'cost_source')) {
+        database.exec("ALTER TABLE agent_runs ADD COLUMN cost_source TEXT CHECK (cost_source IN ('provider', 'estimated'));");
+      }
+      const messageColumns = database.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+      if (!messageColumns.some((column) => column.name === 'cost_source')) {
+        database.exec("ALTER TABLE shared_messages ADD COLUMN cost_source TEXT CHECK (cost_source IN ('provider', 'estimated'));");
+      }
+    },
+  },
+  {
+    // Keep the provider's four usage classes. Combining cache traffic into
+    // input_tokens loses the information required for exact SET accounting.
+    id: '029_agent_run_token_breakdown',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'cache_creation_input_tokens')) {
+        database.exec('ALTER TABLE agent_runs ADD COLUMN cache_creation_input_tokens INTEGER;');
+      }
+      if (!columns.some((column) => column.name === 'cache_read_input_tokens')) {
+        database.exec('ALTER TABLE agent_runs ADD COLUMN cache_read_input_tokens INTEGER;');
+      }
+    },
+  },
+  {
+    // Optimistic concurrency for work-item writes: three writers (browser,
+    // MCP tools, and the scheduler/agent-runner) race against the same row.
+    // A caller-supplied expectedVersion lets an update fail loudly on a stale
+    // read instead of silently overwriting a concurrent change.
+    id: '030_work_item_version',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'version')) {
+        database.exec('ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 1;');
+      }
+    },
+  },
+  {
+    // Vectorized, hybrid retrieval over the complete durable Workbench record
+    // (memory-index.ts). One row per durable record (message, activity entry,
+    // agent-run prompt/response/error, audit entry, work item, doc page) in
+    // memory_documents, keyed by (source, source_id) so re-collecting is an
+    // upsert rather than a growing duplicate log. memory_chunks holds the
+    // chunked, embedded text; memory_chunks_fts is a standalone FTS5 mirror
+    // kept in sync by triggers, matching the conversations_fts/messages_fts
+    // convention above rather than an external-content table, for the same
+    // reason: memory_chunks uses an INTEGER PRIMARY KEY autoincrement id here,
+    // so it could use content=, but standalone keeps this migration's sync
+    // triggers as trivial and uniform as the existing FTS tables.
+    id: '031_memory_index',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS memory_documents (
+          id TEXT PRIMARY KEY,
+          source TEXT NOT NULL,
+          source_id TEXT NOT NULL,
+          conversation_id TEXT,
+          work_item_id TEXT,
+          actor TEXT,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          indexed_at TEXT,
+          UNIQUE(source, source_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_documents_indexed_at
+          ON memory_documents(indexed_at);
+        CREATE INDEX IF NOT EXISTS idx_memory_documents_created_at
+          ON memory_documents(created_at);
+
+        CREATE TABLE IF NOT EXISTS memory_chunks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          document_id TEXT NOT NULL REFERENCES memory_documents(id) ON DELETE CASCADE,
+          ordinal INTEGER NOT NULL,
+          text TEXT NOT NULL,
+          embedding BLOB,
+          model TEXT,
+          dims INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_chunks_document
+          ON memory_chunks(document_id);
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks_fts USING fts5(
+          chunk_id UNINDEXED,
+          text
+        );
+
+        CREATE TRIGGER IF NOT EXISTS memory_chunks_fts_ai AFTER INSERT ON memory_chunks BEGIN
+          INSERT INTO memory_chunks_fts(chunk_id, text) VALUES (new.id, new.text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS memory_chunks_fts_au AFTER UPDATE ON memory_chunks BEGIN
+          DELETE FROM memory_chunks_fts WHERE chunk_id = old.id;
+          INSERT INTO memory_chunks_fts(chunk_id, text) VALUES (new.id, new.text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS memory_chunks_fts_ad AFTER DELETE ON memory_chunks BEGIN
+          DELETE FROM memory_chunks_fts WHERE chunk_id = old.id;
+        END;
+      `);
     },
   },
 ];

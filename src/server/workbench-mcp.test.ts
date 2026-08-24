@@ -175,6 +175,20 @@ describe('Workbench MCP', () => {
     expect(detail.activity).toContainEqual(expect.objectContaining({ actor: 'codex', kind: 'decision', body: 'Provider-owned fields remain outside MCP.' }));
   });
 
+  it('surfaces a stale expectedVersion on update_work_item as a CONFLICT tool failure', async () => {
+    const item = repository.create({ title: 'Raced by another writer', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    // Simulate another writer (browser or scheduler) landing first.
+    repository.update(item.id, { title: 'Already changed' });
+
+    const result = await client.callTool({
+      name: 'update_work_item',
+      arguments: { workItemId: item.id, title: 'Stale write', expectedVersion: item.version },
+    });
+
+    expect(result.structuredContent).toEqual({ error: { code: 'CONFLICT', message: expect.stringMatching(/changed since/i) } });
+    expect(repository.get(item.id)?.title).toBe('Already changed');
+  });
+
   it('logs an attributed activity entry for the fields an assistant changes', async () => {
     const item = repository.create({ title: 'Assistant edit', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
 

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
-import { WorkItemDependencyError, WorkItemRepository } from './repository.js';
+import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
 import { cancelSharedReply, dispatchNextSharedTurn } from './shared-room.js';
+import { setEmbedder } from './memory-index.js';
+import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 
 describe('WorkItemRepository', () => {
   let database: WorkbenchDatabase;
@@ -10,18 +12,25 @@ describe('WorkItemRepository', () => {
   beforeEach(() => {
     database = openDatabase(':memory:');
     repository = new WorkItemRepository(database);
+    // searchActivityMemory refreshes memory-index.ts before every search;
+    // stub the embedder so tests never download or run the real model.
+    setEmbedder(deterministicTestEmbedder);
   });
 
-  afterEach(() => database.close());
+  afterEach(() => {
+    database.close();
+    setEmbedder(null);
+  });
 
   it('aggregates reported token usage by provider and model for terminal runs', () => {
     const item = repository.create({ title: 'Measure usage', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const codexRun = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Implement it.');
     const claudeRun = repository.createRun(item.id, 'review', 'claude', 'claude', 'Review it.');
     const unreportedRun = repository.createRun(item.id, 'research', 'codex', 'codex', 'Research it.');
-    repository.updateRun(codexRun.id, { status: 'completed', model: 'gpt-5.6-terra', inputTokens: 1_200, outputTokens: 300 });
-    repository.updateRun(claudeRun.id, { status: 'failed', model: 'claude-sonnet', inputTokens: 400, outputTokens: 100 });
-    repository.updateRun(unreportedRun.id, { status: 'completed', model: 'gpt-5.6-terra' });
+    const completedAt = new Date().toISOString();
+    repository.updateRun(codexRun.id, { status: 'completed', completedAt, model: 'gpt-5.6-terra', inputTokens: 1_200, outputTokens: 300 });
+    repository.updateRun(claudeRun.id, { status: 'failed', completedAt, model: 'claude-sonnet', inputTokens: 400, outputTokens: 100 });
+    repository.updateRun(unreportedRun.id, { status: 'completed', completedAt, model: 'gpt-5.6-terra' });
 
     expect(repository.getRunInsights()).toMatchObject({
       inputTokens: 1_600,
@@ -82,14 +91,14 @@ describe('WorkItemRepository', () => {
     expect(repository.getSharedContext(undefined, { workItemId: task.id })).not.toContain('Use the existing API');
   });
 
-  it('retrieves shared history across messages, task activity, and prior runs', () => {
+  it('retrieves shared history across messages, task activity, and prior runs', async () => {
     const task = repository.create({ title: 'Investigate memory retrieval', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const conversation = repository.createConversation('Memory room', task.id);
     repository.createSharedMessage('codex', 'The durable-memory marker appears in this message.', 'completed', conversation.id);
     repository.addActivity(task.id, 'codex', 'progress', 'Recorded durable-memory evidence in activity.');
     const run = repository.createRun(task.id, 'analysis', 'claude', 'claude', 'Search durable-memory history.');
     repository.updateRun(run.id, { status: 'completed', output: 'durable-memory run result' });
-    const results = repository.searchActivityMemory('durable-memory');
+    const results = await repository.searchActivityMemory('durable-memory');
     expect(results.map((result) => result.source)).toEqual(expect.arrayContaining(['message', 'activity', 'run']));
   });
 
@@ -113,26 +122,47 @@ describe('WorkItemRepository', () => {
     expect(repository.backfillEstimatedCosts()).toBe(0);
   });
 
-  it('reports total, per-agent, and per-model cost, and counts runs it could not price', () => {
+  it('separates provider bills from list-price estimates and excludes legacy costs', () => {
     const item = repository.create({ title: 'Cost insights', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const claudeRun = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');
     const codexRun = repository.createRun(item.id, 'review', 'codex', 'codex', 'Review it.');
     const unpriced = repository.createRun(item.id, 'research', 'codex', 'codex', 'Research it.');
-    repository.updateRun(claudeRun.id, { status: 'completed', model: 'opus', inputTokens: 100, outputTokens: 200, estimatedCostUsd: 2 });
-    repository.updateRun(codexRun.id, { status: 'completed', model: 'gpt-5.6-terra', inputTokens: 100, outputTokens: 200, estimatedCostUsd: 0.5 });
-    repository.updateRun(unpriced.id, { status: 'completed', model: 'not-a-real-model', inputTokens: 100, outputTokens: 200 });
+    const completedAt = new Date().toISOString();
+    repository.updateRun(claudeRun.id, { status: 'completed', completedAt, model: 'opus', inputTokens: 100, outputTokens: 200, estimatedCostUsd: 2, costSource: 'provider' });
+    repository.updateRun(codexRun.id, { status: 'completed', completedAt, model: 'gpt-5.6-terra', inputTokens: 100, outputTokens: 200, estimatedCostUsd: 0.5, costSource: 'estimated' });
+    repository.updateRun(unpriced.id, { status: 'completed', completedAt, model: 'not-a-real-model', inputTokens: 100, outputTokens: 200 });
 
     const insights = repository.getRunInsights();
-    expect(insights.costUsd).toBe(2.5);
-    expect(insights.pricedRuns).toBe(2);
+    expect(insights.providerCostUsd).toBe(2);
+    expect(insights.estimatedCostUsd).toBe(0.5);
+    expect(insights.providerPricedRuns).toBe(1);
+    expect(insights.estimatedPricedRuns).toBe(1);
     expect(insights.unpricedRuns).toBe(1);
     // No history before this window, so there is nothing to trend against.
-    expect(insights.previousCostUsd).toBeNull();
-    expect(insights.byAgent.find((agent) => agent.agent === 'claude')?.costUsd).toBe(2);
-    expect(insights.byAgent.find((agent) => agent.agent === 'codex')?.costUsd).toBe(0.5);
-    expect(insights.tokenUsageByModel.find((row) => row.model === 'opus')).toMatchObject({ costUsd: 2, runs: 1, rateSource: 'default' });
+    expect(insights.previousProviderCostUsd).toBeNull();
+    expect(insights.previousEstimatedCostUsd).toBeNull();
+    expect(insights.byAgent.find((agent) => agent.agent === 'claude')?.providerCostUsd).toBe(2);
+    expect(insights.byAgent.find((agent) => agent.agent === 'codex')?.estimatedCostUsd).toBe(0.5);
+    expect(insights.tokenUsageByModel.find((row) => row.model === 'opus')).toMatchObject({ costUsd: 0, runs: 1, rateSource: 'default' });
     expect(insights.tokenUsageByModel.find((row) => row.model === 'not-a-real-model')).toMatchObject({ costUsd: 0, rateSource: null });
-    expect(insights.costByDay.reduce((total, day) => total + day.costUsd, 0)).toBe(2.5);
+    expect(insights.costByDay.reduce((total, day) => total + day.costUsd, 0)).toBe(0.5);
+  });
+
+  it('uses terminal completion time and counts canceled runs as unsuccessful attempts', () => {
+    const item = repository.create({ title: 'Reliable run metrics', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const completed = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Implement it.');
+    const failed = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Implement it.');
+    const canceled = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Implement it.');
+    const completedAt = new Date().toISOString();
+    repository.updateRun(completed.id, { status: 'completed', completedAt });
+    repository.updateRun(failed.id, { status: 'failed', completedAt });
+    repository.updateRun(canceled.id, { status: 'canceled', completedAt });
+    database.prepare("UPDATE agent_runs SET created_at = '2020-01-01T00:00:00.000Z' WHERE id = ?").run(completed.id);
+
+    const insights = repository.getRunInsights();
+    expect(insights.completedRuns).toBe(1);
+    expect(insights.byAgent.find((agent) => agent.agent === 'codex')).toMatchObject({ total: 3, completed: 1, failed: 1, successRate: 1 / 3 });
+    expect(insights.byKind).toEqual([expect.objectContaining({ kind: 'execute', completed: 1, failed: 1, canceled: 1, successRate: 1 / 3 })]);
   });
 
   it('uses lifecycle events for retry and handoff insights, including chat-era history', () => {
@@ -204,6 +234,53 @@ describe('WorkItemRepository', () => {
     expect(repository.listWorkbench().map((entry) => entry.id)).toContain(item.id);
     expect(repository.update(item.id, { status: 'in_progress' })?.status).toBe('in_progress');
     expect(repository.listActivity(item.id)).toHaveLength(1);
+  });
+
+  it('applies an update whose expectedVersion matches the current row and bumps version', () => {
+    const item = repository.create({ title: 'Versioned task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    expect(item.version).toBe(1);
+
+    const updated = repository.update(item.id, { title: 'Renamed once', expectedVersion: 1 });
+    expect(updated?.title).toBe('Renamed once');
+    expect(updated?.version).toBe(2);
+  });
+
+  it('rejects a second update against a version already consumed by a prior write', () => {
+    const item = repository.create({ title: 'Versioned task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    const first = repository.update(item.id, { title: 'First writer wins', expectedVersion: 1 });
+    expect(first?.version).toBe(2);
+
+    expect(() => repository.update(item.id, { title: 'Second writer loses', expectedVersion: 1 }))
+      .toThrow(WorkItemVersionConflictError);
+
+    const current = repository.get(item.id)!;
+    expect(current.title).toBe('First writer wins');
+    expect(current.version).toBe(2);
+  });
+
+  it('applies an update with no expectedVersion regardless of the current version', () => {
+    const item = repository.create({ title: 'Unversioned caller', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.update(item.id, { title: 'Bumped by someone else', expectedVersion: 1 });
+
+    const updated = repository.update(item.id, { title: 'Last write wins' });
+    expect(updated?.title).toBe('Last write wins');
+    expect(updated?.version).toBe(3);
+  });
+
+  it('rolls back a dependency change when a conflicting update also passes blockedByIds', () => {
+    const item = repository.create({ title: 'Depends on something', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const prerequisite = repository.create({ title: 'Prerequisite', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    // Consume the version out from under the caller before it applies its own update.
+    repository.update(item.id, { title: 'Concurrent edit' });
+
+    expect(() => repository.update(item.id, { title: 'Should not apply', blockedByIds: [prerequisite.id], expectedVersion: 1 }))
+      .toThrow(WorkItemVersionConflictError);
+
+    const current = repository.get(item.id)!;
+    expect(current.title).toBe('Concurrent edit');
+    expect(current.blockedBy ?? []).toHaveLength(0);
   });
 
   it('never archives a task when editing its title and can restore archived tasks', () => {
@@ -363,7 +440,7 @@ describe('WorkItemRepository', () => {
     const stale = repository.create({ title: 'Stale Workbench task', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     database.prepare('UPDATE work_items SET last_touched_at = ? WHERE id = ?').run(new Date(Date.now() - 9 * 86_400_000).toISOString(), stale.id);
 
-    const proposal = repository.buildDailyProposal(Date.now(), 'workbench');
+    const proposal = repository.buildDailyProposal(Date.now());
 
     expect(proposal.stack).toBe('attention');
     expect(repository.listWorkbench().map((item) => item.id)).toEqual([stale.id, fresh.id]);

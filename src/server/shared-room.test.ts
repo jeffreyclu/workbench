@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { buildSharedReplyPrompt, classificationForLinkedItem, compactConversationHistory, hasUntrackedContinuationClaim, resolveSharedReplyWorkingDirectory } from './shared-room.js';
+import { buildSharedReplyPrompt, classificationForLinkedItem, compactConversationHistory, compactSharedBrief, hasUntrackedContinuationClaim, resolveSharedReplyWorkingDirectory } from './shared-room.js';
 
 function message(index: number, body: string): SharedMessage {
   return {
@@ -47,6 +47,16 @@ describe('compactConversationHistory', () => {
     expect(history).toContain('Earlier conversation');
     expect(history).toContain('turn-13');
     expect(history).not.toContain(`turn-0 ${'x'.repeat(500)}`);
+  });
+
+  it('caps the scoped brief and relies on retrieved memory for older detail', () => {
+    const brief = `start ${'x'.repeat(2_800)} end`;
+    const compacted = compactSharedBrief(brief);
+
+    expect(compacted.length).toBeLessThanOrEqual(1_900);
+    expect(compacted).toContain('characters compacted; use retrieved memory');
+    expect(compacted).toContain('start');
+    expect(compacted).toContain('end');
   });
 
   it('uses frontend-reviewer for a review-linked reply with no stored classification', () => {

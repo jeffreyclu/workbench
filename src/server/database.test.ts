@@ -38,6 +38,10 @@ const EXPECTED_MIGRATIONS = [
   '025_workbench_is_attention_focus',
   '026_budget_reservation_run_link',
   '027_project_registry',
+  '028_agent_run_cost_provenance',
+  '029_agent_run_token_breakdown',
+  '030_work_item_version',
+  '031_memory_index',
 ];
 
 describe('openDatabase', () => {
@@ -188,6 +192,23 @@ describe('openDatabase', () => {
     expect(upgraded.prepare("SELECT COUNT(*) AS count FROM work_items WHERE project_key = 'workbench'").get()).toEqual({ count: 4 });
     expect(upgraded.prepare("SELECT name, key FROM projects ORDER BY key").all())
       .toEqual([{ name: 'Connectors', key: 'connectors' }, { name: 'Workbench', key: 'workbench' }]);
+    upgraded.close();
+  });
+
+  it('adds cost provenance on upgrade from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE agent_runs DROP COLUMN cost_source; ALTER TABLE shared_messages DROP COLUMN cost_source;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '028_agent_run_cost_provenance'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const runColumns = (upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>).map((column) => column.name);
+    const messageColumns = (upgraded.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(runColumns).toContain('cost_source');
+    expect(messageColumns).toContain('cost_source');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '028_agent_run_cost_provenance'").get()).toBeTruthy();
     upgraded.close();
   });
 
@@ -394,6 +415,21 @@ describe('openDatabase', () => {
     upgraded.close();
   });
 
+  it('adds the work-item version column on upgrade from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE work_items DROP COLUMN version;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '030_work_item_version'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toContain('version');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '030_work_item_version'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
   it('rejects a database created by a newer Workbench build', () => {
     directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
     const path = join(directory, 'workbench.db');
@@ -402,5 +438,50 @@ describe('openDatabase', () => {
     database.close();
 
     expect(() => openDatabase(path)).toThrow('newer than this Workbench build');
+  });
+
+  it('upgrades a database recorded through 028 with exact agent-run token fields', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '029_agent_run_token_breakdown'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['cache_creation_input_tokens', 'cache_read_input_tokens']));
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '029_agent_run_token_breakdown'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('creates the memory index tables on upgrade from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    // Rebuild the pre-031 shape: existing databases have already recorded
+    // migration 030 and nothing past it, so the upgrade must run against that.
+    current.exec(`
+      DROP TRIGGER IF EXISTS memory_chunks_fts_ai;
+      DROP TRIGGER IF EXISTS memory_chunks_fts_au;
+      DROP TRIGGER IF EXISTS memory_chunks_fts_ad;
+      DROP TABLE IF EXISTS memory_chunks_fts;
+      DROP TABLE IF EXISTS memory_chunks;
+      DROP TABLE IF EXISTS memory_documents;
+    `);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '031_memory_index'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_documents'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_chunks'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_chunks_fts'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '031_memory_index'").get()).toBeTruthy();
+
+    // The FTS mirror stays in sync via triggers on memory_chunks, the same
+    // convention as conversations_fts/messages_fts.
+    upgraded.prepare("INSERT INTO memory_documents (id, source, source_id, conversation_id, work_item_id, actor, title, body, created_at, content_hash, indexed_at) VALUES ('doc-1', 'doc', 'readme.md', NULL, NULL, NULL, 'Readme', 'hello world', '2026-08-23T00:00:00.000Z', 'hash', NULL)").run();
+    upgraded.prepare("INSERT INTO memory_chunks (document_id, ordinal, text, embedding, model, dims) VALUES ('doc-1', 0, 'hello world', NULL, NULL, NULL)").run();
+    expect(upgraded.prepare("SELECT chunk_id FROM memory_chunks_fts WHERE memory_chunks_fts MATCH 'hello'").all()).toEqual([{ chunk_id: 1 }]);
+    upgraded.close();
   });
 });

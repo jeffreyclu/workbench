@@ -57,15 +57,13 @@ function tierMultiplier(agent: AgentRun['agent'], model: string | null): number 
 }
 
 /**
- * `agent_runs` stores input tokens as a single combined figure (see
- * `agent-runner.ts` `usageFromEvent`), not split into fresh/cache-write/
- * cache-read. Treating the whole figure as fresh input is a deliberate
- * upper bound — real cost is lower because most input is cache reads — so
- * this SET figure over-counts rather than under-counts against the budget.
+ * Exact SET conversion for the four usage classes captured on new runs. Rows
+ * written before migration 029 lack cache fields; their historic input is
+ * intentionally treated as fresh input rather than inventing a cache split.
  */
-function setForCombinedTokens(agent: AgentRun['agent'], model: string | null, inputTokens: number, outputTokens: number): number {
+export function sonnetEquivalentTokens(agent: AgentRun['agent'], model: string | null, tokens: { inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null }): number {
   const multiplier = tierMultiplier(agent, model);
-  return multiplier * (inputTokens * TOKEN_KIND_WEIGHT.freshInput + outputTokens * TOKEN_KIND_WEIGHT.output);
+  return multiplier * ((tokens.inputTokens ?? 0) * TOKEN_KIND_WEIGHT.freshInput + (tokens.cacheCreationInputTokens ?? 0) * TOKEN_KIND_WEIGHT.cacheWrite + (tokens.cacheReadInputTokens ?? 0) * TOKEN_KIND_WEIGHT.cacheRead + (tokens.outputTokens ?? 0) * TOKEN_KIND_WEIGHT.output);
 }
 
 /** Exact SET for one Claude Code transcript usage sample, using the real cache-read/cache-write split. */
@@ -75,13 +73,7 @@ function setForTranscriptUsage(model: string | null, usage: {
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
 }): number {
-  const multiplier = tierMultiplier('claude', model);
-  return multiplier * (
-    (usage.input_tokens ?? 0) * TOKEN_KIND_WEIGHT.freshInput
-    + (usage.cache_creation_input_tokens ?? 0) * TOKEN_KIND_WEIGHT.cacheWrite
-    + (usage.cache_read_input_tokens ?? 0) * TOKEN_KIND_WEIGHT.cacheRead
-    + (usage.output_tokens ?? 0) * TOKEN_KIND_WEIGHT.output
-  );
+  return sonnetEquivalentTokens('claude', model, { inputTokens: usage.input_tokens, cacheCreationInputTokens: usage.cache_creation_input_tokens, cacheReadInputTokens: usage.cache_read_input_tokens, outputTokens: usage.output_tokens });
 }
 
 function emptyTotals(): UsageTotals {
@@ -115,7 +107,7 @@ export function computeWorkbenchUsage(repository: WorkItemRepository, weekStart:
     const outputTokens = row.outputTokens ?? 0;
     bucket.inputTokens += inputTokens;
     bucket.outputTokens += outputTokens;
-    bucket.setTokens += setForCombinedTokens(row.agent, row.model, inputTokens, outputTokens);
+    bucket.setTokens += sonnetEquivalentTokens(row.agent, row.model, { inputTokens, cacheCreationInputTokens: row.cacheCreationInputTokens, cacheReadInputTokens: row.cacheReadInputTokens, outputTokens });
     bucket.runCount += 1;
   }
   return totals;
@@ -136,13 +128,11 @@ interface TranscriptUsageLine {
 export function scanClaudeInteractiveUsage(weekStart: Date, weekEnd: Date, root = join(homedir(), '.claude', 'projects')): ClaudeInteractiveUsage {
   let setTokens = 0;
   let scannedFiles = 0;
-  let unreadableFiles = 0;
-
   let projectDirs: string[];
   try {
     projectDirs = readdirSync(root);
-  } catch {
-    return { setTokens: 0, scannedFiles: 0, unreadableFiles: 0 };
+  } catch (error) {
+    return { setTokens: 0, scannedFiles: 0, error: `Unable to read Claude transcript directory: ${error instanceof Error ? error.message : String(error)}` };
   }
 
   for (const projectDir of projectDirs) {
@@ -150,8 +140,8 @@ export function scanClaudeInteractiveUsage(weekStart: Date, weekEnd: Date, root 
     let entries: string[];
     try {
       entries = readdirSync(projectPath).filter((name) => name.endsWith('.jsonl'));
-    } catch {
-      continue;
+    } catch (error) {
+      return { setTokens: 0, scannedFiles, error: `Unable to read Claude transcript project ${projectDir}: ${error instanceof Error ? error.message : String(error)}` };
     }
     for (const entry of entries) {
       const filePath = join(projectPath, entry);
@@ -175,13 +165,13 @@ export function scanClaudeInteractiveUsage(weekStart: Date, weekEnd: Date, root 
           if (occurredAt < weekStart || occurredAt >= weekEnd) continue;
           setTokens += setForTranscriptUsage(parsed.message?.model ?? null, usage);
         }
-      } catch {
-        unreadableFiles += 1;
+      } catch (error) {
+        return { setTokens: 0, scannedFiles, error: `Unable to read Claude transcript ${filePath}: ${error instanceof Error ? error.message : String(error)}` };
       }
     }
   }
 
-  return { setTokens, scannedFiles, unreadableFiles };
+  return { setTokens, scannedFiles, error: null };
 }
 
 /**

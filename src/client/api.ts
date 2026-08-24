@@ -15,7 +15,7 @@ import type {
   BrokerSourceId,
   SharedMessage,
   SharedConversation,
-  SharedSearchResponse,
+  MemorySearchResponse,
   ConversationPage,
   WorkItem,
   WorkItemDetail,
@@ -199,10 +199,10 @@ export const api = {
   getWorkItemCounts: () => request<{ active: number; workbench: number; archive: number }>('/api/work-item-counts'),
   getProjects: () => request<{ projects: ProjectSummary[] }>('/api/projects'),
   getRuntimePreviewStatus: () => request<{ pending: boolean; currentFingerprint: string; promotedFingerprint: string | null; promotedAt: string | null }>('/api/runtime/preview-status'),
-  searchShared: (query: string, limit?: number) => {
+  searchMemory: (query: string, limit?: number) => {
     const params = new URLSearchParams({ q: query });
     if (limit) params.set('limit', String(limit));
-    return request<SharedSearchResponse>(`/api/shared/search?${params}`);
+    return request<MemorySearchResponse>(`/api/memory/search?${params}`);
   },
   getSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}`),
   createSharedConversation: (title = 'New conversation') => request<{ conversation: SharedConversation }>('/api/shared/conversations', { method: 'POST', body: JSON.stringify({ title }) }),

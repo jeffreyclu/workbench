@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { isSelfAssigned, workItemFilterSchema, type Activity, type ProjectSummary, type AgentRun, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryCandidateStatus, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type UsageCalibration, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType } from '../shared/contracts.js';
+import { isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryCandidateStatus, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type UsageCalibration, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType } from '../shared/contracts.js';
 import { learnFeedbackWeights, planQueue, type FeedbackWeight, type QueueContext, type QueuePlan } from './queue-intelligence.js';
 import { listProjects, resolveProjectName } from './project-registry.js';
 import { projectKey, WORKBENCH_PROJECT_KEY, WORKBENCH_PROJECT_NAME } from '../shared/project-name.js';
@@ -10,6 +10,8 @@ import { DEFAULT_WORKBENCH_TIMEZONE, localCalendarDate } from '../shared/due-dat
 import { describeLifecycleChange, summarizeWorkItemChanges } from './activity-log.js';
 import { summarizeCursing } from './profanity.js';
 import { estimateModelCost, resolveModelRate } from './model-pricing.js';
+import { collectMemoryDocuments, indexPendingMemory, searchMemory } from './memory-index.js';
+import { buildFtsMatchQuery } from './fts-query.js';
 
 /**
  * Workbench is a project focus on the one attention queue (migration 025), so
@@ -54,6 +56,7 @@ interface WorkItemRow {
   created_at: string;
   updated_at: string;
   last_touched_at: string | null;
+  version: number;
 }
 
 interface ActivityRow {
@@ -75,8 +78,11 @@ interface RunPatch {
   model?: string;
   executionProfile?: NonNullable<AgentRun['executionProfile']>;
   inputTokens?: number | null;
+  cacheCreationInputTokens?: number | null;
+  cacheReadInputTokens?: number | null;
   outputTokens?: number | null;
   estimatedCostUsd?: number | null;
+  costSource?: AgentRun['costSource'];
   fallbackFrom?: AgentRun['agent'] | null;
   fallbackReason?: string | null;
   ownerId?: string | null;
@@ -178,6 +184,7 @@ function mapWorkItem(row: WorkItemRow): WorkItem {
     providerUpdatedAt: row.provider_updated_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    version: row.version,
     lastTouchedAt: row.last_touched_at ?? row.created_at,
   };
 }
@@ -246,8 +253,31 @@ function parseProviderValue(value: string): ProviderFieldValue {
   return JSON.parse(value) as ProviderFieldValue;
 }
 
+/**
+ * `/api/activity-memory` predates the three-way run split
+ * (run_instructions/run_output/run_error) that lets a prompt be retrieved
+ * independently of its response; collapse them back to the legacy 'run'
+ * label so the response shape agents already parse does not change.
+ */
+function legacyMemorySource(source: string): string {
+  if (source === 'run_instructions' || source === 'run_output' || source === 'run_error') return 'run';
+  return source;
+}
+
 export class WorkItemDependencyError extends Error {
   readonly code = 'INVALID_DEPENDENCIES';
+}
+
+/**
+ * Thrown when a caller's `expectedVersion` no longer matches the row. Carries
+ * the current server-side item so the caller can decide whether to retry
+ * with fresh data instead of clobbering the concurrent write.
+ */
+export class WorkItemVersionConflictError extends Error {
+  readonly code = VERSION_CONFLICT_CODE;
+  constructor(readonly item: WorkItem) {
+    super(VERSION_CONFLICT_MESSAGE);
+  }
 }
 
 export class WorkItemRepository {
@@ -758,21 +788,6 @@ export class WorkItemRepository {
   }
 
   /**
-   * Turns a raw user query into a safe FTS5 MATCH expression: every
-   * whitespace-separated token is individually double-quoted (with internal
-   * `"` doubled per SQLite string-escaping rules), which makes FTS5 treat it
-   * as a literal string rather than syntax — so special characters and
-   * reserved keywords (`*`, `:`, `AND`, `OR`, `NOT`, unbalanced quotes, ...)
-   * can never produce a MATCH syntax error. Quoted tokens are implicitly
-   * ANDed by FTS5, i.e. "find rows containing all of these words".
-   */
-  private buildFtsMatchQuery(query: string): string | null {
-    const tokens = query.trim().split(/\s+/).filter(Boolean);
-    if (!tokens.length) return null;
-    return tokens.map((token) => `"${token.replace(/"/g, '""')}"`).join(' ');
-  }
-
-  /**
    * Combined, ranked full-text search over shared conversation titles and
    * message bodies (see the conversations_fts/messages_fts tables and their
    * sync triggers in database.ts). Each side is queried and ranked
@@ -781,7 +796,7 @@ export class WorkItemRepository {
    * from two independent FTS tables without a fragile cross-table UNION.
    */
   searchShared(query: string, limit = 20): SharedSearchResult[] {
-    const matchQuery = this.buildFtsMatchQuery(query);
+    const matchQuery = buildFtsMatchQuery(query);
     if (!matchQuery) return [];
     const safeLimit = Math.max(1, Math.min(100, limit));
 
@@ -835,27 +850,42 @@ export class WorkItemRepository {
     return results.slice(0, safeLimit);
   }
 
-  /** Read-only retrieval over the complete durable Workbench record for agents. */
-  searchActivityMemory(query: string, limit = 40): Array<{ source: 'message' | 'activity' | 'run' | 'audit'; title: string; body: string; createdAt: string }> {
+  /**
+   * Read-only retrieval over the complete durable Workbench record for
+   * agents. Built on the vectorized hybrid (FTS5 BM25 + cosine) index in
+   * memory-index.ts rather than a LIKE scan. Public/ad-hoc searches refresh
+   * first, collecting new or changed durable records and embedding anything
+   * pending so a write made moments ago is retrievable with no separate
+   * reindex step. Prompt assembly may opt out of that refresh to avoid making
+   * a task wait behind corpus maintenance; it searches the already-ready
+   * index instead.
+   *
+   * At the current corpus size (~19k rows) that per-call refresh is a
+   * handful of full-table scans plus embedding only whatever is still
+   * unindexed (usually nothing, once collectMemoryDocuments/indexPendingMemory
+   * have run at startup) -- cheap in steady state. If the corpus grows enough
+   * for the full per-source scan itself to matter, decouple collection from
+   * the request path (a poller keyed off a watermark) rather than doing it
+   * here.
+   */
+  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string }>> {
     if (query.trim().length < 2) return [];
-    const needle = `%${query.trim().replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+    if (options.refresh !== false) {
+      try {
+        collectMemoryDocuments(this.database);
+        await indexPendingMemory(this.database, { limit: 2_000 });
+      } catch (error) {
+        console.error('[memory-index] failed to refresh memory index before search', error);
+      }
+    }
     const safeLimit = Math.max(1, Math.min(100, limit));
-    const rows = this.database.prepare(`
-      SELECT 'message' AS source, COALESCE(c.title, 'Conversation') AS title, m.body AS body, m.created_at AS created_at
-        FROM shared_messages m LEFT JOIN shared_conversations c ON c.id = m.conversation_id
-        WHERE m.body LIKE ? ESCAPE '\\' AND (c.deleted_at IS NULL OR c.id IS NULL)
-      UNION ALL
-      SELECT 'activity', w.title, a.body, a.created_at FROM activities a JOIN work_items w ON w.id = a.work_item_id
-        WHERE a.body LIKE ? ESCAPE '\\' OR w.title LIKE ? ESCAPE '\\'
-      UNION ALL
-      SELECT 'run', w.title, COALESCE(r.output, r.instructions, r.error), r.created_at FROM agent_runs r JOIN work_items w ON w.id = r.work_item_id
-        WHERE r.output LIKE ? ESCAPE '\\' OR r.instructions LIKE ? ESCAPE '\\' OR r.error LIKE ? ESCAPE '\\' OR w.title LIKE ? ESCAPE '\\'
-      UNION ALL
-      SELECT 'audit', COALESCE(w.title, 'Workbench API'), a.category || ': ' || a.detail, a.created_at FROM audit_log a LEFT JOIN work_items w ON w.id = a.work_item_id
-        WHERE a.detail LIKE ? ESCAPE '\\' OR a.source LIKE ? ESCAPE '\\' OR a.category LIKE ? ESCAPE '\\' OR w.title LIKE ? ESCAPE '\\'
-      ORDER BY created_at DESC LIMIT ?
-    `).all(needle, needle, needle, needle, needle, needle, needle, needle, needle, needle, needle, safeLimit) as Array<{ source: 'message' | 'activity' | 'run' | 'audit'; title: string; body: string; created_at: string }>;
-    return rows.map((row) => ({ source: row.source, title: row.title, body: row.body.slice(0, 4_000), createdAt: row.created_at }));
+    const results = await searchMemory(this.database, query, { limit: safeLimit });
+    return results.map((result) => ({
+      source: legacyMemorySource(result.source),
+      title: result.title,
+      body: result.snippet.slice(0, 4_000),
+      createdAt: result.createdAt,
+    }));
   }
 
   listQueuedConversationIds(): string[] {
@@ -907,14 +937,14 @@ export class WorkItemRepository {
     return this.getSharedMessageById(id);
   }
 
-  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; outputTokens?: number | null; estimatedCostUsd?: number | null; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null }): SharedMessage | null {
+  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; outputTokens?: number | null; estimatedCostUsd?: number | null; costSource?: SharedMessage['costSource']; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null }): SharedMessage | null {
     // A retry reuses the same message row. Never let the error from the prior
     // attempt survive a successful or user-canceled terminal transition.
     const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
     const entries = Object.entries({
       pinned: changes.pinned === undefined ? undefined : Number(changes.pinned),
       body: changes.body, status: changes.status, error, author: changes.author, model: changes.model, execution_profile: changes.executionProfile,
-      input_tokens: changes.inputTokens, output_tokens: changes.outputTokens, estimated_cost_usd: changes.estimatedCostUsd, fallback_from: changes.fallbackFrom, fallback_reason: changes.fallbackReason,
+      input_tokens: changes.inputTokens, output_tokens: changes.outputTokens, estimated_cost_usd: changes.estimatedCostUsd, cost_source: changes.costSource, fallback_from: changes.fallbackFrom, fallback_reason: changes.fallbackReason,
       completed_at: changes.completedAt ?? (changes.status && ['completed', 'failed', 'canceled'].includes(changes.status) ? new Date().toISOString() : undefined),
     }).filter((entry): entry is [string, string | number] => entry[1] !== undefined);
     if (entries.length) this.database.prepare(`UPDATE shared_messages SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE id = ?`)
@@ -1413,7 +1443,7 @@ export class WorkItemRepository {
     return row ? this.mapProposal(row) : null;
   }
 
-  createProposal(orderedItemIds: string[], rationale: string, explanations: QueueItemExplanation[] = [], stack: 'attention' | 'workbench' = 'attention'): QueueProposal {
+  createProposal(orderedItemIds: string[], rationale: string, explanations: QueueItemExplanation[] = []): QueueProposal {
     const canonicalStack = 'attention';
     const previousOrder = this.list().map((item) => item.id);
     if (previousOrder.length !== orderedItemIds.length || !previousOrder.every((id) => orderedItemIds.includes(id))) {
@@ -1508,11 +1538,11 @@ export class WorkItemRepository {
     return planQueue(this.list(), this.buildQueueContext(now));
   }
 
-  buildDailyProposal(now = Date.now(), stack: 'attention' | 'workbench' = 'attention'): QueueProposal {
+  buildDailyProposal(now = Date.now()): QueueProposal {
     const items = this.list();
     if (!items.length) throw new Error('Add at least one task before planning the stack.');
     const plan = planQueue(items, this.buildQueueContext(now));
-    return this.createProposal(plan.orderedItemIds, plan.rationale, plan.explanations, 'attention');
+    return this.createProposal(plan.orderedItemIds, plan.rationale, plan.explanations);
   }
 
   getPendingExecutionPlan(workItemId: string): ExecutionPlan | null {
@@ -1870,7 +1900,7 @@ export class WorkItemRepository {
     }
   }
 
-  update(id: string, changes: Partial<Pick<WorkItem, 'title' | 'description' | 'priority' | 'status' | 'projectName' | 'stack' | 'workspacePath' | 'dueDate' | 'labels' | 'strategy' | 'assignees' | 'queuePosition'>> & { blockedByIds?: string[] }, withinTransaction = false): WorkItem | null {
+  update(id: string, changes: Partial<Pick<WorkItem, 'title' | 'description' | 'priority' | 'status' | 'projectName' | 'stack' | 'workspacePath' | 'dueDate' | 'labels' | 'strategy' | 'assignees' | 'queuePosition'>> & { blockedByIds?: string[]; expectedVersion?: number }, withinTransaction = false): WorkItem | null {
     const before = this.get(id);
     if (!before) return null;
     // Canonicalise before anything reads the change set, so a re-typed
@@ -1913,9 +1943,20 @@ export class WorkItemRepository {
         const values = entries.map(([, value]) => value);
         const assignmentMode = resolved.assignees ? ", agent_assignment_mode = 'manual'" : '';
         const now = new Date().toISOString();
-        this.database
-          .prepare(`UPDATE work_items SET ${assignments}${assignmentMode}, updated_at = ?, last_touched_at = ? WHERE id = ?`)
-          .run(...values, now, now, id);
+        // Every write bumps `version`, whether or not the caller checked one.
+        // A caller that supplied `expectedVersion` additionally guards the
+        // WHERE clause with it, so a stale read fails the update outright
+        // instead of silently overwriting a write that landed in between.
+        const versionGuard = resolved.expectedVersion !== undefined ? ' AND version = ?' : '';
+        const guardValues = resolved.expectedVersion !== undefined ? [resolved.expectedVersion] : [];
+        const result = this.database
+          .prepare(`UPDATE work_items SET ${assignments}${assignmentMode}, version = version + 1, updated_at = ?, last_touched_at = ? WHERE id = ?${versionGuard}`)
+          .run(...values, now, now, id, ...guardValues);
+        if (resolved.expectedVersion !== undefined && result.changes === 0) {
+          const current = this.get(id);
+          if (!current) return null;
+          throw new WorkItemVersionConflictError(current);
+        }
         if (locallyChangedProviderFields.length) {
           this.recordLocalProviderOverrides(id, providerValues(before), resolved, locallyChangedProviderFields, now);
         }
@@ -2013,8 +2054,9 @@ export class WorkItemRepository {
           startedAt: row.started_at, completedAt: row.completed_at, createdAt: row.created_at!,
           conversationId: row.conversation_id, messageId: row.message_id,
           model: row.model, executionProfile: row.execution_profile as AgentRun['executionProfile'],
-          inputTokens: row.input_tokens === null ? null : Number(row.input_tokens), outputTokens: row.output_tokens === null ? null : Number(row.output_tokens),
+          inputTokens: row.input_tokens === null ? null : Number(row.input_tokens), cacheCreationInputTokens: row.cache_creation_input_tokens === null ? null : Number(row.cache_creation_input_tokens), cacheReadInputTokens: row.cache_read_input_tokens === null ? null : Number(row.cache_read_input_tokens), outputTokens: row.output_tokens === null ? null : Number(row.output_tokens),
           estimatedCostUsd: row.estimated_cost_usd === null ? null : Number(row.estimated_cost_usd),
+          costSource: row.cost_source as AgentRun['costSource'] ?? null,
           fallbackFrom: row.fallback_from as AgentRun['fallbackFrom'] ?? null, fallbackReason: row.fallback_reason,
           attempt: Number(row.attempt ?? 0), maxAttempts: Number(row.max_attempts ?? 3),
           nextAttemptAt: row.next_attempt_at ?? null,
@@ -2092,7 +2134,7 @@ export class WorkItemRepository {
     const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
     const columns = new Map<string, string | number | null | undefined>([
       ['agent', changes.agent], ['status', changes.status], ['output', changes.output], ['error', error], ['model', changes.model], ['execution_profile', changes.executionProfile],
-      ['input_tokens', changes.inputTokens], ['output_tokens', changes.outputTokens], ['estimated_cost_usd', changes.estimatedCostUsd], ['fallback_from', changes.fallbackFrom], ['fallback_reason', changes.fallbackReason],
+      ['input_tokens', changes.inputTokens], ['cache_creation_input_tokens', changes.cacheCreationInputTokens], ['cache_read_input_tokens', changes.cacheReadInputTokens], ['output_tokens', changes.outputTokens], ['estimated_cost_usd', changes.estimatedCostUsd], ['cost_source', changes.costSource], ['fallback_from', changes.fallbackFrom], ['fallback_reason', changes.fallbackReason],
       ['started_at', changes.startedAt], ['completed_at', changes.completedAt], ['owner_id', changes.ownerId], ['lease_expires_at', changes.leaseExpiresAt],
       ['next_attempt_at', changes.nextAttemptAt], ['attempt', changes.attempt], ['resolved_workspace', changes.resolvedWorkspace],
     ]);
@@ -2796,13 +2838,13 @@ export class WorkItemRepository {
   }
 
   /** Token usage for every run created since `sinceIso`, for the usage meter. Not scoped to one work item. */
-  listAgentRunUsageSince(sinceIso: string): Array<{ agent: AgentRun['agent']; origin: AgentRun['origin']; model: string | null; inputTokens: number | null; outputTokens: number | null }> {
+  listAgentRunUsageSince(sinceIso: string): Array<{ agent: AgentRun['agent']; origin: AgentRun['origin']; model: string | null; inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null }> {
     return (this.database.prepare(`
-      SELECT agent, origin, model, input_tokens, output_tokens
+      SELECT agent, origin, model, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens
       FROM agent_runs
       WHERE created_at >= ?
-    `).all(sinceIso) as Array<{ agent: AgentRun['agent']; origin: AgentRun['origin']; model: string | null; input_tokens: number | null; output_tokens: number | null }>)
-      .map((row) => ({ agent: row.agent, origin: row.origin, model: row.model, inputTokens: row.input_tokens, outputTokens: row.output_tokens }));
+    `).all(sinceIso) as Array<{ agent: AgentRun['agent']; origin: AgentRun['origin']; model: string | null; input_tokens: number | null; cache_creation_input_tokens: number | null; cache_read_input_tokens: number | null; output_tokens: number | null }>)
+      .map((row) => ({ agent: row.agent, origin: row.origin, model: row.model, inputTokens: row.input_tokens, cacheCreationInputTokens: row.cache_creation_input_tokens, cacheReadInputTokens: row.cache_read_input_tokens, outputTokens: row.output_tokens }));
   }
 
   // --- Usage calibration -----------------------------------------------------
@@ -2934,9 +2976,9 @@ export class WorkItemRepository {
   getRunInsights(days: 7 | 30 = 30): RunInsights {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
     const runs = this.database.prepare(`
-      SELECT agent, kind, status, attempt, fallback_from, model, input_tokens, output_tokens, estimated_cost_usd, created_at,
+      SELECT agent, kind, status, attempt, fallback_from, model, input_tokens, output_tokens, estimated_cost_usd, cost_source, created_at, completed_at,
         CAST((julianday(completed_at) - julianday(started_at)) * 24 * 60 * 60 * 1000 AS INTEGER) as duration_ms
-      FROM agent_runs WHERE status IN ('completed', 'failed', 'canceled') AND created_at >= ?
+      FROM agent_runs WHERE status IN ('completed', 'failed', 'canceled') AND completed_at >= ?
     `).all(since) as Array<{
       agent: 'codex' | 'claude';
       kind: AgentRun['kind'];
@@ -2947,7 +2989,9 @@ export class WorkItemRepository {
       input_tokens: number | null;
       output_tokens: number | null;
       estimated_cost_usd: number | null;
+      cost_source: 'provider' | 'estimated' | null;
       created_at: string;
+      completed_at: string;
       duration_ms: number | null;
     }>;
 
@@ -3014,18 +3058,28 @@ export class WorkItemRepository {
       }).filter((row) => row.count > 0).sort((left, right) => right.count - left.count || left.model.localeCompare(right.model)),
     };
 
-    const costByDay: Record<string, number> = {};
-    const costByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
+    const estimatedCostByDay: Record<string, number> = {};
+    const providerCostByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
+    const estimatedCostByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
     const tokenUsageByModel = new Map<string, { provider: 'codex' | 'claude'; model: string | null; inputTokens: number; outputTokens: number; costUsd: number; runs: number }>();
-    let totalCostUsd = 0;
-    let pricedRuns = 0;
+    let providerCostUsd = 0;
+    let estimatedCostUsd = 0;
+    let providerPricedRuns = 0;
+    let estimatedPricedRuns = 0;
+    let unverifiedCostRuns = 0;
     let unpricedRuns = 0;
     for (const run of runs) {
-      const day = run.created_at.slice(0, 10);
-      costByDay[day] = (costByDay[day] ?? 0) + (run.estimated_cost_usd ?? 0);
-      totalCostUsd += run.estimated_cost_usd ?? 0;
-      costByAgent[run.agent] += run.estimated_cost_usd ?? 0;
-      if (run.estimated_cost_usd !== null) pricedRuns += 1;
+      const day = run.completed_at.slice(0, 10);
+      if (run.estimated_cost_usd !== null && run.cost_source === 'provider') {
+        providerCostUsd += run.estimated_cost_usd;
+        providerCostByAgent[run.agent] += run.estimated_cost_usd;
+        providerPricedRuns += 1;
+      } else if (run.estimated_cost_usd !== null && run.cost_source === 'estimated') {
+        estimatedCostUsd += run.estimated_cost_usd;
+        estimatedCostByDay[day] = (estimatedCostByDay[day] ?? 0) + run.estimated_cost_usd;
+        estimatedCostByAgent[run.agent] += run.estimated_cost_usd;
+        estimatedPricedRuns += 1;
+      } else if (run.estimated_cost_usd !== null) unverifiedCostRuns += 1;
       // A run that reported tokens but carries no cost has no rate for its
       // model. Surfacing that count keeps the total honest rather than silently low.
       else if (run.input_tokens !== null || run.output_tokens !== null) unpricedRuns += 1;
@@ -3034,39 +3088,44 @@ export class WorkItemRepository {
         const bucket = tokenUsageByModel.get(key) ?? { provider: run.agent, model: run.model, inputTokens: 0, outputTokens: 0, costUsd: 0, runs: 0 };
         bucket.inputTokens += run.input_tokens ?? 0;
         bucket.outputTokens += run.output_tokens ?? 0;
-        bucket.costUsd += run.estimated_cost_usd ?? 0;
+        bucket.costUsd += run.cost_source === 'estimated' ? run.estimated_cost_usd ?? 0 : 0;
         bucket.runs += 1;
         tokenUsageByModel.set(key, bucket);
       }
     }
     // Trend compares this window against the equally long window before it.
     const previousWindowStart = new Date(Date.now() - days * 2 * 24 * 60 * 60 * 1000).toISOString();
-    const previousCost = this.database.prepare(`
-      SELECT COALESCE(SUM(estimated_cost_usd), 0) AS cost, COUNT(*) AS runs FROM agent_runs
-      WHERE status IN ('completed', 'failed', 'canceled') AND created_at >= ? AND created_at < ?
-    `).get(previousWindowStart, since) as { cost: number | null; runs: number | null };
-    const previousCostUsd = previousCost.runs ? Number(previousCost.cost ?? 0) : null;
+    const previousCosts = this.database.prepare(`
+      SELECT estimated_cost_usd, cost_source FROM agent_runs
+      WHERE status IN ('completed', 'failed', 'canceled') AND completed_at >= ? AND completed_at < ?
+    `).all(previousWindowStart, since) as Array<{ estimated_cost_usd: number | null; cost_source: 'provider' | 'estimated' | null }>;
+    const previousProviderCosts = previousCosts.filter((run) => run.cost_source === 'provider' && run.estimated_cost_usd !== null);
+    const previousEstimatedCosts = previousCosts.filter((run) => run.cost_source === 'estimated' && run.estimated_cost_usd !== null);
+    const previousProviderCostUsd = previousProviderCosts.length ? previousProviderCosts.reduce((total, run) => total + (run.estimated_cost_usd ?? 0), 0) : null;
+    const previousEstimatedCostUsd = previousEstimatedCosts.length ? previousEstimatedCosts.reduce((total, run) => total + (run.estimated_cost_usd ?? 0), 0) : null;
 
-    const fitBuckets = new Map<string, { kind: AgentRun['kind']; agent: 'codex' | 'claude'; completed: number; failed: number; durations: number[] }>();
+    const fitBuckets = new Map<string, { kind: AgentRun['kind']; agent: 'codex' | 'claude'; completed: number; failed: number; canceled: number; durations: number[] }>();
     for (const run of runs) {
       const key = `${run.kind}:${run.agent}`;
-      const bucket = fitBuckets.get(key) ?? { kind: run.kind, agent: run.agent, completed: 0, failed: 0, durations: [] };
+      const bucket = fitBuckets.get(key) ?? { kind: run.kind, agent: run.agent, completed: 0, failed: 0, canceled: 0, durations: [] };
       if (run.status === 'completed') bucket.completed += 1;
       else if (run.status === 'failed') bucket.failed += 1;
+      else if (run.status === 'canceled') bucket.canceled += 1;
       if (run.duration_ms !== null) bucket.durations.push(run.duration_ms);
       fitBuckets.set(key, bucket);
     }
 
-    type AgentBucket = { total: number; completed: number; failed: number; retried: number; fallback: number; durations: number[] };
+    type AgentBucket = { total: number; completed: number; failed: number; canceled: number; retried: number; fallback: number; durations: number[] };
     const byAgent: Record<'codex' | 'claude', AgentBucket> = {
-      codex: { total: 0, completed: 0, failed: 0, retried: 0, fallback: 0, durations: [] },
-      claude: { total: 0, completed: 0, failed: 0, retried: 0, fallback: 0, durations: [] },
+      codex: { total: 0, completed: 0, failed: 0, canceled: 0, retried: 0, fallback: 0, durations: [] },
+      claude: { total: 0, completed: 0, failed: 0, canceled: 0, retried: 0, fallback: 0, durations: [] },
     };
     for (const run of runs) {
       const bucket = byAgent[run.agent];
       bucket.total += 1;
       if (run.status === 'completed') bucket.completed += 1;
       if (run.status === 'failed') bucket.failed += 1;
+      if (run.status === 'canceled') bucket.canceled += 1;
       if (run.duration_ms !== null) bucket.durations.push(run.duration_ms);
     }
     for (const event of retryEvents) {
@@ -3080,18 +3139,14 @@ export class WorkItemRepository {
     if (retryEvents.length === 0) for (const run of runs) if (run.attempt > 0) byAgent[run.agent].retried += 1;
     if (handoffEvents.length === 0) for (const run of runs) if (run.fallback_from !== null) byAgent[run.agent].fallback += 1;
 
-    type KindBucket = { completed: number; failed: number };
+    type KindBucket = { completed: number; failed: number; canceled: number };
     const byKind: Record<AgentRun['kind'], KindBucket> = {
-      research: { completed: 0, failed: 0 },
-      analysis: { completed: 0, failed: 0 },
-      strategy: { completed: 0, failed: 0 },
-      execute: { completed: 0, failed: 0 },
-      review: { completed: 0, failed: 0 },
-      bugfix: { completed: 0, failed: 0 },
+      research: { completed: 0, failed: 0, canceled: 0 }, analysis: { completed: 0, failed: 0, canceled: 0 }, strategy: { completed: 0, failed: 0, canceled: 0 }, execute: { completed: 0, failed: 0, canceled: 0 }, review: { completed: 0, failed: 0, canceled: 0 }, bugfix: { completed: 0, failed: 0, canceled: 0 },
     };
     for (const run of runs) {
       if (run.status === 'completed') byKind[run.kind].completed += 1;
       if (run.status === 'failed') byKind[run.kind].failed += 1;
+      if (run.status === 'canceled') byKind[run.kind].canceled += 1;
     }
 
     return {
@@ -3101,9 +3156,13 @@ export class WorkItemRepository {
       handoffCount,
       inputTokens: [...tokenUsageByModel.values()].reduce((total, bucket) => total + bucket.inputTokens, 0),
       outputTokens: [...tokenUsageByModel.values()].reduce((total, bucket) => total + bucket.outputTokens, 0),
-      costUsd: Number(totalCostUsd.toFixed(6)),
-      previousCostUsd: previousCostUsd === null ? null : Number(previousCostUsd.toFixed(6)),
-      pricedRuns,
+      providerCostUsd: Number(providerCostUsd.toFixed(6)),
+      previousProviderCostUsd: previousProviderCostUsd === null ? null : Number(previousProviderCostUsd.toFixed(6)),
+      estimatedCostUsd: Number(estimatedCostUsd.toFixed(6)),
+      previousEstimatedCostUsd: previousEstimatedCostUsd === null ? null : Number(previousEstimatedCostUsd.toFixed(6)),
+      providerPricedRuns,
+      estimatedPricedRuns,
+      unverifiedCostRuns,
       unpricedRuns,
       tokenUsageByModel: [...tokenUsageByModel.values()].map((bucket) => ({
         ...bucket,
@@ -3124,10 +3183,11 @@ export class WorkItemRepository {
         agent: bucket.agent,
         completed: bucket.completed,
         failed: bucket.failed,
-        successRate: bucket.completed + bucket.failed > 0 ? bucket.completed / (bucket.completed + bucket.failed) : null,
+        canceled: bucket.canceled,
+        successRate: bucket.completed + bucket.failed + bucket.canceled > 0 ? bucket.completed / (bucket.completed + bucket.failed + bucket.canceled) : null,
         medianDurationMs: median(bucket.durations),
       })),
-      costByDay: Object.entries(costByDay)
+      costByDay: Object.entries(estimatedCostByDay)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([day, costUsd]) => ({ day, costUsd: Number(costUsd.toFixed(6)) })),
       byAgent: Object.entries(byAgent).map(([agent, bucket]) => ({
@@ -3135,20 +3195,22 @@ export class WorkItemRepository {
         total: bucket.total,
         completed: bucket.completed,
         failed: bucket.failed,
-        successRate: bucket.completed + bucket.failed > 0 ? bucket.completed / (bucket.completed + bucket.failed) : null,
+        successRate: bucket.total > 0 ? bucket.completed / bucket.total : null,
         retryRate: bucket.total > 0 ? bucket.retried / bucket.total : null,
         fallbackRate: bucket.total > 0 ? bucket.fallback / bucket.total : null,
         medianDurationMs: median(bucket.durations),
         p90DurationMs: percentile(bucket.durations, 0.9),
-        costUsd: Number(costByAgent[agent as 'codex' | 'claude'].toFixed(6)),
+        providerCostUsd: Number(providerCostByAgent[agent as 'codex' | 'claude'].toFixed(6)),
+        estimatedCostUsd: Number(estimatedCostByAgent[agent as 'codex' | 'claude'].toFixed(6)),
       })),
       byKind: Object.entries(byKind)
-        .filter(([, bucket]) => bucket.completed + bucket.failed > 0)
+        .filter(([, bucket]) => bucket.completed + bucket.failed + bucket.canceled > 0)
         .map(([kind, bucket]) => ({
           kind: kind as AgentRun['kind'],
           completed: bucket.completed,
           failed: bucket.failed,
-          successRate: bucket.completed + bucket.failed > 0 ? bucket.completed / (bucket.completed + bucket.failed) : null,
+          canceled: bucket.canceled,
+          successRate: bucket.completed + bucket.failed + bucket.canceled > 0 ? bucket.completed / (bucket.completed + bucket.failed + bucket.canceled) : null,
         })),
     };
   }

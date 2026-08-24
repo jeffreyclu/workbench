@@ -37,6 +37,15 @@ export const SELF_ASSIGNED_OWNER_MESSAGE = 'Jeffrey owns this task. Unassign him
 export const SELF_ASSIGNED_EXECUTION_MESSAGE = 'Jeffrey owns this task, so an agent cannot execute it. Unassign him first.';
 
 /**
+ * Work items are written concurrently by the browser, MCP tools, and the
+ * scheduler/agent-runner. A caller that read a stale `version` and passes it
+ * back as `expectedVersion` gets this conflict instead of silently
+ * clobbering a concurrent write.
+ */
+export const VERSION_CONFLICT_CODE = 'VERSION_CONFLICT';
+export const VERSION_CONFLICT_MESSAGE = 'This task changed since it was last read. Reload it and try again.';
+
+/**
  * Assignment lists carry the exclusivity rule. Filter inputs deliberately keep the
  * plain array schema: filtering for "mine and Codex's" is a legitimate query.
  */
@@ -101,6 +110,10 @@ export const workItemSchema = z.object({
   // Optional while older promoted runtimes can still return the pre-dependency
   // contract. New repository reads always populate it.
   blockedBy: z.array(workItemDependencySchema).optional(),
+  // Optional for the same reason: an older promoted runtime's response, and
+  // any fixture written before optimistic concurrency existed, omits it. New
+  // repository reads always populate it.
+  version: z.number().int().optional(),
   lineage: z.object({
     parentTitle: z.string().nullable(),
     followUpCount: z.number().int().nonnegative(),
@@ -217,6 +230,22 @@ export interface SharedSearchResult {
 
 export interface SharedSearchResponse {
   results: SharedSearchResult[];
+}
+
+export interface MemorySearchResult {
+  source: string;
+  sourceId: string;
+  title: string;
+  snippet: string;
+  createdAt: string;
+  conversationId: string | null;
+  workItemId: string | null;
+  actor: string | null;
+  score: number;
+}
+
+export interface MemorySearchResponse {
+  results: MemorySearchResult[];
 }
 
 export const createWorkItemSchema = z.object({
@@ -345,6 +374,10 @@ export const updateWorkItemSchema = z.object({
   assignees: assigneeSelectionSchema.optional(),
   queuePosition: z.number().optional(),
   blockedByIds: z.array(z.string().uuid()).max(200).optional(),
+  // When present, the update is only applied if the row's current `version`
+  // still matches. Omitted, the write applies unconditionally (last write
+  // wins), which keeps existing callers working unchanged.
+  expectedVersion: z.number().int().optional(),
 });
 export type UpdateWorkItemInput = z.infer<typeof updateWorkItemSchema>;
 
@@ -475,8 +508,12 @@ export interface AgentRun {
   model: string | null;
   executionProfile: 'economy' | 'standard' | 'deep' | null;
   inputTokens: number | null;
+  cacheCreationInputTokens: number | null;
+  cacheReadInputTokens: number | null;
   outputTokens: number | null;
   estimatedCostUsd: number | null;
+  /** Whether the stored cost came from the provider or a token-rate estimate. */
+  costSource: 'provider' | 'estimated' | null;
   fallbackFrom: 'codex' | 'claude' | null;
   fallbackReason: string | null;
   attempt: number;
@@ -598,6 +635,7 @@ export interface SharedMessage {
   inputTokens: number | null;
   outputTokens: number | null;
   estimatedCostUsd: number | null;
+  costSource?: 'provider' | 'estimated' | null;
   fallbackFrom: 'codex' | 'claude' | null;
   fallbackReason: string | null;
   dispatchTarget: 'auto' | 'both' | 'codex' | 'claude' | 'none';
@@ -735,12 +773,17 @@ export interface RunInsights {
   fallbackRate: number | null;
   handoffCount: number;
   costByDay: RunInsightsCostByDay[];
-  /** Summed estimated cost of runs in this window, in USD. */
-  costUsd: number;
-  /** Same measure over the equally long window immediately before it; null when that window had no runs. */
-  previousCostUsd: number | null;
-  /** Runs carrying a cost, and runs that reported tokens but had no rate for their model. */
-  pricedRuns: number;
+  /** Provider-reported billed cost. Never derived from tokens. */
+  providerCostUsd: number;
+  previousProviderCostUsd: number | null;
+  /** Uncached, short-context list-price estimate from reported tokens; not a bill. */
+  estimatedCostUsd: number;
+  previousEstimatedCostUsd: number | null;
+  providerPricedRuns: number;
+  estimatedPricedRuns: number;
+  /** Historical rows that stored a cost before Workbench recorded its provenance. Excluded from totals. */
+  unverifiedCostRuns: number;
+  /** Runs that reported tokens but had no rate for their model. */
   unpricedRuns: number;
   inputTokens: number;
   outputTokens: number;
@@ -771,6 +814,7 @@ export interface RunInsightsAgentFit {
   agent: 'codex' | 'claude';
   completed: number;
   failed: number;
+  canceled: number;
   successRate: number | null;
   medianDurationMs: number | null;
 }
@@ -801,13 +845,15 @@ export interface RunInsightsByAgent {
   fallbackRate: number | null;
   medianDurationMs: number | null;
   p90DurationMs: number | null;
-  costUsd: number;
+  providerCostUsd: number;
+  estimatedCostUsd: number;
 }
 
 export interface RunInsightsByKind {
   kind: z.infer<typeof runKindSchema>;
   completed: number;
   failed: number;
+  canceled: number;
   successRate: number | null;
 }
 
@@ -834,8 +880,8 @@ export interface WorkbenchUsageByOrigin {
 export interface ClaudeInteractiveUsage {
   setTokens: number;
   scannedFiles: number;
-  /** Files that existed but could not be read/parsed; the scan still returns partial totals. */
-  unreadableFiles: number;
+  /** Non-null means this result is unsafe for a governor to use. */
+  error: string | null;
 }
 
 /** Current account window read directly from Codex app-server. */

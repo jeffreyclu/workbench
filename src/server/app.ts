@@ -40,6 +40,7 @@ import {
   listAuditLogQuerySchema,
   isSelfAssigned,
   SELF_ASSIGNED_EXECUTION_MESSAGE,
+  VERSION_CONFLICT_CODE,
   submitUsageCalibrationSchema,
 } from '../shared/contracts.js';
 import { generateFastAiTaskDraft } from './fast-task-draft-ai.js';
@@ -47,7 +48,8 @@ import type { Activity, AgentRun, WorkItem } from '../shared/contracts.js';
 import { z } from 'zod';
 import type { WorkbenchDatabase } from './database.js';
 import { LinearProvider } from './providers/linear.js';
-import { WorkItemDependencyError, WorkItemRepository } from './repository.js';
+import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
+import { searchMemory } from './memory-index.js';
 import { cancelAgentRun, classificationForKind, classifyExecutionRobust, executeAgentRun, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback } from './agent-runner.js';
 import { describeExecutionRouting, summarizeWorkItemChanges } from './activity-log.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, runSharedBackgroundJob } from './shared-room.js';
@@ -649,10 +651,23 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
 
   // This is intentionally read-only. Both CLI agents can retrieve the full
   // durable Workbench record instead of relying on their private chat memory.
-  app.get('/api/activity-memory', (request, response) => {
+  app.get('/api/activity-memory', async (request, response) => {
     const query = z.string().trim().min(2).max(500).parse(request.query.q);
     const limit = z.coerce.number().int().min(1).max(100).default(40).parse(request.query.limit);
-    response.json({ results: repository.searchActivityMemory(query, limit) });
+    response.json({ results: await repository.searchActivityMemory(query, limit) });
+  });
+
+  // Same durable record as /api/activity-memory, but exposing the raw
+  // memory-index.ts hybrid-search result shape (per-source-document fields,
+  // relevance score, optional `source` filter) instead of the legacy
+  // collapsed {source,title,body,createdAt} shape that endpoint preserves
+  // for its existing callers.
+  app.get('/api/memory/search', async (request, response) => {
+    const query = z.string().trim().min(2).max(500).parse(request.query.q);
+    const limit = z.coerce.number().int().min(1).max(100).default(20).parse(request.query.limit);
+    const sourceParam = z.string().trim().min(1).optional().parse(request.query.source);
+    const sources = sourceParam ? sourceParam.split(',').map((value) => value.trim()).filter(Boolean) : undefined;
+    response.json({ results: await searchMemory(database, query, { limit, sources }) });
   });
 
   app.get('/api/shared/messages', (request, response) => {
@@ -880,8 +895,7 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
 
   app.post('/api/queue/plan', (request, response, next) => {
     try {
-      const stack = z.enum(['attention', 'workbench']).default('attention').parse(request.body?.stack ?? 'attention');
-      const proposal = repository.buildDailyProposal(Date.now(), stack);
+      const proposal = repository.buildDailyProposal(Date.now());
       response.status(201).json({ proposal, items: repository.list() });
     } catch (error) {
       next(error);
@@ -1130,6 +1144,9 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     try {
       item = repository.update(request.params.id, input);
     } catch (error) {
+      if (error instanceof WorkItemVersionConflictError) {
+        return response.status(409).json({ error: error.message, code: VERSION_CONFLICT_CODE, item: error.item });
+      }
       if (error instanceof WorkItemDependencyError) {
         return response.status(409).json({ error: error.message, code: error.code });
       }

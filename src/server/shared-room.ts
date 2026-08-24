@@ -66,24 +66,41 @@ export function compactConversationHistory(messages: SharedMessage[], budget = 8
   return [olderSummary ? `${olderHeader}${olderSummary}` : '', recent.join('\n\n')].filter(Boolean).join('\n\n');
 }
 
+/** Keep current handoff state cheap; the full historical record arrives through retrieval. */
+export function compactSharedBrief(sharedContext: string, budget = 1_800): string {
+  if (sharedContext.length <= budget) return sharedContext;
+  const head = Math.floor(budget * 0.65);
+  const tail = Math.floor(budget * 0.25);
+  const omitted = sharedContext.length - head - tail;
+  return `${sharedContext.slice(0, head)}\n\n[… ${omitted.toLocaleString()} characters compacted; use retrieved memory for older detail …]\n\n${sharedContext.slice(-tail)}`;
+}
+
+function formatRetrievedMemory(matches: Array<{ source: string; title: string; body: string; createdAt: string }>): string {
+  if (!matches.length) return 'Retrieved memory: no indexed match for the latest message. This does not mean nothing relevant exists — query /api/activity-memory directly with different terms before concluding history is silent on this.';
+  return `Retrieved memory (top ${matches.length} hybrid FTS+embedding matches for the latest message, pulled automatically from the same index that backs /api/activity-memory — durable docs, past messages, activities, and agent-run output together): do not re-derive facts these already settle.\n${matches.map((match) => `- [${match.source}, ${match.createdAt}] ${match.title}: ${match.body.slice(0, 400).replace(/\s+/g, ' ')}`).join('\n')}`;
+}
+
 export function buildSharedReplyPrompt(
   agent: AgentRun['agent'],
   sharedContext: string,
   connectionContext: string,
   thread: SharedMessage[],
   linked?: { item: WorkItem; run: AgentRun },
+  retrievedMemory?: Array<{ source: string; title: string; body: string; createdAt: string }>,
 ): string {
   const roleContext = linked
     ? buildPrompt(linked.item, linked.run, sharedContext)
-    : `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.\n\n${sharedContext}`;
+    : `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.\n\n${compactSharedBrief(sharedContext)}`;
   return `${roleContext}
 
 ${connectionContext}
 
+${formatRetrievedMemory(retrievedMemory ?? [])}
+
 Current conversation:
 ${compactConversationHistory(thread)}
 
-Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. Start by naming the relevant decision, handoff, or blocker from the structured shared brief that you are continuing; if it conflicts with observed state, say so before acting. Both agents share the complete durable Workbench history through read-only retrieval: curl -sG http://localhost:5173/api/activity-memory --data-urlencode 'q=<focused terms>' --data 'limit=40'. Search it whenever historical work matters; do not claim history you did not retrieve or receive here. Durable memory is shared, never per-agent: read docs/shared-memory.md in the Workbench repo for Jeffrey's standing preferences and corrections, and append anything durable you learn to that file in the same turn instead of writing a private per-agent memory. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential. Never launch detached/background work (including &, nohup, tmux, screen, or a subagent you will report on later): Workbench cannot track it after this CLI turn exits. Keep every command and delegated action foreground until its observed result is available, then report it in this response. If that is not possible, state that the work is blocked or incomplete.`;
+Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. Start by naming the relevant decision, handoff, or blocker from the structured shared brief that you are continuing; if it conflicts with observed state, say so before acting. The retrieved-memory block above is auto-pulled from the full durable Workbench history (docs, messages, activities, run output) for the latest message only — if you need a different angle, query it yourself: curl -sG http://localhost:5173/api/activity-memory --data-urlencode 'q=<focused terms>' --data 'limit=40'. Append anything durable you learn (a standing preference or correction) to the right docs/shared-memory/*.md topic file in the same turn instead of writing a private per-agent memory; consult docs/shared-memory.md's index only if the retrieved block didn't surface the topic you need to update. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential. Never launch detached/background work (including &, nohup, tmux, screen, or a subagent you will report on later): Workbench cannot track it after this CLI turn exits. Keep every command and delegated action foreground until its observed result is available, then report it in this response. If that is not possible, state that the work is blocked or incomplete.`;
 }
 
 export function linearContextForPrompt(repository: WorkItemRepository, message: string): string {
@@ -219,12 +236,17 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const linkedItem = linkedRun ? repository.get(linkedRun.workItemId) : null;
     const cwd = resolveSharedReplyWorkingDirectory(linkedItem);
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}.`);
+    const retrievedMemory = await repository.searchActivityMemory(latestUserMessage, 6).catch((error) => {
+      console.error('[shared-room] memory retrieval failed for prompt injection', error);
+      return [];
+    });
     const prompt = buildSharedReplyPrompt(
       agent,
       repository.getSharedContext(target.conversationId, { conversationId: target.conversationId }),
       connectionContext,
       thread,
       linkedRun && linkedItem ? { item: linkedItem, run: linkedRun } : undefined,
+      retrievedMemory,
     );
     repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
     const guardedPrompt = prompt;

@@ -7,7 +7,7 @@ The shared room is the common conversation for Jeffrey, Codex, and Claude. Every
 
 ## Rules
 
-- `docs/shared-memory.md` is the shared durable memory for Codex and Claude. Read it before acting; append durable preferences and corrections there in the same turn you learn them. Private per-agent memory files are not allowed.
+- `docs/shared-memory.md` is the shared durable memory index for Codex and Claude. Read the index before acting, and open only the relevant `docs/shared-memory/*.md` topic file(s) for the task at hand; append durable preferences and corrections to the right topic file in the same turn you learn them. Private per-agent memory files are not allowed.
 - Read the full work item before proposing or executing a strategy.
 - Record durable decisions, progress, blockers, and handoffs as activity.
 - Pass `actor` to `update_work_item` and `set_work_item_lifecycle` so the field changes and lifecycle moves you make are attributed in the task activity log. Workbench writes those entries automatically; do not duplicate them with `add_activity`.

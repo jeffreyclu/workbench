@@ -12,7 +12,7 @@ class TestWebSocket {
   static instances: TestWebSocket[] = [];
   readonly listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
 
-  constructor(_url: string) { TestWebSocket.instances.push(this); }
+  constructor() { TestWebSocket.instances.push(this); }
   addEventListener(type: string, listener: (event: { data?: unknown }) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
   close() { this.emit('close'); }
   emit(type: string, data?: unknown) { for (const listener of this.listeners.get(type) ?? []) listener({ data }); }
@@ -351,17 +351,18 @@ describe('shared room', () => {
     expect(screen.queryByText(/Archived conversation · restore or fork it to continue/)).toBeNull();
   });
 
-  it('keeps the Archive view control tappable after Archive is selected', async () => {
+  it('refetches the archive rail when Archive is selected again', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const active = { id: '00000000-0000-4000-8000-000000000041', title: 'Active conversation', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
     const archived = { ...active, id: '00000000-0000-4000-8000-000000000042', title: 'Archived conversation', archivedAt: '2026-01-02T00:00:00Z' };
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       const body = url.includes('/api/shared/conversations')
         ? (url.includes('view=archive') ? { conversations: [archived], nextCursor: null } : { conversations: [active], nextCursor: null })
         : { messages: [] };
       return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
-    }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={active.id} /></QueryClientProvider>);
 
@@ -369,13 +370,92 @@ describe('shared room', () => {
     const archiveView = within(viewTabs).getByRole('button', { name: 'Archive' });
     fireEvent.click(archiveView);
     await waitFor(() => expect(archiveView.getAttribute('aria-pressed')).toBe('true'));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/shared/conversations?') && String(input).includes('view=archive')).length).toBeGreaterThan(0));
+    const archiveRequestsBeforeRepeat = fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/shared/conversations?') && String(input).includes('view=archive')).length;
 
     const archiveViewAfterSelection = within(screen.getByRole('group', { name: 'Conversation view' })).getByRole('button', { name: 'Archive' });
     archiveViewAfterSelection.focus();
     fireEvent.click(archiveViewAfterSelection);
-    expect(document.activeElement).toBe(archiveViewAfterSelection);
-    expect(archiveViewAfterSelection.getAttribute('aria-pressed')).toBe('true');
-    expect((archiveViewAfterSelection as HTMLButtonElement).disabled).toBe(false);
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/shared/conversations?') && String(input).includes('view=archive')).length).toBeGreaterThan(archiveRequestsBeforeRepeat));
+  });
+
+  it('does not reselect an active conversation while the archive rail is loading', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const active = { id: '00000000-0000-4000-8000-000000000043', title: 'Active conversation that must not return', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const archived = { ...active, id: '00000000-0000-4000-8000-000000000044', title: 'Archived conversation that should open', archivedAt: '2026-01-02T00:00:00Z' };
+    let releaseArchiveRequest!: () => void;
+    const archiveRequest = new Promise<void>((resolve) => { releaseArchiveRequest = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations?') && url.includes('view=archive')) {
+        await archiveRequest;
+        return new Response(JSON.stringify({ conversations: [archived], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      const body = url.includes('/api/shared/conversations') ? { conversations: [active], nextCursor: null } : { messages: [] };
+      return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={active.id} /></QueryClientProvider>);
+
+    expect(await screen.findByRole('heading', { name: active.title })).toBeTruthy();
+    fireEvent.click(within(screen.getByRole('group', { name: 'Conversation view' })).getByRole('button', { name: 'Archive' }));
+    releaseArchiveRequest();
+
+    expect(await screen.findByRole('heading', { name: archived.title })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: active.title })).toBeNull();
+  });
+
+  it('keeps the archive view selected while conversation URL state follows the rail', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const active = { id: '00000000-0000-4000-8000-000000000045', title: 'Active URL conversation', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const archived = { ...active, id: '00000000-0000-4000-8000-000000000046', title: 'Archived URL conversation', archivedAt: '2026-01-02T00:00:00Z' };
+    window.history.replaceState(null, '', `/conversations/${active.id}`);
+    window.localStorage.setItem('workbench:last-opened-conversation', active.id);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes('/api/shared/conversations?')
+        ? { conversations: url.includes('view=archive') ? [archived] : [active], nextCursor: null }
+        : { ok: true, mode: 'live', runtimeWorkActive: false, buildId: 'test', items: [], conversations: [], messages: [], active: 0, workbench: 0, archive: 1, count: 0, pending: false, proposal: null, nextCursor: null };
+      return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    expect(await screen.findByRole('heading', { name: active.title })).toBeTruthy();
+    fireEvent.click(within(screen.getByRole('group', { name: 'Conversation view' })).getByRole('button', { name: 'Archive' }));
+    expect(await screen.findByRole('heading', { name: archived.title })).toBeTruthy();
+    expect(window.location.pathname).toBe(`/conversations/${archived.id}`);
+
+    const archiveRequestsBeforeRepeat = fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/shared/conversations?') && String(input).includes('view=archive')).length;
+    fireEvent.click(within(screen.getByRole('group', { name: 'Conversation view' })).getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/shared/conversations?') && String(input).includes('view=archive')).length).toBeGreaterThan(archiveRequestsBeforeRepeat));
+    expect(screen.getByRole('heading', { name: archived.title })).toBeTruthy();
+    expect(window.location.pathname).toBe(`/conversations/${archived.id}`);
+  });
+
+  it('keeps the selected archived conversation open when Archive is selected again', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const active = { id: '00000000-0000-4000-8000-000000000051', title: 'Active conversation', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const archived = { ...active, id: '00000000-0000-4000-8000-000000000052', title: 'Archived conversation', archivedAt: '2026-01-02T00:00:00Z' };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes('/api/shared/conversations')
+        ? { conversations: url.includes('view=archive') ? [archived] : [active], nextCursor: null }
+        : { messages: [] };
+      return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={active.id} /></QueryClientProvider>);
+
+    const viewTabs = await screen.findByRole('group', { name: 'Conversation view' });
+    fireEvent.click(within(viewTabs).getByRole('button', { name: 'Archive' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Archived conversation/i }));
+    expect(await screen.findByRole('heading', { name: 'Archived conversation' })).toBeTruthy();
+
+    fireEvent.click(within(screen.getByRole('group', { name: 'Conversation view' })).getByRole('button', { name: 'Archive' }));
+
+    expect(screen.getByRole('heading', { name: 'Archived conversation' })).toBeTruthy();
   });
 
   it('distinguishes manual conversations from task-linked conversations', async () => {
@@ -689,9 +769,12 @@ describe('shared room', () => {
     await waitFor(() => expect(sendButton.disabled).toBe(false));
   });
 
-  it('stops autoscrolling once the reader scrolls away from the bottom, and resumes near it', async () => {
+  it('autoscrolls only the message thread so conversation controls stay in the viewport', async () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+    const scrollTo = vi.fn();
+    const scrollToDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo');
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo });
     const conversationId = '00000000-0000-4000-8000-000000000030';
     let pollCount = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -709,25 +792,29 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     await screen.findByText('chunk x');
-    expect(scrollIntoView.mock.calls.length).toBeGreaterThan(0);
+    expect(scrollTo.mock.calls.length).toBeGreaterThan(0);
+    expect(scrollIntoView).not.toHaveBeenCalled();
 
     const container = document.querySelector('.shared-thread') as HTMLElement;
     Object.defineProperty(container, 'scrollHeight', { configurable: true, value: 2000 });
     Object.defineProperty(container, 'clientHeight', { configurable: true, value: 400 });
     Object.defineProperty(container, 'scrollTop', { configurable: true, value: 0, writable: true });
     fireEvent.scroll(container);
-    scrollIntoView.mockClear();
+    scrollTo.mockClear();
 
     const pollBeforeScrollAway = pollCount;
     await waitFor(() => expect(pollCount).toBeGreaterThan(pollBeforeScrollAway), { timeout: 2000 });
     await waitFor(() => expect(screen.getByText(/^chunk x+$/).textContent).toBe(`chunk ${'x'.repeat(pollCount)}`));
-    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(scrollTo).not.toHaveBeenCalled();
 
     (container as unknown as { scrollTop: number }).scrollTop = 1650;
     fireEvent.scroll(container);
     const pollBeforeResume = pollCount;
     await waitFor(() => expect(pollCount).toBeGreaterThan(pollBeforeResume), { timeout: 2000 });
-    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    if (scrollToDescriptor) Object.defineProperty(HTMLElement.prototype, 'scrollTo', scrollToDescriptor);
+    else delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
   });
 
   it('shows the selected recipient on Jeffrey messages', async () => {
@@ -793,10 +880,10 @@ describe('shared room', () => {
     const searchMock = vi.fn();
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith('/api/shared/search')) {
+      if (url.startsWith('/api/memory/search')) {
         searchMock(url);
         return new Response(JSON.stringify({
-          results: [{ type: 'message', conversationId: matchedId, conversationTitle: 'Matched conversation', messageId: 'message-1', snippet: 'found the [needle] here', rank: 0 }],
+          results: [{ source: 'message', sourceId: 'message-1', title: 'Matched conversation', snippet: 'found the needle here', createdAt: '2026-01-01T00:00:00Z', conversationId: matchedId, workItemId: null, actor: null, score: 1 }],
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [
@@ -816,7 +903,7 @@ describe('shared room', () => {
     await waitFor(() => expect(searchMock).toHaveBeenCalledWith(expect.stringContaining('q=needle')), { timeout: 1000 });
 
     expect(await screen.findByText('Matched conversation')).toBeTruthy();
-    expect(screen.getByText('needle')).toBeTruthy();
+    expect(screen.getByText('found the needle here')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /First task/i })).toBeNull();
 
     fireEvent.click(screen.getByText('Matched conversation'));
@@ -1083,6 +1170,7 @@ describe('task creation from search', () => {
 
   async function searchForTask() {
     fireEvent.click(await screen.findByRole('button', { name: 'New' }));
+    fireEvent.click(screen.getByRole('button', { name: /From search/i }));
     fireEvent.change(screen.getByPlaceholderText('Search Linear, Slack, Atlassian, and GitHub…'), { target: { value: 'search-created' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     return await screen.findByRole('button', { name: /Search-created task/ });
@@ -1208,6 +1296,61 @@ describe('stack navigation', () => {
     const createCall = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find(([input, init]) => String(input) === '/api/work-items' && (init as RequestInit | undefined)?.method === 'POST');
     expect(JSON.parse((createCall?.[1] as RequestInit).body as string)).toEqual(expect.objectContaining({ classificationKind: 'bugfix' }));
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' }));
+  });
+
+  it('opens the add-task dialog on the manual task view by default', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url === '/api/work-item-counts' ? { active: 0, workbench: 0, archive: 0 }
+        : url.startsWith('/api/work-items?') ? { items: [], nextCursor: null, totalCount: 0, proposal: null }
+        : {};
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New' }));
+
+    expect(screen.getByRole('button', { name: /Manual task/i }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: /From search/i }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByPlaceholderText('What needs to happen?')).toBeTruthy();
+  });
+
+  it('moves roving focus between queue rows with ArrowDown/ArrowUp and opens the focused row with Enter', async () => {
+    const makeItem = (id: string, title: string, queuePosition: number) => ({
+      id, title, description: '', status: 'backlog', priority: 2, queuePosition,
+      source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete',
+      agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: null, workspacePath: null,
+      strategy: '', assignees: ['jeffrey'], labels: [], dueDate: null, providerUpdatedAt: null,
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', lastTouchedAt: '2026-01-01T00:00:00Z',
+    });
+    const itemA = makeItem('00000000-0000-4000-8000-000000000041', 'First queue row', 0);
+    const itemB = makeItem('00000000-0000-4000-8000-000000000042', 'Second queue row', 1);
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [itemA, itemB], nextCursor: null, totalCount: 2, proposal: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/work-item-counts') return new Response(JSON.stringify({ active: 2, workbench: 0, archive: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    await screen.findByText(itemA.title);
+    await screen.findByText(itemB.title);
+    const rowA = document.querySelector<HTMLElement>(`[data-work-item-id="${itemA.id}"]`)!;
+    const rowB = document.querySelector<HTMLElement>(`[data-work-item-id="${itemB.id}"]`)!;
+    // The first rendered row is focusable by default (roving tabindex).
+    expect(rowA.tabIndex).toBe(0);
+    expect(rowB.tabIndex).toBe(-1);
+
+    fireEvent.keyDown(rowA, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(rowB);
+
+    fireEvent.keyDown(rowB, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(rowA);
+
+    fireEvent.keyDown(rowA, { key: 'Enter' });
+    expect(window.location.pathname).toBe(`/tasks/${itemA.id}`);
   });
 });
 
@@ -1423,6 +1566,32 @@ describe('addressable navigation', () => {
     await goBack();
     expect(window.location.pathname).toBe('/archive');
     expect(await screen.findByRole('heading', { name: 'Archive' })).toBeTruthy();
+  });
+
+  it('closes a remembered Workbench task back to Workbench after leaving Archive', async () => {
+    const workbenchItem = { ...item, projectName: 'Workbench', stack: 'workbench' };
+    window.localStorage.setItem('workbench:last-opened-workbench-item', taskId);
+    window.history.replaceState(null, '', '/archive');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url === '/api/work-item-counts' ? { active: 0, workbench: 1, archive: 0 }
+        : url === `/api/work-items/${taskId}` ? { item: workbenchItem, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [] }
+        : url.startsWith('/api/work-items?') ? { items: [workbenchItem], nextCursor: null, totalCount: 1, proposal: null }
+        : url === '/api/shared/conversations-unread-count' ? { count: 0 }
+        : url.includes('/api/shared/conversations') ? { conversations: [], nextCursor: null }
+        : { messages: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    renderApp();
+
+    fireEvent.click(await screen.findByRole('button', { name: /workbench/i }));
+    expect(await screen.findByRole('heading', { name: item.title })).toBeTruthy();
+    expect(window.location.pathname).toBe(`/tasks/${taskId}`);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close details' }));
+
+    expect(window.location.pathname).toBe('/workbench');
+    expect(await screen.findByRole('heading', { name: 'Workbench focus' })).toBeTruthy();
   });
 
   it('opens the conversation named in the address and addresses the next one you pick', async () => {

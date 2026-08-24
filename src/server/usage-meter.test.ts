@@ -4,7 +4,17 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { AUTONOMOUS_TARGET_FRACTION, CALIBRATION_MAX_AGE_DAYS, CLAUDE_PESSIMISTIC_CEILING_SET, computeWeeklyUsageReport, computeWorkbenchUsage, currentUsageCalibration, recordUsageCalibration, scanClaudeInteractiveUsage, startOfIsoWeekUtc } from './usage-meter.js';
+import { AUTONOMOUS_TARGET_FRACTION, CALIBRATION_MAX_AGE_DAYS, CLAUDE_PESSIMISTIC_CEILING_SET, computeWeeklyUsageReport, computeWorkbenchUsage, currentUsageCalibration, recordUsageCalibration, scanClaudeInteractiveUsage, sonnetEquivalentTokens, startOfIsoWeekUtc } from './usage-meter.js';
+
+describe('sonnetEquivalentTokens', () => {
+  it('applies every token-class weight and each Claude model multiplier', () => {
+    const tokens = { inputTokens: 100, cacheCreationInputTokens: 100, cacheReadInputTokens: 100, outputTokens: 100 };
+    // Base: 100 + 125 + 10 + 500 = 735 SET.
+    expect(sonnetEquivalentTokens('claude', 'claude-sonnet-5', tokens)).toBeCloseTo(735, 5);
+    expect(sonnetEquivalentTokens('claude', 'claude-haiku-4-5', tokens)).toBeCloseTo(735 * (5 / 15), 5);
+    expect(sonnetEquivalentTokens('claude', 'claude-opus-4-1', tokens)).toBeCloseTo(735 * 5, 5);
+  });
+});
 
 describe('startOfIsoWeekUtc', () => {
   it('returns the preceding Monday 00:00 UTC', () => {
@@ -194,11 +204,13 @@ describe('scanClaudeInteractiveUsage', () => {
     // Sonnet multiplier 1: SET = 100*1 + 40*1.25 + 1000*0.1 + 10*5 = 100+50+100+50 = 300.
     expect(result.setTokens).toBeCloseTo(300, 5);
     expect(result.scannedFiles).toBe(1);
-    expect(result.unreadableFiles).toBe(0);
+    expect(result.error).toBeNull();
   });
 
-  it('returns zeroed totals when the transcripts directory does not exist', () => {
+  it('surfaces a missing transcript directory as an error instead of silently returning zero', () => {
     const result = scanClaudeInteractiveUsage(new Date('2026-08-17T00:00:00.000Z'), new Date('2026-08-24T00:00:00.000Z'), join(tmpdir(), 'does-not-exist-usage-meter'));
-    expect(result).toEqual({ setTokens: 0, scannedFiles: 0, unreadableFiles: 0 });
+    expect(result.setTokens).toBe(0);
+    expect(result.scannedFiles).toBe(0);
+    expect(result.error).toMatch(/Unable to read Claude transcript directory/);
   });
 });

@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,6 +6,7 @@ import { join } from 'node:path';
 import { createApp } from './app.js';
 import { ArtifactLibrary } from './artifact-library.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
+import { closeTestServer, listenTestServer } from './test-http-harness.js';
 
 describe('artifact library API', () => {
   let database: WorkbenchDatabase;
@@ -17,9 +17,7 @@ describe('artifact library API', () => {
   beforeEach(async () => {
     database = openDatabase(':memory:');
     artifacts = new ArtifactLibrary(database);
-    server = createApp(database).listen(0);
-    await new Promise<void>((resolveListen) => server.once('listening', () => resolveListen()));
-    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    ({ server, baseUrl } = await listenTestServer(createApp(database)));
     artifacts.recordPublication({
       id: 'abc123', sourcePath: '/tmp/workbench-missing-source.md', title: 'Connector rollout',
       url: 'https://artifacts.example.com/abc123/', contentHash: 'hash-a', version: 1,
@@ -27,7 +25,7 @@ describe('artifact library API', () => {
   });
 
   afterEach(async () => {
-    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    await closeTestServer(server);
     database.close();
   });
 

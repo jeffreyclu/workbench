@@ -82,6 +82,22 @@ export function activityKindLabel(kind: string): string {
   return activityKindLabels[kind] ?? kind.replace(/_/g, ' ');
 }
 
+const memorySourceLabels: Record<string, string> = {
+  conversation: 'Conversation',
+  message: 'Message',
+  doc: 'Doc',
+  activity: 'Activity',
+  run_instructions: 'Task prompt',
+  run_output: 'Task output',
+  run_error: 'Task error',
+  audit: 'Audit log',
+  work_item: 'Task',
+};
+
+export function memorySourceLabel(source: string): string {
+  return memorySourceLabels[source] ?? source.replace(/_/g, ' ');
+}
+
 export function selectBalancedVisibleAgent(messages: Array<{ author: string }>): 'codex' | 'claude' {
   const codexCount = messages.filter((message) => message.author === 'codex').length;
   const claudeCount = messages.filter((message) => message.author === 'claude').length;

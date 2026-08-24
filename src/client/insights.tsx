@@ -83,20 +83,21 @@ function AgentInsightCard({ agent }: { agent: RunInsightsByAgent }) {
         <strong>{agent.agent}</strong>
         <span className="insight-agent-total">{agent.total} run{agent.total === 1 ? '' : 's'}</span>
       </header>
-      <RateBar label="Success" value={agent.successRate} count={`${agent.completed}/${agent.completed + agent.failed}`} />
+      <RateBar label="Success" value={agent.successRate} count={`${agent.completed}/${agent.total}`} />
       <dl className="insight-agent-stats">
         <div><dt>Retry rate</dt><dd>{formatPercent(agent.retryRate)}</dd></div>
         <div><dt>Agent handoffs</dt><dd>{formatPercent(agent.fallbackRate)}</dd></div>
         <div><dt>Median duration</dt><dd>{formatDuration(agent.medianDurationMs)}</dd></div>
         <div><dt>P90 duration</dt><dd>{formatDuration(agent.p90DurationMs)}</dd></div>
-        <div><dt>Estimated cost</dt><dd>{formatCostUsd(agent.costUsd ?? 0)}</dd></div>
+        <div><dt>Provider billed</dt><dd>{formatCostUsd(agent.providerCostUsd ?? 0)}</dd></div>
+        <div><dt>List-price estimate</dt><dd>{formatCostUsd(agent.estimatedCostUsd ?? 0)}</dd></div>
       </dl>
     </article>
   );
 }
 
 function KindInsightRow({ kind }: { kind: RunInsightsByKind }) {
-  return <RateBar label={kindLabels[kind.kind] ?? kind.kind} value={kind.successRate} count={`${kind.completed}/${kind.completed + kind.failed}`} />;
+  return <RateBar label={kindLabels[kind.kind] ?? kind.kind} value={kind.successRate} count={`${kind.completed}/${kind.completed + kind.failed + kind.canceled}`} />;
 }
 
 function AgentFitRows({ rows }: { rows: RunInsightsAgentFit[] }) {
@@ -106,7 +107,7 @@ function AgentFitRows({ rows }: { rows: RunInsightsAgentFit[] }) {
     return <div className="insight-fit-row" key={kind}>
       <strong>{kindLabels[kind] ?? kind}</strong>
       <div>{agents.map((agent, index) => <span className={index === 0 && agents.length > 1 ? 'recommended' : ''} key={agent.agent}>
-        <b>{agent.agent}</b><em>{formatPercent(agent.successRate)} success</em><small>{formatDuration(agent.medianDurationMs)} median · {agent.completed + agent.failed} runs</small>
+        <b>{agent.agent}</b><em>{formatPercent(agent.successRate)} success</em><small>{formatDuration(agent.medianDurationMs)} median · {agent.completed + agent.failed + agent.canceled} runs</small>
       </span>)}</div>
     </div>;
   })}</div>;
@@ -194,7 +195,7 @@ export function InsightsView() {
           ) : (
             <>
               <div className="insight-overall-row">
-                <div className="insight-overall-stat"><span className="eyebrow">Agent work completed <InfoTooltip>Count of agent runs with status "completed" in this window, counted by when the run was created.</InfoTooltip></span><strong>{data.completedRuns ?? 0}</strong><small>Successful agent runs in this window.</small></div>
+                <div className="insight-overall-stat"><span className="eyebrow">Agent work completed <InfoTooltip>Count of agent runs that reached the completed status in this window, counted by completed time.</InfoTooltip></span><strong>{data.completedRuns ?? 0}</strong><small>Successful agent runs completed in this window.</small></div>
                 <div className="insight-overall-stat"><span className="eyebrow">Tasks completed <InfoTooltip>Count of tasks with a completed_at timestamp inside this window. Not limited to tasks created in the window.</InfoTooltip></span><strong>{data.completedTasks ?? 0}</strong><small>Tasks you accepted and completed.</small></div>
                 <div className="insight-overall-stat"><span className="eyebrow">Median active work time <InfoTooltip>Median, per task completed in this window, of the summed duration of that task's agent runs (each run's started_at to completed_at), excluding extreme durations outside Tukey’s outer fences. Idle time between runs — waiting on you, sitting untouched — is not counted.</InfoTooltip></span><strong>{formatDuration(data.medianTaskCycleMs ?? null)}</strong><small>Typical time agents actually spent working on a task.</small></div>
                 <div className="insight-overall-stat"><span className="eyebrow">Follow-ups created <InfoTooltip>Count of tasks created in this window that have a parent task (i.e. were split out from existing work).</InfoTooltip></span><strong>{data.followUpsCreated ?? 0}</strong><small>Work split out from existing tasks.</small></div>
@@ -203,13 +204,13 @@ export function InsightsView() {
               <CursingInsight data={data.cursing} />
 
               <div className="insight-section">
-                <h3>Best agent by task type <InfoTooltip>For each task type, agents are ranked by success rate: completed runs ÷ (completed + failed runs) for that agent on that task type. The agent with the higher rate is marked "recommended" only when both agents have run history to compare.</InfoTooltip></h3>
+                <h3>Best agent by task type <InfoTooltip>For each task type, agents are ranked by success rate: completed runs ÷ all terminal runs (completed, failed, and canceled) for that agent. The agent with the higher rate is marked "recommended" only when both agents have run history to compare.</InfoTooltip></h3>
                 <p className="insight-section-intro">Use this to improve automatic routing. The stronger result is highlighted when both agents have history.</p>
                 {(data.agentFit ?? []).length === 0 ? <p className="insight-empty-note">Not enough task history yet.</p> : <AgentFitRows rows={data.agentFit} />}
               </div>
 
               <div className="insight-section">
-                <h3>Success rate by agent <InfoTooltip>Per agent: success rate is completed runs ÷ (completed + failed runs). Retries and handoffs are read from the lifecycle event ledger, including chat runs. Median and P90 duration are computed from each run's started_at to completed_at span.</InfoTooltip></h3>
+                <h3>Success rate by agent <InfoTooltip>Per agent: success rate is completed runs ÷ all terminal runs, including canceled runs. Retries and handoffs are read from the lifecycle event ledger, including chat runs. Median and P90 duration are computed from each run's started_at to completed_at span.</InfoTooltip></h3>
                 {data.byAgent.length === 0 ? <p className="insight-empty-note">No agent runs in this window.</p> : (
                   <div className="insight-agent-grid">
                     {data.byAgent.map((agent) => <AgentInsightCard key={agent.agent} agent={agent} />)}
@@ -218,7 +219,7 @@ export function InsightsView() {
               </div>
 
               <div className="insight-section">
-                <h3>Success rate by task type <InfoTooltip>For each task type (research, analysis, strategy, execute, review), success rate is completed runs ÷ (completed + failed runs) across all agents, for runs created in this window.</InfoTooltip></h3>
+                <h3>Success rate by task type <InfoTooltip>For each task type, success rate is completed runs ÷ all terminal runs, including canceled runs, completed in this window.</InfoTooltip></h3>
                 {data.byKind.length === 0 ? <p className="insight-empty-note">No classified runs in this window.</p> : (
                   <div className="insight-bar-list">
                     {data.byKind.map((kind) => <KindInsightRow key={kind.kind} kind={kind} />)}
@@ -227,24 +228,30 @@ export function InsightsView() {
               </div>
 
               <div className="insight-section insight-cost">
-                <h3>Cost <InfoTooltip>Estimated spend on agent runs created in this window. Claude runs use the provider's own reported total when it is available; everything else is tokens multiplied by the rate for that model. Rates come from deployment environment overrides when set, otherwise from a built-in list-price table.</InfoTooltip></h3>
-                <p className="insight-section-intro">What agent work cost in this window, which agent drove it, and whether it is rising.</p>
-                {(data.pricedRuns ?? 0) === 0 ? <p className="insight-empty-note">No priced runs in this window yet.</p> : <>
+                <h3>Cost <InfoTooltip>Provider billed cost is reported directly by the provider. List-price estimates use reported tokens at uncached, short-context rates and are not bills: cache use, cache writes, long contexts, and provider discounts can change the actual charge.</InfoTooltip></h3>
+                <p className="insight-section-intro">Billed cost and token-based estimates are intentionally separate so they cannot be mistaken for one number.</p>
+                {(data.providerPricedRuns ?? 0) === 0 && (data.estimatedPricedRuns ?? 0) === 0 ? <p className="insight-empty-note">No trustworthy cost records in this window yet.</p> : <>
                   <div className="insight-cost-summary">
                     <div className="insight-cost-total">
-                      <span className="eyebrow">Estimated total</span>
-                      <strong>{formatCostUsd(data.costUsd ?? 0)}</strong>
-                      <CostTrend current={data.costUsd ?? 0} previous={data.previousCostUsd ?? null} />
+                      <span className="eyebrow">Provider billed</span>
+                      <strong>{formatCostUsd(data.providerCostUsd ?? 0)}</strong>
+                      <CostTrend current={data.providerCostUsd ?? 0} previous={data.previousProviderCostUsd ?? null} />
+                    </div>
+                    <div className="insight-cost-total">
+                      <span className="eyebrow">List-price estimate</span>
+                      <strong>{formatCostUsd(data.estimatedCostUsd ?? 0)}</strong>
+                      <CostTrend current={data.estimatedCostUsd ?? 0} previous={data.previousEstimatedCostUsd ?? null} />
                     </div>
                     <div className="insight-cost-split">
                       {data.byAgent.filter((agent) => agent.total > 0).map((agent) => <div key={agent.agent}>
                         <span>{agent.agent}</span>
-                        <strong>{formatCostUsd(agent.costUsd ?? 0)}</strong>
-                        <small>{formatPercent(data.costUsd > 0 ? (agent.costUsd ?? 0) / data.costUsd : null)} of spend</small>
+                        <strong>{formatCostUsd(agent.providerCostUsd ?? 0)} billed</strong>
+                        <small>{formatCostUsd(agent.estimatedCostUsd ?? 0)} estimate</small>
                       </div>)}
                     </div>
                   </div>
                   {(data.costByDay ?? []).length > 0 && <CostByDayChart rows={data.costByDay} />}
+                  {(data.unverifiedCostRuns ?? 0) > 0 && <p className="insight-empty-note">{data.unverifiedCostRuns} historical run{data.unverifiedCostRuns === 1 ? '' : 's'} had a stored cost without provenance and are excluded from these totals.</p>}
                   {(data.unpricedRuns ?? 0) > 0 && <p className="insight-empty-note">{data.unpricedRuns} run{data.unpricedRuns === 1 ? '' : 's'} reported tokens but had no rate for their model, so the total is understated.</p>}
                 </>}
               </div>

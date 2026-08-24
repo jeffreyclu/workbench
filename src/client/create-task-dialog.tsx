@@ -9,7 +9,7 @@ import { toast, toastError } from './toast-store';
 
 export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { onClose: () => void; onCreated: (item: WorkItem) => void; defaultProjectName?: string }) {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<'search' | 'link' | 'ai' | 'manual'>('search');
+  const [mode, setMode] = useState<'search' | 'link' | 'ai' | 'manual'>('manual');
   const [sourceQuery, setSourceQuery] = useState('');
   const [submittedSourceQuery, setSubmittedSourceQuery] = useState('');
   const [sourceUrl, setSourceUrl] = useState('');
@@ -104,11 +104,11 @@ export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { on
             <X size={17} />
           </button>
         </div>
-        <div className="task-mode-tabs four-tabs" role="tablist">
-          <button className={mode === 'search' ? 'active' : ''} onClick={() => setMode('search')}><Search size={14} /> From search</button>
-          <button className={mode === 'link' ? 'active' : ''} onClick={() => setMode('link')}><ArrowUpRight size={14} /> Paste link</button>
-          <button className={mode === 'ai' ? 'active' : ''} onClick={() => setMode('ai')}><Sparkles size={14} /> Describe to AI</button>
-          <button className={mode === 'manual' ? 'active' : ''} onClick={() => setMode('manual')}><Plus size={14} /> Manual task</button>
+        <div className="task-mode-tabs four-tabs" role="group" aria-label="Task creation mode">
+          <button type="button" className={mode === 'search' ? 'active' : ''} aria-pressed={mode === 'search'} onClick={() => setMode('search')}><Search size={14} /> From search</button>
+          <button type="button" className={mode === 'link' ? 'active' : ''} aria-pressed={mode === 'link'} onClick={() => setMode('link')}><ArrowUpRight size={14} /> Paste link</button>
+          <button type="button" className={mode === 'ai' ? 'active' : ''} aria-pressed={mode === 'ai'} onClick={() => setMode('ai')}><Sparkles size={14} /> Describe to AI</button>
+          <button type="button" className={mode === 'manual' ? 'active' : ''} aria-pressed={mode === 'manual'} onClick={() => setMode('manual')}><Plus size={14} /> Manual task</button>
         </div>
 
         {mode === 'search' ? (
