@@ -192,3 +192,34 @@ The control also remained only 32px high on a phone after earlier reports called
 Active and Archive at least 44px high. The permanent regression runs the complete pointer flow in both
 Chromium mobile emulation and WebKit, proves the second tap sends `view=archive`, retains the archived
 URL and heading, and probes every part of the target while the desktop nav is expanded.
+
+### "A bubble cannot exceed the width of the screen" means its rendered content, not its box
+
+Jeffrey has now had to repeat this constraint twice, and the first fix failed because it was read too
+narrowly. Capping `.shared-message` with `width: min(94%, 640px); min-width: 0; max-width: 100%` bounds
+the *box* and satisfies a CSS-source unit test, while the content inside it still paints hundreds of
+pixels past the phone screen. On a 390px viewport a structured agent reply measured `clientWidth: 338`
+with `scrollWidth: 3106`, and its `.agent-response-section` painted out to x=3121. The rule Jeffrey is
+stating covers everything the user can see, so the assertion has to be a real layout measurement of
+every descendant, not a string match on the stylesheet.
+
+Two structural causes, both specific to agent bubbles rather than Jeffrey's own messages:
+
+- `.agent-response` and `.agent-response-deck` are grid containers whose items default to
+  `min-width: auto`, so a single unbreakable URL or token inside a section sizes the track to
+  max-content and drags the whole bubble open. Give every grid container and item in that chain
+  `min-width: 0` (plus `grid-template-columns: minmax(0, 1fr)`), and give code blocks and tables
+  `max-width: 100%` so they scroll inside the bubble instead of widening it.
+- `.live-run-output pre` had no CSS rule at all. A bare `<pre>` is `white-space: pre` with no overflow,
+  so a streaming tool log stretched the bubble to the width of its longest line — which is why the
+  problem looked worst while an agent was mid-run.
+
+`.shared-message` now also carries `overflow: hidden` as a standing clip boundary, so any future
+descendant that escapes is contained rather than shipped.
+
+Testing note: agent-authored and `running` messages cannot be created over the public API in e2e
+(`e2eRuntimeCapabilities.executeAgents` is `false`), and they are exactly the bubbles that break. The
+Playwright harness in `scripts/e2e-api.ts` therefore mounts a test-only `POST /api/e2e/seed-message`
+route ahead of the real app, in the script and never in shipped server code. When asserting overflow,
+exempt descendants that sit inside their own horizontal scroll container — a code block scrolling
+within the bubble is the intended treatment, and flagging it hides the real offenders.

@@ -11,6 +11,30 @@ describe('shared message layout', () => {
     expect(sharedMessageRule).toContain('width: min(94%, 640px)');
     expect(sharedMessageRule).toContain('min-width: 0');
     expect(sharedMessageRule).toContain('max-width: 100%');
+    // The bubble is the clip boundary: no descendant may paint outside it.
+    expect(sharedMessageRule).toContain('overflow: hidden');
+  });
+
+  it('stops agent response sections from being widened by their own content', () => {
+    // These are grid containers/items, whose default min-width: auto lets one
+    // unbreakable token or wide code block stretch the whole bubble open.
+    for (const selector of ['.agent-response', '.agent-response-deck', '.agent-response-section', '.agent-markdown', '.message-markdown', '.live-run-output']) {
+      // Anchored to the line start so a descendant rule such as
+      // ".run-summary .agent-markdown" can't be mistaken for the base rule.
+      const rule = styles.match(new RegExp(`^\\${selector}\\s*\\{[^}]*\\}`, 'm'))?.[0] ?? '';
+      expect(rule, `${selector} rule exists`).not.toBe('');
+      expect(rule, `${selector} declares min-width: 0`).toContain('min-width: 0');
+    }
+  });
+
+  it('keeps streaming run output inside the bubble', () => {
+    // A bare <pre> is white-space: pre with no overflow, so an unstyled live
+    // run log stretches the bubble to the width of its longest tool line.
+    const rule = styles.match(/\.live-run-output pre\s*\{[^}]*\}/)?.[0] ?? '';
+
+    expect(rule).toContain('max-width: 100%');
+    expect(rule).toContain('white-space: pre-wrap');
+    expect(rule).toContain('overflow-wrap: anywhere');
   });
 });
 
