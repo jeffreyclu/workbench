@@ -39,6 +39,14 @@ describe('shared message layout', () => {
 });
 
 describe('conversation view controls', () => {
+  it('uses one desktop width and gutter for task and conversation stacks', () => {
+    expect(styles).toContain('--stack-column-width: clamp(320px, 28vw, 380px)');
+    expect(styles).toContain('grid-template-columns: 56px var(--stack-column-width) minmax(0, 1fr)');
+    expect(styles).toContain('grid-template-columns: var(--stack-column-width) minmax(0, 1fr)');
+    expect(styles).toContain('.queue-header { display: flex; justify-content: space-between; align-items: center; min-height: 66px; padding: 12px 15px;');
+    expect(styles).toContain('.conversation-rail { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; padding: 18px 10px;');
+  });
+
   it('gives expanded desktop navigation its own grid column instead of covering the switch', () => {
     expect(styles).toMatch(/\.app-shell:has\(\.sidebar:hover\),\s*\.app-shell:has\(\.sidebar:focus-within\)\s*\{\s*grid-template-columns:\s*220px/);
     const desktopNavigationRule = styles.match(/@media \(min-width: 821px\) \{[\s\S]*?\.sidebar\s*\{[^}]*\}/)?.[0] ?? '';

@@ -142,6 +142,11 @@ pair of buttons. Keep the 44px targets at the mobile breakpoint. The conversatio
 desktop width that supports a usable full-width **Search everything…** field; do not inherit the
 task stack's wide search margins there. Correction from Jeffrey, 2026-08-24.
 
+The task stack and conversation rail use the same responsive desktop column (`clamp(320px, 28vw,
+380px)`) and the same 15px outer control gutter. Do not let one become a fractional layout column
+while the other uses a hard-coded rail width; their card, search, and filter widths should stay
+visually identical. Correction from Jeffrey, 2026-08-24.
+
 ### Workbench is a mobile target
 
 *Jeffrey uses Workbench from his phone every day, so mobile layout and a stable shareable URL are first-class requirements rather than nice-to-haves.*
