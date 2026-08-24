@@ -260,7 +260,7 @@ nav { display: grid; gap: 3px; }
 .archive-state.completed { color: var(--acid); }
 .archive-date { color: #77766f; font: 9px 'DM Mono'; }
 .stack-view-filter { display: grid; grid-template-columns: 1fr 1fr; margin: 0 19px 10px; padding: 3px; background: #0b0b0a; border: 1px solid #252522; border-radius: 7px; }
-.stack-view-filter button { min-height: 44px; padding: 5px; border: 0; border-radius: 4px; background: transparent; color: #66655f; font: 700 9px 'DM Mono'; letter-spacing: .04em; text-transform: uppercase; }
+.stack-view-filter button { min-height: 32px; padding: 5px; border: 0; border-radius: 4px; background: transparent; color: #66655f; font: 700 9px 'DM Mono'; letter-spacing: .04em; text-transform: uppercase; }
 .stack-view-filter button:last-child { border-right: 0; }
 .stack-view-filter button.active { color: #d9d8d0; background: #252522; }
 .stack-view-filter button span { margin-left: 5px; opacity: .75; }
@@ -496,10 +496,11 @@ nav { display: grid; gap: 3px; }
 .connection-scope-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .mcp-required { color: #8d8c84; font: 9px 'DM Mono'; text-transform: uppercase; letter-spacing: .06em; }
 .shared-room-dialog { display: flex; flex-direction: column; width: min(760px, 100%); height: min(820px, 92vh); }
-.shared-workspace { grid-column: 2 / -1; display: grid; grid-template-columns: 250px minmax(0, 1fr); min-width: 0; min-height: 0; height: 100vh; overflow: hidden; background: #0f0f0e; }
+.shared-workspace { grid-column: 2 / -1; display: grid; grid-template-columns: 320px minmax(0, 1fr); min-width: 0; min-height: 0; height: 100vh; overflow: hidden; background: #0f0f0e; }
 .conversation-rail { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; padding: 18px 10px; background: #10100f; border-right: 1px solid var(--line); }
 .conversation-rail > header { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 0 5px 10px; }
 .conversation-rail > header .stack-toolbar-copy h2 { display: none; }
+.conversation-rail > .search-box { margin: 0 5px 9px; }
 .conversation-tabs .virtual-row > button { animation: conversation-card-enter 560ms cubic-bezier(.16,1,.3,1) both; }
 .conversation-tabs .virtual-row > button.conversation-exiting { overflow: hidden; animation: conversation-card-exit 560ms cubic-bezier(.4,0,1,1) both; pointer-events: none; }
 @keyframes conversation-card-enter { from { opacity: 0; transform: translate3d(-14px, 0, 0) scale(.985); } to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); } }
@@ -509,7 +510,7 @@ nav { display: grid; gap: 3px; }
 .conversation-header-actions .delete-conversation-button { color: #8e6862; }
 .conversation-header-actions .delete-conversation-button:hover { color: #ff9384; background: #2b1715; border-color: #542b26; }
 .conversation-view-tabs { position: relative; z-index: 10; flex: 0 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin: 0 5px 10px; padding: 3px; background: #0b0b0a; border: 1px solid #252522; border-radius: 7px; }
-.conversation-view-tabs button { position: relative; z-index: 1; min-height: 44px; padding: 5px; color: #66655f; background: transparent; border: 0; border-radius: 4px; font: 700 9px 'DM Mono'; letter-spacing: .04em; text-transform: uppercase; }
+.conversation-view-tabs button { position: relative; z-index: 1; min-height: 32px; padding: 5px; color: #66655f; background: transparent; border: 0; border-radius: 4px; font: 700 9px 'DM Mono'; letter-spacing: .04em; text-transform: uppercase; }
 .conversation-view-tabs button.active { color: #d9d8d0; background: #252522; }
 .archived-composer-note { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 72px; padding: 18px; color: #85847d; border-top: 1px solid var(--line); font: 10px 'DM Mono'; }
 .conversation-tabs { position: relative; z-index: 0; flex: 1; min-height: 0; overflow: auto; }
@@ -722,6 +723,8 @@ nav { display: grid; gap: 3px; }
   .queue-header { flex: 0 0 auto; min-height: 64px; padding: 12px 16px; }
   .queue-header h2 { font-size: 13px; }
   .stack-view-filter { margin-inline: 12px; }
+  .stack-view-filter button,
+  .conversation-view-tabs button { min-height: 44px; }
   .queue-header .header-actions { gap: 5px; }
   .queue-header .button { padding-inline: 10px; }
   .search-box { flex: 0 0 auto; margin-inline: 12px; }

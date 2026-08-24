@@ -137,6 +137,11 @@ segmented control. Do not reintroduce a task-only hero heading or a tiny, visual
 conversation filter; the header should frame the stack, not compete with its cards. Decision from
 Jeffrey, 2026-08-24.
 
+On desktop, the shared Active/Archive control is compact (32px minimum height), not a phone-sized
+pair of buttons. Keep the 44px targets at the mobile breakpoint. The conversation rail needs a
+desktop width that supports a usable full-width **Search everything…** field; do not inherit the
+task stack's wide search margins there. Correction from Jeffrey, 2026-08-24.
+
 ### Workbench is a mobile target
 
 *Jeffrey uses Workbench from his phone every day, so mobile layout and a stable shareable URL are first-class requirements rather than nice-to-haves.*
