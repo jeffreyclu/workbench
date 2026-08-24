@@ -44,7 +44,7 @@ import { api } from './api';
 import { ArtifactLibraryView, ArtifactNav } from './artifacts';
 import { ConfirmationDialog } from './confirmation-dialog';
 import { InsightsView, InsightsNav } from './insights';
-import { navigate, parseRoute, useRoute, type StackName } from './router';
+import { navigate, parseRoute, routePath, useRoute, type StackName } from './router';
 import { ListRowSkeleton } from './skeleton';
 import { Toaster } from './toast';
 import { toast, toastError } from './toast-store';
@@ -66,7 +66,7 @@ import { useRealtimeNotifications, type RealtimeNotification } from './realtime'
 
 const CONVERSATION_ROW_GAP = 6;
 
-export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectConversation }: { initialConversationId?: string | null; onOpenTask?: (taskId: string) => void; onSelectConversation?: (conversationId: string | null) => void }) {
+export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectConversation, view, onViewChange }: { initialConversationId?: string | null; onOpenTask?: (taskId: string) => void; onSelectConversation?: (conversationId: string | null) => void; view?: 'active' | 'archive'; onViewChange?: (view: 'active' | 'archive') => void }) {
   const queryClient = useQueryClient();
   const [body, setBody] = useState(() => initialConversationId ? readConversationDrafts()[initialConversationId] ?? '' : '');
   const [dispatchTo, setDispatchTo] = useState<'both' | 'codex' | 'claude'>('codex');
@@ -137,7 +137,12 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     });
     updateConversationPreferences.mutate({ conversationId: targetConversationId, profile });
   }
-  const [conversationView, setConversationView] = useState<'active' | 'archive'>('active');
+  // The rail's Active/Archive selection is owned by the caller when it supplies
+  // one, so it survives the workspace being remounted onto a conversation from
+  // the address bar. Rendered on its own the workspace still keeps its own.
+  const [ownConversationView, setOwnConversationView] = useState<'active' | 'archive'>('active');
+  const conversationView = view ?? ownConversationView;
+  const setConversationView = (next: 'active' | 'archive') => { setOwnConversationView(next); onViewChange?.(next); };
   const [deleteConversationPromptOpen, setDeleteConversationPromptOpen] = useState(false);
   const [conversationSearch, setConversationSearch] = useState('');
   const [dismissedCompletionPromptPromotionId, setDismissedCompletionPromptPromotionId] = useState<string | null>(null);
@@ -1532,6 +1537,10 @@ export function App() {
   const [taskStack, setTaskStack] = useState<StackName>('active');
   const [resolvedTaskId, setResolvedTaskId] = useState<string | null>(null);
   const [conversationNavigationVersion, setConversationNavigationVersion] = useState(0);
+  // The rail's Active/Archive selection lives here, outside the remount key
+  // above, so reopening the workspace on a conversation keeps the rail Jeffrey
+  // chose instead of snapping back to Active.
+  const [conversationRailView, setConversationRailView] = useState<'active' | 'archive'>('active');
   const [pendingTaskNavigation, setPendingTaskNavigation] = useState<string | null>(null);
   const [pendingPinnedNavigation, setPendingPinnedNavigation] = useState(false);
   const selectedId = route.name === 'task' ? route.taskId : null;
@@ -1599,7 +1608,16 @@ export function App() {
     navigate({ name: 'conversations', conversationId }, { replace: route.name === 'conversations' && route.conversationId === null });
   }
   useEffect(() => {
-    if (route.name !== 'conversations' || route.conversationId === syncedConversationId.current) return;
+    if (route.name !== 'conversations') return;
+    // Switching rails clears the selection before the new rail picks its first
+    // conversation, so the workspace briefly addresses `/conversations` and then
+    // the conversation it settled on. The workspace's own effects flush before
+    // this one, which means `route` here can already describe a superseded
+    // address. Remounting on that stale intermediate reset the rail to Active
+    // and reopened an unrelated conversation. Only a render that still matches
+    // the live address describes navigation that came from outside.
+    if (routePath(route) !== window.location.pathname) return;
+    if (route.conversationId === syncedConversationId.current) return;
     // The address changed from outside the workspace — a link, a notification,
     // or the back button — so remount it on the conversation the URL names.
     syncedConversationId.current = route.conversationId;
@@ -1846,7 +1864,7 @@ export function App() {
         </nav>
       </aside>
 
-      {view === 'context' ? <SharedWorkspace key={`conversation-${conversationNavigationVersion}`} initialConversationId={agentConversationId} onSelectConversation={handleConversationSelected} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} /> : view === 'artifacts' ? <ArtifactLibraryView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : view === 'insights' ? <InsightsView /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenStack={() => navigate({ name: 'stack', stack: 'active' })} /> : <><main className="queue-panel">
+      {view === 'context' ? <SharedWorkspace key={`conversation-${conversationNavigationVersion}`} initialConversationId={agentConversationId} view={conversationRailView} onViewChange={setConversationRailView} onSelectConversation={handleConversationSelected} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} /> : view === 'artifacts' ? <ArtifactLibraryView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : view === 'insights' ? <InsightsView /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenStack={() => navigate({ name: 'stack', stack: 'active' })} /> : <><main className="queue-panel">
         <header className="queue-header">
           <div><span className="eyebrow">{view === 'active' ? 'Focus' : view === 'workbench' ? 'Focus' : 'History'}</span><h2>{view === 'active' ? 'Attention stack' : view === 'workbench' ? 'Workbench focus' : 'Archive'}</h2></div>
           <div className="header-actions">

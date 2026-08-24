@@ -148,3 +148,47 @@ jumps directly into a `{ name: 'task' }` route without an intervening `{ name: '
 back/close navigation on mobile, even if the desktop split-pane view looks unaffected — `navigate()`
 calls in this codebase should mirror the visual navigation stack the user actually experiences, not
 just the shortest path to the destination URL.
+
+### A stale rendered route must never remount `SharedWorkspace`
+
+Jeffrey reported the same Archive bug five separate times across four "verified and promoted" agent
+fixes (2026-08-24). Every one of those fixes addressed a real but secondary issue — z-index
+occlusion, autoscroll moving the header, clearing the selection on a repeat tap — and none addressed
+the actual cause, because each was validated with a **single** Active → Archive transition. The bug
+only appears on the third switch, once both rails have rendered at least once and both TanStack Query
+caches are warm.
+
+The cause: `App` remounts `SharedWorkspace` via `key={`conversation-${conversationNavigationVersion}`}`
+whenever the address names a conversation the workspace did not itself select, and that remount reset
+the rail's `conversationView` to `'active'`. Switching rails clears the selection first, so the
+address transiently becomes `/conversations` before the new rail auto-selects its first row and pushes
+`/conversations/<id>`. Because the workspace's own effects flush *before* the parent's, the parent's
+guard effect could run on a render whose `route` already described a superseded address while
+`syncedConversationId.current` had advanced past it — `null !== <archived id>` — firing a spurious
+remount. The visible result was exactly Jeffrey's words: the Archive tab snapped back to Active while
+an unrelated archived conversation opened underneath it.
+
+Two rules follow, both now enforced in the code:
+
+- A guard that decides whether navigation came from *outside* a component must compare against the
+  live `window.location.pathname`, not only the route object from the current render. In an app where
+  a child effect calls `history.pushState`, the parent's rendered route is routinely one step behind
+  reality, and treating that lag as an external navigation causes spurious remounts.
+- State a remount would silently discard must live above the remount key. `conversationView` is now
+  owned by `App` and passed down as an optional controlled `view`/`onViewChange` pair; the workspace
+  keeps its own state only when rendered standalone, so existing standalone tests still exercise the
+  tabs.
+
+Method lesson, which generalizes past this bug: when Jeffrey says a UI fix is still broken after tests
+pass, drive the real app in a real browser at his viewport before touching the code. `playwright` and
+both `chromium` and `webkit` browsers are already installed in this repo; a throwaway script against a
+`vite` dev server pointed at the live API (`WORKBENCH_API_TARGET=http://127.0.0.1:5173`) reproduces
+against real data in under a minute. Reproduce the *multi-step* sequence — repeat each toggle three
+times — because state that only corrupts after both branches have been visited is invisible to a
+one-transition test. Run that server as a child process of a single foreground script that kills it in
+a `finally`, and put the readiness wait inside the `try`, or a startup failure leaks the process.
+
+The control also remained only 32px high on a phone after earlier reports called it “tappable.” Keep
+Active and Archive at least 44px high. The permanent regression runs the complete pointer flow in both
+Chromium mobile emulation and WebKit, proves the second tap sends `view=archive`, retains the archived
+URL and heading, and probes every part of the target while the desktop nav is expanded.

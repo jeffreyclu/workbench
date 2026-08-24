@@ -458,6 +458,48 @@ describe('shared room', () => {
     expect(screen.getByRole('heading', { name: 'Archived conversation' })).toBeTruthy();
   });
 
+  // Switching rails clears the selection first, so the address briefly drops to
+  // `/conversations` before the new rail settles on a conversation. The
+  // workspace used to be remounted on that intermediate address, which reset the
+  // rail to Active and reopened an unrelated conversation. It only reproduced
+  // after both rails had been visited once, so a single Active -> Archive switch
+  // looked fine.
+  it('stays on the archive rail when Archive is reselected after returning to Active', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const active = { id: '00000000-0000-4000-8000-000000000061', title: 'Active rail conversation', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const archived = { ...active, id: '00000000-0000-4000-8000-000000000062', title: 'Archived rail conversation', archivedAt: '2026-01-02T00:00:00Z' };
+    window.history.replaceState(null, '', `/conversations/${active.id}`);
+    window.localStorage.setItem('workbench:last-opened-conversation', active.id);
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes('/api/shared/conversations?')
+        ? { conversations: url.includes('view=archive') ? [archived] : [active], nextCursor: null }
+        : { ok: true, mode: 'live', runtimeWorkActive: false, buildId: 'test', items: [], conversations: [], messages: [], active: 0, workbench: 0, archive: 1, count: 0, pending: false, proposal: null, nextCursor: null };
+      return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+    const viewTabs = () => screen.getByRole('group', { name: 'Conversation view' });
+    const tab = (name: 'Active' | 'Archive') => within(viewTabs()).getByRole('button', { name });
+
+    expect(await screen.findByRole('heading', { name: active.title })).toBeTruthy();
+
+    // Three switches, because the rail only lost the selection once both rails
+    // had been rendered at least once.
+    for (const step of [1, 2, 3]) {
+      fireEvent.click(tab('Archive'));
+      await waitFor(() => expect(tab('Archive').getAttribute('aria-pressed')).toBe('true'), { timeout: 3000 });
+      expect(tab('Active').getAttribute('aria-pressed')).toBe('false');
+      expect(await screen.findByRole('heading', { name: archived.title })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: active.title })).toBeNull();
+      expect(step).toBeGreaterThan(0);
+
+      fireEvent.click(tab('Active'));
+      await waitFor(() => expect(tab('Active').getAttribute('aria-pressed')).toBe('true'), { timeout: 3000 });
+      expect(await screen.findByRole('heading', { name: active.title })).toBeTruthy();
+    }
+  });
+
   it('distinguishes manual conversations from task-linked conversations', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const manualId = '00000000-0000-4000-8000-000000000010';

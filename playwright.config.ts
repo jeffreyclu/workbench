@@ -14,6 +14,7 @@ export default defineConfig({
   },
   projects: [
     { name: 'mobile-iphone', use: { ...devices['iPhone 13'] } },
+    { name: 'mobile-webkit', use: { ...devices['iPhone 13'], browserName: 'webkit' } },
   ],
   // Starts the isolated e2e API + web servers before the suite and always tears
   // them down afterward, even on failure, so no dev process is left running.

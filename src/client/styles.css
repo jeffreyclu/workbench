@@ -493,7 +493,7 @@ nav { display: grid; gap: 3px; }
 .conversation-header-actions .delete-conversation-button { color: #8e6862; }
 .conversation-header-actions .delete-conversation-button:hover { color: #ff9384; background: #2b1715; border-color: #542b26; }
 .conversation-view-tabs { position: relative; z-index: 10; flex: 0 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin: 0 5px 10px; padding: 3px; background: #0b0b0a; border: 1px solid #252522; border-radius: 6px; }
-.conversation-view-tabs button { position: relative; z-index: 1; min-height: 32px; padding: 5px; color: #66655f; background: transparent; border: 0; border-radius: 4px; font: 9px 'DM Mono'; text-transform: uppercase; }
+.conversation-view-tabs button { position: relative; z-index: 1; min-height: 44px; padding: 5px; color: #66655f; background: transparent; border: 0; border-radius: 4px; font: 9px 'DM Mono'; text-transform: uppercase; }
 .conversation-view-tabs button.active { color: #d9d8d0; background: #252522; }
 .archived-composer-note { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 72px; padding: 18px; color: #85847d; border-top: 1px solid var(--line); font: 10px 'DM Mono'; }
 .conversation-tabs { position: relative; z-index: 0; flex: 1; min-height: 0; overflow: auto; }
