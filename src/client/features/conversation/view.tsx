@@ -709,7 +709,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     <main className={`shared-workspace ${railOpen ? 'rail-open' : ''}`}>
       <button type="button" className="rail-scrim" aria-label="Close conversation list" onClick={() => setRailOpen(false)} />
       <aside id="conversation-rail" className="conversation-rail" aria-label="Conversations">
-        <header><span className="eyebrow">Conversations</span><div className="conversation-header-actions"><button className="icon-button" onClick={() => createConversation.mutate()} aria-label="New conversation"><Plus size={15} /></button></div></header>
+        <header className="stack-toolbar"><div className="stack-toolbar-copy"><span className="eyebrow">Conversations</span><h2>Conversations</h2></div><div className="conversation-header-actions"><button className="icon-button" onClick={() => createConversation.mutate()} aria-label="New conversation"><Plus size={15} /></button></div></header>
         <div className="search-box">
           <Search size={15} />
           <input

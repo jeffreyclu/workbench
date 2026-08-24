@@ -434,8 +434,8 @@ export function App() {
       />
 
       {view === 'context' ? <SharedWorkspace key={`conversation-${conversationNavigationVersion}`} initialConversationId={agentConversationId} view={conversationRailView} onViewChange={setConversationRailView} onSelectConversation={handleConversationSelected} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} /> : view === 'artifacts' ? <ArtifactLibraryView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : view === 'insights' ? <InsightsView /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenStack={() => navigate({ name: 'stack', stack: 'active' })} /> : <><main className="queue-panel">
-        <header className="queue-header">
-          <div><span className="eyebrow">{isArchiveView ? 'Filter' : 'Focus'}</span><h2>{isWorkbenchScope ? 'Workbench focus' : 'Attention stack'}</h2><div className="stack-view-filter" role="group" aria-label="Task view"><button type="button" className={!isArchiveView ? 'active' : ''} aria-pressed={!isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench' : 'active' })}>Active</button><button type="button" className={isArchiveView ? 'active' : ''} aria-pressed={isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench-archive' : 'archive' })}>Archive <span>{isArchiveView ? items.data?.pages[0]?.totalCount ?? '…' : isWorkbenchScope ? workItemCounts.data?.workbenchArchive ?? '…' : workItemCounts.data?.attentionArchive ?? '…'}</span></button></div></div>
+        <header className="queue-header stack-toolbar">
+          <div className="stack-toolbar-copy"><span className="eyebrow">{isArchiveView ? 'Archive' : 'Tasks'}</span><h2>{isWorkbenchScope ? 'Workbench focus' : 'Attention stack'}</h2></div>
           <div className="header-actions">
             {(!isArchiveView) && <>
             <button className="button secondary compact" onClick={() => planQueue.mutate()} disabled={planQueue.isPending}>
@@ -455,6 +455,7 @@ export function App() {
           />
           {taskSearch && <button type="button" className="icon-button" aria-label="Clear task search" onClick={() => setTaskSearch('')}><X size={13} /></button>}
         </div>
+        <div className="stack-view-filter task-view-filter" role="group" aria-label="Task view"><button type="button" className={!isArchiveView ? 'active' : ''} aria-pressed={!isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench' : 'active' })}>Active</button><button type="button" className={isArchiveView ? 'active' : ''} aria-pressed={isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench-archive' : 'archive' })}>Archive <span>{isArchiveView ? items.data?.pages[0]?.totalCount ?? '…' : isWorkbenchScope ? workItemCounts.data?.workbenchArchive ?? '…' : workItemCounts.data?.attentionArchive ?? '…'}</span></button></div>
         {selectedIds.size > 0 && <div className="queue-bulkbar" role="toolbar" aria-label="Bulk task actions"><span>{selectedIds.size} selected</span><button onClick={() => bulkUpdate.mutate({ action: isArchiveView ? 'restore' : 'archive', ids: [...selectedIds] })} disabled={bulkUpdate.isPending}>{isArchiveView ? 'Restore' : 'Archive'}</button><button onClick={() => setSelectedIds(new Set())}>Clear</button>{isWorkbenchScope && <small>Workbench is filtered to the Workbench project.</small>}</div>}
         {items.data?.pages[0]?.proposal && (
           <div className="proposal-banner">

@@ -131,6 +131,12 @@ Keep the **Search everything…** affordance on both the task stack and the conv
 search uses the existing server-backed work-item query; conversation search remains the hybrid
 memory search. Neither UI-consistency work nor future list refactors may remove either entry point.
 
+The stack headers use one compact toolbar hierarchy: an uppercase surface label, a small contextual
+title where needed, right-aligned actions, then Search everything and the full-width Active/Archive
+segmented control. Do not reintroduce a task-only hero heading or a tiny, visually unrelated
+conversation filter; the header should frame the stack, not compete with its cards. Decision from
+Jeffrey, 2026-08-24.
+
 ### Workbench is a mobile target
 
 *Jeffrey uses Workbench from his phone every day, so mobile layout and a stable shareable URL are first-class requirements rather than nice-to-haves.*
