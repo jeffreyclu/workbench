@@ -48,6 +48,7 @@ describe('project card theme', () => {
     render(<QueryClientProvider client={client}><SortableQueueItem item={themedItem} index={0} selected={false} focused={false} draggable={false} onSelect={vi.fn()} onOpenTask={vi.fn()} onFocus={vi.fn()} onKeyDown={vi.fn()} /></QueryClientProvider>);
 
     const card = screen.getByRole('listitem');
+    expect(card.className).toContain('stack-card');
     expect(card.className).toContain('project-colored');
     expect(card.getAttribute('style')).toContain(`--task-accent: ${projectTheme(projectName).accent}`);
   });

@@ -117,6 +117,20 @@ looked different from the task-card's 6px marker even when both computed the sam
 Use `ProjectColorDot` for both surfaces; do not add conversation-specific marker chrome or
 dim the marker through a parent opacity rule.
 
+### Task and conversation stacks share one card hierarchy
+
+*Decision from Jeffrey, 2026-08-24.*
+
+The Attention/Workbench task stack and the conversation rail must feel like one product. Both use
+the same stacked-card geometry: project rail/tint when a project is linked, a two-line title,
+compact contextual metadata, a stable neutral selection outline, and a surface-only hover state.
+Do not shift cards horizontally on hover or selection. Task-only controls and conversation-only
+origin/activity metadata remain specific to their surfaces; the visual shell is shared.
+
+Keep the **Search everything…** affordance on both the task stack and the conversation rail. Task
+search uses the existing server-backed work-item query; conversation search remains the hybrid
+memory search. Neither UI-consistency work nor future list refactors may remove either entry point.
+
 ### Workbench is a mobile target
 
 *Jeffrey uses Workbench from his phone every day, so mobile layout and a stable shareable URL are first-class requirements rather than nice-to-haves.*

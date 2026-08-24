@@ -40,7 +40,13 @@ export function SortableQueueItem({ item, index, selected, focused, draggable, o
   onSelect: () => void; onOpenTask: (id: string) => void; onFocus: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id, disabled: !draggable });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: item.id,
+    disabled: !draggable,
+    // Keep neighboring cards moving as a single, readable list rather than
+    // snapping into their new rank after the drop.
+    transition: { duration: 220, easing: 'cubic-bezier(.22, 1, .36, 1)' },
+  });
   const hasFollowUps = (item.lineage?.followUpCount ?? 0) > 0;
   const isFollowUp = Boolean(item.parentWorkItemId && item.lineage?.parentTitle);
   const color = item.projectName ? projectTheme(item.projectName) : null;
@@ -50,7 +56,7 @@ export function SortableQueueItem({ item, index, selected, focused, draggable, o
   const isHumanOnly = !item.agentOutcome && item.assignees.length === 1 && item.assignees[0] === 'jeffrey';
   const openDependencies = (item.blockedBy ?? []).filter((dependency) => dependency.isOpen);
   const visibleOutcome = item.agentOutcome ?? (item.status === 'in_progress' ? 'in_progress' : null);
-  return <div ref={setNodeRef} data-work-item-id={item.id} style={style} role="listitem" tabIndex={focused ? 0 : -1} className={`queue-item ${visibleOutcome ? `outcome-${visibleOutcome}` : ''} ${isHumanOnly ? 'human-only' : ''} ${item.projectName ? 'project-colored' : ''} ${hasFollowUps || isFollowUp ? 'relationship-family' : ''} ${selected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}`} onClick={onSelect} onFocus={onFocus} onKeyDown={onKeyDown}>
+  return <div ref={setNodeRef} data-work-item-id={item.id} style={style} role="listitem" tabIndex={focused ? 0 : -1} className={`stack-card queue-item ${visibleOutcome ? `outcome-${visibleOutcome}` : ''} ${isHumanOnly ? 'human-only' : ''} ${item.projectName ? 'project-colored' : ''} ${hasFollowUps || isFollowUp ? 'relationship-family' : ''} ${selected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}`} onClick={onSelect} onFocus={onFocus} onKeyDown={onKeyDown}>
     {draggable ? <button className="drag-handle" onClick={(event) => event.stopPropagation()} aria-label={`Reorder ${item.title}`} {...attributes} {...listeners}><GripVertical size={15} /></button> : <span className="rank">{String(index + 1).padStart(2, '0')}</span>}
     <span className="item-copy"><strong>{item.title}</strong>
       <span className="item-meta"><span className="item-project">{item.projectName && <ProjectColorDot projectName={item.projectName} />}{item.sourceIdentifier ? `${item.sourceIdentifier} · ` : ''}{item.projectName ?? 'Personal'}</span><span className="source-tags">{item.sourceTags.map((source) => <span key={source} className={`source-tag source-${source.toLowerCase()}`}>{source}</span>)}</span></span>

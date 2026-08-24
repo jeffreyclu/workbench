@@ -32,7 +32,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from '../../markdown-composer.js';
@@ -58,7 +58,7 @@ import { FollowUpArchiveDialog } from '../../follow-up-archive-dialog';
 import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
 import { clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
 import { QueueExplanationList } from '../../queue-explanations';
-import { ProjectColorDot } from '../../project-color';
+import { ProjectColorDot, projectTheme } from '../../project-color';
 import { InlineProjectEditor } from '../../project-field';
 import { isWorkbenchProject, WORKBENCH_PROJECT_NAME } from '../../../shared/project-name';
 import { SourcesDialog } from '../../sources-dialog';
@@ -763,7 +763,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                   const isUnread = Boolean(conversation.isUnread && !locallyReadConversationIds.has(conversation.id) && conversation.id !== conversationId);
                   const stateLabel = state === 'working' ? 'Working' : state === 'needs_attention' ? 'Failed or canceled' : state === 'waiting_approval' ? 'Review follow-ups' : state === 'promoting' ? 'Approved · promoting preview' : state === 'waiting_promotion' ? 'Approved and waiting promotion' : state === 'finished' ? 'Finished' : null;
                   const stateClass = state;
-                  return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><button className={`${conversation.id === conversationId ? 'active' : ''} ${isUnread ? 'conversation-unread' : 'conversation-read'} ${stateClass ? `conversation-${stateClass}` : ''} ${exitingConversationIds.has(conversation.id) ? 'conversation-exiting' : ''}`} onClick={() => { setConversationId(conversation.id); setRailOpen(false); }}><span className="conversation-tab-title">{conversation.linkedProjectName && <ProjectColorDot projectName={conversation.linkedProjectName} labelled />}<strong>{conversation.title}</strong>{conversation.linkedWorkItemPinned && <span className="conversation-pinned-marker" aria-label="Pinned task" title="Pinned task"><Pin size={10} fill="currentColor" aria-hidden="true" /></span>}{isUnread && <span className="conversation-unread-marker">New</span>}{stateLabel && <span className={`conversation-state conversation-state-${state}`}>{(state === 'working' || state === 'promoting') && <LoaderCircle className="spin" size={10} />}{state === 'waiting_promotion' && <Clock size={10} />}{stateLabel}</span>}</span><small className="conversation-tab-meta"><ConversationOriginBadge workItemId={conversation.workItemId} /><span>{state === 'working' ? 'Agent working…' : state === 'promoting' ? 'Promoting preview…' : state === 'waiting_promotion' ? 'Waiting to promote…' : new Date(conversation.updatedAt).toLocaleDateString()}</span></small></button></div>;
+                  const color = conversation.linkedProjectName ? projectTheme(conversation.linkedProjectName) : null;
+                  const cardStyle = color ? { '--task-accent': color.accent, '--task-tint': color.tint, '--task-border': color.border } as CSSProperties : undefined;
+                  return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><button style={cardStyle} className={`stack-card ${conversation.id === conversationId ? 'active' : ''} ${isUnread ? 'conversation-unread' : 'conversation-read'} ${conversation.linkedProjectName ? 'project-colored' : ''} ${stateClass ? `conversation-${stateClass}` : ''} ${exitingConversationIds.has(conversation.id) ? 'conversation-exiting' : ''}`} onClick={() => { setConversationId(conversation.id); setRailOpen(false); }}><span className="conversation-tab-title">{conversation.linkedProjectName && <ProjectColorDot projectName={conversation.linkedProjectName} labelled />}<strong>{conversation.title}</strong>{conversation.linkedWorkItemPinned && <span className="conversation-pinned-marker" aria-label="Pinned task" title="Pinned task"><Pin size={10} fill="currentColor" aria-hidden="true" /></span>}{isUnread && <span className="conversation-unread-marker">New</span>}{stateLabel && <span className={`conversation-state conversation-state-${state}`}>{(state === 'working' || state === 'promoting') && <LoaderCircle className="spin" size={10} />}{state === 'waiting_promotion' && <Clock size={10} />}{stateLabel}</span>}</span><small className="conversation-tab-meta"><ConversationOriginBadge workItemId={conversation.workItemId} /><span>{state === 'working' ? 'Agent working…' : state === 'promoting' ? 'Promoting preview…' : state === 'waiting_promotion' ? 'Waiting to promote…' : new Date(conversation.updatedAt).toLocaleDateString()}</span></small></button></div>;
                 })}
               </div>
               {conversations.isLoading && <ListRowSkeleton count={6} />}

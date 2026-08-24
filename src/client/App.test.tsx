@@ -23,6 +23,33 @@ class TestWebSocket {
 afterEach(() => { cleanup(); toast.clear(); TestWebSocket.instances = []; window.localStorage.clear(); window.history.replaceState(null, '', '/'); vi.unstubAllGlobals(); });
 
 describe('primary navigation', () => {
+  it('keeps Search everything available on the task stack and refetches with the entered query', async () => {
+    const requestedPaths: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedPaths.push(url);
+      const body = url.startsWith('/api/work-items?')
+        ? { items: [], nextCursor: null, totalCount: 0, proposal: null }
+        : url.includes('/api/work-items/counts')
+          ? { active: 0, workbench: 0, archive: 0 }
+          : url.includes('/api/shared/conversations')
+            ? { conversations: [] }
+            : { messages: [] };
+      return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    const search = screen.getByRole('textbox', { name: 'Search tasks' });
+    expect(search).toHaveAttribute('placeholder', 'Search everything…');
+    fireEvent.change(search, { target: { value: 'card consistency' } });
+
+    await waitFor(() => expect(requestedPaths.some((path) => new URL(path, 'http://localhost').searchParams.get('query') === 'card consistency')).toBe(true));
+    expect(await screen.findByText('No tasks match “card consistency”.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear task search' }));
+    expect(search).toHaveValue('');
+  });
+
   it('reopens the independently saved attention, Workbench, and conversation items', () => {
     const attentionId = '00000000-0000-4000-8000-000000000101';
     const workbenchId = '00000000-0000-4000-8000-000000000102';

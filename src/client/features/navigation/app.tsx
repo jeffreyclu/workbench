@@ -103,6 +103,7 @@ export function App() {
   const [showCreate, setShowCreate] = useState(false);
   const [showSources, setShowSources] = useState(false);
   const [showProposalDetail, setShowProposalDetail] = useState(false);
+  const [taskSearch, setTaskSearch] = useState('');
   // A task URL names the task, never a stack, so a link keeps working after the
   // task moves. The queue shown behind an open task is resolved from the task.
   const [taskStack, setTaskStack] = useState<StackName>('active');
@@ -146,8 +147,8 @@ export function App() {
   const isWorkbenchScope = view === 'workbench' || view === 'workbench-archive';
   const queueView = view === 'workbench-archive' ? 'workbench-archive' : view === 'archive' ? 'archive' : view === 'workbench' ? 'workbench' : 'active';
   const items = useInfiniteQuery({
-    queryKey: ['work-items', queueView],
-    queryFn: ({ pageParam }) => api.listWorkItems(queueView, '', pageParam),
+    queryKey: ['work-items', queueView, taskSearch.trim()],
+    queryFn: ({ pageParam }) => api.listWorkItems(queueView, taskSearch.trim(), pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
     enabled: view === 'active' || view === 'workbench' || isArchiveView,
@@ -444,6 +445,16 @@ export function App() {
             </>}
           </div>
         </header>
+        <div className="search-box task-search-box">
+          <Search size={15} />
+          <input
+            aria-label="Search tasks"
+            value={taskSearch}
+            onChange={(event) => setTaskSearch(event.target.value)}
+            placeholder="Search everything…"
+          />
+          {taskSearch && <button type="button" className="icon-button" aria-label="Clear task search" onClick={() => setTaskSearch('')}><X size={13} /></button>}
+        </div>
         {selectedIds.size > 0 && <div className="queue-bulkbar" role="toolbar" aria-label="Bulk task actions"><span>{selectedIds.size} selected</span><button onClick={() => bulkUpdate.mutate({ action: isArchiveView ? 'restore' : 'archive', ids: [...selectedIds] })} disabled={bulkUpdate.isPending}>{isArchiveView ? 'Restore' : 'Archive'}</button><button onClick={() => setSelectedIds(new Set())}>Clear</button>{isWorkbenchScope && <small>Workbench is filtered to the Workbench project.</small>}</div>}
         {items.data?.pages[0]?.proposal && (
           <div className="proposal-banner">
@@ -467,7 +478,7 @@ export function App() {
         }}>
           {items.isLoading && <ListRowSkeleton count={8} />}
           {items.isError && <div className="list-state error-message">Could not load work items. <button className="button secondary compact" onClick={() => items.refetch()}>Retry</button></div>}
-          {!items.isLoading && !items.isError && filtered.length === 0 && <div className="list-state">{view === 'active' ? 'No work items yet. Add one or connect Linear.' : view === 'workbench' ? 'No Workbench-project tasks yet.' : 'No archived tasks.'}</div>}
+          {!items.isLoading && !items.isError && filtered.length === 0 && <div className="list-state">{taskSearch.trim() ? `No tasks match “${taskSearch.trim()}”.` : view === 'active' ? 'No work items yet. Add one or connect Linear.' : view === 'workbench' ? 'No Workbench-project tasks yet.' : 'No archived tasks.'}</div>}
           <SortableContext items={(view === 'active' || view === 'workbench') && !items.hasNextPage && selectedIds.size === 0 ? renderedItems.map((item) => item.id) : []} strategy={verticalListSortingStrategy}>
             <div className="queue-rows">
               {renderedRows.map((rendered, index) => rendered.type === 'header'

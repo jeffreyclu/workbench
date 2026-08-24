@@ -46,3 +46,12 @@ describe('conversation view controls', () => {
     expect(desktopNavigationRule).not.toContain('position: fixed');
   });
 });
+
+describe('interaction motion', () => {
+  it('animates the requested interaction surfaces and honors reduced motion', () => {
+    expect(styles).toContain('transition: grid-template-columns var(--motion-emphasized) var(--motion-ease)');
+    expect(styles).toContain('.task-collapsible::details-content');
+    expect(styles).toContain('animation: streaming-caret 900ms steps(2, end) infinite');
+    expect(styles).toContain('@media (prefers-reduced-motion: reduce)');
+  });
+});

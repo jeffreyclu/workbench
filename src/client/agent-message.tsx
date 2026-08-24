@@ -40,9 +40,9 @@ export function AgentMessageBody({ body, running, conversationId, workItemId }: 
     },
   }}>{content}</ReactMarkdown>;
 
-  if (!structured) return <div className="agent-markdown">{renderMarkdown(visibleBody)}</div>;
+  if (!structured) return <div className={`agent-markdown${running ? ' streaming' : ''}`}>{renderMarkdown(visibleBody)}</div>;
 
-  return <div className="agent-response" aria-label={`Agent response in ${sections.length} parts`}>
+  return <div className={`agent-response${running ? ' streaming' : ''}`} aria-label={`Agent response in ${sections.length} parts`}>
     <div className="agent-response-deck">
       {sections.map((section, index) => <section key={`${section.title}-${index}`} className="agent-response-section" style={{ '--section-index': index } as CSSProperties}>
         <div className="agent-response-section-heading"><h3>{section.title}</h3></div>

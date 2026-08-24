@@ -42,4 +42,10 @@ describe('splitAgentResponse', () => {
     expect(container.querySelector('h3')?.textContent).toBe('Decision');
     expect(container.querySelector('.agent-response-section-heading > span')).toBeNull();
   });
+
+  it('marks live agent text for the streaming motion treatment', () => {
+    const { container } = render(<AgentMessageBody body="Receiving output" running />);
+
+    expect(container.querySelector('.agent-markdown')).toHaveClass('streaming');
+  });
 });
