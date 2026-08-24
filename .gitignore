@@ -1,14 +1,9 @@
 node_modules/
 dist/
 .workbench-runtime/
-data/*.db
-data/*.db-*
-data/*.log
-data/attachments/
-data/published/
-data/.published-stage-*/
-data/logs/
-data/backups/
+# Workbench's local database, attachments, logs, backups, and generated
+# summaries are runtime state. Nothing under this directory belongs in Git.
+data/
 .env
 .DS_Store
 coverage/
