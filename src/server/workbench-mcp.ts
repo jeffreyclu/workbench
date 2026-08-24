@@ -270,7 +270,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     const hasFieldChange = Object.entries(changes).some(([key, value]) => key !== 'expectedVersion' && value !== undefined);
     if (!hasFieldChange) throw new ToolFailure('INVALID_ARGUMENT', 'Provide at least one locally owned field to update.');
     try {
-      const updated = repository.update(workItemId, changes);
+      const updated = repository.update(workItemId, changes, false, { actor: actor ?? 'system', source: 'mcp' });
       // Every field change an assistant makes shows up in the same activity log
       // Jeffrey's own edits land in, so the task history has one timeline.
       const edits = updated ? summarizeWorkItemChanges(item, updated) : [];

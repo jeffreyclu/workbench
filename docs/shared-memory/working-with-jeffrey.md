@@ -184,6 +184,14 @@ adding remote MCP servers: "add it for both claude and codex." Mirror the config
 ships first — Codex bundles OpenAI-curated plugins that may already cover the service, and stacking a
 second server for the same service just gives an agent two competing tool sets.
 
+### Workbench-supplied sources are authenticated access **(always)**
+
+When Workbench supplies Slack, Confluence, GitHub, or another connector's search context in the room,
+that content is authenticated source access. Use it directly. Do not claim the service is unavailable
+because a native MCP tool is absent, a local CLI is unauthenticated, or a browser page asks to sign in.
+The concrete limitation, if any, is only that no additional live query is exposed beyond the supplied
+context. Recorded from Jeffrey's correction on 2026-08-24.
+
 ### Persist what Jeffrey dumps at you
 
 Jeffrey deliberately offloads context expecting it to be retained: "i want to throw stuff at you to
@@ -196,6 +204,26 @@ preferences and corrections about how to work with him go here. Update the exist
 rather than creating a near-duplicate. Do **not** ask him to disambiguate an ambiguous dump — see
 "Never ask clarifying questions just act"; record it with the ambiguity named, or resolve it against
 the code yourself.
+
+### Project fixes need a live validation surface
+
+After fixing a project, Jeffrey needs to validate it in a running app. Automated checks are necessary
+but are not the handoff. Use the project's real preview/development surface and return its direct URL
+or a concrete way to open it, plus the narrow scenario to smoke-test. Workbench's Preview model is the
+standard to match for other projects.
+
+For Writer monorepo changes, the verified PR-scoped route is the `preview` PR label: its
+`.github/workflows/build-preview.yaml` builds and posts an **Open Preview** link after the preview is
+ready. For Pluto, retain the existing local Preview-MCP development surface until a remote deployment
+preview is explicitly wired and verified. Recorded from Jeffrey's decision and repository inspection
+on 2026-08-24.
+
+For immediate local validation, Jeffrey wants a share command as well as a deployed preview. Both
+Pluto-Alpha and `fe.web-app` now expose `npm run share` / `pnpm share`; the command validates the
+already-running local server and keeps its ngrok tunnel in the foreground. It must target a distinct
+reserved ngrok domain when another app is already sharing the account's default domain—never use
+ngrok endpoint pooling, because it would route requests nondeterministically between apps. Recorded
+from Jeffrey's decision and local ngrok validation on 2026-08-24.
 
 ### Exhaust the code before escalating a question to a person **(always)**
 

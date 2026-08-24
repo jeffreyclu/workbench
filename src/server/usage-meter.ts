@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, ClaudeInteractiveUsage, CodexRateLimit, UsageCalibration, UsageTotals, WeeklyUsageReport, WorkbenchUsageByOrigin } from '../shared/contracts.js';
-import { resolveModelRate } from './model-pricing.js';
+import { CACHE_READ_RATE_MULTIPLIER, CACHE_WRITE_RATE_MULTIPLIER, resolveModelRate } from './model-pricing.js';
 import type { WorkItemRepository } from './repository.js';
 
 /**
@@ -44,8 +44,8 @@ const SONNET_OUTPUT_RATE_USD_PER_MILLION = 15;
 
 const TOKEN_KIND_WEIGHT = {
   freshInput: 1,
-  cacheWrite: 1.25,
-  cacheRead: 0.1,
+  cacheWrite: CACHE_WRITE_RATE_MULTIPLIER,
+  cacheRead: CACHE_READ_RATE_MULTIPLIER,
   output: 5,
 } as const;
 

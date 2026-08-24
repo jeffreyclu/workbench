@@ -123,6 +123,15 @@ local backend services only as an explicitly-labeled fallback, after exhausting 
 The local backend is still fine for *diagnosis* — using it as a control to isolate whether a failure is
 frontend- or backend-side is fine, as long as the delivered fix restores the proxied configuration.
 
+### Legacy custom connector surface ownership
+
+The organization-level Create Connector workflow at
+`/aistudio/organization/:organizationId/connectors` is implemented in the legacy `fe.web-app` repository,
+not `writer-monorepo`. Its OpenAPI authentication picker is in
+`apps/service.writer-app/src/components/organisms/CustomConnector/components/EditConnectorDetailsForm.tsx`;
+the MCP variant is `MCPConfigureStep.tsx` beside it. This was verified from the reported production UI and
+local source on 2026-08-24.
+
 ### Treat terminology in Jeffrey's meeting notes as phonetic
 
 Jeffrey writes meeting notes by typing what he hears in the moment. He confirmed this on 2026-08-19
@@ -138,4 +147,3 @@ document, the evidence pointing to it being spoken shorthand for the real "Agent
 When a term cannot be confirmed in code, say so and attribute it to the meeting rather than presenting
 it as an established name. Asking Jeffrey to confirm the term is not productive — he is reporting what
 he heard, not what he knows.
-

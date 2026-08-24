@@ -42,6 +42,15 @@ const defaultModelRates: Record<string, { input: number; output: number }> = {
   'gpt-5': { input: 1.25, output: 10 },
 };
 
+/**
+ * Cache write/read multipliers on the base input rate, per Anthropic's published
+ * cache pricing (5-minute TTL writes cost 1.25x a fresh input token; cache reads
+ * cost 0.1x). `usage-meter.ts` uses the same ratios for its SET accounting — kept
+ * here as the single source so the two never drift apart.
+ */
+export const CACHE_WRITE_RATE_MULTIPLIER = 1.25;
+export const CACHE_READ_RATE_MULTIPLIER = 0.1;
+
 function envRate(scope: string, direction: 'INPUT' | 'OUTPUT'): number | null {
   const key = `WORKBENCH_${scope}_${direction}_TOKEN_USD_PER_MILLION`;
   const raw = process.env[key];
@@ -86,10 +95,17 @@ export function estimateModelCost(
   model: string | null,
   inputTokens: number | null,
   outputTokens: number | null,
+  cacheCreationInputTokens?: number | null,
+  cacheReadInputTokens?: number | null,
 ): number | null {
-  if (inputTokens === null && outputTokens === null) return null;
+  if (inputTokens === null && outputTokens === null && !cacheCreationInputTokens && !cacheReadInputTokens) return null;
   const rate = resolveModelRate(agent, model);
   if (!rate) return null;
-  const cost = ((inputTokens ?? 0) * rate.inputUsdPerMillion + (outputTokens ?? 0) * rate.outputUsdPerMillion) / 1_000_000;
+  const cost = (
+    (inputTokens ?? 0) * rate.inputUsdPerMillion
+    + (cacheCreationInputTokens ?? 0) * rate.inputUsdPerMillion * CACHE_WRITE_RATE_MULTIPLIER
+    + (cacheReadInputTokens ?? 0) * rate.inputUsdPerMillion * CACHE_READ_RATE_MULTIPLIER
+    + (outputTokens ?? 0) * rate.outputUsdPerMillion
+  ) / 1_000_000;
   return Number(cost.toFixed(6));
 }

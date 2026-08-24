@@ -23,7 +23,7 @@ const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
   ],
   discovery: [['discovery'], ['discovery-merge-targets']],
   runtime: [['runtime-preview-status']],
-  insights: [['insights'], ['usage']],
+  insights: [['insights'], ['usage'], ['lifecycle-report']],
   artifacts: [['artifacts'], ['artifact']],
 };
 

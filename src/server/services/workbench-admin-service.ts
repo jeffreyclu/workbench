@@ -103,7 +103,7 @@ export class WorkbenchAdminService {
       : this.repository.getOrCreateWorkConversation(item.id, item.title);
     const run = this.repository.prepareRunRetry(prior.id);
     if (!run) return { status: 409, body: { error: 'This run is no longer retryable.' } } as ActionFailure;
-    this.repository.update(item.id, { status: 'in_progress' });
+    this.repository.update(item.id, { status: 'in_progress' }, false, { actor: 'system', source: 'workbench_admin' });
     const activity = this.repository.addActivity(item.id, 'system', 'execution_retried', `Retrying ${prior.agent} ${prior.kind} after the prior attempt ${prior.status}.`);
     const sourceContext = await this.sourceContextFor(item);
     void executeAgentRun(this.repository, run, OWNER_ID, LEASE_MS, sourceContext);

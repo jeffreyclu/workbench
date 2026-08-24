@@ -1,0 +1,543 @@
+import type { AgentRun, RunInsights, SharedMessage } from '../../shared/contracts.js';
+import type { WorkbenchDatabase } from '../database.js';
+import type { UnitOfWork } from '../unit-of-work.js';
+import { RunRepository } from '../repositories/run-repository.js';
+import type { TelemetryRepository } from '../repositories/telemetry-repository.js';
+import { resolveModelRate } from '../model-pricing.js';
+import { summarizeCursing } from '../profanity.js';
+
+export interface ExecutionCollaborators {
+  getSharedMessageById(id: string): SharedMessage | null;
+  recordSharedBriefEntry(conversationId: string, messageId: string, author: string, kind: 'decision' | 'agent_handoff' | 'synthesis', body: string): void;
+}
+
+function percentile(values: number[], fraction: number): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))];
+}
+
+function median(values: number[]): number | null {
+  return percentile(values, 0.5);
+}
+
+/**
+ * Removes only the most exceptional values using Tukey's outer fences. This
+ * keeps a task that genuinely took longer in the data set while preventing a
+ * stale task completed long after it was created from defining the insight.
+ */
+function excludeExtremeOutliers(values: number[]): number[] {
+  if (values.length < 5) return values;
+
+  const sorted = [...values].sort((left, right) => left - right);
+  const lowerQuartile = percentile(sorted, 0.25);
+  const upperQuartile = percentile(sorted, 0.75);
+  if (lowerQuartile === null || upperQuartile === null) return values;
+
+  const interquartileRange = upperQuartile - lowerQuartile;
+  const lowerFence = lowerQuartile - 3 * interquartileRange;
+  const upperFence = upperQuartile + 3 * interquartileRange;
+  return values.filter((value) => value >= lowerFence && value <= upperFence);
+}
+
+/**
+ * Owns the agent-run execution lifecycle's cross-table orchestration: retry
+ * prep that reopens a run and its linked chat bubble together, the
+ * shared-message dispatch control plane (claims, leases, promotion queueing)
+ * that has no single-table repository of its own, lease reclamation that
+ * spans `agent_runs` and `shared_messages`, run/message retention, and the
+ * run-insights report. Pure single-table `agent_runs` primitives (claim,
+ * finish, cancel, dueWork, and the rest of the lease/retry API) already
+ * delegate straight from `WorkItemRepository` to `RunRepository`, matching
+ * the pattern used for the other extracted repositories, and stay there
+ * unchanged.
+ */
+export class ExecutionService {
+  constructor(
+    private readonly database: WorkbenchDatabase,
+    private readonly unitOfWork: UnitOfWork,
+    private readonly runs: RunRepository,
+    private readonly telemetry: TelemetryRepository,
+    private readonly collaborators: ExecutionCollaborators,
+  ) {}
+
+  /**
+   * Reopens the same failed attempt and linked chat bubble instead of forking
+   * a second execution. Reopening the run and reopening its linked message
+   * used to be two independent, unwrapped statements — a crash between them
+   * could leave a `queued` run pointing at a chat bubble still marked
+   * `failed`. Both writes now share one `UnitOfWork` transaction so they
+   * commit or roll back together.
+   */
+  prepareRunRetry(id: string): AgentRun | null {
+    return this.unitOfWork.transaction(() => {
+      const run = this.runs.get(id);
+      if (!run || (run.status !== 'failed' && run.status !== 'canceled')) return null;
+      if (!this.runs.reopenForRetry(id)) return null;
+      if (run.messageId) this.database.prepare(`UPDATE shared_messages
+        SET status = 'running', error = '', completed_at = NULL, owner_id = NULL, lease_expires_at = NULL,
+            attempt = attempt + 1, next_attempt_at = NULL
+        WHERE id = ? AND status IN ('failed', 'canceled')`).run(run.messageId);
+      return this.runs.get(id);
+    });
+  }
+
+  prepareSharedMessageRetry(id: string): SharedMessage | null {
+    const changed = this.database.prepare(`UPDATE shared_messages
+      SET status = 'running', error = '', completed_at = NULL, owner_id = NULL, lease_expires_at = NULL,
+          attempt = attempt + 1, next_attempt_at = NULL
+      WHERE id = ? AND author IN ('codex', 'claude') AND status IN ('failed', 'canceled')`).run(id).changes;
+    return changed ? this.collaborators.getSharedMessageById(id) : null;
+  }
+
+  claimSharedMessage(id: string, ownerId: string, leaseMs: number): boolean {
+    const now = new Date().toISOString();
+    const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
+    const changed = this.database.prepare(`
+      UPDATE shared_messages SET owner_id = ?, lease_expires_at = ?
+      WHERE id = ? AND status = 'running' AND (owner_id IS NULL OR lease_expires_at < ?)
+    `).run(ownerId, leaseExpiresAt, id, now).changes;
+    return Number(changed) > 0;
+  }
+
+  /** Atomically starts a queued control-plane job. Kept separate from normal
+   * messages so a promotion can visibly wait without pretending it is building. */
+  claimQueuedPromotionMessage(id: string, ownerId: string, leaseMs: number): boolean {
+    const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
+    const changed = this.database.prepare(`
+      UPDATE shared_messages SET status = 'running', owner_id = ?, lease_expires_at = ?
+      WHERE id = ? AND author = 'system' AND dispatch_target = 'promotion' AND status = 'queued'
+    `).run(ownerId, leaseExpiresAt, id).changes;
+    return Number(changed) > 0;
+  }
+
+  /** Atomically promote exactly one queued jeffrey turn to running-dispatch, guarding against double dispatch. */
+  claimQueuedTurn(id: string): boolean {
+    const changed = this.database.prepare(`
+      UPDATE shared_messages SET status = 'completed' WHERE id = ? AND status = 'queued' AND author = 'jeffrey'
+    `).run(id).changes;
+    if (!Number(changed)) return false;
+    const message = this.collaborators.getSharedMessageById(id);
+    if (message) this.collaborators.recordSharedBriefEntry(message.conversationId, message.id, 'jeffrey', 'decision', message.body);
+    return true;
+  }
+
+  renewLeases(ownerId: string, leaseMs: number): void {
+    const now = new Date().toISOString();
+    const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
+    this.runs.renewOwnedLeases(ownerId, leaseMs);
+    this.database.prepare(`UPDATE shared_messages SET lease_expires_at = ? WHERE owner_id = ? AND status = 'running' AND lease_expires_at >= ?`).run(leaseExpiresAt, ownerId, now);
+  }
+
+  renewSharedMessageLease(id: string, ownerId: string, leaseMs: number): boolean {
+    const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
+    const changed = this.database.prepare(`
+      UPDATE shared_messages SET lease_expires_at = ?
+      WHERE id = ? AND owner_id = ? AND status = 'running'
+    `).run(leaseExpiresAt, id, ownerId).changes;
+    return Number(changed) > 0;
+  }
+
+  /**
+   * Reclaim work whose lease expired without the owner finishing it (crash or restart).
+   * `execute` runs perform non-idempotent filesystem edits, so they are never silently
+   * re-run: they are marked failed for Jeffrey to re-trigger deliberately.
+   *
+   * The run reclamation loop and the message reclamation loop used to run as
+   * separate, unwrapped statement batches: a crash or thrown error partway
+   * through could leave some runs recovered and others (or their linked
+   * messages) still dangling with an expired lease. Both loops now share one
+   * `UnitOfWork` transaction so a whole reclamation pass commits or rolls
+   * back together.
+   */
+  reclaimExpired(graceMs = 3 * 60_000): { recoveredRunIds: string[]; failedRunIds: string[]; recoveredMessageIds: string[] } {
+    return this.unitOfWork.transaction(() => {
+      const now = new Date().toISOString();
+      // A missed heartbeat is not proof of a restart. Wait through a grace period
+      // before recovery changes user-visible state.
+      const recoveryCutoff = new Date(Date.now() - graceMs).toISOString();
+      const { recoveredRunIds, failedRunIds } = this.runs.reclaimExpired(recoveryCutoff, now);
+      // Shared messages with expired leases are interrupted (not retried). This also
+      // catches a reply that was persisted as `running` but whose dispatch process
+      // died before it could claim its first lease. If there's an associated agent
+      // run, that run will be recovered separately. When the run completes, it will
+      // update the message to its final status (completed/failed).
+      const expiredMessages = this.database.prepare(`SELECT id FROM shared_messages
+        WHERE status = 'running'
+          AND (lease_expires_at < ? OR (owner_id IS NULL AND lease_expires_at IS NULL AND created_at <= ?))
+          AND dispatch_target != 'promotion'
+          AND NOT EXISTS (
+            SELECT 1 FROM agent_runs
+            WHERE agent_runs.message_id = shared_messages.id
+              AND agent_runs.status IN ('queued', 'running')
+          )`).all(recoveryCutoff, recoveryCutoff) as Array<{ id: string }>;
+      const recoveredMessageIds: string[] = [];
+      for (const message of expiredMessages) {
+        this.database.prepare(`UPDATE shared_messages SET status = 'failed', error = 'Agent process stopped reporting progress. Retry or continue the conversation.', owner_id = NULL, lease_expires_at = NULL, completed_at = ? WHERE id = ?`).run(now, message.id);
+        recoveredMessageIds.push(message.id);
+      }
+      return { recoveredRunIds, failedRunIds, recoveredMessageIds };
+    });
+  }
+
+  listRunningPromotionMessageIds(): string[] {
+    return (this.database.prepare(`SELECT id FROM shared_messages
+      WHERE author = 'system' AND dispatch_target = 'promotion' AND status = 'running'
+      ORDER BY created_at ASC`).all() as Array<{ id: string }>).map(({ id }) => id);
+  }
+
+  listQueuedPromotionMessageIds(): string[] {
+    return (this.database.prepare(`SELECT id FROM shared_messages
+      WHERE author = 'system' AND dispatch_target = 'promotion' AND status = 'queued'
+      ORDER BY created_at ASC`).all() as Array<{ id: string }>).map(({ id }) => id);
+  }
+
+  /** A promotion snapshots the complete idle tree, so later queued approvals
+   * waiting on that same idle point are fulfilled by the one release. */
+  completeQueuedPromotionMessages(exceptId: string, body: string): void {
+    this.database.prepare(`
+      UPDATE shared_messages
+      SET status = 'completed', body = ?, error = '', completed_at = ?, owner_id = NULL, lease_expires_at = NULL
+      WHERE author = 'system' AND dispatch_target = 'promotion' AND status = 'queued' AND id != ?
+    `).run(body, new Date().toISOString(), exceptId);
+  }
+
+  /** A crashed owner must not leave a control-plane approval displayed as an
+   * active deployment. It returns to the visible queue for the next worker. */
+  requeueExpiredPromotionMessages(): number {
+    const changed = this.database.prepare(`
+      UPDATE shared_messages
+      SET status = 'queued', owner_id = NULL, lease_expires_at = NULL
+      WHERE author = 'system' AND dispatch_target = 'promotion' AND status = 'running'
+        AND lease_expires_at IS NOT NULL AND lease_expires_at < ?
+    `).run(new Date().toISOString()).changes;
+    return Number(changed);
+  }
+
+  getRunInsights(days: 7 | 30 = 30): RunInsights {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const runs = this.database.prepare(`
+      SELECT agent, kind, status, attempt, fallback_from, model, input_tokens, output_tokens, estimated_cost_usd, cost_source, created_at, completed_at,
+        CAST((julianday(completed_at) - julianday(started_at)) * 24 * 60 * 60 * 1000 AS INTEGER) as duration_ms
+      FROM agent_runs WHERE status IN ('completed', 'failed', 'canceled') AND completed_at >= ?
+    `).all(since) as Array<{
+      agent: 'codex' | 'claude';
+      kind: AgentRun['kind'];
+      status: 'completed' | 'failed' | 'canceled';
+      attempt: number;
+      fallback_from: string | null;
+      model: string | null;
+      input_tokens: number | null;
+      output_tokens: number | null;
+      estimated_cost_usd: number | null;
+      cost_source: 'provider' | 'estimated' | null;
+      created_at: string;
+      completed_at: string;
+      duration_ms: number | null;
+    }>;
+
+    // Activities are the lifecycle ledger. `attempt` and `fallback_from` were
+    // introduced later and are incomplete for existing chat runs.
+    const lifecycleEvents = this.database.prepare(`
+      SELECT kind, body FROM activities
+      WHERE kind IN ('execution_retried', 'agent_fallback') AND created_at >= ?
+    `).all(since) as Array<{ kind: 'execution_retried' | 'agent_fallback'; body: string }>;
+    const retryEvents = lifecycleEvents.filter((event) => event.kind === 'execution_retried');
+    const handoffEvents = lifecycleEvents.filter((event) => event.kind === 'agent_fallback');
+    const retryCount = retryEvents.length || runs.filter((run) => run.attempt > 0).length;
+    const handoffCount = handoffEvents.length || runs.filter((run) => run.fallback_from !== null).length;
+    const retryRate = runs.length > 0 ? retryCount / runs.length : null;
+    const fallbackRate = runs.length > 0 ? handoffCount / runs.length : null;
+    const taskSummary = this.database.prepare(`
+      SELECT
+        SUM(CASE WHEN completed_at IS NOT NULL AND completed_at >= ? THEN 1 ELSE 0 END) AS completed_tasks,
+        SUM(CASE WHEN parent_work_item_id IS NOT NULL AND created_at >= ? THEN 1 ELSE 0 END) AS follow_ups
+      FROM work_items
+    `).get(since, since) as { completed_tasks: number | null; follow_ups: number | null };
+    // Active-work duration, not wall-clock cycle time: sum of each task's agent
+    // run spans (started_at -> completed_at), so idle time between runs (waiting
+    // on Jeffrey, sitting untouched) doesn't count as "task time".
+    const taskActiveDurations = (this.database.prepare(`
+      SELECT work_item_id,
+        SUM(CAST((julianday(completed_at) - julianday(started_at)) * 24 * 60 * 60 * 1000 AS INTEGER)) AS duration_ms
+      FROM agent_runs
+      WHERE work_item_id IN (SELECT id FROM work_items WHERE completed_at IS NOT NULL AND completed_at >= ?)
+        AND started_at IS NOT NULL AND completed_at IS NOT NULL
+      GROUP BY work_item_id
+    `).all(since) as Array<{ work_item_id: string; duration_ms: number | null }>).flatMap((row) => row.duration_ms === null ? [] : [row.duration_ms]);
+    const cursingMessages = this.database.prepare(`
+      SELECT jeffrey.body, jeffrey.created_at,
+        (
+          SELECT COALESCE(agent.model, agent.author)
+          FROM shared_messages agent
+          WHERE agent.conversation_id = jeffrey.conversation_id
+            AND agent.author IN ('codex', 'claude')
+            AND (agent.created_at < jeffrey.created_at OR (agent.created_at = jeffrey.created_at AND agent.rowid < jeffrey.rowid))
+          ORDER BY agent.created_at DESC, agent.rowid DESC
+          LIMIT 1
+        ) AS prior_model
+      FROM shared_messages jeffrey
+      WHERE jeffrey.author = 'jeffrey' AND jeffrey.created_at >= ?
+    `).all(since).map((row) => ({
+      body: String((row as { body: string }).body),
+      createdAt: String((row as { created_at: string }).created_at),
+      model: (row as { prior_model: string | null }).prior_model,
+    }));
+    const cursingSummary = summarizeCursing(cursingMessages);
+    const cursingByModel = new Map<string, Array<{ body: string; createdAt: string }>>();
+    for (const message of cursingMessages) {
+      if (!message.model) continue;
+      const messages = cursingByModel.get(message.model) ?? [];
+      messages.push(message);
+      cursingByModel.set(message.model, messages);
+    }
+    const cursing = {
+      ...cursingSummary,
+      byModel: [...cursingByModel.entries()].map(([model, messages]) => {
+        const summary = summarizeCursing(messages);
+        return { model, count: summary.total, messagesWithCurses: summary.messagesWithCurses, messagesAnalyzed: summary.messagesAnalyzed, instancesPer100Messages: summary.instancesPer100Messages };
+      }).filter((row) => row.count > 0).sort((left, right) => right.count - left.count || left.model.localeCompare(right.model)),
+    };
+
+    const estimatedCostByDay: Record<string, number> = {};
+    const providerCostByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
+    const estimatedCostByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
+    const tokenUsageByModel = new Map<string, { provider: 'codex' | 'claude'; model: string | null; inputTokens: number; outputTokens: number; costUsd: number; runs: number }>();
+    let providerCostUsd = 0;
+    let estimatedCostUsd = 0;
+    let providerPricedRuns = 0;
+    let estimatedPricedRuns = 0;
+    let unverifiedCostRuns = 0;
+    let unpricedRuns = 0;
+    for (const run of runs) {
+      const day = run.completed_at.slice(0, 10);
+      if (run.estimated_cost_usd !== null && run.cost_source === 'provider') {
+        providerCostUsd += run.estimated_cost_usd;
+        providerCostByAgent[run.agent] += run.estimated_cost_usd;
+        providerPricedRuns += 1;
+      } else if (run.estimated_cost_usd !== null && run.cost_source === 'estimated') {
+        estimatedCostUsd += run.estimated_cost_usd;
+        estimatedCostByDay[day] = (estimatedCostByDay[day] ?? 0) + run.estimated_cost_usd;
+        estimatedCostByAgent[run.agent] += run.estimated_cost_usd;
+        estimatedPricedRuns += 1;
+      } else if (run.estimated_cost_usd !== null) unverifiedCostRuns += 1;
+      // A run that reported tokens but carries no cost has no rate for its
+      // model. Surfacing that count keeps the total honest rather than silently low.
+      else if (run.input_tokens !== null || run.output_tokens !== null) unpricedRuns += 1;
+      if (run.input_tokens !== null || run.output_tokens !== null) {
+        const key = `${run.agent}:${run.model ?? ''}`;
+        const bucket = tokenUsageByModel.get(key) ?? { provider: run.agent, model: run.model, inputTokens: 0, outputTokens: 0, costUsd: 0, runs: 0 };
+        bucket.inputTokens += run.input_tokens ?? 0;
+        bucket.outputTokens += run.output_tokens ?? 0;
+        bucket.costUsd += run.cost_source === 'estimated' ? run.estimated_cost_usd ?? 0 : 0;
+        bucket.runs += 1;
+        tokenUsageByModel.set(key, bucket);
+      }
+    }
+    // Trend compares this window against the equally long window before it.
+    const previousWindowStart = new Date(Date.now() - days * 2 * 24 * 60 * 60 * 1000).toISOString();
+    const previousCosts = this.database.prepare(`
+      SELECT estimated_cost_usd, cost_source FROM agent_runs
+      WHERE status IN ('completed', 'failed', 'canceled') AND completed_at >= ? AND completed_at < ?
+    `).all(previousWindowStart, since) as Array<{ estimated_cost_usd: number | null; cost_source: 'provider' | 'estimated' | null }>;
+    const previousProviderCosts = previousCosts.filter((run) => run.cost_source === 'provider' && run.estimated_cost_usd !== null);
+    const previousEstimatedCosts = previousCosts.filter((run) => run.cost_source === 'estimated' && run.estimated_cost_usd !== null);
+    const previousProviderCostUsd = previousProviderCosts.length ? previousProviderCosts.reduce((total, run) => total + (run.estimated_cost_usd ?? 0), 0) : null;
+    const previousEstimatedCostUsd = previousEstimatedCosts.length ? previousEstimatedCosts.reduce((total, run) => total + (run.estimated_cost_usd ?? 0), 0) : null;
+
+    const fitBuckets = new Map<string, { kind: AgentRun['kind']; agent: 'codex' | 'claude'; completed: number; failed: number; canceled: number; durations: number[] }>();
+    for (const run of runs) {
+      const key = `${run.kind}:${run.agent}`;
+      const bucket = fitBuckets.get(key) ?? { kind: run.kind, agent: run.agent, completed: 0, failed: 0, canceled: 0, durations: [] };
+      if (run.status === 'completed') bucket.completed += 1;
+      else if (run.status === 'failed') bucket.failed += 1;
+      else if (run.status === 'canceled') bucket.canceled += 1;
+      if (run.duration_ms !== null) bucket.durations.push(run.duration_ms);
+      fitBuckets.set(key, bucket);
+    }
+
+    type AgentBucket = { total: number; completed: number; failed: number; canceled: number; retried: number; fallback: number; durations: number[] };
+    const byAgent: Record<'codex' | 'claude', AgentBucket> = {
+      codex: { total: 0, completed: 0, failed: 0, canceled: 0, retried: 0, fallback: 0, durations: [] },
+      claude: { total: 0, completed: 0, failed: 0, canceled: 0, retried: 0, fallback: 0, durations: [] },
+    };
+    for (const run of runs) {
+      const bucket = byAgent[run.agent];
+      bucket.total += 1;
+      if (run.status === 'completed') bucket.completed += 1;
+      if (run.status === 'failed') bucket.failed += 1;
+      if (run.status === 'canceled') bucket.canceled += 1;
+      if (run.duration_ms !== null) bucket.durations.push(run.duration_ms);
+    }
+    for (const event of retryEvents) {
+      const agent = /Retrying (codex|claude)\b/i.exec(event.body)?.[1]?.toLowerCase() as 'codex' | 'claude' | undefined;
+      if (agent) byAgent[agent].retried += 1;
+    }
+    for (const event of handoffEvents) {
+      const agent = /continued with (codex|claude)\b/i.exec(event.body)?.[1]?.toLowerCase() as 'codex' | 'claude' | undefined;
+      if (agent) byAgent[agent].fallback += 1;
+    }
+    if (retryEvents.length === 0) for (const run of runs) if (run.attempt > 0) byAgent[run.agent].retried += 1;
+    if (handoffEvents.length === 0) for (const run of runs) if (run.fallback_from !== null) byAgent[run.agent].fallback += 1;
+
+    type KindBucket = { completed: number; failed: number; canceled: number };
+    const byKind: Record<AgentRun['kind'], KindBucket> = {
+      research: { completed: 0, failed: 0, canceled: 0 }, analysis: { completed: 0, failed: 0, canceled: 0 }, strategy: { completed: 0, failed: 0, canceled: 0 }, execute: { completed: 0, failed: 0, canceled: 0 }, review: { completed: 0, failed: 0, canceled: 0 }, bugfix: { completed: 0, failed: 0, canceled: 0 },
+    };
+    for (const run of runs) {
+      if (run.status === 'completed') byKind[run.kind].completed += 1;
+      if (run.status === 'failed') byKind[run.kind].failed += 1;
+      if (run.status === 'canceled') byKind[run.kind].canceled += 1;
+    }
+
+    return {
+      retryRate,
+      retryCount,
+      fallbackRate,
+      handoffCount,
+      inputTokens: [...tokenUsageByModel.values()].reduce((total, bucket) => total + bucket.inputTokens, 0),
+      outputTokens: [...tokenUsageByModel.values()].reduce((total, bucket) => total + bucket.outputTokens, 0),
+      providerCostUsd: Number(providerCostUsd.toFixed(6)),
+      previousProviderCostUsd: previousProviderCostUsd === null ? null : Number(previousProviderCostUsd.toFixed(6)),
+      estimatedCostUsd: Number(estimatedCostUsd.toFixed(6)),
+      previousEstimatedCostUsd: previousEstimatedCostUsd === null ? null : Number(previousEstimatedCostUsd.toFixed(6)),
+      providerPricedRuns,
+      estimatedPricedRuns,
+      unverifiedCostRuns,
+      unpricedRuns,
+      tokenUsageByModel: [...tokenUsageByModel.values()].map((bucket) => ({
+        ...bucket,
+        costUsd: Number(bucket.costUsd.toFixed(6)),
+        rateSource: resolveModelRate(bucket.provider, bucket.model)?.source ?? null,
+      })).sort((left, right) => {
+        const usageDifference = (right.inputTokens + right.outputTokens) - (left.inputTokens + left.outputTokens);
+        if (usageDifference !== 0) return usageDifference;
+        return `${left.provider}:${left.model ?? ''}`.localeCompare(`${right.provider}:${right.model ?? ''}`);
+      }),
+      completedRuns: runs.filter((run) => run.status === 'completed').length,
+      completedTasks: taskSummary.completed_tasks ?? 0,
+      medianTaskCycleMs: median(excludeExtremeOutliers(taskActiveDurations)),
+      followUpsCreated: taskSummary.follow_ups ?? 0,
+      cursing,
+      agentFit: [...fitBuckets.values()].map((bucket) => ({
+        kind: bucket.kind,
+        agent: bucket.agent,
+        completed: bucket.completed,
+        failed: bucket.failed,
+        canceled: bucket.canceled,
+        successRate: bucket.completed + bucket.failed + bucket.canceled > 0 ? bucket.completed / (bucket.completed + bucket.failed + bucket.canceled) : null,
+        medianDurationMs: median(bucket.durations),
+      })),
+      costByDay: Object.entries(estimatedCostByDay)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([day, costUsd]) => ({ day, costUsd: Number(costUsd.toFixed(6)) })),
+      byAgent: Object.entries(byAgent).map(([agent, bucket]) => ({
+        agent: agent as 'codex' | 'claude',
+        total: bucket.total,
+        completed: bucket.completed,
+        failed: bucket.failed,
+        successRate: bucket.total > 0 ? bucket.completed / bucket.total : null,
+        retryRate: bucket.total > 0 ? bucket.retried / bucket.total : null,
+        fallbackRate: bucket.total > 0 ? bucket.fallback / bucket.total : null,
+        medianDurationMs: median(bucket.durations),
+        p90DurationMs: percentile(bucket.durations, 0.9),
+        providerCostUsd: Number(providerCostByAgent[agent as 'codex' | 'claude'].toFixed(6)),
+        estimatedCostUsd: Number(estimatedCostByAgent[agent as 'codex' | 'claude'].toFixed(6)),
+      })),
+      byKind: Object.entries(byKind)
+        .filter(([, bucket]) => bucket.completed + bucket.failed + bucket.canceled > 0)
+        .map(([kind, bucket]) => ({
+          kind: kind as AgentRun['kind'],
+          completed: bucket.completed,
+          failed: bucket.failed,
+          canceled: bucket.canceled,
+          successRate: bucket.completed + bucket.failed + bucket.canceled > 0 ? bucket.completed / (bucket.completed + bucket.failed + bucket.canceled) : null,
+        })),
+    };
+  }
+
+  compactTerminalRuns(retentionDays: number = 7): number {
+    const cutoffDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+    const changed = this.database.prepare(`
+      UPDATE agent_runs
+      SET output = '', instructions = ''
+      WHERE status IN ('completed', 'failed') AND completed_at < ? AND (output != '' OR instructions != '')
+    `).run(cutoffDate).changes;
+    return Number(changed);
+  }
+
+  pruneArchivedMessages(retentionDays: number = 90): number {
+    const cutoffDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+    const changed = this.database.prepare(`
+      DELETE FROM shared_messages
+      WHERE conversation_id IN (SELECT id FROM shared_conversations WHERE archived_at IS NOT NULL AND archived_at < ?)
+        AND pinned = 0
+    `).run(cutoffDate).changes;
+    return Number(changed);
+  }
+
+  runRetentionCleanup(): void {
+    const start = Date.now();
+    try {
+      const compactedRuns = this.compactTerminalRuns(7);
+      const prunedMessages = this.pruneArchivedMessages(90);
+      const durationMs = Date.now() - start;
+
+      this.telemetry.logDiagnostic(
+        'retention_cleanup',
+        'retention',
+        'success',
+        `Compacted ${compactedRuns} terminal runs and pruned ${prunedMessages} archived messages.`,
+        durationMs,
+      );
+    } catch (error) {
+      const durationMs = Date.now() - start;
+      this.telemetry.logDiagnostic(
+        'retention_cleanup',
+        'retention',
+        'failure',
+        String(error),
+        durationMs,
+        'cleanup_error',
+      );
+    }
+  }
+
+  surfaceStrandedRuns(graceMs = 3 * 60_000): string[] {
+    const cutoff = new Date(Date.now() - graceMs).toISOString();
+    const stranded = this.database.prepare(`
+      SELECT id, work_item_id, message_id FROM agent_runs
+      WHERE status = 'running' AND lease_expires_at IS NULL AND created_at <= ?
+    `).all(cutoff) as Array<{ id: string; work_item_id: string; message_id: string | null }>;
+    if (stranded.length > 0) {
+      const now = new Date().toISOString();
+      this.database.exec('BEGIN IMMEDIATE');
+      try {
+        for (const run of stranded) {
+          this.database.prepare(`UPDATE agent_runs
+            SET status = 'failed', error = 'Agent process stopped reporting progress. Retry or continue the conversation.', completed_at = ?, owner_id = NULL, lease_expires_at = NULL
+            WHERE id = ? AND status = 'running' AND lease_expires_at IS NULL`).run(now, run.id);
+          if (run.message_id) this.database.prepare(`UPDATE shared_messages
+            SET status = 'failed', error = 'Agent process stopped reporting progress. Retry or continue the conversation.', completed_at = ?, owner_id = NULL, lease_expires_at = NULL
+            WHERE id = ? AND status = 'running'`).run(now, run.message_id);
+          this.database.prepare(`UPDATE work_items SET status = 'ready', updated_at = ?, last_touched_at = ?
+            WHERE id = ? AND status = 'in_progress'
+              AND NOT EXISTS (SELECT 1 FROM agent_runs WHERE work_item_id = ? AND status IN ('queued', 'running'))`).run(now, now, run.work_item_id, run.work_item_id);
+        }
+        this.database.exec('COMMIT');
+      } catch (error) {
+        this.database.exec('ROLLBACK');
+        throw error;
+      }
+      this.telemetry.logDiagnostic(
+        'run_recovery',
+        'recovery',
+        'failure',
+        `Marked ${stranded.length} stranded runs without leases failed: ${stranded.map((r) => r.id).join(', ')}`,
+        undefined,
+        'stranded_no_lease',
+      );
+    }
+    return stranded.map((r) => r.id);
+  }
+}

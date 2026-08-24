@@ -5,7 +5,7 @@ import { api } from './api';
 import { formatCostUsd } from './formatters';
 import { UsageDial } from './usage-dial';
 import { InsightsSkeleton, UsageDialSkeleton } from './skeleton';
-import type { RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsCostByDay, RunInsightsTokenUsage } from '../shared/contracts';
+import type { LifecycleReportStatus, RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsCostByDay, RunInsightsTokenUsage } from '../shared/contracts';
 
 function InfoTooltip({ children }: { children: string }) {
   return (
@@ -156,10 +156,25 @@ function CursingInsight({ data }: { data: RunInsights['cursing'] }) {
   </div>;
 }
 
+function LifecycleReportInsight({ status }: { status: LifecycleReportStatus }) {
+  const report = status.report;
+  if (!report) return <div className="insight-section lifecycle-report">
+    <h3>Process discovery</h3>
+    <p className="insight-section-intro">Runs automatically each week. It only analyzes complete traces collected by the new lifecycle ledger, so historical partial data cannot produce a misleading report.</p>
+    <p className="insight-empty-note">Waiting for {status.minimumCompletedCases - status.eligibleCompletedCases} more fully observed completed task trace{status.minimumCompletedCases - status.eligibleCompletedCases === 1 ? '' : 's'} ({status.eligibleCompletedCases}/{status.minimumCompletedCases}).</p>
+  </div>;
+  return <div className="insight-section lifecycle-report">
+    <div className="lifecycle-report-header"><div><h3>Process discovery</h3><p className="insight-section-intro">Latest scheduled conformance report. It uses completed traces only; deviations are checks against the current Workbench lifecycle contract, not automatic errors.</p></div><a className="button secondary compact" href="/api/process-mining/report.html" target="_blank" rel="noreferrer">Open report</a></div>
+    <div className="lifecycle-report-stats"><div><span>Completed traces</span><strong>{report.caseCount}</strong></div><div><span>Lifecycle events</span><strong>{report.eventCount}</strong></div><div><span>Deviations</span><strong>{report.deviations.length}</strong></div></div>
+    <p className="insight-empty-note">Generated {new Date(report.generatedAt).toLocaleString()}. {report.dataQuality.sameTimestampPairs} same-timestamp event pair{report.dataQuality.sameTimestampPairs === 1 ? '' : 's'} retained in deterministic order.</p>
+  </div>;
+}
+
 export function InsightsView() {
   const [days, setDays] = useState<7 | 30>(30);
   const insights = useQuery({ queryKey: ['insights', days], queryFn: () => api.getInsights(days), refetchInterval: 10_000 });
   const usage = useQuery({ queryKey: ['usage', 'weekly'], queryFn: () => api.getWeeklyUsage(), refetchInterval: 300_000 });
+  const lifecycleReport = useQuery({ queryKey: ['lifecycle-report'], queryFn: () => api.getLifecycleReport(), refetchInterval: 300_000 });
   const data = insights.data;
 
   return (
@@ -186,6 +201,7 @@ export function InsightsView() {
           ) : usage.isLoading ? (
             <UsageDialSkeleton />
           ) : null}
+          {lifecycleReport.data && <LifecycleReportInsight status={lifecycleReport.data} />}
           {data.byAgent.length === 0 && data.byKind.length === 0 && data.tokenUsageByModel.length === 0 && data.cursing.messagesAnalyzed === 0 ? (
             <div className="discovery-empty">
               <LineChart size={26} />

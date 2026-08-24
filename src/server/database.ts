@@ -1209,6 +1209,30 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // A machine-readable lifecycle ledger. The existing activities table is a
+    // human timeline and deliberately allows arbitrary kinds/bodies; process
+    // mining needs one unambiguous row for each state transition instead.
+    id: '032_work_item_lifecycle_events',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS work_item_lifecycle_events (
+          id TEXT PRIMARY KEY,
+          work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+          transition TEXT NOT NULL,
+          from_status TEXT,
+          to_status TEXT NOT NULL,
+          is_initial INTEGER NOT NULL DEFAULT 0 CHECK (is_initial IN (0, 1)),
+          actor TEXT NOT NULL,
+          source TEXT NOT NULL,
+          reason TEXT,
+          occurred_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_lifecycle_events_export
+          ON work_item_lifecycle_events(work_item_id, occurred_at);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

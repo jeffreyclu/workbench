@@ -358,8 +358,15 @@ export function compactPromptSection(value: string, budget: number): string {
  * across the tiers Workbench routes to, and unset in practice, so every run
  * stored a null cost.
  */
-export function estimateUsageCost(agent: AgentRun['agent'], model: string | null, inputTokens: number | null, outputTokens: number | null): number | null {
-  return estimateModelCost(agent, model, inputTokens, outputTokens);
+export function estimateUsageCost(
+  agent: AgentRun['agent'],
+  model: string | null,
+  inputTokens: number | null,
+  outputTokens: number | null,
+  cacheCreationInputTokens?: number | null,
+  cacheReadInputTokens?: number | null,
+): number | null {
+  return estimateModelCost(agent, model, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens);
 }
 
 export function selectExecutionProfile(item: WorkItem, run: Pick<AgentRun, 'kind' | 'instructions'>): ExecutionProfile {
@@ -438,9 +445,35 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
     // subagent's text and thinking back as assistant/user events tagged with
     // parent_tool_use_id, which readableAgentEvent attributes to the worker
     // that produced it. Forwarded events are progress only, never terminal.
-    args: ['-p', '--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--output-format', 'stream-json', '--include-partial-messages', '--forward-subagent-text', '--verbose', '--effort', effort, '--model', model, '--no-session-persistence', '--disable-slash-commands', '--add-dir', cwd, homedir()],
+    // --mcp-config/--strict-mcp-config scope every run to the one MCP server it
+    // actually needs, instead of inheriting Jeffrey's full personal config
+    // (atlassian, linear, the figma plugin). Codex's `exec --ephemeral` never
+    // carried that baggage; this closes the gap for the trivial per-turn cost.
+    // --autocompact caps the real driver of the worst runs (up to 13M cached
+    // tokens on a single ~10-minute, many-tool-call run): without a bound the CLI lets a
+    // single run's conversation grow unpruned, so every later turn re-sends and
+    // re-reads everything every earlier turn already produced. 100k is the
+    // CLI's most aggressive setting; these are bounded single-purpose tasks, not
+    // long interactive chats, so trading a bit of far-back coherence for a hard
+    // ceiling on runaway context growth is the right tradeoff here.
+    args: ['-p', '--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--output-format', 'stream-json', '--include-partial-messages', '--forward-subagent-text', '--verbose', '--effort', effort, '--model', model, '--no-session-persistence', '--disable-slash-commands', '--autocompact', '100000', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
   };
 }
+
+/**
+ * The only MCP server a Workbench-dispatched run needs. Mirrors the "workbench"
+ * entry from the user's global MCP config so auth (token substitution) behaves
+ * identically; see the comment on commandFor for why this is scoped down.
+ */
+const WORKBENCH_ONLY_MCP_CONFIG = JSON.stringify({
+  mcpServers: {
+    workbench: {
+      type: 'http',
+      url: 'http://localhost:5173/mcp',
+      headers: { Authorization: 'Bearer ${WORKBENCH_TOKEN}' },
+    },
+  },
+});
 
 export function modelFor(agent: AgentRun['agent'], profile: ExecutionProfile): string {
   return process.env[`WORKBENCH_${agent.toUpperCase()}_MODEL_${profile.toUpperCase()}`]?.trim()
@@ -645,10 +678,10 @@ ${CLAUDE_EXECUTION_CONTRACT}` : prompt;
     let providerCostUsd: number | null = null;
     let estimatedOutputTokens = 0;
     let lastReportedUsage = '';
-    const costFor = (inputTokens: number | null, outputTokens: number | null): number | null =>
-      providerCostUsd ?? estimateUsageCost(agent, runModel, inputTokens, outputTokens);
-    const costSource = (inputTokens: number | null, outputTokens: number | null): AgentUsage['costSource'] =>
-      providerCostUsd !== null ? 'provider' : estimateUsageCost(agent, runModel, inputTokens, outputTokens) === null ? null : 'estimated';
+    const costFor = (inputTokens: number | null, outputTokens: number | null, cacheCreationInputTokens: number | null, cacheReadInputTokens: number | null): number | null =>
+      providerCostUsd ?? estimateUsageCost(agent, runModel, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens);
+    const costSource = (inputTokens: number | null, outputTokens: number | null, cacheCreationInputTokens: number | null, cacheReadInputTokens: number | null): AgentUsage['costSource'] =>
+      providerCostUsd !== null ? 'provider' : estimateUsageCost(agent, runModel, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens) === null ? null : 'estimated';
     const emitLiveUsage = () => {
       const liveUsage = {
         inputTokens: reportedUsage.inputTokens,
@@ -659,7 +692,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : prompt;
       const signature = `${liveUsage.inputTokens ?? ''}:${liveUsage.cacheCreationInputTokens ?? ''}:${liveUsage.cacheReadInputTokens ?? ''}:${liveUsage.outputTokens ?? ''}:${providerCostUsd ?? ''}`;
       if (signature === lastReportedUsage) return;
       lastReportedUsage = signature;
-      onUsage?.({ ...liveUsage, estimatedCostUsd: costFor(liveUsage.inputTokens, liveUsage.outputTokens), costSource: costSource(liveUsage.inputTokens, liveUsage.outputTokens) }, agent);
+      onUsage?.({ ...liveUsage, estimatedCostUsd: costFor(liveUsage.inputTokens, liveUsage.outputTokens, liveUsage.cacheCreationInputTokens, liveUsage.cacheReadInputTokens), costSource: costSource(liveUsage.inputTokens, liveUsage.outputTokens, liveUsage.cacheCreationInputTokens, liveUsage.cacheReadInputTokens) }, agent);
     };
     const reportUsage = (usage: UsageSample) => {
       if (usage.costUsd !== null) providerCostUsd = usage.costUsd;
@@ -778,7 +811,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : prompt;
       else if (code === 0 && !terminalError) {
         const output = finalOutput.trim() || progress.trim() || stdout.trim();
         const outputTokens = reportedUsage.outputTokens ?? (estimatedOutputTokens || null);
-        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens, estimatedCostUsd: costFor(reportedUsage.inputTokens, outputTokens), costSource: costSource(reportedUsage.inputTokens, outputTokens) } });
+        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens, estimatedCostUsd: costFor(reportedUsage.inputTokens, outputTokens, reportedUsage.cacheCreationInputTokens, reportedUsage.cacheReadInputTokens), costSource: costSource(reportedUsage.inputTokens, outputTokens, reportedUsage.cacheCreationInputTokens, reportedUsage.cacheReadInputTokens) } });
       }
       else {
         const providerDiagnostic = stderr.trim() || terminalError || finalOutput.trim() || stdout.trim();
@@ -932,7 +965,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   leaseHeartbeat.unref();
   const startedAt = new Date().toISOString();
   repository.updateRun(run.id, { startedAt });
-  repository.update(item.id, { status: 'in_progress' });
+  repository.update(item.id, { status: 'in_progress' }, false, { actor: 'system', source: 'agent_runner' });
   repository.moveForAttention(item.id, 'bottom', `${run.agent} started ${run.kind}.`);
   repository.addActivity(item.id, run.agent, 'progress', `Started ${run.kind}.`);
   // Seed the reply bubble immediately. Assembling the prompt reads shared
@@ -1026,7 +1059,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // completion callback.
     const latestItem = repository.get(item.id);
     if (!latestItem?.archivedAt && latestItem?.status !== 'done' && latestItem?.status !== 'canceled' && !repository.activeRunsForItem(item.id).length) {
-      repository.update(item.id, { status: 'ready' });
+      repository.update(item.id, { status: 'ready' }, false, { actor: 'system', source: 'agent_runner' });
       repository.moveForAttention(item.id, 'top', `${result.agent} completed ${run.kind}; review the result.`);
     }
     repository.addActivity(item.id, result.agent, 'progress', `Completed ${run.kind}.`);
@@ -1054,7 +1087,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'failed', error: message });
     const latestItem = repository.get(item.id);
     if (!latestItem?.archivedAt && latestItem?.status !== 'done') {
-      repository.update(item.id, { status: 'blocked' });
+      repository.update(item.id, { status: 'blocked' }, false, { actor: 'system', source: 'agent_runner' });
       repository.moveForAttention(item.id, 'top', `${activeAgent} execution failed and needs intervention.`);
     }
     repository.addActivity(item.id, activeAgent, 'blocker', `${run.kind} failed: ${message}`);
@@ -1078,7 +1111,7 @@ export function cancelAgentRun(repository: WorkItemRepository, id: string): Agen
   if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'canceled' });
   const item = repository.get(run.workItemId);
   if (!item?.archivedAt && item?.status !== 'done') {
-    repository.update(run.workItemId, { status: 'ready' });
+    repository.update(run.workItemId, { status: 'ready' }, false, { actor: 'system', source: 'agent_runner' });
     repository.moveForAttention(run.workItemId, 'top', `${run.agent} execution was canceled.`);
   }
   repository.addActivity(run.workItemId, run.agent, 'progress', `Canceled ${run.kind}.`);

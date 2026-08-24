@@ -1,11 +1,14 @@
 import { Router } from 'express';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { z } from 'zod';
 import { listAuditLogQuerySchema, submitUsageCalibrationSchema } from '../../shared/contracts.js';
 import type { RouteContext } from '../route-context.js';
 import { runtimePreviewStatus } from '../runtime-preview.js';
-import { OWNER_ID } from '../scheduler.js';
+import { LIFECYCLE_REPORT_MS, lifecycleReportMinimumCases, OWNER_ID } from '../scheduler.js';
 import { computeWeeklyUsageReport, recordUsageCalibration } from '../usage-meter.js';
 import { readCodexRateLimit } from '../codex-rate-limits.js';
+import { DEFAULT_LIFECYCLE_REPORT_DIRECTORY, lifecycleReportStatus } from '../lifecycle-report.js';
 import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMessage } from '../slack-notify.js';
 
 export function createHealthRouter({ repository, capabilities, buildId }: RouteContext) {
@@ -25,6 +28,14 @@ export function createSystemRouter({ repository, admin }: RouteContext) {
   router.get('/api/insights', (request, response) => {
     const days = z.enum(['7', '30']).catch('30').parse(request.query.days);
     response.json(repository.getRunInsights(days === '7' ? 7 : 30));
+  });
+  router.get('/api/process-mining/report', (_request, response) => {
+    response.json(lifecycleReportStatus(repository.database, { minimumCompletedCases: lifecycleReportMinimumCases(), nextRunIntervalMs: LIFECYCLE_REPORT_MS }));
+  });
+  router.get('/api/process-mining/report.html', (_request, response) => {
+    const reportPath = resolve(DEFAULT_LIFECYCLE_REPORT_DIRECTORY, 'report.html');
+    if (!existsSync(reportPath)) return response.status(404).json({ error: 'No lifecycle report has been generated yet.' });
+    response.sendFile(reportPath);
   });
   router.get('/api/audit-log', (request, response) => {
     const input = listAuditLogQuerySchema.parse(request.query);

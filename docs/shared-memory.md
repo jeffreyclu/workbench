@@ -41,7 +41,9 @@ belong in `~/notes/knowledge/` so both tools can read them.
   skeletons that match the eventual content, not spinners or late-arriving text; the `frontend-engineer`
   implementation standards (layering, stack, plan-before-code, full acceptance-criteria test coverage);
   the `frontend-reviewer`-only code review method (reading exercise, blocking/non-blocking labels, no
-  test/app execution); and the Figma design-access gate (never implement from a link or screenshot).
+  test/app execution); the Figma design-access gate (never implement from a link or screenshot); and the
+  eval-cost rules — layered eval tiers instead of caps, and **never fire a billed live-agent bench run
+  without Jeffrey's explicit run-specific go-ahead**.
 - `shared-memory/verification-and-debugging-method.md` — how to verify and debug rigorously: confirm
   which repo a check actually ran against before asserting git state, verify a stated rationale instead
   of inferring it, there is no recovery for edits to untracked files, edit as a single tracked worker and

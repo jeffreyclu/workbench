@@ -190,3 +190,63 @@ that writes to a spawned child's `stdin` needs a `child.stdin.on('error', () => 
 there is an expected race when the child is killed just before the write lands, not a real failure,
 and leaving it unhandled fails the whole process even though vitest still reports every test green.
 
+### When a task is blocked on an exhausted third-party account balance, stop probing and cut the code-level cost driver instead
+
+On 2026-08-24, a Pluto-Alpha stability-check task (repeat a live-agent query 3–5 times) got parked
+mid-run when the app's Anthropic account hit "credit balance too low." Jeffrey supplied usage
+evidence that a top-up had recently happened, and the response was to send one more live "probe"
+call to check whether the account was unblocked before committing to the full rerun. Jeffrey's
+correction: **"stop fucking probing! we need to fix the billing issue."** Account credit/limits are
+outside any coding agent's tool access — no billing API or credential is exposed in these sessions —
+so an actual top-up is Taylor's (or finance's) action, not something to keep testing for. When a task
+is blocked on that kind of external account state, the right move is not another billed call to check
+if it cleared; it's to (a) say plainly that the balance itself can't be fixed from here, and (b) look
+for a real code-level fix to whatever is driving the cost, so the same exhaustion doesn't recur once
+the account is funded. In this case that meant shipping a `skipSmartTitle` request flag so the bench
+harness stops paying for a fire-and-forget Haiku title call on every one of its ~32 billed cases —
+a concrete cost reduction, not another status check.
+
+**Correction, same day:** do not solve eval spend with an arbitrary numeric cap or confirmation flag.
+Jeffrey explicitly rejected that as the wrong takeaway: the durable solution is a **layered evaluation
+suite**. Make deterministic retrieval and evidence contracts the routine default; use frozen-evidence
+generation tests to isolate citation/synthesis; keep a deliberately small, representative live-agent
+canary suite; and reserve full live audits or repeated runs for explicit integration/stability work.
+The harness must make those targets explicit, preserve tool traces and usage per run, and keep full
+audits possible. Generalize this: cost control comes from testing the layer an assertion measures,
+not from blocking a legitimate test run after an arbitrary number of calls.
+
+### (always) Never fire billed live-agent eval runs on your own initiative
+
+Immediately after the layered-eval work above landed, an agent started four back-to-back live
+`--tier canary` q21 repeats without asking. Jeffrey's reaction: **"ok stop just RUNNING EVAL BENCH
+WILDLY!!! WE RISK EXPLODING THE CLAUDE USAGE BUDGET AGAIN."** This is the third correction in the same
+thread and it is about agent behavior, not harness code — do not respond to it by adding a cap or a
+confirmation flag, which he already rejected once.
+
+The standing rule: **any bench selection that posts to the live agent (`--tier canary`, `--tier live`,
+or any `--only` selection whose questions resolve to a live tier) requires Jeffrey's explicit,
+run-specific go-ahead in the immediately preceding message.** Free deterministic tiers — the default
+`component` retrieval contracts and replay/frozen-evidence cases — can be run freely, because they
+cost nothing. When a task's success criteria require live repeats, do every free and static part of
+the work first, then stop and say exactly what you want to run, how many billed cases it is, and
+roughly what it costs; wait for the answer rather than starting it. State the model/provider too.
+Run only that approved scope, serially and in the foreground; stop as soon as the requested evidence
+exists or any spend/error signal appears, and never add confirmation runs speculatively.
+
+Approval does not generalize across steps. Jeffrey saying "ok, lets go!!!" to a *design or handoff*
+proposal authorizes that design, not an unbounded series of billed runs downstream of it — and one
+approved run is never authorization for a repeat loop. When in doubt about whether a prior "go" covers
+the spend you are about to incur, it does not. On 2026-08-24, Jeffrey stopped an in-progress q21
+repeat attempt after three completed billed calls; no further billed q21 call is authorized until he
+explicitly approves a newly stated bounded run.
+
+### Pluto RAG runtime spend is bounded before dispatch, not merely counted afterward
+
+The 2026-08-24 RAG runaway fix established a separate production invariant from the eval-tier rule:
+every `/api/agent-v2` run owns one shared token ledger across the Research Agent, producer rounds, and
+model-backed RAG reranking. A model request must reserve a provider-bounded worst case before it is
+sent; if that reservation cannot fit, the runtime degrades cleanly without making the call. Successful
+calls replace the reservation with actual fresh-input, cache-read, cache-write, and output usage;
+failed/cancelled calls release it. Optional reranking skips to deterministic RRF order when its
+reservation is refused. Never regress this to a spent-only, post-response counter: that can observe an
+overspend but cannot prevent it, and parallel work can pass the same stale headroom check.

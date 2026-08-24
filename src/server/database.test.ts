@@ -42,6 +42,7 @@ const EXPECTED_MIGRATIONS = [
   '029_agent_run_token_breakdown',
   '030_work_item_version',
   '031_memory_index',
+  '032_work_item_lifecycle_events',
 ];
 
 describe('openDatabase', () => {
@@ -144,6 +145,23 @@ describe('openDatabase', () => {
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '015_durable_artifact_publication'").get()).toBeTruthy();
     expect((upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>).map((column) => column.name)).toContain('adopted_conversation_id');
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_agent_runs_adopted_conversation'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds the structured lifecycle ledger when upgrading from migration 031', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE work_item_lifecycle_events;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '032_work_item_lifecycle_events'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(work_item_lifecycle_events)').all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      'work_item_id', 'transition', 'from_status', 'to_status', 'is_initial', 'actor', 'source', 'reason', 'occurred_at',
+    ]));
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_lifecycle_events_export'").get()).toBeTruthy();
     upgraded.close();
   });
 

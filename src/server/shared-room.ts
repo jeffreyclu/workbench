@@ -140,7 +140,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     ? [repository.selectBalancedAgent(resolvedAgents[0])]
     : resolvedAgents;
   if (linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled') {
-    repository.update(linkedItem.id, { status: 'in_progress' });
+    repository.update(linkedItem.id, { status: 'in_progress' }, false, { actor: 'jeffrey', source: 'shared_room' });
     const attachmentText = queued.message.attachments.length ? ` · ${queued.message.attachments.length} attachment${queued.message.attachments.length === 1 ? '' : 's'}` : '';
     repository.addActivity(linkedItem.id, 'jeffrey', 'chat_started', `To ${agents.join(' and ')}${attachmentText}: ${queued.message.body.trim() || '(attachment-only message)'}`);
   }
@@ -161,7 +161,7 @@ function settleLinkedTask(repository: WorkItemRepository, conversationId: string
   if (!conversation?.workItemId) return;
   const item = repository.get(conversation.workItemId);
   if (!item || item.archivedAt || item.status !== 'in_progress') return;
-  repository.update(item.id, { status: 'ready' });
+  repository.update(item.id, { status: 'ready' }, false, { actor: 'system', source: 'shared_room' });
   repository.moveForAttention(item.id, 'top', reason);
   repository.addActivity(item.id, 'system', 'chat_completed', reason);
 }

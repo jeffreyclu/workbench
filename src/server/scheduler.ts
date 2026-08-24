@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { executeAgentRun } from './agent-runner.js';
+import { generateLifecycleReport } from './lifecycle-report.js';
+import { publishRealtimeEvent } from './realtime.js';
 import type { WorkItemRepository } from './repository.js';
 
 /**
@@ -23,6 +25,10 @@ export const LEASE_MS = 120_000;
 export const HEARTBEAT_MS = 20_000;
 export const TICK_MS = 5_000;
 export const RETENTION_MS = 24 * 60 * 60 * 1000;
+export const LIFECYCLE_REPORT_MS = (() => {
+  const configuredHours = Number.parseInt(process.env.WORKBENCH_LIFECYCLE_REPORT_INTERVAL_HOURS ?? '', 10);
+  return Number.isFinite(configuredHours) && configuredHours >= 1 ? configuredHours * 60 * 60 * 1_000 : 7 * 24 * 60 * 60 * 1_000;
+})();
 
 /**
  * Global ceiling on concurrently `running` agent runs. Each run spawns a real
@@ -98,7 +104,26 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
   }, RETENTION_MS);
   retention.unref();
 
+  const lifecycleReport = setInterval(() => {
+    const startedAt = Date.now();
+    try {
+      const result = generateLifecycleReport(repository.database, { minimumCompletedCases: lifecycleReportMinimumCases(), nextRunIntervalMs: LIFECYCLE_REPORT_MS });
+      repository.logDiagnostic('scheduler_tick', 'scheduler', 'success', result.report
+        ? `Lifecycle report generated from ${result.eligibleCompletedCases} fully observed completed traces.`
+        : `Lifecycle report waiting for fully observed completed traces (${result.eligibleCompletedCases}/${result.minimumCompletedCases}).`, Date.now() - startedAt);
+      publishRealtimeEvent('insights');
+    } catch (error) {
+      repository.logDiagnostic('scheduler_error', 'scheduler', 'failure', `Lifecycle report failed: ${String(error)}`, Date.now() - startedAt, 'lifecycle_report_error');
+    }
+  }, LIFECYCLE_REPORT_MS);
+  lifecycleReport.unref();
+
   return {
-    stop: () => { clearInterval(heartbeat); clearInterval(tick); clearInterval(retention); },
+    stop: () => { clearInterval(heartbeat); clearInterval(tick); clearInterval(retention); clearInterval(lifecycleReport); },
   };
+}
+
+export function lifecycleReportMinimumCases(): number {
+  const value = Number.parseInt(process.env.WORKBENCH_LIFECYCLE_REPORT_MIN_COMPLETED_CASES ?? '', 10);
+  return Number.isFinite(value) && value >= 1 ? value : 50;
 }

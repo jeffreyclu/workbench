@@ -77,6 +77,8 @@ When a task involves file output and multiple agents are active, one must comple
 
 **Prevention:** Before writing to a file that may have been touched by another agent, check git status and read the file to verify whether the task is actually complete. If it is, say so. Do not continue working on the same output path independently.
 
+**Source files under active refactor are not exempt.** During a long-running repository.ts extraction (2026-08-24), Codex saved concurrent, unrelated edits (a new `StatusTransitionContext` parameter, bulk-update logic) to the exact file Claude was mid-edit on, live, with no coordination. A `vitest run` executed at the instant Codex's write landed on disk caught the file mid-save and failed with a spurious `cannot start a transaction within a transaction` error in code neither agent had touched that turn; the identical run seconds later, once the write settled, passed clean. Treat a test failure that implicates code you did not touch as a possible read of a concurrently-written file before assuming it is real: re-run once, and only trust the result if `git diff` is stable (no shared file is actively changing) across the two runs.
+
 ### Always close dev servers **(always)**
 
 *Always shut down dev servers before finishing; they interfere with Jeffrey's local environment*

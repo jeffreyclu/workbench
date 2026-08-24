@@ -207,7 +207,7 @@ export function createWorkItemRouter({ repository }: RouteContext) {
     if (!existing) return response.status(404).json({ error: 'Work item not found.' });
     let item;
     try {
-      item = repository.update(request.params.id, input);
+      item = repository.update(request.params.id, input, false, { actor: 'jeffrey', source: 'http' });
     } catch (error) {
       if (error instanceof WorkItemVersionConflictError) {
         return response.status(409).json({ error: error.message, code: VERSION_CONFLICT_CODE, item: error.item });

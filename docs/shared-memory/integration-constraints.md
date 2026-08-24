@@ -70,3 +70,49 @@ The remaining option that needs no app is a Slack Workflow Builder webhook trigg
 Slack UI. Prefer that shape, or an inbound-from-Slack design that piggybacks on tooling
 Writer has already installed.
 
+### Writer PR preview login is basic auth, not SSO
+
+*Writer's `writer-app-pr-<N>.dev-deer.qordobadev.com` PR previews sit behind an HTTP basic-auth
+gate in front of the app's own login page — SSO and "sign in with Google" on the preview's login
+screen are not the credential to use for that outer gate.*
+
+When Jeffrey or an agent opens a PR preview created by the `preview` label, the flow is two
+separate logins stacked, not one:
+
+1. **Outer gate: HTTP basic auth.** Credentials are in 1Password → Office vault →
+   "Basic Auth Dev." This prompt is unrelated to Writer's own auth system, so SSO/Gmail
+   buttons on it (if any render) do nothing useful.
+2. **Inner gate: the Writer App login page itself**, reached only after basic auth succeeds.
+   Per a 2026-08-03 helpdesk response, this may also require Tailscale connected to the
+   `qordoba-devel-gcoo` exit node first, and the account to use on that page is a specific
+   shared dev account ("select May's account"), not Jeffrey's personal SSO/Google identity.
+
+A known failure mode at the basic-auth prompt: 1Password's autofill can trigger a recursive
+redirect loop back to the same login dialog. Work around it by opening the preview in an
+incognito window and typing/pasting the basic-auth credentials manually instead of using
+1Password autofill.
+
+Source: Slack threads in `#CSJ8VQSVC` (2026-08-06), `#C080MJCFC1E` (2025-03-20), and
+`#C05G3DFK58X` (2026-08-03); Confluence "Preview Environments [Deprecated]" and
+"skynet-preview to PR-preview: migration and setup".
+
+### Check for a local `gh` CLI before claiming no GitHub access
+
+*An agent's session may lack a GitHub MCP tool while still having a fully authenticated `gh` CLI
+available in its Bash shell — check `which gh && gh auth status` before telling Jeffrey GitHub
+access is unavailable.*
+
+On 2026-08-24 an agent claimed it had "no GitHub access" to inspect a PR diff, reasoning only from
+the fact that the `atlassian` MCP server (Confluence/Slack) was unauthorized in that session and
+generalizing that gap to GitHub as well. Jeffrey pointed out Workbench's GitHub source showed
+"CONNECTED." Two separate things turned out to be true: (1) the Workbench GitHub source connector
+is real but narrow — it only backs `resolve_links`/`search` for pulling link context into prompts,
+not full repo/PR reads, so its "CONNECTED" state was not actually the answer either; (2) the local
+shell had `gh` already authenticated (`gh auth status` showed a logged-in `repo`-scoped token), and
+`gh pr view <N> --repo <org>/<repo> --json ...` worked immediately once tried.
+
+The general lesson: before reporting a capability gap, check the concrete local tool (`gh`, `docker`,
+language CLIs, etc.) directly rather than inferring its absence from an unrelated MCP server's auth
+state. MCP-server authorization and locally-installed authenticated CLIs are independent — one being
+unauthorized says nothing about the other.
+

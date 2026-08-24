@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
 import { cancelSharedReply, dispatchNextSharedTurn } from './shared-room.js';
@@ -1533,6 +1533,361 @@ describe('WorkItemRepository', () => {
       expect(secondPage.entries).toHaveLength(2);
       expect(secondPage.entries.map((entry) => entry.detail)).not.toEqual(firstPage.entries.map((entry) => entry.detail));
       expect(() => repository.listAuditLog(2, 'not-a-real-cursor')).toThrow('Invalid audit log cursor.');
+    });
+  });
+
+  describe('extracted repositories: telemetry unit-of-work integrity', () => {
+    it('rolls back the whole budget reservation on a constraint failure, leaving the held total untouched', () => {
+      const item = repository.create({ title: 'Budgeted task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const windowStart = new Date(Date.now() - 60_000).toISOString();
+      const first = repository.tryReserveAutonomousBudget({ provider: 'claude', model: 'claude-sonnet', workItemId: item.id, requiredTokenCount: 100, spentTokenCount: 0, budgetTokenLimit: 1_000, windowStart });
+      expect(first).not.toBeNull();
+      expect(repository.heldBudgetReservationSet('claude', windowStart)).toBe(100);
+
+      // A malformed provider violates the budget_reservations CHECK constraint,
+      // so the INSERT inside tryReserveAutonomousBudget's transaction throws.
+      // The held total must reflect only the first, successfully committed
+      // reservation — proving the shared UnitOfWork rolled the failed write back
+      // rather than leaving a partial insert behind.
+      expect(() => repository.tryReserveAutonomousBudget({
+        provider: 'not-a-real-provider' as 'claude',
+        model: 'claude-sonnet', workItemId: item.id, requiredTokenCount: 50, spentTokenCount: 0, budgetTokenLimit: 1_000, windowStart,
+      })).toThrow();
+      expect(repository.heldBudgetReservationSet('claude', windowStart)).toBe(100);
+      expect(repository.heldBudgetReservationSet('codex', windowStart)).toBe(0);
+    });
+
+    it('tryReserveAutonomousBudget is atomic: a second reservation that would exceed the ceiling is rejected without a partial write', () => {
+      const item = repository.create({ title: 'Budgeted task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const windowStart = new Date(Date.now() - 60_000).toISOString();
+      const first = repository.tryReserveAutonomousBudget({ provider: 'codex', model: 'gpt-5.6-terra', workItemId: item.id, requiredTokenCount: 700, spentTokenCount: 0, budgetTokenLimit: 1_000, windowStart });
+      expect(first).not.toBeNull();
+
+      // The second request alone fits under the ceiling, but combined with the
+      // first held reservation it does not — the read-then-insert must see the
+      // first reservation's held amount, not a stale pre-transaction snapshot.
+      const second = repository.tryReserveAutonomousBudget({ provider: 'codex', model: 'gpt-5.6-terra', workItemId: item.id, requiredTokenCount: 400, spentTokenCount: 0, budgetTokenLimit: 1_000, windowStart });
+      expect(second).toBeNull();
+      expect(repository.heldBudgetReservationSet('codex', windowStart)).toBe(700);
+    });
+  });
+
+  describe('extracted repositories: discovery unit-of-work integrity', () => {
+    it('rolls back the created work item when convert fails partway through, leaving the candidate pending', () => {
+      const run = repository.startDiscoveryRun();
+      repository.upsertDiscoveryCandidate({ fingerprint: 'rollback-me', provider: 'slack', title: 'Candidate to roll back', description: '', sourceUrl: null, occurredAt: null, runId: run.id });
+      const candidate = repository.getDiscoveryInbox().candidates[0];
+
+      // addActivity runs after WorkItemRepository.create inside the same
+      // resolveDiscoveryCandidate transaction. Forcing it to throw proves the
+      // work item insert and the candidate status update — both already
+      // issued to SQLite — are rolled back together rather than left partial.
+      const addActivitySpy = vi.spyOn(repository, 'addActivity').mockImplementationOnce(() => { throw new Error('boom'); });
+      expect(() => repository.resolveDiscoveryCandidate(candidate.id, 'convert')).toThrow('boom');
+      addActivitySpy.mockRestore();
+
+      expect(repository.list()).toHaveLength(0);
+      const inbox = repository.getDiscoveryInbox();
+      expect(inbox.pendingCount).toBe(1);
+      expect(inbox.candidates[0]).toEqual(expect.objectContaining({ id: candidate.id, status: 'pending' }));
+    });
+
+    it('resolveDiscoveryCandidates keeps resolving independent candidates after one is torn down concurrently', () => {
+      const run = repository.startDiscoveryRun();
+      repository.upsertDiscoveryCandidate({ fingerprint: 'a', provider: 'linear', title: 'A', description: '', sourceUrl: null, occurredAt: null, runId: run.id });
+      repository.upsertDiscoveryCandidate({ fingerprint: 'b', provider: 'linear', title: 'B', description: '', sourceUrl: null, occurredAt: null, runId: run.id });
+      const [first, second] = repository.getDiscoveryInbox().candidates;
+
+      // Simulates a concurrent resolution of `first` racing this bulk call:
+      // by the time the loop reaches it, its row no longer matches the
+      // `status = 'pending'` guard, so applyResolution is a no-op rather than
+      // a lost-update — the loop must still resolve the untouched candidate.
+      repository.resolveDiscoveryCandidate(first.id, 'dismiss');
+      const resolved = repository.resolveDiscoveryCandidates([first.id, second.id], 'dismiss');
+      expect(resolved.map((candidate) => candidate.id)).toEqual([second.id]);
+      expect(repository.getDiscoveryInbox().pendingCount).toBe(0);
+    });
+  });
+
+  describe('extracted repositories: conversation unit-of-work integrity', () => {
+    it('rolls back the forked conversation and its copied messages when copying fails partway through', () => {
+      const task = repository.create({ title: 'Conversation task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const source = repository.createConversation('Original thread', task.id);
+      repository.createSharedMessage('jeffrey', 'First message', 'completed', source.id);
+      repository.createSharedMessage('claude', 'Second message', 'completed', source.id);
+
+      // forkConversation creates the fork row, copies every message, then
+      // unlinks the source from its task — all inside one UnitOfWork
+      // transaction. Forcing the message copy to throw proves none of that
+      // survives: no orphaned fork row, and the source keeps its task link.
+      const createSharedMessageSpy = vi.spyOn(repository, 'createSharedMessage').mockImplementationOnce(() => { throw new Error('boom'); });
+      expect(() => repository.forkConversation(source.id)).toThrow('boom');
+      createSharedMessageSpy.mockRestore();
+
+      expect(repository.listConversations('all').some((conversation) => conversation.forkedFromConversationId === source.id)).toBe(false);
+      expect(repository.getConversation(source.id)?.workItemId).toBe(task.id);
+    });
+
+    it('rolls back the archive cascade when the linked task archive fails partway through, leaving both unarchived', () => {
+      const task = repository.create({ title: 'Cascade task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const conversation = repository.createConversation('Cascade thread', task.id);
+
+      // setConversationArchived archives the linked task before flipping the
+      // conversation's own archived_at, inside one UnitOfWork transaction.
+      // Forcing addActivity (called from inside archive()) to throw proves
+      // the task's archive and the conversation's archived_at are rolled
+      // back together rather than left half-applied.
+      const addActivitySpy = vi.spyOn(repository, 'addActivity').mockImplementationOnce(() => { throw new Error('boom'); });
+      expect(() => repository.setConversationArchived(conversation.id, true)).toThrow('boom');
+      addActivitySpy.mockRestore();
+
+      expect(repository.get(task.id)?.archivedAt).toBeNull();
+      expect(repository.getConversation(conversation.id)?.archivedAt).toBeNull();
+    });
+
+    // No other conversation composition (setConversationWorkItem's link/unlink,
+    // backfillConversationRunAdoptions) has a genuinely concurrent-write path
+    // distinct from the forced-failure rollback covered above and the existing
+    // "keeps resolving independent candidates" style race already exercised for
+    // discovery — shared_conversations has no unique constraint that a second
+    // writer could collide with, so no concurrency test was added here.
+  });
+
+  describe('extracted repositories: run unit-of-work integrity', () => {
+    it('prepareRunRetry rolls back the reopened run when reopening its linked chat bubble fails, leaving both still failed', () => {
+      const item = repository.create({ title: 'Retry cascade', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const conversation = repository.getOrCreateWorkConversation(item.id, item.title);
+      const message = repository.createSharedMessage('codex', 'Partial output', 'failed', conversation.id);
+      const run = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Continue', conversation.id, message.id);
+      repository.updateRun(run.id, { status: 'failed', error: 'Agent process stopped reporting progress.' });
+
+      // prepareRunRetry reopens the run row, then reopens its linked message —
+      // both inside one UnitOfWork transaction. Forcing the *second* write (the
+      // shared_messages reopen) to throw proves the already-issued run reopen
+      // does not survive on its own — it must roll back together with the message.
+      const originalPrepare = database.prepare.bind(database);
+      const prepareSpy = vi.spyOn(database, 'prepare').mockImplementation((sql: string) => {
+        if (sql.includes('UPDATE shared_messages') && sql.includes("status = 'running'") && sql.includes("WHERE id = ? AND status IN ('failed', 'canceled')")) throw new Error('boom');
+        return originalPrepare(sql);
+      });
+      expect(() => repository.prepareRunRetry(run.id)).toThrow('boom');
+      prepareSpy.mockRestore();
+
+      expect(repository.getRun(run.id)?.status).toBe('failed');
+      expect(repository.getSharedMessageById(message.id)?.status).toBe('failed');
+    });
+
+    it('reclaimExpired rolls back a recovered run when the shared-message reclaim in the same pass fails, leaving both still expired', () => {
+      const item = repository.create({ title: 'Reclaim cascade', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const run = repository.createRun(item.id, 'analysis', 'codex', 'codex', '');
+      repository.claimRun(run.id, 'dead-owner', -1); // lease already expired
+
+      const conversation = repository.createConversation();
+      const message = repository.createSharedMessage('codex', 'partial output', 'running', conversation.id);
+      repository.claimSharedMessage(message.id, 'dead-owner', -1); // lease already expired
+
+      // reclaimExpired recovers expired agent_runs first, then reclaims
+      // expired shared_messages, inside one UnitOfWork transaction. Forcing
+      // the shared_messages recovery UPDATE to throw proves the already-issued
+      // run recovery from the same pass is rolled back too, rather than left
+      // half-applied while the message stays stuck.
+      const originalPrepare = database.prepare.bind(database);
+      const prepareSpy = vi.spyOn(database, 'prepare').mockImplementation((sql: string) => {
+        if (sql.includes("UPDATE shared_messages SET status = 'failed', error = 'Agent process stopped reporting progress")) throw new Error('boom');
+        return originalPrepare(sql);
+      });
+
+      expect(() => repository.reclaimExpired(0)).toThrow('boom');
+      prepareSpy.mockRestore();
+
+      expect(repository.getRun(run.id)?.status).toBe('running');
+      expect(repository.getSharedMessageById(message.id)?.status).toBe('running');
+    });
+
+    // claimRun and claimWorkspace already have dedicated atomicity tests above
+    // ("claimRun is atomic...", "grants a workspace to one run at a time...")
+    // covering the genuine concurrent-claimant races this repository exposes;
+    // no further concurrency test was added here to avoid duplicating them.
+
+    it('surfaceStrandedRuns rolls back the agent_runs write when the work_items re-fencing write fails, leaving all three tables untouched', () => {
+      const item = repository.create({ title: 'Stranded without a lease', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      repository.update(item.id, { status: 'in_progress' });
+      const conversation = repository.getOrCreateWorkConversation(item.id, item.title);
+      const message = repository.createSharedMessage('codex', 'Working…', 'running', conversation.id);
+      const run = repository.createRun(item.id, 'analysis', 'codex', 'codex', '', conversation.id, message.id);
+      // A run stranded before it ever claimed a lease (process died between
+      // insert and its first claim) never sets lease_expires_at; back-date its
+      // created_at past the grace window so surfaceStrandedRuns treats it as
+      // abandoned rather than merely in flight.
+      database.prepare("UPDATE agent_runs SET status = 'running', created_at = '2020-01-01T00:00:00.000Z' WHERE id = ?").run(run.id);
+
+      // surfaceStrandedRuns writes agent_runs, then shared_messages, then
+      // work_items inside one BEGIN IMMEDIATE transaction. Forcing the final
+      // (work_items) write to throw proves the two writes already issued
+      // ahead of it do not survive on their own.
+      const originalPrepare = database.prepare.bind(database);
+      const prepareSpy = vi.spyOn(database, 'prepare').mockImplementation((sql: string) => {
+        if (sql.includes('UPDATE work_items') && sql.includes("status = 'ready'") && sql.includes("status = 'in_progress'")) throw new Error('boom');
+        return originalPrepare(sql);
+      });
+      expect(() => repository.surfaceStrandedRuns(0)).toThrow('boom');
+      prepareSpy.mockRestore();
+
+      expect(repository.getRun(run.id)?.status).toBe('running');
+      expect(repository.getSharedMessageById(message.id)?.status).toBe('running');
+      expect(repository.get(item.id)?.status).toBe('in_progress');
+    });
+
+    it('reclaimExpired is idempotent across two racing passes: the second finds nothing left to reclaim', () => {
+      const item = repository.create({ title: 'Racing reclaim', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const analysisRun = repository.createRun(item.id, 'analysis', 'codex', 'codex', '');
+      repository.claimRun(analysisRun.id, 'dead-owner', -1); // lease already expired
+
+      // Two schedulers (or a retry loop) can race to reclaim the same expired
+      // lease. The first pass recovers it; the guard on lease_expires_at means
+      // a second pass over the same state must find nothing left to touch and
+      // must not double-increment the attempt count.
+      const first = repository.reclaimExpired(0);
+      expect(first.recoveredRunIds).toEqual([analysisRun.id]);
+      const afterFirst = repository.getRun(analysisRun.id)!;
+      expect(afterFirst.status).toBe('queued');
+      expect(afterFirst.attempt).toBe(1);
+
+      const second = repository.reclaimExpired(0);
+      expect(second.recoveredRunIds).toEqual([]);
+      expect(second.failedRunIds).toEqual([]);
+      const afterSecond = repository.getRun(analysisRun.id)!;
+      expect(afterSecond.status).toBe('queued');
+      expect(afterSecond.attempt).toBe(1);
+    });
+  });
+
+  describe('extracted repositories: queue unit-of-work integrity', () => {
+    it('rolls back undoLastQueueChange when the final re-fencing write fails, leaving the change un-undone and the proposal still pending', () => {
+      repository.create({ title: 'First', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      repository.create({ title: 'Second', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const originalOrder = repository.list().map((item) => item.id);
+      const reversedOrder = [...originalOrder].reverse();
+
+      repository.reorder(reversedOrder, 'attention', { actor: 'jeffrey', reason: 'Swap for the test.' });
+      expect(repository.list().map((item) => item.id)).toEqual(reversedOrder);
+      const proposal = repository.createProposal(originalOrder, 'Proposed reverting the swap.');
+
+      // undoLastQueueChange marks the journalled swap undone, supersedes the
+      // pending proposal, replays the previous order (which journals its own
+      // new row), then re-fences that replay row so it cannot itself be
+      // undone — all inside one UnitOfWork transaction. Forcing that final
+      // fencing UPDATE to throw proves the three writes already issued before
+      // it (the undo mark, the proposal supersede, and the replay reorder) do
+      // not survive on their own.
+      const originalPrepare = database.prepare.bind(database);
+      const prepareSpy = vi.spyOn(database, 'prepare').mockImplementation((sql: string) => {
+        if (sql.includes('WHERE rowid > ? AND undone_at IS NULL')) throw new Error('boom');
+        return originalPrepare(sql);
+      });
+
+      expect(() => repository.undoLastQueueChange('attention')).toThrow('boom');
+      prepareSpy.mockRestore();
+
+      expect(repository.list().map((item) => item.id)).toEqual(reversedOrder);
+      expect(repository.listQueueHistory('attention').find((change) => change.newOrder.join() === reversedOrder.join())?.undoneAt).toBeNull();
+      expect(repository.getPendingProposal('attention')?.id).toBe(proposal.id);
+    });
+
+    it('resolveProposal supersedes a stale proposal instead of applying it when the queue was reordered after it was created', () => {
+      repository.create({ title: 'First', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      repository.create({ title: 'Second', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const currentOrder = repository.list().map((item) => item.id);
+      const proposal = repository.createProposal([...currentOrder].reverse(), 'Proposed reversal.');
+
+      // Bumps the attention queue's version without changing the order (the
+      // reorder is a no-op on the id sequence, so nothing is journalled), the
+      // same way any intervening manual reorder would after the proposal was
+      // built against an earlier version.
+      repository.reorder(currentOrder, 'attention', { actor: 'jeffrey', reason: 'No-op version bump.' });
+
+      const resolved = repository.resolveProposal(proposal.id, 'accepted');
+
+      expect(resolved?.status).toBe('superseded');
+      // The stale proposal's reversed order must never have been applied.
+      expect(repository.list().map((item) => item.id)).toEqual(currentOrder);
+      expect(repository.getPendingProposal('attention')).toBeNull();
+    });
+  });
+
+  describe('extracted repositories: provider sync unit-of-work integrity', () => {
+    it('rolls back an in-place Linear update when the snapshot write fails partway through, leaving the row, override, and lifecycle event untouched', () => {
+      const input = { sourceIdentifier: 'ENG-ROLLBACK', sourceUrl: null, title: 'Provider title', description: '', status: 'ready' as const, priority: 2, projectName: null, labels: ['backend'], dueDate: null, providerUpdatedAt: '2026-08-18T10:00:00.000Z', providerPayload: {} };
+      repository.upsertLinearItem(input);
+      const item = repository.searchLinear('ENG-ROLLBACK')[0];
+      // A local edit first, so the update path also writes a provider_field_overrides
+      // row, then a status change from the provider that would append a lifecycle
+      // event — every write this transaction can make is exercised at once.
+      repository.update(item.id, { title: 'Local title' });
+
+      // upsertLinearItem's update branch writes overrides, the work_items row,
+      // a lifecycle event (status changed), and the provider snapshot — all
+      // inside one UnitOfWork transaction. Forcing the final snapshot INSERT
+      // to throw proves none of the earlier writes in the same pass survive.
+      const originalPrepare = database.prepare.bind(database);
+      const prepareSpy = vi.spyOn(database, 'prepare').mockImplementation((sql: string) => {
+        if (sql.includes('INSERT INTO provider_work_item_snapshots')) throw new Error('boom');
+        return originalPrepare(sql);
+      });
+
+      expect(() => repository.upsertLinearItem({ ...input, status: 'done', providerUpdatedAt: '2026-08-18T11:00:00.000Z' })).toThrow('boom');
+      prepareSpy.mockRestore();
+
+      const unchanged = repository.get(item.id)!;
+      expect(unchanged.title).toBe('Local title');
+      expect(unchanged.status).toBe('ready');
+      expect(repository.listActivity(item.id).some((activity) => activity.kind === 'imported')).toBe(true);
+    });
+
+    it('rolls back resolveProviderConflict when recording the resolution activity fails, leaving the override and work item untouched', () => {
+      const input = { sourceIdentifier: 'ENG-CONFLICT-ROLLBACK', sourceUrl: null, title: 'Provider title', description: '', status: 'ready' as const, priority: 2, projectName: null, labels: [], dueDate: null, providerUpdatedAt: '2026-08-18T10:00:00.000Z', providerPayload: {} };
+      repository.upsertLinearItem(input);
+      const item = repository.searchLinear('ENG-CONFLICT-ROLLBACK')[0];
+      repository.update(item.id, { title: 'Local title' });
+      repository.upsertLinearItem({ ...input, title: 'Provider title v2', providerUpdatedAt: '2026-08-18T11:00:00.000Z' });
+      expect(repository.listProviderConflicts(item.id)).toHaveLength(1);
+
+      // resolveProviderConflict updates work_items, deletes the override row,
+      // then records an activity — all inside one UnitOfWork transaction via
+      // the injected addActivity collaborator. Forcing addActivity to throw
+      // proves the work_items update and override delete do not survive on
+      // their own.
+      const addActivitySpy = vi.spyOn(repository, 'addActivity').mockImplementationOnce(() => { throw new Error('boom'); });
+      expect(() => repository.resolveProviderConflict(item.id, 'title', 'use_provider')).toThrow('boom');
+      addActivitySpy.mockRestore();
+
+      expect(repository.get(item.id)?.title).toBe('Local title');
+      expect(repository.listProviderConflicts(item.id)).toHaveLength(1);
+    });
+
+    it('upsertLinearItems keeps every prior page-item write atomic with a later item in the same page when that later item fails', () => {
+      const first = { sourceIdentifier: 'ENG-PAGE-1', sourceUrl: null, title: 'First', description: '', status: 'ready' as const, priority: 2, projectName: null, labels: [], dueDate: null, providerUpdatedAt: '2026-08-18T10:00:00.000Z', providerPayload: {} };
+      const second = { sourceIdentifier: 'ENG-PAGE-2', sourceUrl: null, title: 'Second', description: '', status: 'ready' as const, priority: 2, projectName: null, labels: [], dueDate: null, providerUpdatedAt: '2026-08-18T10:00:00.000Z', providerPayload: {} };
+
+      // A whole synced page composes as one UnitOfWork transaction (upsertLinearItems
+      // wraps every item's upsertLinearItem call). Forcing the second new item's
+      // insert to fail proves the first item's otherwise-committed insert is rolled
+      // back too.
+      let newItemInserts = 0;
+      const originalPrepare = database.prepare.bind(database);
+      const prepareSpy = vi.spyOn(database, 'prepare').mockImplementation((sql: string) => {
+        if (sql.includes('INSERT INTO work_items') && sql.includes("'linear'")) {
+          newItemInserts += 1;
+          if (newItemInserts === 2) throw new Error('boom');
+        }
+        return originalPrepare(sql);
+      });
+
+      expect(() => repository.upsertLinearItems([first, second])).toThrow('boom');
+      prepareSpy.mockRestore();
+
+      expect(repository.searchLinear('ENG-PAGE-1')).toHaveLength(0);
+      expect(repository.searchLinear('ENG-PAGE-2')).toHaveLength(0);
     });
   });
 
