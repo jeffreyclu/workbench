@@ -170,7 +170,7 @@ describe('shared room', () => {
     expect(await screen.findByText('No messages yet. Ask Codex or Claude to get started.')).toBeTruthy();
   });
 
-  it('offers preview approval from an unlinked conversation when changes are pending', async () => {
+  it('does not offer preview approval from a new empty conversation when changes are pending elsewhere', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000006';
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -178,6 +178,22 @@ describe('shared room', () => {
       if (url === '/api/runtime/preview-status') return new Response(JSON.stringify({ pending: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Manual release', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    await screen.findByRole('heading', { name: 'Manual release' });
+    expect(screen.queryByRole('button', { name: 'Approve preview' })).toBeNull();
+  });
+
+  it('offers preview approval after completed agent work when changes are pending', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000006';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/runtime/preview-status') return new Response(JSON.stringify({ pending: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Manual release', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [{ id: 'agent-1', conversationId, author: 'codex', body: 'Completed the change.', pinned: false, status: 'completed', error: '', createdAt: '2026-01-01T00:00:00Z', attachments: [], model: null, executionProfile: 'auto', dispatchTarget: 'none' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
@@ -960,6 +976,43 @@ describe('shared room', () => {
     expect(modelChoice.value).toBe('deep');
   });
 
+  it('restores the last recipient and model choice from conversation history', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000031';
+    const timestamp = '2026-01-01T00:00:00Z';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Continue with Claude', workItemId: null, preferredExecutionProfile: null, createdAt: timestamp, updatedAt: timestamp }], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [
+        { id: 'request-1', conversationId, author: 'jeffrey', body: 'Please investigate.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: null, executionProfile: 'deep', inputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'claude' },
+        { id: 'reply-1', conversationId, author: 'claude', body: 'I found the regression.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: 'opus', executionProfile: 'deep', inputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'none' },
+      ] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    await screen.findByLabelText('Who should respond');
+    await waitFor(() => expect((screen.getByLabelText('Who should respond') as HTMLSelectElement).value).toBe('claude'));
+    expect((screen.getByLabelText('Model choice') as HTMLSelectElement).value).toBe('deep');
+  });
+
+  it('starts an empty conversation with Ask both and Auto', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000032';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'New conversation', workItemId: null, preferredExecutionProfile: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    await screen.findByRole('heading', { name: 'New conversation' });
+    await waitFor(() => expect((screen.getByLabelText('Who should respond') as HTMLSelectElement).value).toBe('both'));
+    expect((screen.getByLabelText('Model choice') as HTMLSelectElement).value).toBe('auto');
+  });
+
   it('searches conversations, selects a result, and restores the list on clear', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const firstId = '00000000-0000-4000-8000-000000000001';
@@ -1457,22 +1510,42 @@ describe('primary nav hover rail', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
-    const archive = await screen.findByRole('button', { name: /archive/i });
-    archive.focus();
-    expect(document.activeElement).toBe(archive);
+    const workbench = await screen.findByRole('button', { name: /workbench/i });
+    workbench.focus();
+    expect(document.activeElement).toBe(workbench);
 
-    fireEvent.click(archive, { detail: 1 });
-    expect(document.activeElement).not.toBe(archive);
-    expect(await screen.findByRole('heading', { name: 'Archive' })).toBeTruthy();
+    fireEvent.click(workbench, { detail: 1 });
+    expect(document.activeElement).not.toBe(workbench);
+    expect(await screen.findByRole('heading', { name: 'Workbench focus' })).toBeTruthy();
   });
 
-  it('keeps every nav destination reachable from the compact rail', async () => {
+  it('makes Archive a filter in the task stack, not a nav destination', async () => {
     stubEmptyQueue();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
+    expect(document.querySelector('#primary-nav')?.textContent).not.toContain('Archive');
     fireEvent.click(screen.getByRole('button', { name: /archive/i }));
-    expect(await screen.findByRole('heading', { name: 'Archive' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Attention stack' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /archive/i }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('shows each archive filter count before its archived list loads', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url === '/api/work-item-counts'
+        ? { active: 0, workbench: 0, archive: 6, attentionArchive: 2, workbenchArchive: 4 }
+        : url.startsWith('/api/work-items?')
+          ? { items: [], nextCursor: null, totalCount: url.includes('view=workbench-archive') ? 4 : 2, proposal: null }
+          : { items: [], conversations: [], messages: [], count: 0 };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    expect(await screen.findByRole('button', { name: 'Archive 2' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Workbench 0' }));
+    expect(await screen.findByRole('button', { name: 'Archive 4' })).toBeTruthy();
   });
 
   it('keeps secondary destinations behind the mobile More control', async () => {
@@ -1633,8 +1706,8 @@ describe('addressable navigation', () => {
     expect(window.location.pathname).toBe('/workbench');
 
     fireEvent.click(screen.getByRole('button', { name: /archive/i }));
-    expect(await screen.findByRole('heading', { name: 'Archive' })).toBeTruthy();
-    expect(window.location.pathname).toBe('/archive');
+    expect(await screen.findByRole('heading', { name: 'Workbench focus' })).toBeTruthy();
+    expect(window.location.pathname).toBe('/workbench/archive');
 
     await goBack();
     expect(window.location.pathname).toBe('/workbench');
@@ -1652,7 +1725,7 @@ describe('addressable navigation', () => {
 
     await goBack();
     expect(window.location.pathname).toBe('/archive');
-    expect(await screen.findByRole('heading', { name: 'Archive' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Attention stack' })).toBeTruthy();
   });
 
   it('closes a remembered Workbench task back to Workbench after leaving Archive', async () => {
@@ -1679,6 +1752,28 @@ describe('addressable navigation', () => {
 
     expect(window.location.pathname).toBe('/workbench');
     expect(await screen.findByRole('heading', { name: 'Workbench focus' })).toBeTruthy();
+  });
+
+  it('drops an archived remembered Workbench task instead of navigating to the Archive filter', async () => {
+    const archivedWorkbenchItem = { ...item, projectName: 'Workbench', stack: 'workbench', archivedAt: '2026-01-03T00:00:00Z', completedAt: '2026-01-03T00:00:00Z', completionStatus: 'completed' };
+    window.localStorage.setItem('workbench:last-opened-workbench-item', taskId);
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url === '/api/work-item-counts' ? { active: 0, workbench: 0, archive: 1 }
+        : url === `/api/work-items/${taskId}` ? { item: archivedWorkbenchItem, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [] }
+        : url.startsWith('/api/work-items?') ? { items: [], nextCursor: null, totalCount: 0, proposal: null }
+        : url === '/api/shared/conversations-unread-count' ? { count: 0 }
+        : url.includes('/api/shared/conversations') ? { conversations: [], nextCursor: null }
+        : { messages: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    renderApp();
+
+    fireEvent.click(await screen.findByRole('button', { name: /workbench/i }));
+
+    await waitFor(() => expect(window.location.pathname).toBe('/workbench'));
+    expect(await screen.findByRole('heading', { name: 'Workbench focus' })).toBeTruthy();
+    expect(window.localStorage.getItem('workbench:last-opened-workbench-item')).toBeNull();
   });
 
   it('opens the conversation named in the address and addresses the next one you pick', async () => {

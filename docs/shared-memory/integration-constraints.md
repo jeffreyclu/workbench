@@ -116,3 +116,17 @@ language CLIs, etc.) directly rather than inferring its absence from an unrelate
 state. MCP-server authorization and locally-installed authenticated CLIs are independent — one being
 unauthorized says nothing about the other.
 
+### Provider account profiles are isolated and provider-neutral
+
+Jeffrey has separate Claude and GPT accounts and requires an account-switching mechanism that works
+for both providers while preserving shared Workbench context and identical run budgets. The runner
+now supports provider-specific credential directories through `WORKBENCH_CLAUDE_ACCOUNT_<NAME>_DIR`
+(`CLAUDE_CONFIG_DIR`) and `WORKBENCH_CODEX_ACCOUNT_<NAME>_DIR` (`CODEX_HOME`), selected by the
+corresponding `WORKBENCH_CLAUDE_ACCOUNT` or `WORKBENCH_CODEX_ACCOUNT` value. Unknown profiles fail
+closed; `default` retains the normal CLI credentials. This is the subprocess foundation for a UI
+account picker; credentials are never placed in prompts or shared memory.
+
+Task dispatches now persist the selected profile name on the individual `agent_runs` row and pass it
+to the spawned provider CLI. The Workbench task execution panel keeps the chosen profile per task in
+browser storage, so Jeffrey can type `personal` (or another configured name) for that dispatch without
+changing the Workbench process environment. The stored profile name is audit metadata only.

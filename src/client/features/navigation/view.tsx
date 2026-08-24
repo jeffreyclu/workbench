@@ -1,4 +1,4 @@
-import { Archive, Cloud, Command, MessageCircle, MoreHorizontal, Wrench } from 'lucide-react';
+import { Cloud, Command, MessageCircle, MoreHorizontal, Wrench } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { ArtifactNav } from '../../artifacts';
 import { DiscoveryNav } from '../../discovery';
@@ -6,7 +6,7 @@ import { InsightsNav } from '../../insights';
 
 export type NavigationViewName = 'active' | 'workbench' | 'archive' | 'artifacts' | 'context' | 'discovery' | 'insights';
 
-export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conversationCount, onOpenActive, onOpenWorkbench, onOpenArchive, onOpenDiscovery, onOpenConversations, onOpenArtifacts, onOpenInsights, onOpenSources, onToggleMore }: {
+export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conversationCount, onOpenActive, onOpenWorkbench, onOpenDiscovery, onOpenConversations, onOpenArtifacts, onOpenInsights, onOpenSources, onToggleMore }: {
   view: NavigationViewName;
   mobileNavOpen: boolean;
   isCompactNav: boolean;
@@ -14,7 +14,6 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
   conversationCount: number | undefined;
   onOpenActive: () => void;
   onOpenWorkbench: () => void;
-  onOpenArchive: () => void;
   onOpenDiscovery: () => void;
   onOpenConversations: () => void;
   onOpenArtifacts: () => void;
@@ -34,12 +33,11 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
       <DiscoveryNav active={view === 'discovery'} onClick={onOpenDiscovery} />
       <button className={`nav-item ${view === 'context' ? 'active' : ''}`} onClick={onOpenConversations}><MessageCircle size={16} /> Conversations <span>{conversationCount ?? '…'}</span></button>
       <div id="mobile-nav-more" className="mobile-nav-secondary" aria-label="More destinations">
-        <button className={`nav-item ${view === 'archive' ? 'active' : ''}`} onClick={onOpenArchive}><Archive size={16} /> Archive <span>{counts?.archive ?? '…'}</span></button>
         <ArtifactNav active={view === 'artifacts'} onClick={onOpenArtifacts} />
         <InsightsNav active={view === 'insights'} onClick={onOpenInsights} />
         <button className="nav-item" onClick={onOpenSources}><Cloud size={16} /> Sources</button>
       </div>
-      {isCompactNav && <button className={`nav-item mobile-nav-more ${mobileNavOpen || ['archive', 'artifacts', 'insights'].includes(view) ? 'active' : ''}`} aria-controls="mobile-nav-more" aria-expanded={mobileNavOpen} onClick={onToggleMore}><MoreHorizontal size={18} /> More</button>}
+      {isCompactNav && <button className={`nav-item mobile-nav-more ${mobileNavOpen || ['artifacts', 'insights'].includes(view) ? 'active' : ''}`} aria-controls="mobile-nav-more" aria-expanded={mobileNavOpen} onClick={onToggleMore}><MoreHorizontal size={18} /> More</button>}
     </nav>
   </aside>;
 }

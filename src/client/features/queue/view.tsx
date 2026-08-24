@@ -64,10 +64,9 @@ export function SortableQueueItem({ item, index, selected, focused, draggable, o
         {openDependencies.length > 0 && <QueueItemUnblockButton item={item} />}
         {item.agentOutcome === 'follow_ups' && <button type="button" className="queue-item-cta queue-item-cta-inspect" onClick={(event) => { event.stopPropagation(); onSelect(); }} aria-label={`Inspect execution results for ${item.title}`}>Inspect</button>}
       </span>}
-      {item.archivedAt && <span className={`archive-meta ${item.completionStatus}`}>{item.completionStatus === 'completed' ? 'Completed' : 'Incomplete'} · {new Date(item.archivedAt).toLocaleDateString()}</span>}
+      {item.archivedAt && <time className="archive-date" dateTime={item.archivedAt}>Archived {new Date(item.archivedAt).toLocaleDateString()}</time>}
       {item.assignees.length > 0 && <span className="assignees">{item.assignees.map((assignee) => <AssigneeIcon key={assignee} assignee={assignee} />)}</span>}
     </span>
     {visibleOutcome && <span className={`agent-outcome agent-outcome-${visibleOutcome}`}>{visibleOutcome === 'needs_attention' ? <AlertTriangle size={11} /> : visibleOutcome === 'follow_ups' ? <Sparkles size={11} /> : visibleOutcome === 'waiting_promotion' ? <Clock size={11} /> : visibleOutcome === 'promoting' || visibleOutcome === 'in_progress' ? <LoaderCircle className="spin" size={11} /> : <Check size={11} />}{visibleOutcome === 'needs_attention' ? 'Needs attention' : visibleOutcome === 'follow_ups' ? 'Follow-ups recommended' : visibleOutcome === 'promoting' ? 'Approved · promoting preview' : visibleOutcome === 'waiting_promotion' ? 'Approved and waiting promotion' : visibleOutcome === 'in_progress' ? 'In progress' : 'Finished'}</span>}
   </div>;
 }
-

@@ -7,7 +7,7 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react';
  * the source of truth for navigation state; components read it with useRoute()
  * and change it with navigate() instead of holding their own view state.
  */
-export type StackName = 'active' | 'workbench' | 'archive';
+export type StackName = 'active' | 'workbench' | 'archive' | 'workbench-archive';
 
 export type Route =
   | { name: 'stack'; stack: StackName }
@@ -17,7 +17,7 @@ export type Route =
   | { name: 'artifacts' }
   | { name: 'insights' };
 
-const stackPaths: Record<StackName, string> = { active: '/', workbench: '/workbench', archive: '/archive' };
+const stackPaths: Record<StackName, string> = { active: '/', workbench: '/workbench', archive: '/archive', 'workbench-archive': '/workbench/archive' };
 const libraryRoutes = ['discovery', 'artifacts', 'insights'] as const;
 
 /**
@@ -27,7 +27,8 @@ const libraryRoutes = ['discovery', 'artifacts', 'insights'] as const;
  */
 export function parseRoute(pathname: string): Route {
   const [first, second] = pathname.split('/').filter(Boolean).map((segment) => decodeURIComponent(segment));
-  if (first === 'workbench' || first === 'archive') return { name: 'stack', stack: first };
+  if (first === 'workbench') return { name: 'stack', stack: second === 'archive' ? 'workbench-archive' : 'workbench' };
+  if (first === 'archive') return { name: 'stack', stack: 'archive' };
   if (first === 'tasks' && second) return { name: 'task', taskId: second };
   if (first === 'conversations') return { name: 'conversations', conversationId: second ?? null };
   const library = libraryRoutes.find((route) => route === first);

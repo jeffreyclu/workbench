@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { CLAUDE_EXECUTION_CONTRACT, backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { AgentRunBudgetExceededError, CLAUDE_EXECUTION_CONTRACT, backoffDelayMs, budgetForAgentRun, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -15,6 +15,8 @@ const temporaryDirectories: string[] = [];
 
 afterEach(() => {
   process.env.PATH = originalPath;
+  delete process.env.WORKBENCH_CLAUDE_RUN_MAX_TOKENS;
+  delete process.env.WORKBENCH_CLAUDE_RUN_MAX_COST_USD;
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -433,6 +435,10 @@ describe('classifyExecution', () => {
   });
 
   it('prices a Claude run from the model rate table when the provider reports no billed total', async () => {
+    // This is a pricing fixture, not a circuit-breaker test: its deliberately
+    // oversized sample must be allowed through so we can inspect its stored cost.
+    process.env.WORKBENCH_CLAUDE_RUN_MAX_TOKENS = '3000000';
+    process.env.WORKBENCH_CLAUDE_RUN_MAX_COST_USD = '10';
     const assistant = '{"type":"assistant","message":{"usage":{"input_tokens":1000000,"output_tokens":1000000}}}';
     const result = '{"type":"result","result":"done"}';
     fakeAgentDirectory('exit 1', `cat > /dev/null\nprintf '%s\\n%s\\n' '${assistant}' '${result}'`);
@@ -441,6 +447,30 @@ describe('classifyExecution', () => {
     const run = await runAgentCommandWithFallback('claude', tmpdir(), 'Report usage.', undefined, undefined, undefined, 'economy');
 
     expect(run.usage.estimatedCostUsd).toBe(6);
+  });
+
+  it('terminates Claude before a cache-heavy run can exceed its per-run token budget', async () => {
+    process.env.WORKBENCH_CLAUDE_RUN_MAX_TOKENS = '100';
+    const usage = JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 10, cache_read_input_tokens: 91, output_tokens: 1 } } });
+    const { directory, log } = fakeAgentDirectory('exit 1', `printf '%s\\n' '${usage}'\ntrap 'exit 143' TERM\nwhile true; do /bin/sleep 0.1; done`);
+
+    await expect(runAgentCommandWithFallback('claude', directory, 'Stop after budget.')).rejects.toBeInstanceOf(AgentRunBudgetExceededError);
+    expect(readFileSync(log, 'utf8').trim().split('\\n')).toEqual(['claude']);
+  });
+
+  it('terminates Claude before a run can exceed its estimated-cost budget', async () => {
+    process.env.WORKBENCH_CLAUDE_RUN_MAX_COST_USD = '0.01';
+    const usage = JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 20_000, output_tokens: 1 } } });
+    const { directory } = fakeAgentDirectory('exit 1', `printf '%s\\n' '${usage}'\ntrap 'exit 143' TERM\nwhile true; do /bin/sleep 0.1; done`);
+
+    await expect(runAgentCommandWithFallback('claude', directory, 'Stop after budget.', undefined, undefined, undefined, 'economy')).rejects.toThrow(/estimated-cost budget/);
+  });
+
+  it('keeps the circuit breaker scoped to Claude and falls back to safe defaults for invalid configuration', () => {
+    process.env.WORKBENCH_CLAUDE_RUN_MAX_TOKENS = 'not-a-number';
+    process.env.WORKBENCH_CLAUDE_RUN_MAX_COST_USD = '0';
+    expect(budgetForAgentRun('codex')).toBeNull();
+    expect(budgetForAgentRun('claude')).toEqual({ maxTokens: 1_000_000, maxCostUsd: 2 });
   });
 
   it('bounds large prompt sections while retaining the beginning and conclusion', () => {

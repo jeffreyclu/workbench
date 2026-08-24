@@ -132,6 +132,10 @@ not `writer-monorepo`. Its OpenAPI authentication picker is in
 the MCP variant is `MCPConfigureStep.tsx` beside it. This was verified from the reported production UI and
 local source on 2026-08-24.
 
+### Manage Connectors search includes profile labels
+
+**Verified by static source inspection on 2026-08-24; not runtime-tested.** The Writer Agent Manage Connectors search at `frontend/src/components/agents/manage-tabs/connectors-tab.tsx` filters loaded rows by canonical connector name, connector display name, profile label/name (`config.name`), and description. The table displays the connector display name separately from `config.name`; the latter is the profile label. Treat a report that a profile label cannot be found in this UI as a likely deployed-version, data-shape, or runtime issue—not intended behavior—until reproduced.
+
 ### Treat terminology in Jeffrey's meeting notes as phonetic
 
 Jeffrey writes meeting notes by typing what he hears in the moment. He confirmed this on 2026-08-19

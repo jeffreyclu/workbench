@@ -26,8 +26,8 @@ describe('InsightsView', () => {
   it('renders token totals grouped by provider and model', async () => {
     stubInsightsFetch({
       retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
-      medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 1_200, outputTokens: 300,
-      tokenUsageByModel: [{ provider: 'codex', model: 'gpt-5.6-terra', inputTokens: 1_200, outputTokens: 300 }],
+      medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 1_200, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 300,
+      tokenUsageByModel: [{ provider: 'codex', model: 'gpt-5.6-terra', inputTokens: 1_200, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 300 }],
       cursing: { total: 0, messagesAnalyzed: 1, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
     });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -38,6 +38,23 @@ describe('InsightsView', () => {
     expect(screen.getByText('gpt-5.6-terra')).toBeTruthy();
     expect(screen.getByText('codex')).toBeTruthy();
     expect(screen.getAllByText('1.5K')).toHaveLength(2);
+  });
+
+  it('keeps massive cache traffic visible instead of folding it into fresh input', async () => {
+    stubInsightsFetch({
+      retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 1, completedTasks: 0,
+      medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 1_700, cacheCreationInputTokens: 2_000_000, cacheReadInputTokens: 57_500_000, outputTokens: 184_400,
+      tokenUsageByModel: [{ provider: 'claude', model: 'claude-opus-5', inputTokens: 1_700, cacheCreationInputTokens: 2_000_000, cacheReadInputTokens: 57_500_000, outputTokens: 184_400, costUsd: 53.08, rateSource: 'default', runs: 1 }],
+      cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
+
+    expect(await screen.findAllByText('Cache read')).toHaveLength(2);
+    expect(screen.getAllByText('57.5M')).toHaveLength(2);
+    expect(screen.getAllByText('Fresh input')).toHaveLength(2);
+    expect(screen.getAllByText('1.7K')).toHaveLength(2);
   });
 
   it('keeps provider billing separate from token-based estimates', async () => {

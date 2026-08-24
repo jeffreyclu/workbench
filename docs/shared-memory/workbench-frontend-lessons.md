@@ -100,6 +100,13 @@ bottom-right whitespace. The in-progress shimmer targets direct card children to
 stacking. Its selector must explicitly preserve the badge's `position: absolute` and raise it
 above the shimmer, or CSS cascade turns the badge back into a grid row.
 
+### Archive cards show dates, not a second completion-status badge
+
+*Decision from Jeffrey, 2026-08-24.* Archive is a filter on the task stack. An archived card may
+retain its archive date as muted inline metadata (`Archived <date>`), but it must not render a second
+`Completed` or `Incomplete` badge beside the task's agent-outcome badge (`Finished`, etc.). The task
+outcome is the single visible status badge; preserve dates without treating them as another status.
+
 ### Virtualized-list row-height math must budget for the visual gap
 
 `App.tsx`'s conversation rail is a manually virtualized list: rows are absolutely positioned via
@@ -192,6 +199,13 @@ The control also remained only 32px high on a phone after earlier reports called
 Active and Archive at least 44px high. The permanent regression runs the complete pointer flow in both
 Chromium mobile emulation and WebKit, proves the second tap sends `view=archive`, retains the archived
 URL and heading, and probes every part of the target while the desktop nav is expanded.
+
+### Expanded desktop navigation must not overlay workspace controls
+
+*Correction from Jeffrey, 2026-08-24.* Raising the Active/Archive switch above a fixed, expanding
+desktop sidebar preserved pointer access but made the switch visibly float across the navigation rail.
+That is not an acceptable interaction. When the desktop rail expands, give it its own grid column so
+the workspace starts after it; do not solve an overlap by raising the covered control's z-index.
 
 ### "A bubble cannot exceed the width of the screen" means its rendered content, not its box
 

@@ -8,6 +8,8 @@
  * needs to run, not a denylist of what it shouldn't have — new Workbench secrets are excluded by
  * default instead of requiring someone to remember to add them here.
  */
+import { existsSync, statSync } from 'node:fs';
+
 const RUNTIME_ENV_KEYS = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM', 'NODE_ENV'];
 
 // Not a Workbench secret: proxy configuration is host/network setup the agent needs to reach its
@@ -29,4 +31,18 @@ export function agentSubprocessEnv(source: NodeJS.ProcessEnv = process.env): Nod
     if (value !== undefined) filtered[key] = value;
   }
   return filtered;
+}
+
+export type AgentAccount = 'default' | (string & {});
+
+/** Select an isolated provider credential directory without putting credentials in prompts. */
+export function agentAccountEnv(agent: 'codex' | 'claude', account: AgentAccount = 'default', source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = agentSubprocessEnv(source);
+  const normalized = account.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  if (!normalized || normalized === 'DEFAULT') return env;
+  const configured = source[`WORKBENCH_${agent.toUpperCase()}_ACCOUNT_${normalized}_DIR`]?.trim();
+  if (!configured) throw new Error(`No credential directory configured for ${agent} account profile "${account}".`);
+  if (!existsSync(configured) || !statSync(configured).isDirectory()) throw new Error(`Credential directory for ${agent} account profile "${account}" does not exist: ${configured}`);
+  env[agent === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'] = configured;
+  return env;
 }

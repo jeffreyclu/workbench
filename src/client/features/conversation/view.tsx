@@ -55,7 +55,7 @@ import { DiscoveryInboxView } from '../../discovery';
 import { useNavigation } from '../../features/navigation/hooks';
 import { NavigationView } from '../../features/navigation/view';
 import { FollowUpArchiveDialog } from '../../follow-up-archive-dialog';
-import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
+import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
 import { clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
 import { QueueExplanationList } from '../../queue-explanations';
 import { ProjectColorDot } from '../../project-color';
@@ -69,10 +69,33 @@ import { useDebouncedValue } from './hooks';
 
 const CONVERSATION_ROW_GAP = 6;
 
+type ConversationDispatchTarget = 'both' | 'codex' | 'claude';
+
+/**
+ * The composer is a continuation control. A routed Jeffrey message records
+ * the choice he made; an agent reply is the useful legacy fallback for older
+ * messages that predate dispatch_target. Empty conversations deliberately
+ * start collaborative rather than inheriting a choice from another thread.
+ */
+function dispatchTargetForConversation(messages: SharedMessage[]): ConversationDispatchTarget {
+  for (const message of [...messages].reverse()) {
+    if (message.author === 'jeffrey' && (message.dispatchTarget === 'both' || message.dispatchTarget === 'codex' || message.dispatchTarget === 'claude')) return message.dispatchTarget;
+    if (message.author === 'codex' || message.author === 'claude') return message.author;
+  }
+  return 'both';
+}
+
+function executionProfileForConversation(messages: SharedMessage[]): Exclude<AgentRun['executionProfile'], 'routing'> {
+  for (const message of [...messages].reverse()) {
+    if (message.author === 'codex' || message.author === 'claude' || (message.author === 'jeffrey' && message.dispatchTarget !== 'none')) return message.executionProfile === 'routing' ? null : message.executionProfile ?? null;
+  }
+  return null;
+}
+
 export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectConversation, view, onViewChange }: { initialConversationId?: string | null; onOpenTask?: (taskId: string) => void; onSelectConversation?: (conversationId: string | null) => void; view?: 'active' | 'archive'; onViewChange?: (view: 'active' | 'archive') => void }) {
   const queryClient = useQueryClient();
   const [body, setBody] = useState(() => initialConversationId ? readConversationDrafts()[initialConversationId] ?? '' : '');
-  const [dispatchTo, setDispatchTo] = useState<'both' | 'codex' | 'claude'>('codex');
+  const [dispatchTo, setDispatchTo] = useState<ConversationDispatchTarget>('both');
   const [conversationModelProfiles, setConversationModelProfiles] = useState(readConversationModelProfiles);
   const dispatchInitializedConversationId = useRef<string | null>(null);
   // Mirrors dispatchInitializedConversationId as render-visible state: the ref
@@ -260,7 +283,6 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   });
   const selectedConversation = listedConversation ?? conversationDetail.data?.conversation;
   const selectedConversationMissing = Boolean(conversationId) && !listedConversation && conversationDetail.isError;
-  const executionProfile = conversationId ? conversationModelProfiles[conversationId] ?? selectedConversation?.preferredExecutionProfile ?? null : null;
   useEffect(() => {
     // Seed the local cache from the server's saved preference the first time
     // a conversation is opened. Once a choice exists locally (picked here, or
@@ -310,6 +332,11 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     refetchInterval: (query) => query.state.data?.messages.some((message) => message.status === 'running' || message.status === 'queued') ? 750 : false,
   });
   const allConversationMessages = messages.data?.messages ?? [];
+  // Conversation preferences are canonical once saved. Message history fills
+  // in older conversations whose last model choice predates that preference.
+  const executionProfile = conversationId
+    ? conversationModelProfiles[conversationId] ?? selectedConversation?.preferredExecutionProfile ?? executionProfileForConversation(allConversationMessages)
+    : null;
   // Keep the thread bounded to a handful of recent messages instead of an
   // endless scroll; older history is revealed a page at a time on request.
   const hasEarlierMessages = allConversationMessages.length > threadVisibleCount;
@@ -333,20 +360,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     : conversationMessages.map((_, index) => ({ index, start: index * 220 }));
   useEffect(() => {
     if (!conversationId || dispatchInitializedConversationId.current === conversationId || !messages.data) return;
-    if (linkedWorkItemId) {
-      if (!linkedWorkItem.data) return;
-      const executionAgent = [...messages.data.messages].reverse().find((message) => message.author === 'codex' || message.author === 'claude')?.author;
-      if (executionAgent === 'codex' || executionAgent === 'claude') setDispatchTo(executionAgent);
-      else {
-        const assignedAgents = linkedWorkItem.data?.item.assignees.filter((assignee) => assignee === 'codex' || assignee === 'claude') ?? [];
-        if (assignedAgents.length === 2) setDispatchTo('both');
-        else if (assignedAgents[0] === 'codex' || assignedAgents[0] === 'claude') setDispatchTo(assignedAgents[0]);
-        else setDispatchTo(selectBalancedVisibleAgent(conversationActivity.data?.messages ?? []));
-      }
-    } else setDispatchTo(selectBalancedVisibleAgent(conversationActivity.data?.messages ?? []));
+    setDispatchTo(dispatchTargetForConversation(messages.data.messages));
     dispatchInitializedConversationId.current = conversationId;
     setDispatchInitializedFor(conversationId);
-  }, [conversationActivity.data?.messages, conversationId, linkedWorkItem.data, linkedWorkItemId, messages.data]);
+  }, [conversationId, messages.data]);
   const send = useMutation({
     mutationFn: async () => {
       const attachments = await Promise.all(files.map(async (file) => ({
@@ -681,6 +698,11 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     // The source fingerprint is authoritative. Conversation history only
     // prevents duplicate requests; an old completed reply must not recreate
     // the banner after its source snapshot was promoted.
+    // A pending fingerprint is global to the editable Workbench tree. It must
+    // not turn every newly opened, empty conversation into a release prompt.
+    // Only the conversation that has actually produced completed agent work is
+    // a useful place to offer approval.
+    && latestCompletedAgentIndex >= 0
     && Boolean(previewStatus.data?.pending) && !promotionInFlight && !agentWorkInFlight;
 
   return (
@@ -820,7 +842,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           })}
           </div>
           {completionPromptAvailable && <div className="completion-prompt" role="status"><span><strong>Preview approved successfully.</strong><small>Complete the linked task?</small></span><div><button type="button" className="button secondary compact" onClick={() => setDismissedCompletionPromptPromotionId(latestSuccessfulPromotion!.id)}>Not yet</button><button type="button" className="button primary compact" onClick={() => completeLinkedTask.mutate()} disabled={completeLinkedTask.isPending}>{completeLinkedTask.isPending ? <><LoaderCircle className="spin" size={12} /> Completing…</> : <><Check size={12} /> Complete task</>}</button></div></div>}
-          {previewApprovalAvailable && <div className="preview-approval"><span><strong>Workbench preview has unpublished changes</strong><small>Review them on port 5174, then promote this source snapshot to live.</small></span><button className="button primary compact" onClick={() => approvePreview.mutate()} disabled={approvePreview.isPending}>{approvePreview.isPending ? <LoaderCircle className="spin" size={12} /> : <Check size={12} />} {approvePreview.isPending ? 'Approving…' : 'Approve preview'}</button></div>}
+          {previewApprovalAvailable && <div className="preview-approval"><span><strong>Workbench preview has unpublished changes</strong><small>Review them on port 5181, then promote this source snapshot to live.</small></span><button className="button primary compact" onClick={() => approvePreview.mutate()} disabled={approvePreview.isPending}>{approvePreview.isPending ? <LoaderCircle className="spin" size={12} /> : <Check size={12} />} {approvePreview.isPending ? 'Approving…' : 'Approve preview'}</button></div>}
           {previewApprovalAvailable && approvePreview.error && <p className="error-message">Could not approve preview: {approvePreview.error.message}</p>}
           {proposedPlan && proposedPlanConversationId === conversationId && <article className="chat-plan"><span className="eyebrow">Proposed follow-up tasks</span><h3>{proposedPlan.summary}</h3><ol>{proposedPlan.tasks.map((task, index) => <li key={`${task.title}-${index}`}><label><input type="checkbox" checked={selectedPlanTaskIndexes.has(index)} onChange={() => setSelectedPlanTaskIndexes((current) => { const next = new Set(current); if (next.has(index)) next.delete(index); else next.add(index); return next; })} /><span><strong>{task.title}</strong><p>{task.description}</p></span></label></li>)}</ol><div><button className="button secondary" onClick={() => resolvePlan.mutate({ resolution: 'rejected' })}>Reject</button><button className="button primary" disabled={selectedPlanTaskIndexes.size === 0 || resolvePlan.isPending} onClick={() => setPlanArchivePromptOpen(true)}><Check size={14} /> Add {selectedPlanTaskIndexes.size} to queue</button></div></article>}
           {createTasks.isPending && createTasks.variables?.conversationId === conversationId && <div className="finding-progress"><LoaderCircle className="spin" size={15} /><span><strong>Turning findings into tasks</strong><small>Reading the report and producing self-contained queue items…</small></span></div>}

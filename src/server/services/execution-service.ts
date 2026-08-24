@@ -217,7 +217,7 @@ export class ExecutionService {
   getRunInsights(days: 7 | 30 = 30): RunInsights {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
     const runs = this.database.prepare(`
-      SELECT agent, kind, status, attempt, fallback_from, model, input_tokens, output_tokens, estimated_cost_usd, cost_source, created_at, completed_at,
+      SELECT agent, kind, status, attempt, fallback_from, model, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, estimated_cost_usd, cost_source, created_at, completed_at,
         CAST((julianday(completed_at) - julianday(started_at)) * 24 * 60 * 60 * 1000 AS INTEGER) as duration_ms
       FROM agent_runs WHERE status IN ('completed', 'failed', 'canceled') AND completed_at >= ?
     `).all(since) as Array<{
@@ -228,6 +228,8 @@ export class ExecutionService {
       fallback_from: string | null;
       model: string | null;
       input_tokens: number | null;
+      cache_creation_input_tokens: number | null;
+      cache_read_input_tokens: number | null;
       output_tokens: number | null;
       estimated_cost_usd: number | null;
       cost_source: 'provider' | 'estimated' | null;
@@ -235,6 +237,27 @@ export class ExecutionService {
       completed_at: string;
       duration_ms: number | null;
     }>;
+    // A shared-room reply linked to a task is the same provider invocation as
+    // its agent_runs row, so it must never be counted twice. Unlinked replies
+    // (including synthesis) have no run row, but are still real Workbench
+    // calls and belong in token and cost accounting.
+    const unlinkedReplyUsage = this.database.prepare(`
+      SELECT author AS agent, model, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, estimated_cost_usd, cost_source, completed_at
+      FROM shared_messages message
+      WHERE author IN ('codex', 'claude') AND status IN ('completed', 'failed', 'canceled') AND completed_at >= ?
+        AND NOT EXISTS (SELECT 1 FROM agent_runs run WHERE run.message_id = message.id)
+    `).all(since) as Array<{
+      agent: 'codex' | 'claude';
+      model: string | null;
+      input_tokens: number | null;
+      cache_creation_input_tokens: number | null;
+      cache_read_input_tokens: number | null;
+      output_tokens: number | null;
+      estimated_cost_usd: number | null;
+      cost_source: 'provider' | 'estimated' | null;
+      completed_at: string;
+    }>;
+    const usageRows: Array<Pick<typeof runs[number], 'agent' | 'model' | 'input_tokens' | 'cache_creation_input_tokens' | 'cache_read_input_tokens' | 'output_tokens' | 'estimated_cost_usd' | 'cost_source' | 'completed_at'>> = [...runs, ...unlinkedReplyUsage];
 
     // Activities are the lifecycle ledger. `attempt` and `fallback_from` were
     // introduced later and are incomplete for existing chat runs.
@@ -302,14 +325,14 @@ export class ExecutionService {
     const estimatedCostByDay: Record<string, number> = {};
     const providerCostByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
     const estimatedCostByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
-    const tokenUsageByModel = new Map<string, { provider: 'codex' | 'claude'; model: string | null; inputTokens: number; outputTokens: number; costUsd: number; runs: number }>();
+    const tokenUsageByModel = new Map<string, { provider: 'codex' | 'claude'; model: string | null; inputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number; outputTokens: number; costUsd: number; runs: number }>();
     let providerCostUsd = 0;
     let estimatedCostUsd = 0;
     let providerPricedRuns = 0;
     let estimatedPricedRuns = 0;
     let unverifiedCostRuns = 0;
     let unpricedRuns = 0;
-    for (const run of runs) {
+    for (const run of usageRows) {
       const day = run.completed_at.slice(0, 10);
       if (run.estimated_cost_usd !== null && run.cost_source === 'provider') {
         providerCostUsd += run.estimated_cost_usd;
@@ -323,11 +346,13 @@ export class ExecutionService {
       } else if (run.estimated_cost_usd !== null) unverifiedCostRuns += 1;
       // A run that reported tokens but carries no cost has no rate for its
       // model. Surfacing that count keeps the total honest rather than silently low.
-      else if (run.input_tokens !== null || run.output_tokens !== null) unpricedRuns += 1;
-      if (run.input_tokens !== null || run.output_tokens !== null) {
+      else if (run.input_tokens !== null || run.cache_creation_input_tokens !== null || run.cache_read_input_tokens !== null || run.output_tokens !== null) unpricedRuns += 1;
+      if (run.input_tokens !== null || run.cache_creation_input_tokens !== null || run.cache_read_input_tokens !== null || run.output_tokens !== null) {
         const key = `${run.agent}:${run.model ?? ''}`;
-        const bucket = tokenUsageByModel.get(key) ?? { provider: run.agent, model: run.model, inputTokens: 0, outputTokens: 0, costUsd: 0, runs: 0 };
+        const bucket = tokenUsageByModel.get(key) ?? { provider: run.agent, model: run.model, inputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 0, costUsd: 0, runs: 0 };
         bucket.inputTokens += run.input_tokens ?? 0;
+        bucket.cacheCreationInputTokens += run.cache_creation_input_tokens ?? 0;
+        bucket.cacheReadInputTokens += run.cache_read_input_tokens ?? 0;
         bucket.outputTokens += run.output_tokens ?? 0;
         bucket.costUsd += run.cost_source === 'estimated' ? run.estimated_cost_usd ?? 0 : 0;
         bucket.runs += 1;
@@ -396,6 +421,8 @@ export class ExecutionService {
       fallbackRate,
       handoffCount,
       inputTokens: [...tokenUsageByModel.values()].reduce((total, bucket) => total + bucket.inputTokens, 0),
+      cacheCreationInputTokens: [...tokenUsageByModel.values()].reduce((total, bucket) => total + bucket.cacheCreationInputTokens, 0),
+      cacheReadInputTokens: [...tokenUsageByModel.values()].reduce((total, bucket) => total + bucket.cacheReadInputTokens, 0),
       outputTokens: [...tokenUsageByModel.values()].reduce((total, bucket) => total + bucket.outputTokens, 0),
       providerCostUsd: Number(providerCostUsd.toFixed(6)),
       previousProviderCostUsd: previousProviderCostUsd === null ? null : Number(previousProviderCostUsd.toFixed(6)),
@@ -410,7 +437,7 @@ export class ExecutionService {
         costUsd: Number(bucket.costUsd.toFixed(6)),
         rateSource: resolveModelRate(bucket.provider, bucket.model)?.source ?? null,
       })).sort((left, right) => {
-        const usageDifference = (right.inputTokens + right.outputTokens) - (left.inputTokens + left.outputTokens);
+        const usageDifference = (right.inputTokens + right.cacheCreationInputTokens + right.cacheReadInputTokens + right.outputTokens) - (left.inputTokens + left.cacheCreationInputTokens + left.cacheReadInputTokens + left.outputTokens);
         if (usageDifference !== 0) return usageDifference;
         return `${left.provider}:${left.model ?? ''}`.localeCompare(`${right.provider}:${right.model ?? ''}`);
       }),

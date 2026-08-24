@@ -38,6 +38,15 @@ export function writeLastOpenedItem(surface: LastOpenedSurface, itemId: string):
     // works; it just cannot survive a later visit.
   }
 }
+
+/** Drop a remembered item once it no longer belongs to that primary surface. */
+export function clearLastOpenedItem(surface: LastOpenedSurface): void {
+  try {
+    window.localStorage.removeItem(lastOpenedItemStorageKeys[surface]);
+  } catch {
+    // Storage can be disabled in a private browser context.
+  }
+}
 export function readTaskModelProfiles(): Record<string, NonNullable<AgentRun['executionProfile']>> {
   try {
     const value = JSON.parse(window.localStorage.getItem(taskModelStorageKey) ?? '{}') as Record<string, unknown>;

@@ -39,12 +39,10 @@ describe('shared message layout', () => {
 });
 
 describe('conversation view controls', () => {
-  it('keeps the Active and Archive switch above the expanding desktop navigation', () => {
-    const viewTabsRule = styles.match(/\.conversation-view-tabs\s*\{[^}]*\}/)?.[0] ?? '';
-    const desktopNavigationRule = styles.match(/\.sidebar\s*\{\s*position: fixed;[^}]*\}/)?.[0] ?? '';
-    const viewTabsLayer = Number(viewTabsRule.match(/z-index:\s*(\d+)/)?.[1]);
-    const desktopNavigationLayer = Number(desktopNavigationRule.match(/z-index:\s*(\d+)/)?.[1]);
+  it('gives expanded desktop navigation its own grid column instead of covering the switch', () => {
+    expect(styles).toMatch(/\.app-shell:has\(\.sidebar:hover\),\s*\.app-shell:has\(\.sidebar:focus-within\)\s*\{\s*grid-template-columns:\s*220px/);
+    const desktopNavigationRule = styles.match(/@media \(min-width: 821px\) \{[\s\S]*?\.sidebar\s*\{[^}]*\}/)?.[0] ?? '';
 
-    expect(viewTabsLayer).toBeGreaterThan(desktopNavigationLayer);
+    expect(desktopNavigationRule).not.toContain('position: fixed');
   });
 });

@@ -250,3 +250,44 @@ calls replace the reservation with actual fresh-input, cache-read, cache-write, 
 failed/cancelled calls release it. Optional reranking skips to deterministic RRF order when its
 reservation is refused. Never regress this to a spent-only, post-response counter: that can observe an
 overspend but cannot prevent it, and parallel work can pass the same stale headroom check.
+
+### Claude cache traffic is a first-class Insight metric
+
+On 2026-08-24, Jeffrey supplied a Claude `/usage` screenshot for recent work: an Opus session reported
+**1.7K fresh input, 57.5M cache-read input, 2.0M cache-write input, and 184.4K output** ($53.08 of
+provider-reported cost). Fresh input alone is not a useful proxy for either Claude traffic or spend.
+
+Insights must preserve and display all four provider usage classes — fresh input, cache write, cache
+read, and output — and label their sum as **total traffic**, never simply “input.” Cache reads are
+discounted, not free, and can dominate a run by orders of magnitude. A provider `/usage` weekly
+percentage is authoritative calibration evidence: the 57% observation in that screenshot was recorded
+at 2026-08-24T17:02:00Z; its inferred SET ceiling remains an estimate of the current promotional
+window, not a permanent plan limit.
+
+This applies to every Workbench provider invocation, including unlinked shared-room replies and
+synthesis calls. Task-linked replies share their `agent_runs` row and must be counted once; unlinked
+replies have no run row, so their fresh input, cache write, cache read, output, cost, and cost source
+must be persisted on `shared_messages` and included in Insights exactly once.
+
+### Codex session accounting: `input_tokens` includes cache reads
+
+On 2026-08-24, Jeffrey's seven-day Codex session-log aggregate reported 637,606,464
+`input_tokens`, 619,460,480 `cached_input_tokens`, 0 cache writes, and 1,646,031 output tokens.
+For Codex, cached input is a subset of input, not an additional category: this means **18,145,984
+fresh input (2.85% of inbound)**, **619,460,480 cache reads (97.15%)**, and **639,252,495 total
+traffic**. Never add the first two figures when reporting total traffic or estimating usage. Codex
+does not separately report cache writes in these local token-count events; zero is an unavailable
+breakdown, not evidence that no cache was written.
+
+### Usage calibration is an agent-owned local command, with one provider boundary
+
+On 2026-08-24, Jeffrey asked that usage calibration become an easy command agents can run without
+asking him to collect local token totals. `npm run usage:calibrate` is the canonical command: it
+reports fresh input, cache read, cache write (when exposed), output, and total traffic over the last
+seven days from Claude transcripts and Codex session logs. It may be run with `-- --days N`.
+
+It must fail closed on calibration: Claude's CLI does not expose the authoritative weekly `/usage`
+percentage, and Codex app-server percentages describe a short rate-limit window rather than the
+ISO-week ceiling. Neither number may be silently recorded as a weekly calibration. Agents own the
+ongoing local measurement and should run the command when asked to calibrate; an interactive Claude
+`/usage` observation is still required to recalibrate Claude's weekly ceiling.

@@ -60,6 +60,30 @@ open most recently for that surface. Do not default to a generic first item when
 selection exists. Persist these selections independently: opening an item in one surface must not
 replace the remembered item for either of the other two.
 
+### Archive is a stack filter, not a primary destination
+
+*Decision from Jeffrey, 2026-08-24.*
+
+Archive is the archived/completed filter on the task stack. Keep task links addressable, but do not
+make Archive its own navbar destination or separate product surface. A stale remembered task must
+never redirect a primary-stack click to this filter.
+
+Archive keeps the parent stack's project scope: `/workbench/archive` shows only archived Workbench
+project tasks, while the Attention Stack archive excludes those tasks. These are complementary
+filters, not two views over the same global archive.
+
+Their tab counts must use those same scoped totals immediately on initial render. Do not show the
+global archive count and replace it only after the archive list loads.
+
+### Conversation composer defaults continue the current conversation
+
+*Decision from Jeffrey, 2026-08-24.*
+
+When opening an existing conversation, its composer must restore the most recent
+agent and model choice recorded in that conversation; it must never inherit a
+load-balancing fallback or a choice from another conversation. A genuinely empty
+new conversation starts with **Ask both** and model **Auto**.
+
 ### Project color is one system
 
 *Jeffrey corrected this on 2026-08-23 after repeated partial fixes.*

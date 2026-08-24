@@ -65,7 +65,7 @@ import { SourcesDialog } from '../../sources-dialog';
 import { createTaskStackViewModel } from '../../stack-view-model';
 import { useRealtimeNotifications, type RealtimeNotification } from '../../realtime';
 import { useTaskDetail } from './hooks';
-import { useTaskExecutionProfile } from './state';
+import { useTaskAccountProfile, useTaskExecutionProfile } from './state';
 
 export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCreated, onRemoving }: { id: string; onClose: () => void; onOpenConversation: (conversationId: string) => void; onOpenTask: (taskId: string) => void; onCreated: (item: WorkItem) => void; onRemoving?: (id: string) => Promise<void> }) {
   const queryClient = useQueryClient();
@@ -92,6 +92,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const [selectedExecutionTaskIndexes, setSelectedExecutionTaskIndexes] = useState<Set<number>>(new Set());
   const [executionPlanArchivePromptOpen, setExecutionPlanArchivePromptOpen] = useState(false);
   const { executionProfile, setExecutionProfile } = useTaskExecutionProfile(id);
+  const { accountProfile, setAccountProfile } = useTaskAccountProfile(id);
   const ACTIVITY_PAGE_SIZE = 20;
   const [activityVisibleCount, setActivityVisibleCount] = useState(ACTIVITY_PAGE_SIZE);
   const RUNS_PAGE_SIZE = 5;
@@ -134,7 +135,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
     enabled: showAddArtifactLink,
   });
   const execute = useMutation({
-    mutationFn: () => api.executeWorkItem(id, executionProfile),
+    mutationFn: () => api.executeWorkItem(id, executionProfile, accountProfile),
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: ['work-items'] });
       const previousLists = queryClient.getQueriesData<InfiniteData<WorkItemPage>>({ queryKey: ['work-items'] });
@@ -510,6 +511,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         <p className="execution-copy">Workbench will classify the task, choose the right agent, and either execute it directly or return an approval-ready decomposition for complex work.</p>
         {execute.error && <p className="error-message">{execute.error.message}</p>}
         <label>Model <ModelProfileSelect value={executionProfile} onChange={setExecutionProfile} /></label>
+        <label>Account profile <input value={accountProfile} onChange={(event) => setAccountProfile(event.target.value)} aria-label="Account profile" placeholder="default" /></label>
         <button className="button primary execute-button" onClick={() => execute.mutate()} disabled={hasBeenExecuted || selfAssigned || openDependencies.length > 0 || execute.isPending}
           title={hasBeenExecuted ? 'This task has already been executed.' : selfAssigned ? SELF_ASSIGNED_EXECUTION_MESSAGE : openDependencies.length > 0 ? 'Complete this task\u2019s prerequisites before dispatching an agent.' : undefined}>
           {execute.isPending ? <LoaderCircle className="spin" size={16} /> : selfAssigned ? <User size={16} /> : openDependencies.length > 0 ? <AlertTriangle size={16} /> : <Sparkles size={16} />}

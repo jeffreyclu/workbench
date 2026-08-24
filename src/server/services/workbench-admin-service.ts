@@ -65,7 +65,7 @@ export class WorkbenchAdminService {
     const agents = input.target === 'auto' ? [this.repository.selectBalancedAgent(resolvedAgents[0])] : resolvedAgents;
     const runs = agents.map((agent) => {
       const reply = this.repository.createSharedMessage(agent, '', 'running', conversation.id);
-      const run = this.repository.createRun(item.id, input.kind, input.target, agent, input.instructions, conversation.id, reply.id);
+      const run = this.repository.createRun(item.id, input.kind, input.target, agent, input.instructions, conversation.id, reply.id, 'manual', input.accountProfile);
       if (!input.executionProfile) return run;
       this.repository.updateRun(run.id, { executionProfile: input.executionProfile });
       this.repository.updateSharedMessage(reply.id, { executionProfile: input.executionProfile });
@@ -110,7 +110,7 @@ export class WorkbenchAdminService {
     return { run, conversation, activity };
   }
 
-  async startWorkItemExecution(workItemId: string, options: { executionProfile: AgentRun['executionProfile']; force: boolean }) {
+  async startWorkItemExecution(workItemId: string, options: { executionProfile: AgentRun['executionProfile']; accountProfile?: string; force: boolean }) {
     const item = this.repository.get(workItemId);
     if (!item) return { status: 404, body: { error: 'Work item not found.' } } as ActionFailure;
     if (!options.force && (item.archivedAt || item.status === 'done' || item.status === 'canceled')) return { status: 409, body: { error: 'Archived or completed tasks cannot be executed. Restore the task first.' } } as ActionFailure;
@@ -135,7 +135,7 @@ export class WorkbenchAdminService {
     this.repository.createSharedMessage('system', `Execute: ${item.title}`, 'completed', conversation.id);
     const runs = agents.map((agent) => {
       const reply = this.repository.createSharedMessage(agent, '', 'running', conversation.id);
-      const run = this.repository.createRun(item.id, classification.kind, explicitlyAssigned.length ? agent : 'auto', agent, classification.instructions, conversation.id, reply.id);
+      const run = this.repository.createRun(item.id, classification.kind, explicitlyAssigned.length ? agent : 'auto', agent, classification.instructions, conversation.id, reply.id, 'manual', options.accountProfile ?? 'default');
       if (!executionProfile) return run;
       this.repository.updateRun(run.id, { executionProfile });
       this.repository.updateSharedMessage(reply.id, { executionProfile });

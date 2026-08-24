@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentSubprocessEnv } from './agent-security.js';
+import { agentAccountEnv, agentSubprocessEnv } from './agent-security.js';
 
 describe('agentSubprocessEnv', () => {
   it('keeps only the runtime environment a spawned agent CLI needs to run', () => {
@@ -42,5 +42,16 @@ describe('agentSubprocessEnv', () => {
   it('never leaks an env var by silently allowlisting an undefined value', () => {
     const filtered = agentSubprocessEnv({ PATH: undefined } as unknown as NodeJS.ProcessEnv);
     expect(filtered).toEqual({});
+  });
+});
+
+describe('agentAccountEnv', () => {
+  it('selects isolated Claude and Codex credential directories', () => {
+    expect(agentAccountEnv('claude', 'personal', { PATH: '/bin', HOME: '/tmp', WORKBENCH_CLAUDE_ACCOUNT_PERSONAL_DIR: '/tmp' })).toMatchObject({ CLAUDE_CONFIG_DIR: '/tmp' });
+    expect(agentAccountEnv('codex', 'personal', { PATH: '/bin', HOME: '/tmp', WORKBENCH_CODEX_ACCOUNT_PERSONAL_DIR: '/tmp' })).toMatchObject({ CODEX_HOME: '/tmp' });
+  });
+
+  it('fails closed for unknown profiles', () => {
+    expect(() => agentAccountEnv('claude', 'missing', { PATH: '/bin', HOME: '/tmp' })).toThrow(/No credential directory configured/);
   });
 });

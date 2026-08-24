@@ -43,6 +43,8 @@ const EXPECTED_MIGRATIONS = [
   '030_work_item_version',
   '031_memory_index',
   '032_work_item_lifecycle_events',
+  '033_agent_run_account_profile',
+  '034_shared_message_token_breakdown',
 ];
 
 describe('openDatabase', () => {
@@ -364,6 +366,59 @@ describe('openDatabase', () => {
       INSERT INTO workspace_leases (workspace, run_id, owner_id, acquired_at, expires_at)
       VALUES ('/Users/jeffrey.lu/dev/workbench', 'r1', 'owner-1', '2026-01-01T00:00:00.000Z', '2026-01-01T00:02:00.000Z')
     `).run()).not.toThrow();
+    upgraded.close();
+  });
+
+  it('adds account_profile to runs upgraded from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec(`
+      CREATE TABLE agent_runs_pre_account AS SELECT
+        id, work_item_id, kind, requested_target, agent, status, instructions, output, error,
+        started_at, completed_at, created_at, conversation_id, message_id, model, execution_profile,
+        input_tokens, output_tokens, estimated_cost_usd, fallback_from, fallback_reason, owner_id,
+        lease_expires_at, attempt, max_attempts, next_attempt_at, cancel_requested,
+        cancel_requested_at, requested_agent, adopted_conversation_id, origin, resolved_workspace,
+        cost_source, cache_creation_input_tokens, cache_read_input_tokens
+      FROM agent_runs;
+      DROP TABLE agent_runs;
+      ALTER TABLE agent_runs_pre_account RENAME TO agent_runs;
+    `);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '033_agent_run_account_profile'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toContain('account_profile');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '033_agent_run_account_profile'").get()).toBeTruthy();
+    upgraded.prepare(`INSERT INTO agent_runs (id, work_item_id, kind, requested_target, agent, status, instructions, created_at)
+      VALUES ('profile-run', 'w1', 'analysis', 'codex', 'codex', 'queued', '', '2026-01-01T00:00:00.000Z')`).run();
+    expect(upgraded.prepare("SELECT account_profile FROM agent_runs WHERE id = 'profile-run'").get()).toEqual({ account_profile: 'default' });
+    upgraded.close();
+  });
+
+  it('adds shared-message cache columns on upgrade from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec(`
+      CREATE TABLE shared_messages_pre_cache AS SELECT
+        id, conversation_id, author, body, pinned, status, error, attachments_json,
+        dispatch_target, created_at, completed_at, execution_profile, model,
+        input_tokens, output_tokens, estimated_cost_usd, cost_source, fallback_from,
+        fallback_reason, attempt, max_attempts, next_attempt_at, owner_id, lease_expires_at
+      FROM shared_messages;
+      DROP TABLE shared_messages;
+      ALTER TABLE shared_messages_pre_cache RENAME TO shared_messages;
+    `);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '034_shared_message_token_breakdown'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['cache_creation_input_tokens', 'cache_read_input_tokens']));
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '034_shared_message_token_breakdown'").get()).toBeTruthy();
     upgraded.close();
   });
 

@@ -56,7 +56,7 @@ import { useNavigation } from '../../features/navigation/hooks';
 import { NavigationView } from '../../features/navigation/view';
 import { FollowUpArchiveDialog } from '../../follow-up-archive-dialog';
 import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
-import { clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
+import { clearLastOpenedItem, clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
 import { QueueExplanationList } from '../../queue-explanations';
 import { ProjectColorDot } from '../../project-color';
 import { InlineProjectEditor } from '../../project-field';
@@ -114,6 +114,9 @@ export function App() {
   const [conversationRailView, setConversationRailView] = useState<'active' | 'archive'>('active');
   const [pendingTaskNavigation, setPendingTaskNavigation] = useState<string | null>(null);
   const [pendingPinnedNavigation, setPendingPinnedNavigation] = useState(false);
+  // A saved primary-surface task can be archived elsewhere between visits. It
+  // must not turn clicking Workbench into navigation to the Archive filter.
+  const primaryStackTask = useRef<{ taskId: string; stack: Extract<StackName, 'active' | 'workbench'> } | null>(null);
   const taskEnterTimers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const selectedId = route.name === 'task' ? route.taskId : null;
   const animateTaskExit = (id: string) => new Promise<void>((resolve) => {
@@ -139,13 +142,15 @@ export function App() {
   const { mobileNavOpen, setMobileNavOpen, isCompactNav, workItems: workItemCounts, conversations: totalConversationCount } = useNavigation();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
   const queueScrollRef = useRef<HTMLDivElement>(null);
-  const queueView = view === 'archive' ? 'archive' : view === 'workbench' ? 'workbench' : 'active';
+  const isArchiveView = view === 'archive' || view === 'workbench-archive';
+  const isWorkbenchScope = view === 'workbench' || view === 'workbench-archive';
+  const queueView = view === 'workbench-archive' ? 'workbench-archive' : view === 'archive' ? 'archive' : view === 'workbench' ? 'workbench' : 'active';
   const items = useInfiniteQuery({
     queryKey: ['work-items', queueView],
     queryFn: ({ pageParam }) => api.listWorkItems(queueView, '', pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
-    enabled: view === 'active' || view === 'workbench' || view === 'archive',
+    enabled: view === 'active' || view === 'workbench' || isArchiveView,
   });
   const pinnedReminder = useQuery({ queryKey: ['pinned-reminder'], queryFn: () => api.listWorkItems('active', ''), staleTime: 60_000 });
   const syncedConversationId = useRef<string | null>(route.name === 'conversations' ? route.conversationId : null);
@@ -159,6 +164,7 @@ export function App() {
     // task route. Set the close destination directly instead of relying on the
     // stack-route effect to observe the intermediate history entry.
     setTaskStack(stack);
+    primaryStackTask.current = taskId ? { taskId, stack } : null;
     // Keep the stack route behind the task for the mobile back gesture.
     navigate({ name: 'stack', stack });
     if (taskId) navigate({ name: 'task', taskId });
@@ -213,7 +219,18 @@ export function App() {
     void queryClient.fetchQuery({ queryKey: ['work-item', taskId], queryFn: () => api.getWorkItem(taskId) })
       .then(({ item }) => {
         if (canceled) return;
-        const stack = item.archivedAt ? 'archive' : isWorkbenchProject(item.projectName) ? 'workbench' : 'active';
+        const stack = item.archivedAt ? (isWorkbenchProject(item.projectName) ? 'workbench-archive' : 'archive') : isWorkbenchProject(item.projectName) ? 'workbench' : 'active';
+        const requested = primaryStackTask.current;
+        if (item.archivedAt && requested?.taskId === taskId) {
+          // The saved selection is stale. Keep the requested stack open and
+          // forget it so the next Workbench click is clean as well.
+          clearLastOpenedItem(requested.stack === 'workbench' ? 'workbench' : 'attention');
+          primaryStackTask.current = null;
+          setTaskStack(requested.stack);
+          setResolvedTaskId(taskId);
+          navigate({ name: 'stack', stack: requested.stack }, { replace: true });
+          return;
+        }
         setTaskStack(stack);
         if (stack !== 'archive') writeLastOpenedItem(stack === 'workbench' ? 'workbench' : 'attention', item.id);
         setResolvedTaskId(taskId);
@@ -265,7 +282,7 @@ export function App() {
     onError: (error) => toastError('Could not update the selected tasks.', error),
   });
   const filtered = useMemo(() => items.data?.pages.flatMap((page) => page.items) ?? [], [items.data?.pages]);
-  const taskStackScope = view === 'workbench' ? 'workbench' : view === 'archive' ? 'archive' : 'attention';
+  const taskStackScope = isArchiveView ? 'archive' : view === 'workbench' ? 'workbench' : 'attention';
   const { items: renderedItems, rows: renderedRows } = useMemo(() => createTaskStackViewModel(filtered, taskStackScope), [filtered, taskStackScope]);
   useEffect(() => {
     if (route.name !== 'task' || !pendingTaskNavigation || pendingTaskNavigation !== route.taskId) return;
@@ -273,7 +290,7 @@ export function App() {
     // still be listing another stack, where the task is legitimately missing.
     if (pendingTaskNavigation !== resolvedTaskId) return;
     const resolvedDetail = queryClient.getQueryData<WorkItemDetail>(['work-item', pendingTaskNavigation]);
-    const resolvedStack = resolvedDetail?.item.archivedAt ? 'archive' : isWorkbenchProject(resolvedDetail?.item.projectName) ? 'workbench' : 'active';
+    const resolvedStack = resolvedDetail?.item.archivedAt ? (isWorkbenchProject(resolvedDetail.item.projectName) ? 'workbench-archive' : 'archive') : isWorkbenchProject(resolvedDetail?.item.projectName) ? 'workbench' : 'active';
     // React can commit the detail lookup before the infinite query behind it has
     // switched stacks. Never judge membership against that stale list.
     if (resolvedDetail && queueView !== resolvedStack) return;
@@ -400,14 +417,13 @@ export function App() {
     <div className="app-shell">
       <Toaster />
       <NavigationView
-        view={view}
+        view={view === 'workbench-archive' ? 'workbench' : view}
         mobileNavOpen={mobileNavOpen}
         isCompactNav={isCompactNav}
         counts={workItemCounts.data}
         conversationCount={totalConversationCount.data?.count}
         onOpenActive={() => { openPrimaryStack('active'); setMobileNavOpen(false); }}
         onOpenWorkbench={() => { openPrimaryStack('workbench'); setMobileNavOpen(false); }}
-        onOpenArchive={() => { navigate({ name: 'stack', stack: 'archive' }); setMobileNavOpen(false); }}
         onOpenDiscovery={() => { navigate({ name: 'discovery' }); setMobileNavOpen(false); }}
         onOpenConversations={() => { openConversations(); setMobileNavOpen(false); }}
         onOpenArtifacts={() => { navigate({ name: 'artifacts' }); setMobileNavOpen(false); }}
@@ -418,9 +434,9 @@ export function App() {
 
       {view === 'context' ? <SharedWorkspace key={`conversation-${conversationNavigationVersion}`} initialConversationId={agentConversationId} view={conversationRailView} onViewChange={setConversationRailView} onSelectConversation={handleConversationSelected} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} /> : view === 'artifacts' ? <ArtifactLibraryView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : view === 'insights' ? <InsightsView /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenStack={() => navigate({ name: 'stack', stack: 'active' })} /> : <><main className="queue-panel">
         <header className="queue-header">
-          <div><span className="eyebrow">{view === 'active' ? 'Focus' : view === 'workbench' ? 'Focus' : 'History'}</span><h2>{view === 'active' ? 'Attention stack' : view === 'workbench' ? 'Workbench focus' : 'Archive'}</h2></div>
+          <div><span className="eyebrow">{isArchiveView ? 'Filter' : 'Focus'}</span><h2>{isWorkbenchScope ? 'Workbench focus' : 'Attention stack'}</h2><div className="stack-view-filter" role="group" aria-label="Task view"><button type="button" className={!isArchiveView ? 'active' : ''} aria-pressed={!isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench' : 'active' })}>Active</button><button type="button" className={isArchiveView ? 'active' : ''} aria-pressed={isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench-archive' : 'archive' })}>Archive <span>{isArchiveView ? items.data?.pages[0]?.totalCount ?? '…' : isWorkbenchScope ? workItemCounts.data?.workbenchArchive ?? '…' : workItemCounts.data?.attentionArchive ?? '…'}</span></button></div></div>
           <div className="header-actions">
-            {(view === 'active' || view === 'workbench') && <>
+            {(!isArchiveView) && <>
             <button className="button secondary compact" onClick={() => planQueue.mutate()} disabled={planQueue.isPending}>
               {planQueue.isPending ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} {planQueue.isPending ? 'Reordering…' : 'Reorder stack'}
             </button>
@@ -428,7 +444,7 @@ export function App() {
             </>}
           </div>
         </header>
-        {selectedIds.size > 0 && <div className="queue-bulkbar" role="toolbar" aria-label="Bulk task actions"><span>{selectedIds.size} selected</span><button onClick={() => bulkUpdate.mutate({ action: view === 'archive' ? 'restore' : 'archive', ids: [...selectedIds] })} disabled={bulkUpdate.isPending}>{view === 'archive' ? 'Restore' : 'Archive'}</button><button onClick={() => setSelectedIds(new Set())}>Clear</button>{view === 'workbench' && <small>Workbench is filtered to the Workbench project.</small>}</div>}
+        {selectedIds.size > 0 && <div className="queue-bulkbar" role="toolbar" aria-label="Bulk task actions"><span>{selectedIds.size} selected</span><button onClick={() => bulkUpdate.mutate({ action: isArchiveView ? 'restore' : 'archive', ids: [...selectedIds] })} disabled={bulkUpdate.isPending}>{isArchiveView ? 'Restore' : 'Archive'}</button><button onClick={() => setSelectedIds(new Set())}>Clear</button>{isWorkbenchScope && <small>Workbench is filtered to the Workbench project.</small>}</div>}
         {items.data?.pages[0]?.proposal && (
           <div className="proposal-banner">
             <div className="proposal-copy"><Sparkles size={15} /><span><strong>Review proposed order</strong><small>{items.data.pages[0].proposal.rationale}</small></span></div>
@@ -445,7 +461,7 @@ export function App() {
           </div>
         )}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <div ref={queueScrollRef} className="queue-list" role="list" aria-label={view === 'archive' ? 'Archived tasks' : view === 'workbench' ? 'Workbench focus' : 'Work stacks'} onScroll={(event) => {
+        <div ref={queueScrollRef} className="queue-list" role="list" aria-label={isArchiveView ? 'Archived tasks' : view === 'workbench' ? 'Workbench focus' : 'Work stacks'} onScroll={(event) => {
           const element = event.currentTarget;
           if (element.scrollHeight - element.scrollTop - element.clientHeight < 500 && items.hasNextPage && !items.isFetchingNextPage) void items.fetchNextPage();
         }}>
@@ -471,4 +487,3 @@ export function App() {
     </div>
   );
 }
-

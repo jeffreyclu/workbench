@@ -12,6 +12,7 @@ export interface RunPatch {
   completedAt?: string | null;
   model?: string;
   executionProfile?: NonNullable<AgentRun['executionProfile']>;
+  accountProfile?: string;
   inputTokens?: number | null;
   cacheCreationInputTokens?: number | null;
   cacheReadInputTokens?: number | null;
@@ -36,6 +37,7 @@ function mapRunRow(row: Record<string, string | null>): AgentRun {
     startedAt: row.started_at, completedAt: row.completed_at, createdAt: row.created_at!,
     conversationId: row.conversation_id, messageId: row.message_id,
     model: row.model, executionProfile: row.execution_profile as AgentRun['executionProfile'],
+    accountProfile: row.account_profile ?? 'default',
     inputTokens: row.input_tokens === null ? null : Number(row.input_tokens), cacheCreationInputTokens: row.cache_creation_input_tokens === null ? null : Number(row.cache_creation_input_tokens), cacheReadInputTokens: row.cache_read_input_tokens === null ? null : Number(row.cache_read_input_tokens), outputTokens: row.output_tokens === null ? null : Number(row.output_tokens),
     estimatedCostUsd: row.estimated_cost_usd === null ? null : Number(row.estimated_cost_usd),
     costSource: row.cost_source as AgentRun['costSource'] ?? null,
@@ -93,13 +95,13 @@ export class RunRepository {
     return row ? this.get(row.id) : null;
   }
 
-  create(workItemId: string, kind: AgentRun['kind'], requestedTarget: AgentRun['requestedTarget'], agent: AgentRun['agent'], instructions: string, conversationId: string | null = null, messageId: string | null = null, origin: AgentRun['origin'] = 'manual'): AgentRun {
+  create(workItemId: string, kind: AgentRun['kind'], requestedTarget: AgentRun['requestedTarget'], agent: AgentRun['agent'], instructions: string, conversationId: string | null = null, messageId: string | null = null, origin: AgentRun['origin'] = 'manual', accountProfile = 'default'): AgentRun {
     const id = randomUUID();
     const createdAt = new Date().toISOString();
     this.database.prepare(`
-      INSERT INTO agent_runs (id, work_item_id, kind, requested_target, requested_agent, agent, status, instructions, created_at, conversation_id, message_id, origin)
-      VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
-    `).run(id, workItemId, kind, requestedTarget, agent, agent, instructions, createdAt, conversationId, messageId, origin);
+      INSERT INTO agent_runs (id, work_item_id, kind, requested_target, requested_agent, agent, status, instructions, created_at, conversation_id, message_id, origin, account_profile)
+      VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
+    `).run(id, workItemId, kind, requestedTarget, agent, agent, instructions, createdAt, conversationId, messageId, origin, accountProfile);
     return this.list(workItemId).find((run) => run.id === id)!;
   }
 
@@ -139,7 +141,7 @@ export class RunRepository {
     // attempt as soon as the reused run completes or is canceled.
     const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
     const columns = new Map<string, string | number | null | undefined>([
-      ['agent', changes.agent], ['status', changes.status], ['output', changes.output], ['error', error], ['model', changes.model], ['execution_profile', changes.executionProfile],
+      ['agent', changes.agent], ['status', changes.status], ['output', changes.output], ['error', error], ['model', changes.model], ['execution_profile', changes.executionProfile], ['account_profile', changes.accountProfile],
       ['input_tokens', changes.inputTokens], ['cache_creation_input_tokens', changes.cacheCreationInputTokens], ['cache_read_input_tokens', changes.cacheReadInputTokens], ['output_tokens', changes.outputTokens], ['estimated_cost_usd', changes.estimatedCostUsd], ['cost_source', changes.costSource], ['fallback_from', changes.fallbackFrom], ['fallback_reason', changes.fallbackReason],
       ['started_at', changes.startedAt], ['completed_at', changes.completedAt], ['owner_id', changes.ownerId], ['lease_expires_at', changes.leaseExpiresAt],
       ['next_attempt_at', changes.nextAttemptAt], ['attempt', changes.attempt], ['resolved_workspace', changes.resolvedWorkspace],

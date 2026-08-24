@@ -21,6 +21,8 @@ import { recordLifecycleEvent as recordLifecycleEventRow } from './lifecycle-eve
 import { ProviderSyncService, type ProviderWorkItem } from './services/provider-sync-service.js';
 import { QueuePlanningService } from './services/queue-planning-service.js';
 import { ExecutionService } from './services/execution-service.js';
+import { WorkItemService } from './services/work-item-service.js';
+import { ConversationService } from './services/conversation-service.js';
 import { normalizeLabels, providerSyncFields, providerValues, sameProviderValue, type ProviderFieldValue, type ProviderSnapshotRow, type ProviderSnapshotValues } from './repositories/provider-sync-support.js';
 
 export type { ProviderWorkItem } from './services/provider-sync-service.js';
@@ -86,6 +88,8 @@ export class WorkItemRepository {
   private readonly providerSync: ProviderSyncService;
   private readonly queuePlanning: QueuePlanningService;
   private readonly execution: ExecutionService;
+  private readonly workItemLifecycle: WorkItemService;
+  private readonly conversationService: ConversationService;
 
   constructor(readonly database: WorkbenchDatabase, private readonly timeZone = process.env.WORKBENCH_TIMEZONE ?? DEFAULT_WORKBENCH_TIMEZONE) {
     this.unitOfWork = new UnitOfWork(database);
@@ -108,6 +112,24 @@ export class WorkItemRepository {
     this.execution = new ExecutionService(database, this.unitOfWork, this.runs, this.telemetry, {
       getSharedMessageById: (id) => this.getSharedMessageById(id),
       recordSharedBriefEntry: (conversationId, messageId, author, kind, body) => this.recordSharedBriefEntry(conversationId, messageId, author, kind, body),
+    });
+    this.workItemLifecycle = new WorkItemService(database, this.unitOfWork, this.workItems, {
+      get: (id) => this.get(id),
+      addActivity: (workItemId, actor, kind, body) => this.addActivity(workItemId, actor, kind, body),
+      recordLifecycleEvent: (input) => this.recordLifecycleEvent(input),
+      list: () => this.list(),
+      listWorkbench: () => this.listWorkbench(),
+      reorder: (orderedItemIds, stack) => this.reorder(orderedItemIds, stack),
+    });
+    this.conversationService = new ConversationService(database, this.unitOfWork, this.conversations, {
+      getConversation: (id) => this.getConversation(id),
+      getWorkItem: (id) => this.get(id),
+      getClassification: (workItemId) => this.getClassification(workItemId),
+      listAllSharedMessages: (conversationId) => this.listAllSharedMessages(conversationId),
+      createConversation: (title, workItemId) => this.createConversation(title, workItemId),
+      createSharedMessage: (author, body, status, conversationId, attachments, dispatchTarget) => this.createSharedMessage(author, body, status, conversationId, attachments, dispatchTarget),
+      archiveWorkItem: (id, completed, withinTransaction, context) => this.archive(id, completed, withinTransaction, context),
+      addActivity: (workItemId, actor, kind, body) => this.addActivity(workItemId, actor, kind, body),
     });
   }
 
@@ -272,83 +294,25 @@ export class WorkItemRepository {
   }
 
   setConversationWorkItem(id: string, workItemId: string | null): SharedConversation | null {
-    const before = this.getConversation(id);
-    if (!before) return null;
-    if (workItemId && !this.get(workItemId)) return null;
-    return this.transaction(() => {
-      const changed = this.conversations.updateWorkItemId(id, workItemId);
-      if (!changed) return null;
-      if (before.workItemId && before.workItemId !== workItemId) {
-        this.database.prepare('DELETE FROM agent_runs WHERE work_item_id = ? AND adopted_conversation_id = ?').run(before.workItemId, id);
-        this.database.prepare('UPDATE agent_handoffs SET work_item_id = NULL WHERE conversation_id = ?').run(id);
-        this.database.prepare('UPDATE shared_brief_entries SET work_item_id = NULL WHERE conversation_id = ?').run(id);
-        this.addActivity(before.workItemId, 'jeffrey', 'conversation_unlinked', `Unlinked conversation “${before.title}” and removed its adopted agent-run history.`);
-      }
-      if (workItemId) {
-        // Linking must carry the existing chat's decisions and handoffs into
-        // the task scope; unlinking above is the exact inverse.
-        this.database.prepare('UPDATE agent_handoffs SET work_item_id = ? WHERE conversation_id = ?').run(workItemId, id);
-        this.database.prepare('UPDATE shared_brief_entries SET work_item_id = ? WHERE conversation_id = ?').run(workItemId, id);
-        const adopted = this.adoptConversationAgentRuns(workItemId, id);
-        if (before.workItemId !== workItemId || adopted) this.addActivity(workItemId, 'jeffrey', 'conversation_linked', `Linked conversation “${before.title}” and adopted ${adopted} agent ${adopted === 1 ? 'run' : 'runs'} as task execution history.`);
-      }
-      return this.getConversation(id);
-    });
+    return this.conversationService.setWorkItem(id, workItemId);
   }
 
   /** Materializes pre-existing chat replies as task runs so either surface has the same execution history. */
   adoptConversationAgentRuns(workItemId: string, conversationId: string): number {
-    const kind = this.getClassification(workItemId)?.kind ?? 'analysis';
-    const agentReplies = this.listAllSharedMessages(conversationId).filter((message) => message.author === 'codex' || message.author === 'claude');
-    const insertRun = this.database.prepare(`
-      INSERT INTO agent_runs (id, work_item_id, kind, requested_target, requested_agent, agent, status, instructions, output, error, started_at, completed_at, created_at, conversation_id, message_id, model, execution_profile, input_tokens, output_tokens, estimated_cost_usd, fallback_from, fallback_reason, adopted_conversation_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    let adopted = 0;
-    for (const message of agentReplies) {
-      const existing = this.database.prepare('SELECT 1 FROM agent_runs WHERE message_id = ?').get(message.id);
-      if (existing) continue;
-      insertRun.run(randomUUID(), workItemId, kind, message.author, message.author, message.author, message.status, 'Adopted from linked conversation.', message.body, message.error, message.createdAt, message.completedAt, message.createdAt, conversationId, message.id, message.model, message.executionProfile, message.inputTokens, message.outputTokens, message.estimatedCostUsd, message.fallbackFrom, message.fallbackReason, conversationId);
-      adopted++;
-    }
-    return adopted;
+    return this.conversationService.adoptRuns(workItemId, conversationId);
   }
 
   /** Repairs conversations linked before run adoption existed. Safe to call on every process startup. */
   backfillConversationRunAdoptions(): number {
-    const links = this.conversations.listWorkItemLinks();
-    return this.transaction(() => links.reduce((total, link) => total + this.adoptConversationAgentRuns(link.workItemId, link.id), 0));
+    return this.conversationService.backfillRunAdoptions();
   }
 
   setConversationArchived(id: string, archived: boolean): SharedConversation | null {
-    const existing = this.listConversations('all').find((conversation) => conversation.id === id);
-    if (!existing) return null;
-    return this.transaction(() => {
-      // A task-backed conversation is the task's execution history. Removing that
-      // history from the active workspace must remove its task from the active stack
-      // in the same transaction, while preserving that it was not completed.
-      if (archived && existing.workItemId) {
-        const linkedTask = this.get(existing.workItemId);
-        if (linkedTask && !linkedTask.archivedAt) this.archive(linkedTask.id, false, true, { actor: 'jeffrey', reason: 'its conversation was archived' });
-      }
-      const changed = this.conversations.setArchived(id, archived);
-      return changed ? this.listConversations('all').find((conversation) => conversation.id === id) ?? null : null;
-    });
+    return this.conversationService.setArchived(id, archived);
   }
 
   forkConversation(id: string): SharedConversation | null {
-    const source = this.listConversations('all').find((conversation) => conversation.id === id);
-    if (!source) return null;
-    return this.transaction(() => {
-      const fork = this.createConversation(`${source.title} · fork`, source.workItemId);
-      this.conversations.setForkedFrom(fork.id, source.id);
-      const messages = this.listAllSharedMessages(source.id);
-      for (const message of messages) this.createSharedMessage(message.author, message.body, message.status === 'running' || message.status === 'queued' ? 'completed' : message.status, fork.id, message.attachments, 'none');
-      // The fork inherits the task link; keeping the source linked too would leave two
-      // conversations claiming to be the task's execution history, so the source is unlinked.
-      if (source.workItemId) this.setConversationWorkItem(source.id, null);
-      return this.listConversations('all').find((conversation) => conversation.id === fork.id) ?? null;
-    });
+    return this.conversationService.fork(id);
   }
 
   getOrCreateWorkConversation(workItemId: string, title: string): SharedConversation {
@@ -400,7 +364,10 @@ export class WorkItemRepository {
       createdAt: String(row.created_at), completedAt: row.completed_at ? String(row.completed_at) : null, attachments: JSON.parse(String(row.attachments_json ?? '[]')) as SharedAttachment[],
       model: row.model ? String(row.model) : null,
       executionProfile: row.execution_profile as SharedMessage['executionProfile'] ?? null,
-      inputTokens: row.input_tokens === null ? null : Number(row.input_tokens), outputTokens: row.output_tokens === null ? null : Number(row.output_tokens),
+      inputTokens: row.input_tokens === null ? null : Number(row.input_tokens),
+      cacheCreationInputTokens: row.cache_creation_input_tokens === null ? null : Number(row.cache_creation_input_tokens),
+      cacheReadInputTokens: row.cache_read_input_tokens === null ? null : Number(row.cache_read_input_tokens),
+      outputTokens: row.output_tokens === null ? null : Number(row.output_tokens),
       estimatedCostUsd: row.estimated_cost_usd === null ? null : Number(row.estimated_cost_usd),
       fallbackFrom: row.fallback_from as SharedMessage['fallbackFrom'] ?? null, fallbackReason: row.fallback_reason ? String(row.fallback_reason) : null,
       dispatchTarget: row.dispatch_target as SharedMessage['dispatchTarget'] ?? 'none',
@@ -580,7 +547,7 @@ export class WorkItemRepository {
     const conversation = conversationId ? this.listConversations('all').find((item) => item.id === conversationId) : this.ensureDefaultConversation();
     if (!conversation) throw new Error('Conversation not found.');
     const message: SharedMessage = {
-      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), completedAt: ['completed', 'failed', 'canceled'].includes(status) ? new Date().toISOString() : null, attachments, model: null, executionProfile, inputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: dispatchTarget as SharedMessage['dispatchTarget'],
+      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), completedAt: ['completed', 'failed', 'canceled'].includes(status) ? new Date().toISOString() : null, attachments, model: null, executionProfile, inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: dispatchTarget as SharedMessage['dispatchTarget'],
       attempt: 0, maxAttempts: 3, nextAttemptAt: null,
     };
     this.database.prepare(`
@@ -620,14 +587,14 @@ export class WorkItemRepository {
     return this.getSharedMessageById(id);
   }
 
-  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; outputTokens?: number | null; estimatedCostUsd?: number | null; costSource?: SharedMessage['costSource']; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null }): SharedMessage | null {
+  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; estimatedCostUsd?: number | null; costSource?: SharedMessage['costSource']; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null }): SharedMessage | null {
     // A retry reuses the same message row. Never let the error from the prior
     // attempt survive a successful or user-canceled terminal transition.
     const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
     const entries = Object.entries({
       pinned: changes.pinned === undefined ? undefined : Number(changes.pinned),
       body: changes.body, status: changes.status, error, author: changes.author, model: changes.model, execution_profile: changes.executionProfile,
-      input_tokens: changes.inputTokens, output_tokens: changes.outputTokens, estimated_cost_usd: changes.estimatedCostUsd, cost_source: changes.costSource, fallback_from: changes.fallbackFrom, fallback_reason: changes.fallbackReason,
+      input_tokens: changes.inputTokens, cache_creation_input_tokens: changes.cacheCreationInputTokens, cache_read_input_tokens: changes.cacheReadInputTokens, output_tokens: changes.outputTokens, estimated_cost_usd: changes.estimatedCostUsd, cost_source: changes.costSource, fallback_from: changes.fallbackFrom, fallback_reason: changes.fallbackReason,
       completed_at: changes.completedAt ?? (changes.status && ['completed', 'failed', 'canceled'].includes(changes.status) ? new Date().toISOString() : undefined),
     }).filter((entry): entry is [string, string | number] => entry[1] !== undefined);
     if (entries.length) this.database.prepare(`UPDATE shared_messages SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE id = ?`)
@@ -711,7 +678,7 @@ export class WorkItemRepository {
     return this.withDependencies(this.withLineage(this.workItems.listArchived().map((item) => this.withAgentOutcome(item))));
   }
 
-  listPage(view: 'active' | 'workbench' | 'archive', limit: number, cursor: string | null, filter: WorkItemFilter): WorkItemPage {
+  listPage(view: 'active' | 'workbench' | 'archive' | 'workbench-archive', limit: number, cursor: string | null, filter: WorkItemFilter): WorkItemPage {
     const { items, nextCursor, totalCount } = this.workItems.listPage(view, limit, cursor, filter, this.timeZone);
     return { items: this.withDependencies(this.withLineage(items.map((item) => this.withAgentOutcome(item)))), nextCursor, totalCount, proposal: view === 'active' ? this.getPendingProposal('attention') : view === 'workbench' ? this.getPendingProposal('workbench') : null };
   }
@@ -743,7 +710,7 @@ export class WorkItemRepository {
     return listProjects(this.database);
   }
 
-  getWorkItemCounts(): { active: number; workbench: number; archive: number } {
+  getWorkItemCounts(): { active: number; workbench: number; archive: number; attentionArchive: number; workbenchArchive: number } {
     return this.workItems.counts();
   }
 
@@ -1136,105 +1103,17 @@ export class WorkItemRepository {
     return this.get(followUp.id);
   }
 
-  /**
-   * `context` names who applied the move and, for cascades, what forced it. The
-   * repository is the only place every archive path converges, so logging here
-   * covers the HTTP routes, the MCP tool, bulk actions, and internal cascades.
-   */
   archive(id: string, completed: boolean, withinTransaction = false, context: LifecycleContext = {}): WorkItem | null {
-    const item = this.get(id);
-    if (!item) return null;
-    // Re-applying the state a task is already in is a no-op, mirroring restore().
-    // Without this a double-tapped Archive button re-stamps archived_at and logs
-    // the lifecycle line twice. Archived
-    // incomplete → completed is still a real transition and falls through.
-    if (item.archivedAt && completed === (item.completionStatus === 'completed')) return item;
-    const now = new Date().toISOString();
-    const ownsTransaction = !withinTransaction && this.unitOfWork.depth === 0;
-    if (ownsTransaction) this.database.exec('BEGIN IMMEDIATE');
-    try {
-      this.workItems.setArchived(id, { archivedAt: now, completedAt: completed ? now : null, status: completed ? 'done' : item.status, updatedAt: now });
-      this.database.prepare(`UPDATE shared_conversations SET archived_at = ?, updated_at = ?
-        WHERE archived_at IS NULL AND (work_item_id = ? OR id IN (SELECT conversation_id FROM agent_runs WHERE work_item_id = ? AND conversation_id IS NOT NULL))`).run(now, now, id, id);
-      this.recordLifecycleEvent({
-        workItemId: id,
-        transition: completed ? 'completed' : 'archived',
-        fromStatus: item.status,
-        toStatus: completed ? 'done' : item.status,
-        isInitial: false,
-        actor: context.actor ?? 'system',
-        source: 'lifecycle_action',
-        reason: context.reason,
-        occurredAt: now,
-      });
-      if (ownsTransaction) this.database.exec('COMMIT');
-    } catch (error) {
-      if (ownsTransaction) this.database.exec('ROLLBACK');
-      throw error;
-    }
-    this.addActivity(id, context.actor ?? 'system', completed ? 'completed' : 'archived',
-      describeLifecycleChange(completed ? 'complete' : 'archive', context.reason));
-    return this.get(id);
+    return this.workItemLifecycle.archive(id, completed, withinTransaction, context);
   }
 
   restore(id: string, withinTransaction = false, context: LifecycleContext = {}): WorkItem | null {
-    const item = this.get(id);
-    if (!item) return null;
-    if (!item.archivedAt) return item;
-    const now = new Date().toISOString();
-    const status = item.status === 'done' || item.status === 'canceled' ? 'ready' : item.status;
-    if (!withinTransaction) this.database.exec('BEGIN IMMEDIATE');
-    try {
-      this.workItems.setRestored(id, { status, updatedAt: now });
-      this.database.prepare(`UPDATE shared_conversations SET archived_at = NULL, updated_at = ?
-        WHERE work_item_id = ? OR id IN (SELECT conversation_id FROM agent_runs WHERE work_item_id = ? AND conversation_id IS NOT NULL)`).run(now, id, id);
-      this.recordLifecycleEvent({
-        workItemId: id,
-        transition: 'restored',
-        fromStatus: item.status,
-        toStatus: status,
-        isInitial: false,
-        actor: context.actor ?? 'system',
-        source: 'lifecycle_action',
-        reason: context.reason,
-        occurredAt: now,
-      });
-      if (!withinTransaction) this.database.exec('COMMIT');
-    } catch (error) {
-      if (!withinTransaction) this.database.exec('ROLLBACK');
-      throw error;
-    }
-    // Unlike archive(), restore() cannot log from inside a caller's transaction:
-    // this early return exists to skip reorder(), which opens its own. Callers
-    // that pass withinTransaction must write their own entry — bulkUpdate does.
-    if (withinTransaction) return this.get(id);
-    const stack = item.stack;
-    const stackItems = stack === 'workbench' ? this.listWorkbench() : this.list();
-    this.reorder([id, ...stackItems.map((entry) => entry.id).filter((entryId) => entryId !== id)], stack);
-    this.addActivity(id, context.actor ?? 'system', 'restored', describeLifecycleChange('restore', context.reason));
-    return this.get(id);
+    return this.workItemLifecycle.restore(id, withinTransaction, context);
   }
 
   /** Soft delete: flags the row so it drops out of every list/get query but stays recoverable in the database. */
   delete(id: string): boolean {
-    const now = new Date().toISOString();
-    this.database.exec('BEGIN IMMEDIATE');
-    try {
-      const changed = this.workItems.softDelete(id, now);
-      if (!changed) {
-        this.database.exec('ROLLBACK');
-        return false;
-      }
-      this.database.prepare(`UPDATE shared_conversations SET deleted_at = ?, updated_at = ?
-        WHERE deleted_at IS NULL AND (work_item_id = ? OR id IN (
-          SELECT conversation_id FROM agent_runs WHERE work_item_id = ? AND conversation_id IS NOT NULL
-        ))`).run(now, now, id, id);
-      this.database.exec('COMMIT');
-      return true;
-    } catch (error) {
-      this.database.exec('ROLLBACK');
-      throw error;
-    }
+    return this.workItemLifecycle.delete(id);
   }
 
   private logBulkEdit(before: WorkItem, after: WorkItem | null): void {
@@ -1497,8 +1376,8 @@ export class WorkItemRepository {
     return this.runs.getByMessage(messageId);
   }
 
-  createRun(workItemId: string, kind: AgentRun['kind'], requestedTarget: AgentRun['requestedTarget'], agent: AgentRun['agent'], instructions: string, conversationId: string | null = null, messageId: string | null = null, origin: AgentRun['origin'] = 'manual'): AgentRun {
-    return this.runs.create(workItemId, kind, requestedTarget, agent, instructions, conversationId, messageId, origin);
+  createRun(workItemId: string, kind: AgentRun['kind'], requestedTarget: AgentRun['requestedTarget'], agent: AgentRun['agent'], instructions: string, conversationId: string | null = null, messageId: string | null = null, origin: AgentRun['origin'] = 'manual', accountProfile = 'default'): AgentRun {
+    return this.runs.create(workItemId, kind, requestedTarget, agent, instructions, conversationId, messageId, origin, accountProfile);
   }
 
   selectBalancedAgent(preferred: AgentRun['agent']): AgentRun['agent'] {

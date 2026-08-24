@@ -30,7 +30,7 @@ import type { RouteContext } from '../route-context.js';
 export function createWorkItemRouter({ repository }: RouteContext) {
   const router = Router();
   router.get('/api/work-items', (request, response) => {
-    const view = request.query.view === 'archive' ? 'archive' : request.query.view === 'workbench' ? 'workbench' : 'active';
+    const view = request.query.view === 'workbench-archive' ? 'workbench-archive' : request.query.view === 'archive' ? 'archive' : request.query.view === 'workbench' ? 'workbench' : 'active';
     const limit = Number(request.query.limit ?? 50);
     if (!Number.isFinite(limit)) return response.status(400).json({ error: 'Invalid page limit.' });
     if (request.query.filter !== undefined && request.query.query !== undefined) return response.status(400).json({ error: 'Use either filter or query, not both.' });

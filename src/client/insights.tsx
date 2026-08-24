@@ -118,9 +118,11 @@ function TokenUsageRows({ rows }: { rows: RunInsightsTokenUsage[] }) {
     {rows.map((row) => <div className="insight-token-row" key={`${row.provider}:${row.model ?? 'unspecified'}`}>
       <div><strong>{row.model ?? 'Unspecified model'}</strong><small>{row.provider}</small></div>
       <dl>
-        <div><dt>Input</dt><dd>{formatTokenCount(row.inputTokens)}</dd></div>
+        <div><dt>Fresh input</dt><dd>{formatTokenCount(row.inputTokens)}</dd></div>
+        <div><dt>Cache write</dt><dd>{formatTokenCount(row.cacheCreationInputTokens)}</dd></div>
+        <div><dt>Cache read</dt><dd>{formatTokenCount(row.cacheReadInputTokens)}</dd></div>
         <div><dt>Output</dt><dd>{formatTokenCount(row.outputTokens)}</dd></div>
-        <div><dt>Total</dt><dd>{formatTokenCount(row.inputTokens + row.outputTokens)}</dd></div>
+        <div><dt>Total traffic</dt><dd>{formatTokenCount(row.inputTokens + row.cacheCreationInputTokens + row.cacheReadInputTokens + row.outputTokens)}</dd></div>
         <div><dt>Cost</dt><dd>{(row.rateSource ?? null) === null ? <span title="No rate is configured for this model.">—</span> : formatCostUsd(row.costUsd)}</dd></div>
       </dl>
     </div>)}
@@ -273,11 +275,13 @@ export function InsightsView() {
               </div>
 
               <div className="insight-section">
-                <h3>Token usage <InfoTooltip>Reported input and output tokens from terminal agent runs created in this window. Rows group usage by the recorded provider and model; runs without reported token usage are excluded.</InfoTooltip></h3>
+                <h3>Token usage <InfoTooltip>Reported fresh input, cache writes, cache reads, and output from terminal agent runs in this window. Cache traffic is shown separately because it is billed differently and can dwarf fresh prompt input. Rows group usage by provider and model.</InfoTooltip></h3>
                 {data.tokenUsageByModel.length === 0 ? <p className="insight-empty-note">No token usage was reported by agent runs in this window.</p> : <>
                   <div className="insight-token-summary">
-                    <div><span>Total tokens</span><strong>{formatTokenCount(data.inputTokens + data.outputTokens)}</strong></div>
-                    <div><span>Input</span><strong>{formatTokenCount(data.inputTokens)}</strong></div>
+                    <div><span>Total traffic</span><strong>{formatTokenCount(data.inputTokens + data.cacheCreationInputTokens + data.cacheReadInputTokens + data.outputTokens)}</strong></div>
+                    <div><span>Fresh input</span><strong>{formatTokenCount(data.inputTokens)}</strong></div>
+                    <div><span>Cache read</span><strong>{formatTokenCount(data.cacheReadInputTokens)}</strong></div>
+                    <div><span>Cache write</span><strong>{formatTokenCount(data.cacheCreationInputTokens)}</strong></div>
                     <div><span>Output</span><strong>{formatTokenCount(data.outputTokens)}</strong></div>
                   </div>
                   <TokenUsageRows rows={data.tokenUsageByModel} />

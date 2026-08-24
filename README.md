@@ -26,19 +26,19 @@ The attention stack stays visible while you review task details and agent-run hi
 Workbench intentionally keeps the interface that controls agents separate from the checkout agents edit:
 
 ```text
-source checkout (/dev/workbench) ── agent edits ──> preview (localhost:5174)
+source checkout (/dev/workbench) ── agent edits ──> preview (localhost:5181)
         │                                            │
         └──────── shared SQLite state ───────────────┘
                                                      │
                                       explicit promotion after review
                                                      │
                                                      ▼
-                                      immutable live runtime (localhost:5173)
+                                      immutable live runtime (localhost:5180)
 ```
 
 - **Source checkout:** the editable repository. Workbench-targeted agents work here.
-- **Preview (`5174`):** a read-only Vite mirror of live Workbench. It reads the live API on `5173`, cannot mutate it, and never owns the scheduler or agent processes.
-- **Live (`5173`):** a stable gateway serves an immutable, promoted snapshot. It keeps working while an agent edits the source checkout.
+- **Preview (`5181`):** a read-only Vite mirror of live Workbench. It reads the live API on `5180`, cannot mutate it, and never owns the scheduler or agent processes.
+- **Live (`5180`):** a stable gateway serves an immutable, promoted snapshot. It keeps working while an agent edits the source checkout.
 - **State:** database, attachments, published artifact metadata, and logs live under `data/` by default and are not committed.
 
 Promotion builds the current checkout, snapshots the built client and server, then switches the gateway only after a health check.
@@ -58,7 +58,7 @@ npm run runtime:promote
 npm run runtime:start
 ```
 
-Open [http://localhost:5173](http://localhost:5173).
+Open [http://localhost:5180](http://localhost:5180).
 
 For development and review, start the preview in a separate terminal:
 
@@ -66,7 +66,7 @@ For development and review, start the preview in a separate terminal:
 npm run preview
 ```
 
-Open [http://localhost:5174](http://localhost:5174). Preview reads real tasks and conversations from live Workbench but blocks every mutation, so it is safe for review without replacing the control plane. Use `npm run preview:sandbox` only when a change needs an isolated writable preview API and database copy.
+Open [http://localhost:5181](http://localhost:5181). Preview reads real tasks and conversations from live Workbench but blocks every mutation, so it is safe for review without replacing the control plane. Use `npm run preview:sandbox` only when a change needs an isolated writable preview API and database copy.
 
 When the change is ready, ask an agent to **approve the Workbench preview** or run:
 
@@ -74,12 +74,12 @@ When the change is ready, ask an agent to **approve the Workbench preview** or r
 npm run runtime:promote
 ```
 
-The same live URL (`5173`) switches after the new release passes its health check. `npm run dev` is for isolated API/client development; it is not the recommended daily control plane.
+The same live URL (`5180`) switches after the new release passes its health check. `npm run dev` is for isolated API/client development; it is not the recommended daily control plane.
 
 ### Health check
 
 ```bash
-curl http://localhost:5173/api/health
+curl http://localhost:5180/api/health
 ```
 
 ## Everyday workflow
@@ -121,7 +121,7 @@ Linear synchronization is read-only. Workbench owns queue order, local assignmen
 Codex and Claude can access the same canonical Workbench state through the Streamable HTTP endpoint:
 
 ```text
-http://localhost:5173/mcp
+http://localhost:5180/mcp
 ```
 
 For non-loopback use, authenticate with `Authorization: Bearer <WORKBENCH_TOKEN>`. The MCP API gives Codex and Claude the same admin control Jeffrey has in the UI: tasks and stack ordering, discoveries and scans, conversations and agent dispatch, execution plans and their approval, artifact publication and revocation, and runtime promotion. It does not expose provider credentials or direct SQLite access — those are not Workbench operations.
@@ -197,8 +197,8 @@ Only artifact-feedback submission is then reachable without a Workbench token; a
 
 ```bash
 npm run runtime:promote  # build and atomically promote a verified immutable release
-npm run runtime:start    # serve the stable runtime on localhost:5173
-npm run preview          # read-only live-data preview UI on 5174
+npm run runtime:start    # serve the stable runtime on localhost:5180
+npm run preview          # read-only live-data preview UI on 5181
 npm run preview:sandbox  # isolated writable preview UI + API
 npm run dev              # isolated API + Vite development
 npm run share            # expose the stable runtime through a configured tunnel

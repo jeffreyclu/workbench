@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
-import { agentSubprocessEnv } from './agent-security.js';
+import { agentAccountEnv } from './agent-security.js';
 import { estimateModelCost } from './model-pricing.js';
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
@@ -284,6 +284,41 @@ export interface AgentUsage {
   costSource: 'provider' | 'estimated' | null;
 }
 interface AgentCommandResult { output: string; usage: AgentUsage; }
+
+/**
+ * A Claude turn can repeatedly bill cached context even when its visible prompt
+ * and final answer are small. These are per-invocation circuit breakers, not a
+ * weekly quota: stop the subprocess as soon as its streamed provider usage
+ * crosses either bound.
+ *
+ * The defaults are deliberately conservative after Claude runs reached millions
+ * of cache-read tokens in one invocation. Deployments may lower either limit,
+ * but cannot disable the guard by supplying an invalid environment value.
+ */
+export const DEFAULT_CLAUDE_RUN_TOKEN_BUDGET = 1_000_000;
+export const DEFAULT_CLAUDE_RUN_COST_BUDGET_USD = 2;
+
+export interface AgentRunBudget { maxTokens: number; maxCostUsd: number; }
+
+function positiveEnvironmentNumber(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+export function budgetForAgentRun(agent: AgentRun['agent']): AgentRunBudget | null {
+  if (agent !== 'claude') return null;
+  return {
+    maxTokens: positiveEnvironmentNumber('WORKBENCH_CLAUDE_RUN_MAX_TOKENS', DEFAULT_CLAUDE_RUN_TOKEN_BUDGET),
+    maxCostUsd: positiveEnvironmentNumber('WORKBENCH_CLAUDE_RUN_MAX_COST_USD', DEFAULT_CLAUDE_RUN_COST_BUDGET_USD),
+  };
+}
+
+export class AgentRunBudgetExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AgentRunBudgetExceededError';
+  }
+}
 
 function numberAt(record: Record<string, unknown>, ...keys: string[]): number | null {
   const value = keys.map((key) => record[key]).find((candidate) => typeof candidate === 'number');
@@ -633,12 +668,12 @@ function terminalAgentError(agent: AgentRun['agent'], line: string): string | nu
   return null;
 }
 
-async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void): Promise<AgentCommandResult> {
+async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void, accountProfile = 'default'): Promise<AgentCommandResult> {
   const { command, args } = commandFor(agent, cwd, profile);
   return new Promise<AgentCommandResult>((resolveOutput, reject) => {
     const child = spawn(command, args, {
       cwd,
-      env: agentSubprocessEnv(),
+      env: agentAccountEnv(agent, accountProfile),
       stdio: ['pipe', 'pipe', 'pipe'],
       // On Unix this makes child.pid the process-group leader, allowing Stop
       // to kill Codex/Claude and every shell/tool process it created.
@@ -672,6 +707,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : prompt;
     let lastProgressEvent = '';
     const eventContext: AgentEventContext = { subagents: new Map() };
     const runModel = modelFor(agent, profile);
+    const budget = budgetForAgentRun(agent);
     let reportedUsage: { inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null } = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
     // Set only by the provider's own billed total (Claude `result.total_cost_usd`).
     // When present it wins over any rate-table estimate.
@@ -682,6 +718,27 @@ ${CLAUDE_EXECUTION_CONTRACT}` : prompt;
       providerCostUsd ?? estimateUsageCost(agent, runModel, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens);
     const costSource = (inputTokens: number | null, outputTokens: number | null, cacheCreationInputTokens: number | null, cacheReadInputTokens: number | null): AgentUsage['costSource'] =>
       providerCostUsd !== null ? 'provider' : estimateUsageCost(agent, runModel, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens) === null ? null : 'estimated';
+    const budgetViolation = (usage: { inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null }): AgentRunBudgetExceededError | null => {
+      if (!budget) return null;
+      const totalTokens = (usage.inputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0) + (usage.outputTokens ?? 0);
+      if (totalTokens > budget.maxTokens) {
+        return new AgentRunBudgetExceededError(`Claude run exceeded its ${budget.maxTokens.toLocaleString()}-token budget (${totalTokens.toLocaleString()} reported tokens) and was terminated.`);
+      }
+      // Use the token-based estimate even if Claude has supplied a billed total:
+      // that total normally arrives only with the terminal event, too late to
+      // prevent another expensive turn.
+      const estimatedCost = estimateUsageCost(agent, runModel, usage.inputTokens, usage.outputTokens, usage.cacheCreationInputTokens, usage.cacheReadInputTokens);
+      if (estimatedCost !== null && estimatedCost > budget.maxCostUsd) {
+        return new AgentRunBudgetExceededError(`Claude run exceeded its $${budget.maxCostUsd.toFixed(2)} estimated-cost budget ($${estimatedCost.toFixed(2)} estimated) and was terminated.`);
+      }
+      return null;
+    };
+    const stopForBudgetViolation = (usage: { inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null }) => {
+      const violation = budgetViolation(usage);
+      if (!violation || terminationError) return;
+      terminationError = violation;
+      stopProcessTree();
+    };
     const emitLiveUsage = () => {
       const liveUsage = {
         inputTokens: reportedUsage.inputTokens,
@@ -714,6 +771,12 @@ ${CLAUDE_EXECUTION_CONTRACT}` : prompt;
         };
       }
       emitLiveUsage();
+      stopForBudgetViolation({
+        inputTokens: reportedUsage.inputTokens,
+        cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens,
+        cacheReadInputTokens: reportedUsage.cacheReadInputTokens,
+        outputTokens: Math.max(reportedUsage.outputTokens ?? 0, estimatedOutputTokens) || null,
+      });
     };
     const timeout = setTimeout(() => {
       terminationError = new Error('Agent run timed out after 30 minutes.');
@@ -746,6 +809,12 @@ ${CLAUDE_EXECUTION_CONTRACT}` : prompt;
       // the terminal provider event replaces it with the real total.
       estimatedOutputTokens = Math.max(estimatedOutputTokens, Math.ceil(visibleProgress.length / 4));
       emitLiveUsage();
+      stopForBudgetViolation({
+        inputTokens: reportedUsage.inputTokens,
+        cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens,
+        cacheReadInputTokens: reportedUsage.cacheReadInputTokens,
+        outputTokens: Math.max(reportedUsage.outputTokens ?? 0, estimatedOutputTokens) || null,
+      });
     };
     const heartbeat = setInterval(() => {
       if (Date.now() - lastEventAt < QUIET_PROGRESS_MS) return;
@@ -868,10 +937,11 @@ export async function runAgentCommandWithFallback(
   onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void,
   onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void,
   kind: AgentRun['kind'] = 'analysis',
+  accountProfile = 'default',
 ): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null }> {
   void kind;
   try {
-    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit);
+    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile);
     return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
   } catch (error) {
     if (signal?.aborted || !isAgentCapacityError(error)) throw error;
@@ -880,7 +950,7 @@ export async function runAgentCommandWithFallback(
     onFallback?.(fallback, reason);
     const prefix = `${primary} is unavailable due to its usage limit. Continuing with ${fallback}.`;
     onProgress?.(prefix);
-    const result = await runAgentCommandWithUsage(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile, onUsage, onAudit);
+    const result = await runAgentCommandWithUsage(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile, onUsage, onAudit, accountProfile);
     return { ...result, agent: fallback, fallbackFrom: primary, fallbackReason: reason.slice(0, 500) };
   }
 }
@@ -1014,7 +1084,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
     }, (entries, producingAgent) => {
       for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
-    }, run.kind);
+    }, run.kind, run.accountProfile);
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the run to Codex.';
       repository.addActivity(item.id, 'system', 'agent_fallback', reason);
@@ -1029,7 +1099,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
       }, (entries, producingAgent) => {
         for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
-      }, run.kind);
+      }, run.kind, run.accountProfile);
       result = { ...recovered, fallbackFrom: 'claude', fallbackReason: reason };
       repository.updateRun(run.id, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });

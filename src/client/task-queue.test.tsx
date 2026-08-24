@@ -77,4 +77,17 @@ describe('task status badges', () => {
     expect(container.querySelector('.item-copy .agent-outcome')).toBeNull();
     expect(container.querySelectorAll('.queue-item > .agent-outcome')).toHaveLength(1);
   });
+
+  it('keeps an archived task date without duplicating its completion status', () => {
+    const { container } = renderCard({
+      archivedAt: '2026-01-02T12:00:00Z',
+      completionStatus: 'completed',
+      agentOutcome: 'finished',
+    });
+
+    expect(container.querySelector('.agent-outcome-finished')?.textContent).toContain('Finished');
+    expect(container.querySelector('.archive-date')?.getAttribute('dateTime')).toBe('2026-01-02T12:00:00Z');
+    expect(container.textContent).not.toMatch(/Completed/);
+    expect(container.querySelector('.archive-meta')).toBeNull();
+  });
 });

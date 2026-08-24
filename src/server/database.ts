@@ -1233,6 +1233,31 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // The selected credential profile is audit data for a dispatch, not a
+    // secret. Store only its name; the directory remains process-local env.
+    id: '033_agent_run_account_profile',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'account_profile')) {
+        database.exec("ALTER TABLE agent_runs ADD COLUMN account_profile TEXT NOT NULL DEFAULT 'default';");
+      }
+    },
+  },
+  {
+    // Shared-room replies can be unlinked from a work item, so they do not
+    // always have an agent_runs row to retain provider cache telemetry.
+    id: '034_shared_message_token_breakdown',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'cache_creation_input_tokens')) {
+        database.exec('ALTER TABLE shared_messages ADD COLUMN cache_creation_input_tokens INTEGER;');
+      }
+      if (!columns.some((column) => column.name === 'cache_read_input_tokens')) {
+        database.exec('ALTER TABLE shared_messages ADD COLUMN cache_read_input_tokens INTEGER;');
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

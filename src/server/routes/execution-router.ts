@@ -16,8 +16,8 @@ export function createExecutionRouter({ admin }: RouteContext) {
     admin.sendAction(response, await admin.retryRun(request.params.id, { force: false }));
   });
   router.post('/api/work-items/:id/execute', async (request, response) => {
-    const { executionProfile } = z.object({ executionProfile: z.enum(['economy', 'standard', 'deep']).nullable().default(null) }).parse(request.body ?? {});
-    admin.sendAction(response, await admin.startWorkItemExecution(request.params.id, { executionProfile, force: false }));
+    const { executionProfile, accountProfile } = z.object({ executionProfile: z.enum(['economy', 'standard', 'deep']).nullable().default(null), accountProfile: z.string().trim().min(1).max(64).default('default') }).parse(request.body ?? {});
+    admin.sendAction(response, await admin.startWorkItemExecution(request.params.id, { executionProfile, accountProfile, force: false }));
   });
   router.post('/api/execution-plans/:id/:resolution', (request, response) => {
     const resolution = z.enum(['accepted', 'rejected']).parse(request.params.resolution);

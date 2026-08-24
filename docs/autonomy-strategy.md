@@ -82,7 +82,7 @@ Codex is easier: its app-server protocol exposes `account/rateLimits/read` and i
 
 ### 2. Calibration — this is what unblocks Claude
 
-Workbench can't read Claude's official percentage. It doesn't have to. Once or twice a week, you run `/usage` in any interactive Claude session and type two things into Workbench: the percentage shown, and the reset date.
+Workbench can't read Claude's official percentage. It can continuously read the local transcript traffic, but Anthropic exposes the weekly percentage only in interactive `/usage`. Run `npm run usage:calibrate` whenever an agent needs current local Claude/Codex totals; it reads both providers' local logs and refuses to mistake Codex's short rate-limit window for a weekly calibration. Once or twice a week, an interactive Claude `/usage` observation remains the authoritative input for Claude's weekly ceiling.
 
 Workbench then solves for the real ceiling:
 

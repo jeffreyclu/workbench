@@ -18,6 +18,8 @@ function message(index: number, body: string): SharedMessage {
     model: null,
     executionProfile: null,
     inputTokens: null,
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: null,
     outputTokens: null,
     estimatedCostUsd: null,
     fallbackFrom: null,

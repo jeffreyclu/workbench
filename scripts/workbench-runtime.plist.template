@@ -16,6 +16,8 @@
   <dict>
     <key>PATH</key>
     <string>__AGENT_BIN_DIR__:__NODE_DIR__:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PORT</key>
+    <string>__WORKBENCH_RUNTIME_PORT__</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

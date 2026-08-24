@@ -211,6 +211,43 @@ against before proposing or accepting a new value. Present the change as "the or
 purpose was X; that purpose is still preserved because Y" rather than "raising the number makes the
 test pass."
 
+### Check a diff against the original scope before reporting it done
+
+On the Pluto RAG-guardrail task, a brief specified three layered pieces: a hard token-budget cap, a
+three-tier eval system (deterministic component contracts, frozen-evidence generation, a live-agent
+canary), and a working q21 stability check. The work was reported as "Implemented the RAG runaway-token
+guardrail... 77/77 tests passed" — true as far as it went, but Jeffrey's own follow-up question ("do
+these fixes do what you scoped out at the beginning?") surfaced three blocking gaps a second read
+caught immediately: model-backed tools like `create_doc` still call the provider *before* checking the
+budget, so the "hard cap" has an uncapped path; the "layered eval system" was mostly a facade (replay
+tier still posts to the live agent, the component tier checks source titles against mutable Supabase
+data instead of frozen source IDs, frozen-evidence generation was never built); and the authorization
+canary (q33) can pass with zero seeded second project, so it can't actually detect cross-project
+leakage. His verdict: "you fucked up."
+
+- Passing unit tests and a clean typecheck verify that the code you wrote does what you intended — they
+  do not verify that what you intended covers the original scope. Before reporting a scoped task
+  complete, re-read the original brief/spec line by line and check off each stated piece against the
+  diff, not against your own summary of the diff.
+- A guardrail description ("hard token cap") needs to be checked for every call path that spends
+  budget, not just the main path exercised by the tests you wrote. If a tool calls the provider before
+  it reports usage, the cap does not cover it — say so up front rather than letting review find it.
+- When a task explicitly promises a design (e.g. "layered evals" citing named external methodologies),
+  do not report partial scaffolding using that design's vocabulary as if the design were realized.
+  State plainly which layers exist, which are stubs, and which are missing.
+- If self-review would have caught the gap Jeffrey found by asking one question, that is the standard
+  to hit next time: ask "does this diff satisfy every clause of the original brief?" before reporting
+  done, not after being asked.
+
+### Reset incomplete work before rebuilding it
+
+On 2026-08-24, after the Pluto RAG guardrail/eval diff was shown to be incomplete against its stated
+scope, Jeffrey directed: "let's clear the current dif and start fresh." When that instruction is
+explicit, first enumerate the tracked and untracked files in the working tree, then discard that exact
+set and verify the branch is clean. Do not salvage partial scaffolding or resume implementation from
+it. The clean branch is the starting point for a new, fully scoped design; it does not authorize live
+bench runs or provider spending.
+
 ### Node toolchain: nvm, not mise
 
 Jeffrey manages Node with **nvm** plus the official nodejs.org `.pkg` installer. Offered mise — which
@@ -222,4 +259,3 @@ One consequence worth remembering: `~/dev/writer-monorepo/mise.toml` pins node 2
 versions are **not** applied automatically — matching the pinned node version and obtaining pnpm,
 python 3.12, and uv has to happen by hand. Flag that gap rather than assuming his environment matches
 the repo's declaration.
-

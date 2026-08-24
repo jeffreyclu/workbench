@@ -481,12 +481,14 @@ export interface ExecutionPlan {
 export const agentTargetSchema = z.enum(['auto', 'codex', 'claude', 'both']);
 export const runStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'canceled']);
 export const executionProfileOverrideSchema = z.enum(['economy', 'standard', 'deep']).nullable().default(null);
+export const accountProfileSchema = z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9][a-zA-Z0-9 _-]*$/, 'Account profile must use letters, numbers, spaces, hyphens, or underscores.').default('default');
 
 export const createAgentRunSchema = z.object({
   kind: runKindSchema,
   target: agentTargetSchema,
   instructions: z.string().trim().max(20_000).default(''),
   executionProfile: executionProfileOverrideSchema,
+  accountProfile: accountProfileSchema,
 });
 
 export interface AgentRun {
@@ -507,6 +509,8 @@ export interface AgentRun {
   messageId: string | null;
   model: string | null;
   executionProfile: 'economy' | 'standard' | 'deep' | null;
+  /** Named local credential profile selected at dispatch; credentials never enter Workbench data. */
+  accountProfile: string;
   inputTokens: number | null;
   cacheCreationInputTokens: number | null;
   cacheReadInputTokens: number | null;
@@ -632,7 +636,12 @@ export interface SharedMessage {
   attachments: SharedAttachment[];
   model: string | null;
   executionProfile: 'routing' | 'economy' | 'standard' | 'deep' | null;
+  /** Fresh, non-cached input tokens. */
   inputTokens: number | null;
+  /** Provider prompt-cache creation/refresh tokens, when reported. */
+  cacheCreationInputTokens: number | null;
+  /** Provider prompt-cache read tokens, when reported. */
+  cacheReadInputTokens: number | null;
   outputTokens: number | null;
   estimatedCostUsd: number | null;
   costSource?: 'provider' | 'estimated' | null;
@@ -801,7 +810,12 @@ export interface RunInsights {
   unverifiedCostRuns: number;
   /** Runs that reported tokens but had no rate for their model. */
   unpricedRuns: number;
+  /** Fresh, non-cached input tokens. */
   inputTokens: number;
+  /** Tokens used to create or refresh a provider prompt cache. */
+  cacheCreationInputTokens: number;
+  /** Tokens served from a provider prompt cache. */
+  cacheReadInputTokens: number;
   outputTokens: number;
   tokenUsageByModel: RunInsightsTokenUsage[];
   byAgent: RunInsightsByAgent[];
@@ -843,7 +857,10 @@ export interface RunInsightsCostByDay {
 export interface RunInsightsTokenUsage {
   provider: 'codex' | 'claude';
   model: string | null;
+  /** Fresh, non-cached input tokens. */
   inputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
   outputTokens: number;
   costUsd: number;
   runs: number;

@@ -22,24 +22,51 @@ describe('WorkItemRepository', () => {
     setEmbedder(null);
   });
 
-  it('aggregates reported token usage by provider and model for terminal runs', () => {
+  it('keeps fresh input, cache writes, cache reads, and output distinct in terminal-run insights', () => {
     const item = repository.create({ title: 'Measure usage', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const codexRun = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Implement it.');
     const claudeRun = repository.createRun(item.id, 'review', 'claude', 'claude', 'Review it.');
     const unreportedRun = repository.createRun(item.id, 'research', 'codex', 'codex', 'Research it.');
     const completedAt = new Date().toISOString();
     repository.updateRun(codexRun.id, { status: 'completed', completedAt, model: 'gpt-5.6-terra', inputTokens: 1_200, outputTokens: 300 });
-    repository.updateRun(claudeRun.id, { status: 'failed', completedAt, model: 'claude-sonnet', inputTokens: 400, outputTokens: 100 });
+    repository.updateRun(claudeRun.id, { status: 'failed', completedAt, model: 'claude-sonnet', inputTokens: 400, cacheCreationInputTokens: 50, cacheReadInputTokens: 5_000, outputTokens: 100 });
     repository.updateRun(unreportedRun.id, { status: 'completed', completedAt, model: 'gpt-5.6-terra' });
 
     expect(repository.getRunInsights()).toMatchObject({
       inputTokens: 1_600,
+      cacheCreationInputTokens: 50,
+      cacheReadInputTokens: 5_000,
       outputTokens: 400,
       tokenUsageByModel: [
+        { provider: 'claude', model: 'claude-sonnet', inputTokens: 400, cacheCreationInputTokens: 50, cacheReadInputTokens: 5_000, outputTokens: 100 },
         { provider: 'codex', model: 'gpt-5.6-terra', inputTokens: 1_200, outputTokens: 300 },
-        { provider: 'claude', model: 'claude-sonnet', inputTokens: 400, outputTokens: 100 },
       ],
     });
+  });
+
+  it('persists all provider token classes on shared-room replies', () => {
+    const conversation = repository.createConversation('Usage telemetry');
+    const reply = repository.createSharedMessage('claude', 'Working…', 'running', conversation.id);
+
+    repository.updateSharedMessage(reply.id, {
+      status: 'completed',
+      inputTokens: 1_700,
+      cacheCreationInputTokens: 2_000_000,
+      cacheReadInputTokens: 57_500_000,
+      outputTokens: 184_400,
+    });
+
+    expect(repository.getSharedMessageById(reply.id)).toMatchObject({
+      inputTokens: 1_700,
+      cacheCreationInputTokens: 2_000_000,
+      cacheReadInputTokens: 57_500_000,
+      outputTokens: 184_400,
+    });
+    const insights = repository.getRunInsights();
+    expect(insights.tokenUsageByModel).toContainEqual(expect.objectContaining({
+      provider: 'claude', inputTokens: 1_700, cacheCreationInputTokens: 2_000_000,
+      cacheReadInputTokens: 57_500_000, outputTokens: 184_400,
+    }));
   });
 
   it('attributes cursing to the model that most recently replied in the conversation', () => {
@@ -1085,7 +1112,7 @@ describe('WorkItemRepository', () => {
     repository.create({ title: 'Active', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const archived = repository.create({ title: 'Archived', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     repository.archive(archived.id, false);
-    expect(repository.getWorkItemCounts()).toEqual({ active: 1, workbench: 0, archive: 1 });
+    expect(repository.getWorkItemCounts()).toEqual({ active: 1, workbench: 0, archive: 1, attentionArchive: 1, workbenchArchive: 0 });
   });
 
   it('renders Workbench-project tasks as an ordered focus of the attention stack', () => {
@@ -1095,7 +1122,7 @@ describe('WorkItemRepository', () => {
     repository.move(first.id, { beforeId: second.id });
     expect(repository.list().map((item) => item.id)).toEqual([first.id, second.id, attention.id]);
     expect(repository.listWorkbench().map((item) => item.id)).toEqual([first.id, second.id]);
-    expect(repository.getWorkItemCounts()).toEqual({ active: 1, workbench: 2, archive: 0 });
+    expect(repository.getWorkItemCounts()).toEqual({ active: 1, workbench: 2, archive: 0, attentionArchive: 0, workbenchArchive: 0 });
   });
 
   it('never surfaces Workbench-project tasks in the paginated active view', () => {
@@ -1103,6 +1130,17 @@ describe('WorkItemRepository', () => {
     repository.create({ title: 'Workbench one', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     const page = repository.listPage('active', 50, null, { query: '', projectNames: [], statuses: [], assignees: [], sources: [], labels: [], dueStates: [] });
     expect(page.items.map((item) => item.id)).toEqual([attention.id]);
+  });
+
+  it('keeps Workbench and attention archive filters complementary', () => {
+    const attention = repository.create({ title: 'Customer archive', description: '', priority: 2, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
+    const workbench = repository.create({ title: 'Workbench archive', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    repository.archive(attention.id, false);
+    repository.archive(workbench.id, true);
+    const filter = { query: '', projectNames: [], statuses: [], assignees: [], sources: [], labels: [], dueStates: [] };
+
+    expect(repository.listPage('archive', 50, null, filter).items.map((item) => item.id)).toEqual([attention.id]);
+    expect(repository.listPage('workbench-archive', 50, null, filter).items.map((item) => item.id)).toEqual([workbench.id]);
   });
 
   it('deduplicates discoveries and only creates a task after approval', () => {
@@ -1651,6 +1689,41 @@ describe('WorkItemRepository', () => {
     // "keeps resolving independent candidates" style race already exercised for
     // discovery — shared_conversations has no unique constraint that a second
     // writer could collide with, so no concurrency test was added here.
+  });
+
+  describe('extracted services: work-item lifecycle integrity', () => {
+    it('rolls back a work-item archive when archiving its linked conversation fails', () => {
+      const task = repository.create({ title: 'Archive rollback', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const conversation = repository.createConversation('Archive history', task.id);
+
+      // The lifecycle service updates work_items before cascading to the
+      // linked conversation. A failure in that second write must leave the
+      // task active too, rather than commit an orphaned archive state.
+      const originalPrepare = database.prepare.bind(database);
+      const prepareSpy = vi.spyOn(database, 'prepare').mockImplementation((sql: string) => {
+        if (sql.includes('UPDATE shared_conversations SET archived_at = ?')) throw new Error('boom');
+        return originalPrepare(sql);
+      });
+      expect(() => repository.archive(task.id, false)).toThrow('boom');
+      prepareSpy.mockRestore();
+
+      expect(repository.get(task.id)?.archivedAt).toBeNull();
+      expect(repository.getConversation(conversation.id)?.archivedAt).toBeNull();
+      expect(repository.listActivity(task.id).filter((entry) => entry.kind === 'archived')).toHaveLength(0);
+    });
+
+    it('treats racing archive requests as one lifecycle transition', () => {
+      const task = repository.create({ title: 'One archive transition', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+      // The second caller observes the committed terminal state and becomes a
+      // no-op. This is the observable concurrency guarantee for the UI's
+      // duplicate-submit/retry path: one task state change and one ledger row.
+      repository.archive(task.id, false);
+      repository.archive(task.id, false);
+
+      expect(repository.get(task.id)?.archivedAt).toEqual(expect.any(String));
+      expect(repository.listActivity(task.id).filter((entry) => entry.kind === 'archived')).toHaveLength(1);
+    });
   });
 
   describe('extracted repositories: run unit-of-work integrity', () => {

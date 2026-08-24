@@ -225,6 +225,13 @@ reserved ngrok domain when another app is already sharing the account's default 
 ngrok endpoint pooling, because it would route requests nondeterministically between apps. Recorded
 from Jeffrey's decision and local ngrok validation on 2026-08-24.
 
+### Keep Writer and Pluto ports untouched when resolving a local port collision
+
+When Writer's frontend needs its standard local port, do not move Writer or Pluto to accommodate
+Workbench. Move Workbench's public runtime port and update its ngrok supervisor to target that same
+port. This is an explicit Jeffrey decision from 2026-08-24. Workbench's Vite preview is its own
+surface and must never be mistaken for a Writer dev server.
+
 ### Exhaust the code before escalating a question to a person **(always)**
 
 When Jeffrey is handed a list of open questions, his response is to ask why they were not answered

@@ -177,12 +177,21 @@ export class WorkItemRepository {
     return rows.map(mapWorkItemRow);
   }
 
-  counts(): { active: number; workbench: number; archive: number } {
+  counts(): { active: number; workbench: number; archive: number; attentionArchive: number; workbenchArchive: number } {
     const row = this.database.prepare(`SELECT
       SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled') AND ${nonWorkbenchProjectPredicate} THEN 1 ELSE 0 END) AS active,
       SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled') AND ${workbenchProjectPredicate} THEN 1 ELSE 0 END) AS workbench,
-      SUM(CASE WHEN archived_at IS NOT NULL THEN 1 ELSE 0 END) AS archive FROM work_items WHERE deleted_at IS NULL`).get() as { active: number | null; workbench: number | null; archive: number | null };
-    return { active: Number(row.active ?? 0), workbench: Number(row.workbench ?? 0), archive: Number(row.archive ?? 0) };
+      SUM(CASE WHEN archived_at IS NOT NULL THEN 1 ELSE 0 END) AS archive,
+      SUM(CASE WHEN archived_at IS NOT NULL AND ${nonWorkbenchProjectPredicate} THEN 1 ELSE 0 END) AS attention_archive,
+      SUM(CASE WHEN archived_at IS NOT NULL AND ${workbenchProjectPredicate} THEN 1 ELSE 0 END) AS workbench_archive
+      FROM work_items WHERE deleted_at IS NULL`).get() as { active: number | null; workbench: number | null; archive: number | null; attention_archive: number | null; workbench_archive: number | null };
+    return {
+      active: Number(row.active ?? 0),
+      workbench: Number(row.workbench ?? 0),
+      archive: Number(row.archive ?? 0),
+      attentionArchive: Number(row.attention_archive ?? 0),
+      workbenchArchive: Number(row.workbench_archive ?? 0),
+    };
   }
 
   searchLinear(query: string, limit = 20): WorkItem[] {
@@ -221,7 +230,7 @@ export class WorkItemRepository {
    * filter set. Purely a `work_items` read: dependency, lineage, agent-outcome
    * decoration, and the queue proposal all stay in the facade's `listPage`.
    */
-  listPage(view: 'active' | 'workbench' | 'archive', limit: number, cursor: string | null, filter: WorkItemFilter, timeZone: string): WorkItemPageRows {
+  listPage(view: 'active' | 'workbench' | 'archive' | 'workbench-archive', limit: number, cursor: string | null, filter: WorkItemFilter, timeZone: string): WorkItemPageRows {
     const safeLimit = Math.max(1, Math.min(100, limit));
     const normalizedFilter = { ...filter, projectNames: [...new Set(filter.projectNames)].sort(), statuses: [...new Set(filter.statuses)].sort(), assignees: [...new Set(filter.assignees)].sort(), sources: [...new Set(filter.sources)].sort(), labels: [...new Set(filter.labels)].sort(), dueStates: [...new Set(filter.dueStates)].sort() };
     const fingerprint = JSON.stringify(normalizedFilter);
@@ -237,7 +246,12 @@ export class WorkItemRepository {
     const active = `is_queued = 1 AND archived_at IS NULL AND deleted_at IS NULL AND status NOT IN ('done', 'canceled')`;
     const workbench = `${active} AND ${workbenchProjectPredicate}`;
     const attention = `${active} AND ${nonWorkbenchProjectPredicate}`;
-    const where = view === 'active' ? attention : view === 'workbench' ? workbench : 'archived_at IS NOT NULL AND deleted_at IS NULL';
+    const archived = 'archived_at IS NOT NULL AND deleted_at IS NULL';
+    // Archive is a filter within its parent stack: attention excludes
+    // Workbench-project work, while Workbench archive includes only that work.
+    const where = view === 'active' ? attention : view === 'workbench' ? workbench
+      : view === 'workbench-archive' ? `${archived} AND ${workbenchProjectPredicate}`
+        : `${archived} AND ${nonWorkbenchProjectPredicate}`;
     const clauses: string[] = []; const args: string[] = [];
     const addIn = (column: string, values: string[]) => { if (values.length) { clauses.push(`${column} IN (${values.map(() => '?').join(', ')})`); args.push(...values); } };
     addIn('project_name', normalizedFilter.projectNames); addIn('status', normalizedFilter.statuses); addIn('source', normalizedFilter.sources);
@@ -252,12 +266,13 @@ export class WorkItemRepository {
       clauses.push(`(${due.join(' OR ')})`);
     }
     const filters = clauses.length ? ` AND ${clauses.join(' AND ')}` : '';
-    const cursorClause = view !== 'archive' ? `(? IS NULL OR queue_position > ? OR (queue_position = ? AND id > ?))` : `(? IS NULL OR archived_at < ? OR (archived_at = ? AND id < ?))`;
-    const cursorArgs = view !== 'archive' ? [cursorValues?.id ?? null, cursorValues?.position ?? null, cursorValues?.position ?? null, cursorValues?.id ?? null] : [cursorValues?.id ?? null, cursorValues?.archivedAt ?? null, cursorValues?.archivedAt ?? null, cursorValues?.id ?? null];
-    const order = view !== 'archive' ? 'queue_position ASC, id ASC' : 'archived_at DESC, id DESC';
+    const isArchive = view === 'archive' || view === 'workbench-archive';
+    const cursorClause = !isArchive ? `(? IS NULL OR queue_position > ? OR (queue_position = ? AND id > ?))` : `(? IS NULL OR archived_at < ? OR (archived_at = ? AND id < ?))`;
+    const cursorArgs = !isArchive ? [cursorValues?.id ?? null, cursorValues?.position ?? null, cursorValues?.position ?? null, cursorValues?.id ?? null] : [cursorValues?.id ?? null, cursorValues?.archivedAt ?? null, cursorValues?.archivedAt ?? null, cursorValues?.id ?? null];
+    const order = !isArchive ? 'queue_position ASC, id ASC' : 'archived_at DESC, id DESC';
     const rows = this.database.prepare(`SELECT * FROM work_items WHERE ${where} AND ${search}${filters} AND ${cursorClause} ORDER BY ${order} LIMIT ?`).all(...searchArgs, ...args, ...cursorArgs, safeLimit + 1) as unknown as WorkItemRow[];
     const pageRows = rows.slice(0, safeLimit); const last = pageRows.at(-1);
-    const nextCursor = rows.length > safeLimit && last ? Buffer.from(JSON.stringify(view !== 'archive' ? { position: last.queue_position, id: last.id, view, fingerprint } : { archivedAt: last.archived_at, id: last.id, view, fingerprint })).toString('base64url') : null;
+    const nextCursor = rows.length > safeLimit && last ? Buffer.from(JSON.stringify(!isArchive ? { position: last.queue_position, id: last.id, view, fingerprint } : { archivedAt: last.archived_at, id: last.id, view, fingerprint })).toString('base64url') : null;
     const totalCount = Number((this.database.prepare(`SELECT COUNT(*) AS count FROM work_items WHERE ${where} AND ${search}${filters}`).get(...searchArgs, ...args) as { count: number }).count);
     return { items: pageRows.map(mapWorkItemRow), nextCursor, totalCount };
   }

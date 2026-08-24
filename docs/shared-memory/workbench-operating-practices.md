@@ -79,6 +79,17 @@ When a task involves file output and multiple agents are active, one must comple
 
 **Source files under active refactor are not exempt.** During a long-running repository.ts extraction (2026-08-24), Codex saved concurrent, unrelated edits (a new `StatusTransitionContext` parameter, bulk-update logic) to the exact file Claude was mid-edit on, live, with no coordination. A `vitest run` executed at the instant Codex's write landed on disk caught the file mid-save and failed with a spurious `cannot start a transaction within a transaction` error in code neither agent had touched that turn; the identical run seconds later, once the write settled, passed clean. Treat a test failure that implicates code you did not touch as a possible read of a concurrently-written file before assuming it is real: re-run once, and only trust the result if `git diff` is stable (no shared file is actively changing) across the two runs.
 
+### Workbench runtime ports
+
+Workbench must not claim Writer or Pluto development ports. Jeffrey's explicit allocation is:
+
+- Writer/Pluto keep their normal ports, including `5173`.
+- Workbench's stable gateway and ngrok target use `5180`.
+- Workbench's review preview uses `5181`.
+
+When changing this allocation, update the preview command, the supervisor-managed process, and
+user-facing runtime references together. Do not redirect Writer or Pluto as a workaround.
+
 ### Always close dev servers **(always)**
 
 *Always shut down dev servers before finishing; they interfere with Jeffrey's local environment*
@@ -143,6 +154,14 @@ with his own thoughts and the assistants' accumulated lessons in one shared cont
 agent can read. Writing back to that shared context is part of finishing a task, not an optional
 extra.
 
+**Shared context is mandatory; budgeting must preserve it.** Jeffrey clarified on 2026-08-24 that
+shared context is Workbench's most critical requirement, not a feature that can be traded away to
+control model usage. Context controls must therefore retain durable shared facts and make them
+available to every agent: constrain each run's transient prompt, retrieve the smallest relevant
+shared-memory evidence automatically, and persist useful outcomes back to the shared store. Never
+solve cost or token overruns by creating agent-private context, withholding shared context, or
+discarding durable history.
+
 ### Automate it; don't add a button **(always)**
 
 Jeffrey pushed back on a "Sync" button that required clicking to pull fresh data: "i don't want a
@@ -176,3 +195,12 @@ things are required together, and either one alone fails him:
 
 When a fuzzy match is uncertain, create the new value rather than guess. A stray new entry is visible
 and fixable; a silently relabelled record is neither.
+### Claude account switching
+
+Jeffrey wants to be able to switch between separately authenticated Claude accounts during
+Workbench use. The supported design is named, isolated Claude profiles: Workbench stores and
+selects a profile identifier, while each profile owns a separate CLI credential/config directory.
+The selected profile must not weaken shared-context injection, subprocess secret filtering, or the
+hard per-run token/cost budget. Do not implement this by copying tokens into Workbench settings or
+by relying on an undocumented Claude CLI environment variable; the one-time account login and the
+credential-directory mechanism must be verified against the installed Claude CLI first.
