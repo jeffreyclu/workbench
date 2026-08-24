@@ -67,6 +67,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  getHealth: () => request<{ ok: boolean; mode: string; runtimeWorkActive: boolean; buildId: string }>('/api/health'),
   getDiscoveryInbox: (view: 'pending' | 'reviewed' = 'pending') => request<DiscoveryInbox>(`/api/discovery?view=${view}`),
   getInsights: (days: 7 | 30 = 30) => request<RunInsights>(`/api/insights?days=${days}`),
   getWeeklyUsage: () => request<WeeklyUsageReport>('/api/usage/weekly'),

@@ -1,7 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Bot, Check, GripVertical, LoaderCircle, Sparkles, Unlock, User } from 'lucide-react';
+import { AlertTriangle, Bot, Check, Clock, GripVertical, LoaderCircle, Sparkles, Unlock, User } from 'lucide-react';
 import type { CSSProperties, KeyboardEvent } from 'react';
 import type { AgentRun, Assignee, WorkItem } from '../shared/contracts';
 import { api } from './api';
@@ -81,7 +81,7 @@ export function SortableQueueItem({ item, index, selected, focused, draggable, o
   const style = { transform: CSS.Translate.toString(transform), transition, ...(color ? { '--task-accent': color.accent, '--task-tint': color.tint, '--task-border': color.border } : {}) } as CSSProperties;
   const isHumanOnly = !item.agentOutcome && item.assignees.length === 1 && item.assignees[0] === 'jeffrey';
   const openDependencies = (item.blockedBy ?? []).filter((dependency) => dependency.isOpen);
-  const visibleOutcome = item.agentOutcome && item.agentOutcome !== 'finished' ? item.agentOutcome : null;
+  const visibleOutcome = item.agentOutcome ?? (item.status === 'in_progress' ? 'in_progress' : null);
   return <div ref={setNodeRef} data-work-item-id={item.id} style={style} role="listitem" tabIndex={focused ? 0 : -1} className={`queue-item ${visibleOutcome ? `outcome-${visibleOutcome}` : ''} ${isHumanOnly ? 'human-only' : ''} ${item.projectName ? 'project-colored' : ''} ${hasFollowUps || isFollowUp ? 'relationship-family' : ''} ${selected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}`} onClick={onSelect} onFocus={onFocus} onKeyDown={onKeyDown}>
     {draggable ? <button className="drag-handle" onClick={(event) => event.stopPropagation()} aria-label={`Reorder ${item.title}`} {...attributes} {...listeners}><GripVertical size={15} /></button> : <span className="rank">{String(index + 1).padStart(2, '0')}</span>}
     <span className="item-copy"><strong>{item.title}</strong>
@@ -91,7 +91,6 @@ export function SortableQueueItem({ item, index, selected, focused, draggable, o
       {hasFollowUps && <button type="button" className="task-lineage follow-up-summary" onClick={(event) => { event.stopPropagation(); onSelect(); }} aria-label={`View ${item.lineage!.followUpCount} follow-ups for ${item.title}`}>{item.lineage!.followUpCount} follow-up{item.lineage!.followUpCount === 1 ? '' : 's'} · {item.lineage!.openFollowUpCount} open</button>}
       {openDependencies.length > 0 && <span className="dependency-signal"><AlertTriangle size={11} /> Blocked by {openDependencies.length} prerequisite{openDependencies.length === 1 ? '' : 's'}</span>}
       {isHumanOnly && <span className="human-only-marker"><User size={11} /> Your task</span>}
-      {visibleOutcome && <span className={`agent-outcome agent-outcome-${visibleOutcome}`}>{visibleOutcome === 'needs_attention' ? <AlertTriangle size={11} /> : visibleOutcome === 'follow_ups' ? <Sparkles size={11} /> : <LoaderCircle className="spin" size={11} />}{visibleOutcome === 'needs_attention' ? 'Needs attention' : visibleOutcome === 'follow_ups' ? 'Follow-ups recommended' : 'Approved · promoting preview'}</span>}
       {(item.agentOutcome === 'needs_attention' || item.agentOutcome === 'follow_ups' || openDependencies.length > 0) && <span className="queue-item-ctas">
         {item.agentOutcome === 'needs_attention' && <button type="button" className="queue-item-cta queue-item-cta-review" onClick={(event) => { event.stopPropagation(); onSelect(); }} aria-label={`Review ${item.title}`}>Review</button>}
         {openDependencies.length > 0 && <QueueItemUnblockButton item={item} />}
@@ -100,5 +99,6 @@ export function SortableQueueItem({ item, index, selected, focused, draggable, o
       {item.archivedAt && <span className={`archive-meta ${item.completionStatus}`}>{item.completionStatus === 'completed' ? 'Completed' : 'Incomplete'} · {new Date(item.archivedAt).toLocaleDateString()}</span>}
       {item.assignees.length > 0 && <span className="assignees">{item.assignees.map((assignee) => <AssigneeIcon key={assignee} assignee={assignee} />)}</span>}
     </span>
+    {visibleOutcome && <span className={`agent-outcome agent-outcome-${visibleOutcome}`}>{visibleOutcome === 'needs_attention' ? <AlertTriangle size={11} /> : visibleOutcome === 'follow_ups' ? <Sparkles size={11} /> : visibleOutcome === 'waiting_promotion' ? <Clock size={11} /> : visibleOutcome === 'promoting' || visibleOutcome === 'in_progress' ? <LoaderCircle className="spin" size={11} /> : <Check size={11} />}{visibleOutcome === 'needs_attention' ? 'Needs attention' : visibleOutcome === 'follow_ups' ? 'Follow-ups recommended' : visibleOutcome === 'promoting' ? 'Approved · promoting preview' : visibleOutcome === 'waiting_promotion' ? 'Approved and waiting promotion' : visibleOutcome === 'in_progress' ? 'In progress' : 'Finished'}</span>}
   </div>;
 }

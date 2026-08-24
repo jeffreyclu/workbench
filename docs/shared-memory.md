@@ -234,6 +234,40 @@ not the end of the search.
 
 ## Workbench product and operating rules
 
+### Agent conversations are visual, not text walls
+
+*Decision from Jeffrey, 2026-08-23.*
+
+The shared agent conversation needs to make long responses immediately scannable. Styling only the
+outer chat bubble is not enough: preserve Markdown, but present authored sections and unstructured
+multi-paragraph replies as distinct visual beats. Use restrained, meaningful motion and visual
+hierarchy (with a reduced-motion fallback), following the local Pluto chat's response treatment as
+the reference for this Workbench surface.
+
+Within that treatment, keep section headings compact and plain: no synthetic section number or decorative
+dot next to labels such as “Detail 07.” Do not use a response-map index, timeline, or orbit visual: it
+competes with the response text and wastes vertical space. Nested response-section surfaces must inherit
+their containing author's low-contrast palette, rather than falling back to a generic green. Do not use
+an outer colored rail on chat bubbles: the bubble surface and border provide enough author distinction.
+Keep decorative markers crisp rather than glowy: bright bloom is visually fatiguing. Human messages
+should have their own equally intentional but calmer treatment, not a plain default bubble or a copy
+of the agent response deck.
+
+Use distinct author palettes in that conversation: Jeffrey is green, Codex is cool blue, and Claude
+is violet. Do not reuse Workbench's global acid green for Codex or a near-orange/green-adjacent tone
+for Claude. Persona colors must make the three authors easy to tell apart at a glance without filling
+the conversation with colored blocks: message bubbles, nested response sections, and Agent Run cards
+use transparent backgrounds. Carry identity through a muted, low-chroma 1px persona-colored border,
+dot, author label, and compact response-section heading instead. The accents should stay visibly
+blue, violet, and green, but read as restrained dark-theme chrome rather than bright outlines. Do not add an outer rail or decorative
+pseudo-element line to any bubble.
+
+Apply the same author identity to Task view Agent Runs cards: Codex runs use cool-blue borders,
+identity dot, headings, live-output state, and model badge; Claude runs use the violet equivalent.
+System action buttons, including “Open execution chat,” retain the established green treatment.
+Run status remains its own semantic state. Do not add an edge rail or use the global acid green as
+the default agent-run color.
+
 ### Restore the last-opened item in each primary surface
 
 *Decision from Jeffrey, 2026-08-23.*
@@ -1093,6 +1127,25 @@ because he was still looking at the stale live build, and only then was it promo
 against source and tests is not the same as verifying it against what Jeffrey actually sees — for
 UI-visible changes, promotion is part of "done."
 
+### A "regression test added" claim must be checked for what it actually asserts
+
+2026-08-24: Codex reported the Active/Archive conversation-view toggle fixed, verified, and
+promoted, backed by "a regression test for clicking Archive twice." Jeffrey reported it still
+broken immediately after. Reading the added test (`App.test.tsx`, `'keeps the Archive view control
+tappable after Archive is selected'`) showed it only asserted `aria-pressed` stayed `"true"` and the
+button wasn't `disabled` after a second click — both true whether or not the click handler actually
+re-ran. It never asserted the click produced an effect (a refetch, a state change). Writing an
+independent test that clicked Archive → Active → Archive and counted `fetch` calls to the
+`view=archive` endpoint proved the handler does fire correctly every time (count rose 2 → 4) — so
+the toggle logic itself was not the bug. Separately, `/api/health` on the live gateway (port 5173)
+was missing the `buildId` field present in the working-tree server source, showing the currently
+promoted release predates the self-reload-toast feature, so a stale open tab would not self-heal
+this time and a real hard refresh was still required. The lesson: when a subagent's "verified" claim
+cites "added a regression test," read the test's actual assertions before trusting it — a test can
+pass while asserting nothing about the behavior it claims to cover. Cross-check "still broken"
+reports against the live served bundle (grep the promoted `client/assets/*.{js,css}` and compare
+`/api/health`) before either re-diagnosing the code or telling Jeffrey to hard-refresh again.
+
 ### Task-linked conversation controls stay icon-only
 
 *Decision from Jeffrey, 2026-08-23.* The task controls in a linked conversation header and the composer attachment control must not render text labels. Keep unlink, complete, and attach as compact, distinct icon buttons with accessible names and hover titles; regression tests must prevent visible button text from returning.
@@ -1119,3 +1172,61 @@ verified promotion (server API correct, live bundle byte-matching the fixed sour
 green), Jeffrey still reported the fix as missing because his open tab predated the swap. Before
 treating a UI fix as still broken post-promotion, verify server response + live bundle content first;
 if those check out, the next step is "hard-refresh the tab," not "re-diagnose the code."
+
+This recurred a fourth time on 2026-08-23 (the in-progress task-card badge), each time independently
+re-verified as correct on the server/bundle before landing on "stale tab" again — a costly loop for
+Jeffrey to sit through. Fixed at the root instead of re-explaining it again: `/api/health` now returns
+a `buildId` (`randomUUID()` generated once per server process in `createApp`, `src/server/app.ts`),
+and `App.tsx` polls it every 15s, showing a pinned "A newer version of Workbench is live" toast with a
+Reload action the moment the id changes from what the tab first loaded. Promotions spawn a fresh
+process per release, so this fires automatically on every future promotion with no other wiring. If
+Jeffrey reports a verified fix as missing after this landed, do not assume stale tab again — that
+path should now self-resolve via the toast, so treat it as a genuinely new bug and re-diagnose the
+code first.
+
+### Task-card status badges: bottom-right corner, styled as prominently as the convo view
+
+*Decision from Jeffrey, 2026-08-23.* On task cards (`.queue-item` in `task-queue.tsx`), the status
+badge (`finished`/`in_progress`/`follow_ups`/`needs_attention`/`promoting`/`waiting_promotion` via
+`.agent-outcome`, and the archived completed/incomplete badge via `.archive-meta`) belongs in the
+bottom-right corner of the card, not the top-right. Conversation cards are unaffected by this — the
+convo view's badge styling (bold, boxed, high-contrast — see `.conversation-state-*` in
+`styles.css`) is the reference standard for prominence that task badges should match, not a layout
+Jeffrey wants copied onto conversations. Any future new task-card status badge should default to
+this bottom-right, high-contrast boxed treatment (background + border + bold uppercase mono text)
+rather than plain colored text — plain-text status labels (like the old `.archive-meta` incomplete
+style) read as "impossible to read" against the dark card background.
+
+When the card has state-specific effects, keep `.agent-outcome` as a direct overlay child of
+`.queue-item`, not content inside `.item-copy`; reserve a compact card footer with bottom padding.
+The in-progress shimmer targets direct card children to establish stacking. Its selector must
+explicitly preserve the badge's `position: absolute` and raise it above the shimmer, or CSS
+cascade turns the badge back into a grid row.
+
+### Virtualized-list row-height math must budget for the visual gap
+
+`App.tsx`'s conversation rail is a manually virtualized list: rows are absolutely positioned via
+`transform: translateY()` at an offset computed from `estimateSize()` (and, in the no-virtualizer
+fallback, from an equivalent manual reduce over row heights). Neither computation reserved space for
+inter-row spacing, so header-to-card and card-to-card gaps rendered as literal 0px even though the
+CSS/JS elsewhere clearly intended visible separation (`e6bd0fa` added the "In progress" / "Pinned for
+you" grouped headers without ever adding a gap term). Fixed 2026-08-23 by adding a
+`CONVERSATION_ROW_GAP` constant folded into both the virtualizer's `estimateSize` and the fallback
+offset reduce. The general lesson: any manually-virtualized (absolute-position + computed-offset)
+list in this codebase needs its gap baked into the row-height math itself, not into CSS margin/padding
+— CSS spacing on an absolutely positioned, intrinsically-sized row does nothing to push the next row
+down, only a bigger reserved offset does.
+
+## Stale responsive overrides survive UI convention changes — check media queries when a "fixed" style regresses
+
+2026-08-23: after task-status badges were moved from top-right/inline to `position: absolute; bottom:
+13px; right: 12px` on `.agent-outcome` (styles.css), two old responsive breakpoints (`max-width:
+1200px` and `max-width: 820px`) still forced `.agent-outcome { position: static; ...margin-top: 2px
+}` — a leftover from the pre-bottom-right layout where the badge needed to wrap onto its own line next
+to a truncating title. Nobody removed it when the positioning convention changed, so on any moderately
+narrow viewport (including a normal 3-panel desktop layout, not just phone widths) the badge fell out
+of absolute positioning and back into grid flow, reproducing the exact "badge floats mid-card / wraps
+to a new line" bug that had already been fixed at the base breakpoint. Lesson: when a Jeffrey-reported
+visual regression matches a style that was verifiably already fixed, check `@media` blocks for a
+duplicate/stale rule targeting the same selector before concluding it's a stale-tab/cache issue —
+`grep -n '<selector>' styles.css` across the whole file, not just the base rule.

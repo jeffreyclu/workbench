@@ -500,9 +500,18 @@ export class WorkItemRepository {
     // still "working" only because the build/promotion step (or the agent work it
     // waits behind) hasn't finished yet. Surface that distinctly from generic work.
     if (promoting) return { ...conversation, state: 'promoting' };
+    // The approval was recorded but the build/promotion step hasn't started yet
+    // (it's still behind active agent work). Surface that distinctly from a
+    // promotion that is actually running, and from generic "working" state.
+    const waitingPromotion = Boolean(this.database.prepare(`
+      SELECT 1 FROM shared_messages
+      WHERE conversation_id = ? AND author = 'system' AND dispatch_target = 'promotion' AND status = 'queued'
+      LIMIT 1
+    `).get(conversation.id));
+    if (waitingPromotion) return { ...conversation, state: 'waiting_promotion' };
     const hasLiveWork = Boolean(this.database.prepare(`
       SELECT 1 FROM shared_messages
-      WHERE conversation_id = ? AND status IN ('queued', 'running')
+      WHERE conversation_id = ? AND status IN ('queued', 'running') AND dispatch_target != 'promotion'
       LIMIT 1
     `).get(conversation.id));
     const latest = this.database.prepare(`
@@ -1247,6 +1256,13 @@ export class WorkItemRepository {
       LIMIT 1
     `).get(item.id));
     if (promoting) return { ...item, agentOutcome: 'promoting' };
+    const waitingPromotion = Boolean(this.database.prepare(`
+      SELECT 1 FROM shared_messages sm
+      JOIN shared_conversations sc ON sc.id = sm.conversation_id
+      WHERE sc.work_item_id = ? AND sm.author = 'system' AND sm.dispatch_target = 'promotion' AND sm.status = 'queued'
+      LIMIT 1
+    `).get(item.id));
+    if (waitingPromotion) return { ...item, agentOutcome: 'waiting_promotion' };
     if (!latest) return item;
     const recentStatuses = this.database.prepare(`
       SELECT status FROM agent_runs

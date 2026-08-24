@@ -135,6 +135,10 @@ export function rejectPreviewMutation(method: string, capabilities: RuntimeCapab
 
 export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapabilities = liveRuntimeCapabilities) {
   const app = express();
+  // Changes every process start (i.e. every runtime promotion), so the client can
+  // detect that a newer build is live and prompt a reload instead of silently
+  // running stale JS in an already-open tab.
+  const buildId = randomUUID();
   const repository = new WorkItemRepository(database);
   repository.backfillConversationRunAdoptions();
   const artifactPublisher = new CloudflarePagesPublisher();
@@ -209,7 +213,7 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
   app.use(createWorkItemActivityMiddleware(repository));
 
   app.get('/api/health', (_request, response) => {
-    response.json({ ok: true, mode: capabilities.mode, runtimeWorkActive: repository.hasRuntimeWork(OWNER_ID) });
+    response.json({ ok: true, mode: capabilities.mode, runtimeWorkActive: repository.hasRuntimeWork(OWNER_ID), buildId });
   });
 
   // Some deployments use a read-only inspection runtime. The local preview is
@@ -658,8 +662,12 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     // this process doesn't recognize as "active" would wrongly kill legitimate
     // work owned by another instance, and would fire on every request right
     // after a restart before the scheduler gets a chance to reclaim it properly.
-    if (capabilities.executeAgents && conversationId) dispatchNextSharedTurn(repository, conversationId);
-    else if (capabilities.executeAgents) {
+    // A browser on the preview port reads this same live API through a
+    // read-only proxy. Its refresh must never be the event that dispatches a
+    // queued production agent turn.
+    const previewMirror = request.header('X-Workbench-Preview-Mirror') === '1';
+    if (!previewMirror && capabilities.executeAgents && conversationId) dispatchNextSharedTurn(repository, conversationId);
+    else if (!previewMirror && capabilities.executeAgents) {
       for (const queuedConversationId of repository.listQueuedConversationIds()) dispatchNextSharedTurn(repository, queuedConversationId);
     }
     const limit = z.coerce.number().int().min(1).max(200).default(100).parse(request.query.limit);

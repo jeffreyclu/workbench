@@ -52,3 +52,28 @@ describe('project card theme', () => {
     expect(card.getAttribute('style')).toContain(`--task-accent: ${projectTheme(projectName).accent}`);
   });
 });
+
+describe('task status badges', () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const renderCard = (overrides: Partial<WorkItem>) => render(
+    <QueryClientProvider client={client}>
+      <SortableQueueItem item={{ ...item, ...overrides }} index={0} selected={false} focused={false} draggable={false} onSelect={vi.fn()} onOpenTask={vi.fn()} onFocus={vi.fn()} onKeyDown={vi.fn()} />
+    </QueryClientProvider>,
+  );
+
+  it.each([
+    [{ status: 'in_progress', agentOutcome: null }, 'In progress', 'agent-outcome-in_progress'],
+    [{ agentOutcome: 'finished' }, 'Finished', 'agent-outcome-finished'],
+    [{ agentOutcome: 'needs_attention' }, 'Needs attention', 'agent-outcome-needs_attention'],
+    [{ agentOutcome: 'follow_ups' }, 'Follow-ups recommended', 'agent-outcome-follow_ups'],
+    [{ agentOutcome: 'promoting' }, 'Approved · promoting preview', 'agent-outcome-promoting'],
+    [{ agentOutcome: 'waiting_promotion' }, 'Approved and waiting promotion', 'agent-outcome-waiting_promotion'],
+  ] as const)('renders %s as a task-card overlay', (overrides, label, className) => {
+    const { container } = renderCard(overrides);
+
+    const badge = screen.getByText(label);
+    expect(badge.className).toContain(className);
+    expect(badge.parentElement?.className).toContain('queue-item');
+    expect(container.querySelector('.item-copy .agent-outcome')).toBeNull();
+  });
+});

@@ -37,7 +37,7 @@ source checkout (/dev/workbench) ── agent edits ──> preview (localhost:5
 ```
 
 - **Source checkout:** the editable repository. Workbench-targeted agents work here.
-- **Preview (`5174`):** Vite UI plus a preview API on `45175`. It uses the real local database but does not own the scheduler or agent processes.
+- **Preview (`5174`):** a read-only Vite mirror of live Workbench. It reads the live API on `5173`, cannot mutate it, and never owns the scheduler or agent processes.
 - **Live (`5173`):** a stable gateway serves an immutable, promoted snapshot. It keeps working while an agent edits the source checkout.
 - **State:** database, attachments, published artifact metadata, and logs live under `data/` by default and are not committed.
 
@@ -66,7 +66,7 @@ For development and review, start the preview in a separate terminal:
 npm run preview
 ```
 
-Open [http://localhost:5174](http://localhost:5174). Preview reads and writes the same local Workbench state as live, so use it to verify UI and API changes against real tasks and conversations without replacing the control plane.
+Open [http://localhost:5174](http://localhost:5174). Preview reads real tasks and conversations from live Workbench but blocks every mutation, so it is safe for review without replacing the control plane. Use `npm run preview:sandbox` only when a change needs an isolated writable preview API and database copy.
 
 When the change is ready, ask an agent to **approve the Workbench preview** or run:
 
@@ -198,7 +198,8 @@ Only artifact-feedback submission is then reachable without a Workbench token; a
 ```bash
 npm run runtime:promote  # build and atomically promote a verified immutable release
 npm run runtime:start    # serve the stable runtime on localhost:5173
-npm run preview          # preview UI on 5174 plus preview API on 45175
+npm run preview          # read-only live-data preview UI on 5174
+npm run preview:sandbox  # isolated writable preview UI + API
 npm run dev              # isolated API + Vite development
 npm run share            # expose the stable runtime through a configured tunnel
 npm run discovery:scan   # run discovery now

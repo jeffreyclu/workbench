@@ -57,13 +57,13 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
 
   it('reports only work owned by this backend in its runtime drain health', async () => {
     const idle = await fetch(`${baseUrl}/api/health`);
-    expect(await idle.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: false });
+    expect(await idle.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: false, buildId: expect.any(String) });
 
     const conversation = repository.ensureDefaultConversation();
     const promotion = repository.createSharedMessage('system', 'Promoting…', 'running', conversation.id, [], 'promotion');
     expect(repository.claimSharedMessage(promotion.id, OWNER_ID, 60_000)).toBe(true);
     const active = await fetch(`${baseUrl}/api/health`);
-    expect(await active.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: true });
+    expect(await active.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: true, buildId: expect.any(String) });
   });
 
   it('persists a manually selected bug-fix type when creating a task', async () => {

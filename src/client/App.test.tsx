@@ -351,6 +351,33 @@ describe('shared room', () => {
     expect(screen.queryByText(/Archived conversation · restore or fork it to continue/)).toBeNull();
   });
 
+  it('keeps the Archive view control tappable after Archive is selected', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const active = { id: '00000000-0000-4000-8000-000000000041', title: 'Active conversation', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const archived = { ...active, id: '00000000-0000-4000-8000-000000000042', title: 'Archived conversation', archivedAt: '2026-01-02T00:00:00Z' };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes('/api/shared/conversations')
+        ? (url.includes('view=archive') ? { conversations: [archived], nextCursor: null } : { conversations: [active], nextCursor: null })
+        : { messages: [] };
+      return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={active.id} /></QueryClientProvider>);
+
+    const viewTabs = await screen.findByRole('group', { name: 'Conversation view' });
+    const archiveView = within(viewTabs).getByRole('button', { name: 'Archive' });
+    fireEvent.click(archiveView);
+    await waitFor(() => expect(archiveView.getAttribute('aria-pressed')).toBe('true'));
+
+    const archiveViewAfterSelection = within(screen.getByRole('group', { name: 'Conversation view' })).getByRole('button', { name: 'Archive' });
+    archiveViewAfterSelection.focus();
+    fireEvent.click(archiveViewAfterSelection);
+    expect(document.activeElement).toBe(archiveViewAfterSelection);
+    expect(archiveViewAfterSelection.getAttribute('aria-pressed')).toBe('true');
+    expect((archiveViewAfterSelection as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('distinguishes manual conversations from task-linked conversations', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const manualId = '00000000-0000-4000-8000-000000000010';
@@ -816,6 +843,34 @@ describe('agent activity stream', () => {
 });
 
 describe('task execution', () => {
+  it('marks Agent Runs with their author so the task view can apply the conversation palette', async () => {
+    const taskId = '00000000-0000-4000-8000-000000000009';
+    const item = {
+      id: taskId, title: 'Palette task', description: '', status: 'in_progress', priority: 2, queuePosition: 0,
+      source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete',
+      agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: 'Workbench', workspacePath: null,
+      strategy: '', assignees: [], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [],
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', lastTouchedAt: '2026-01-01T00:00:00Z',
+    };
+    const baseRun = {
+      workItemId: taskId, kind: 'execute' as const, requestedTarget: 'codex' as const, status: 'completed' as const, instructions: '', output: '', error: '',
+      startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:01:00Z', createdAt: '2026-01-01T00:00:00Z', conversationId: null, messageId: null,
+      model: null, executionProfile: null, inputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null,
+      attempt: 0, maxAttempts: 3, nextAttemptAt: null, resolvedWorkspace: null, origin: 'manual' as const,
+    };
+    const runs = [
+      { ...baseRun, id: '00000000-0000-4000-8000-000000000011', requestedAgent: 'codex' as const, agent: 'codex' as const },
+      { ...baseRun, id: '00000000-0000-4000-8000-000000000012', requestedAgent: 'claude' as const, agent: 'claude' as const },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs, executionPlan: null, classification: null, conversations: [], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><TaskDetail id={taskId} onClose={vi.fn()} onOpenConversation={vi.fn()} onOpenTask={vi.fn()} onCreated={vi.fn()} /></QueryClientProvider>);
+
+    await screen.findByText('Agent runs');
+    expect(document.querySelector('.run-card[data-agent="codex"]')).toBeTruthy();
+    expect(document.querySelector('.run-card[data-agent="claude"]')).toBeTruthy();
+  });
+
   it('replaces an active run with the canceled response immediately', async () => {
     const taskId = '00000000-0000-4000-8000-000000000010';
     const runId = '00000000-0000-4000-8000-000000000020';

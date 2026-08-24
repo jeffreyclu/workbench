@@ -14,11 +14,33 @@ export function authGatePlugin(token: string | null, env: NodeJS.ProcessEnv): Pl
   };
 }
 
+/**
+ * The default preview is a live-data mirror: it may read production through
+ * Vite's proxy, but it must never use that proxy to mutate production. Keeping
+ * this guard in front of the proxy makes the rule true even if the client UI
+ * accidentally leaves an action enabled.
+ */
+export function previewReadOnlyPlugin(enabled: boolean): Plugin {
+  return {
+    name: 'workbench-preview-read-only',
+    configureServer(server) {
+      if (!enabled) return;
+      server.middlewares.use((request, response, next) => {
+        if (!request.url?.startsWith('/api/') || ['GET', 'HEAD', 'OPTIONS'].includes(request.method ?? 'GET')) return next();
+        response.statusCode = 403;
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify({ error: 'Preview mirrors live data and is read-only. Run this action from production.', code: 'PREVIEW_READ_ONLY' }));
+      });
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const token = env.WORKBENCH_TOKEN?.trim() || null;
+  const previewReadOnly = process.env.WORKBENCH_PREVIEW_READ_ONLY === '1';
   return {
-    plugins: [react(), authGatePlugin(token, env)],
+    plugins: [react(), authGatePlugin(token, env), previewReadOnlyPlugin(previewReadOnly)],
     server: {
       port: 5173,
       // LAN/Tailscale access (npm run dev:lan) arrives with a non-localhost Host
@@ -37,6 +59,7 @@ export default defineConfig(({ mode }) => {
           // also lets local development reach an API process started before a
           // localhost-auth configuration change.
           ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+          ...(previewReadOnly ? { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-Workbench-Preview-Mirror': '1' } } : {}),
         },
       },
     },

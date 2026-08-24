@@ -10,6 +10,7 @@ import {
   Bot,
   Check,
   Archive,
+  Clock,
   Cloud,
   Command,
   FileText,
@@ -63,6 +64,8 @@ import { isWorkbenchProject, WORKBENCH_PROJECT_NAME } from '../shared/project-na
 import { SourcesDialog } from './sources-dialog';
 import { createTaskStackViewModel } from './stack-view-model';
 import { useRealtimeNotifications, type RealtimeNotification } from './realtime';
+
+const CONVERSATION_ROW_GAP = 6;
 
 export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectConversation }: { initialConversationId?: string | null; onOpenTask?: (taskId: string) => void; onSelectConversation?: (conversationId: string | null) => void }) {
   const queryClient = useQueryClient();
@@ -202,14 +205,14 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     const rows = conversationList.map((conversation) => {
       const isActive = conversation.isActive || activeConversationIds.has(conversation.id);
       const serverState = conversation.state ?? fallbackConversationStates.get(conversation.id) ?? null;
-      const state = serverState === 'promoting' ? 'promoting' : isActive ? 'working' : serverState;
+      const state = serverState === 'promoting' || serverState === 'waiting_promotion' ? serverState : isActive ? 'working' : serverState;
       return { type: 'conversation' as const, id: conversation.id, conversation, state };
     });
     if (conversationView === 'archive') return rows;
 
-    const progress = rows.filter((row) => !row.conversation.linkedWorkItemPinned && (row.state === 'working' || row.state === 'promoting'));
+    const progress = rows.filter((row) => !row.conversation.linkedWorkItemPinned && (row.state === 'working' || row.state === 'promoting' || row.state === 'waiting_promotion'));
     const pinned = rows.filter((row) => row.conversation.linkedWorkItemPinned);
-    const attention = rows.filter((row) => !row.conversation.linkedWorkItemPinned && row.state !== 'working' && row.state !== 'promoting');
+    const attention = rows.filter((row) => !row.conversation.linkedWorkItemPinned && row.state !== 'working' && row.state !== 'promoting' && row.state !== 'waiting_promotion');
     const groups = [
       { id: 'conversation-in-progress-header', label: 'In progress', group: 'progress' as const, rows: progress },
       { id: 'conversation-attention-header', label: 'Attention stack', group: 'attention' as const, rows: attention },
@@ -220,9 +223,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       ...group.rows,
     ]);
   }, [activeConversationIds, conversationList, conversationView, fallbackConversationStates]);
-  const conversationVirtualizer = useVirtualizer({ count: conversationStackRows.length, getScrollElement: () => conversationScrollRef.current, estimateSize: (index) => conversationStackRows[index]?.type === 'header' ? 38 : 58, overscan: 5, initialRect: { width: 250, height: 600 } });
+  const conversationVirtualizer = useVirtualizer({ count: conversationStackRows.length, getScrollElement: () => conversationScrollRef.current, estimateSize: (index) => (conversationStackRows[index]?.type === 'header' ? 38 : 58) + CONVERSATION_ROW_GAP, overscan: 5, initialRect: { width: 250, height: 600 } });
   const conversationRows = conversationVirtualizer.getVirtualItems();
-  const displayedConversationRows = conversationRows.length ? conversationRows : conversationStackRows.map((row, index) => ({ index, start: conversationStackRows.slice(0, index).reduce((total, item) => total + (item.type === 'header' ? 38 : 58), 0) }));
+  const displayedConversationRows = conversationRows.length ? conversationRows : conversationStackRows.map((row, index) => ({ index, start: conversationStackRows.slice(0, index).reduce((total, item) => total + (item.type === 'header' ? 38 : 58) + CONVERSATION_ROW_GAP, 0) }));
   useEffect(() => {
     // Group headers change the virtual row geometry as conversations move
     // between stacks, so recalculate instead of waiting for a scroll event.
@@ -695,7 +698,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           </div>
         ) : (
           <>
-            <div className="conversation-view-tabs"><button className={conversationView === 'active' ? 'active' : ''} onClick={() => { setConversationView('active'); setConversationId(null); }}>Active</button><button className={conversationView === 'archive' ? 'active' : ''} onClick={() => { setConversationView('archive'); setConversationId(null); }}>Archive</button></div>
+            <div className="conversation-view-tabs" role="group" aria-label="Conversation view">
+              <button type="button" className={conversationView === 'active' ? 'active' : ''} aria-pressed={conversationView === 'active'} onClick={() => { setConversationView('active'); setConversationId(null); }}>Active</button>
+              <button type="button" className={conversationView === 'archive' ? 'active' : ''} aria-pressed={conversationView === 'archive'} onClick={() => { setConversationView('archive'); setConversationId(null); }}>Archive</button>
+            </div>
             <div ref={conversationScrollRef} className="conversation-tabs">
               <div className="virtual-list" style={{ height: conversationVirtualizer.getTotalSize() }}>
                 {displayedConversationRows.map((virtualRow) => {
@@ -705,9 +711,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
 
                   const { conversation, state } = row;
                   const isUnread = Boolean(conversation.isUnread && !locallyReadConversationIds.has(conversation.id) && conversation.id !== conversationId);
-                  const stateLabel = state === 'working' ? 'Working' : state === 'needs_attention' ? 'Failed or canceled' : state === 'waiting_approval' ? 'Review follow-ups' : state === 'promoting' ? 'Approved · promoting preview' : null;
-                  const stateClass = state === 'finished' ? null : state;
-                  return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><button className={`${conversation.id === conversationId ? 'active' : ''} ${isUnread ? 'conversation-unread' : 'conversation-read'} ${stateClass ? `conversation-${stateClass}` : ''} ${exitingConversationIds.has(conversation.id) ? 'conversation-exiting' : ''}`} onClick={() => { setConversationId(conversation.id); setRailOpen(false); }}><span className="conversation-tab-title">{conversation.linkedProjectName && <ProjectColorDot projectName={conversation.linkedProjectName} labelled />}<strong>{conversation.title}</strong>{conversation.linkedWorkItemPinned && <span className="conversation-pinned-marker" aria-label="Pinned task" title="Pinned task"><Pin size={10} fill="currentColor" aria-hidden="true" /></span>}{isUnread && <span className="conversation-unread-marker">New</span>}{stateLabel && <span className={`conversation-state conversation-state-${state}`}>{(state === 'working' || state === 'promoting') && <LoaderCircle className="spin" size={10} />}{stateLabel}</span>}</span><small className="conversation-tab-meta"><ConversationOriginBadge workItemId={conversation.workItemId} /><span>{state === 'working' ? 'Agent working…' : state === 'promoting' ? 'Promoting preview…' : new Date(conversation.updatedAt).toLocaleDateString()}</span></small></button></div>;
+                  const stateLabel = state === 'working' ? 'Working' : state === 'needs_attention' ? 'Failed or canceled' : state === 'waiting_approval' ? 'Review follow-ups' : state === 'promoting' ? 'Approved · promoting preview' : state === 'waiting_promotion' ? 'Approved and waiting promotion' : state === 'finished' ? 'Finished' : null;
+                  const stateClass = state;
+                  return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><button className={`${conversation.id === conversationId ? 'active' : ''} ${isUnread ? 'conversation-unread' : 'conversation-read'} ${stateClass ? `conversation-${stateClass}` : ''} ${exitingConversationIds.has(conversation.id) ? 'conversation-exiting' : ''}`} onClick={() => { setConversationId(conversation.id); setRailOpen(false); }}><span className="conversation-tab-title">{conversation.linkedProjectName && <ProjectColorDot projectName={conversation.linkedProjectName} labelled />}<strong>{conversation.title}</strong>{conversation.linkedWorkItemPinned && <span className="conversation-pinned-marker" aria-label="Pinned task" title="Pinned task"><Pin size={10} fill="currentColor" aria-hidden="true" /></span>}{isUnread && <span className="conversation-unread-marker">New</span>}{stateLabel && <span className={`conversation-state conversation-state-${state}`}>{(state === 'working' || state === 'promoting') && <LoaderCircle className="spin" size={10} />}{state === 'waiting_promotion' && <Clock size={10} />}{stateLabel}</span>}</span><small className="conversation-tab-meta"><ConversationOriginBadge workItemId={conversation.workItemId} /><span>{state === 'working' ? 'Agent working…' : state === 'promoting' ? 'Promoting preview…' : state === 'waiting_promotion' ? 'Waiting to promote…' : new Date(conversation.updatedAt).toLocaleDateString()}</span></small></button></div>;
                 })}
               </div>
               {conversations.isLoading && <ListRowSkeleton count={6} />}
@@ -1285,7 +1291,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
           <summary><span>Agent runs</span><small>{detail.data.runs.length} run{detail.data.runs.length === 1 ? '' : 's'}</small></summary>
           <div className="task-collapsible-content">
           {detail.data.runs.slice(0, runsVisibleCount).map((run, runIndex) => (
-            <article className="run-card" key={run.id}>
+            <article className="run-card" data-agent={run.agent} key={run.id}>
               <header>
                 <span className={`run-status run-${run.status}`}>{run.status === 'running' && <LoaderCircle className="spin" size={11} />}{run.status === 'queued' && run.attempt > 0 ? `Retrying (attempt ${run.attempt + 1} of ${run.maxAttempts})…` : run.status}</span>
                 <strong>{run.agent} · {run.kind}</strong>
@@ -1475,6 +1481,20 @@ export function App() {
     toast[notification.tone](notification.message, options);
   }, []);
   useRealtimeNotifications(handleRealtimeNotification);
+  const health = useQuery({ queryKey: ['health'], queryFn: api.getHealth, refetchInterval: 15_000 });
+  const loadedBuildId = useRef<string | null>(null);
+  useEffect(() => {
+    const buildId = health.data?.buildId;
+    if (!buildId) return;
+    if (loadedBuildId.current === null) { loadedBuildId.current = buildId; return; }
+    if (loadedBuildId.current === buildId) return;
+    toast.info('A newer version of Workbench is live', {
+      duration: 0,
+      action: () => window.location.reload(),
+      actionLabel: 'Reload',
+    });
+    loadedBuildId.current = buildId;
+  }, [health.data?.buildId]);
   const route = useRoute();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [exitingTaskIds, setExitingTaskIds] = useState<Set<string>>(new Set());
