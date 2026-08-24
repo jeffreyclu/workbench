@@ -912,6 +912,193 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // Two runs sharing one working tree edit each other's files. A run now
+    // records the directory it resolved to and mutating runs take an expiring
+    // lease on it, so a second one waits in the queue instead of overwriting
+    // live work. The lease expires so a killed process cannot hold a workspace
+    // hostage; the scheduler reclaims it the way it reclaims run leases.
+    id: '022_workspace_run_leases',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'resolved_workspace')) {
+        database.exec('ALTER TABLE agent_runs ADD COLUMN resolved_workspace TEXT;');
+      }
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS workspace_leases (
+          workspace TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          owner_id TEXT NOT NULL,
+          acquired_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_workspace_leases_run ON workspace_leases(run_id);
+      `);
+    },
+  },
+  {
+    // Phase 1a's ceiling (docs/autonomy-strategy.md "Calibration") is a guess.
+    // `/usage` in an interactive Claude session reports the real weekly
+    // fraction spent; recording that observation alongside the SET Workbench
+    // already measured for the same week solves for a measured ceiling
+    // (ceiling = observed SET ÷ observed_fraction). Each row is one manual
+    // observation — there is no automatic retry or correction, only new
+    // observations superseding old ones by recency.
+    id: '023_usage_calibrations',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS usage_calibrations (
+          id TEXT PRIMARY KEY,
+          provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+          observed_at TEXT NOT NULL,
+          observed_percentage REAL NOT NULL CHECK (observed_percentage > 0 AND observed_percentage <= 100),
+          workbench_set REAL NOT NULL,
+          interactive_set REAL NOT NULL,
+          computed_ceiling_set REAL NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_usage_calibrations_provider_observed ON usage_calibrations(provider, observed_at DESC);
+      `);
+    },
+  },
+  {
+    // The budget governor (docs/autonomy-strategy.md "Estimate, reserve,
+    // dispatch, reconcile") must lock the tokens an autonomous run intends to
+    // spend before the run is allowed to start, so two runs racing the
+    // governor can never both claim the same slice of the weekly ceiling. A
+    // reservation is 'held' the moment the governor accepts a request and
+    // moves to 'released' if the run never starts, or 'committed' once phase
+    // 3 reconciles it against the run's actual usage. Nothing writes this
+    // table yet outside the governor itself.
+    id: '024_budget_reservations',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS budget_reservations (
+          id TEXT PRIMARY KEY,
+          provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+          origin TEXT NOT NULL CHECK (origin IN ('manual', 'autonomous')),
+          model TEXT NOT NULL,
+          work_item_id TEXT NOT NULL,
+          reserved_set REAL NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('held', 'released', 'committed')) DEFAULT 'held',
+          created_at TEXT NOT NULL,
+          released_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_budget_reservations_provider_status ON budget_reservations(provider, status, created_at DESC);
+      `);
+    },
+  },
+  {
+    // Workbench is a focused view of the attention stack, not a second queue.
+    // Keep the legacy column during the compatibility window, but collapse all
+    // existing rows onto the canonical queue before this build starts serving.
+    id: '025_workbench_is_attention_focus',
+    apply(database) {
+      database.exec("UPDATE work_items SET stack = 'attention' WHERE stack != 'attention';");
+      // A pending proposal for the old subset cannot safely reorder the full
+      // canonical queue, so require a fresh plan after this upgrade.
+      database.exec("UPDATE queue_proposals SET status = 'superseded', resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP) WHERE status = 'pending' AND stack = 'workbench';");
+    },
+  },
+  {
+    // Reservations must be tied to the exact run they authorize so later
+    // reconciliation cannot accidentally settle a different attempt.
+    id: '026_budget_reservation_run_link',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(budget_reservations)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'agent_run_id')) {
+        database.exec('ALTER TABLE budget_reservations ADD COLUMN agent_run_id TEXT;');
+        database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_budget_reservations_agent_run ON budget_reservations(agent_run_id) WHERE agent_run_id IS NOT NULL;');
+      }
+    },
+  },
+  {
+    // Project names are free text and Workbench membership is selected by
+    // project name (migration 025), so a spelling drift silently moves a task
+    // between stacks and changes its colour. This gives projects an identity
+    // that survives typing: `projects` holds the canonical spelling,
+    // `project_aliases` remembers every spelling that resolved to it, and
+    // `work_items.project_key` carries the comparison key so queries stop
+    // depending on an exact display string.
+    //
+    // The backfill only collapses names that differ by case, punctuation, or
+    // spacing — a mechanical fold with no judgement in it. Typo merging is
+    // deliberately left to write-time resolution: most existing names are
+    // Linear-owned, and rewriting provider data on the strength of an edit
+    // distance is not a migration's call to make.
+    id: '027_project_registry',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS projects (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          key TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          last_used_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS project_aliases (
+          alias_key TEXT PRIMARY KEY,
+          alias_text TEXT NOT NULL,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_project_aliases_project
+          ON project_aliases(project_id);
+      `);
+
+      const columns = database.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'project_key')) {
+        database.exec('ALTER TABLE work_items ADD COLUMN project_key TEXT;');
+      }
+      database.exec('CREATE INDEX IF NOT EXISTS idx_work_items_project_key ON work_items(project_key, queue_position);');
+
+      // Inlined rather than imported from `project-name.ts`: a migration must
+      // keep producing the same result years from now, even if the shared
+      // normaliser is later tuned.
+      const keyOf = (name: string) => name
+        .normalize('NFKD')
+        .replace(/[̀-ͯ]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '');
+
+      // A database old enough to predate project_name has no vocabulary to
+      // collect, and querying the column would fail the whole upgrade. Guarded
+      // the same way as migration 005.
+      if (!columns.some((column) => column.name === 'project_name')) return;
+
+      const usage = database.prepare(`SELECT project_name AS name, COUNT(*) AS uses, MAX(COALESCE(updated_at, created_at)) AS last_used
+        FROM work_items WHERE project_name IS NOT NULL AND TRIM(project_name) != ''
+        GROUP BY project_name`).all() as Array<{ name: string; uses: number; last_used: string | null }>;
+
+      const grouped = new Map<string, Array<{ raw: string; name: string; uses: number; lastUsed: string | null }>>();
+      for (const row of usage) {
+        const key = keyOf(row.name.trim());
+        if (!key) continue;
+        const spellings = grouped.get(key) ?? [];
+        spellings.push({ raw: row.name, name: row.name.trim(), uses: Number(row.uses), lastUsed: row.last_used });
+        grouped.set(key, spellings);
+      }
+
+      const now = new Date().toISOString();
+      const insertProject = database.prepare('INSERT OR IGNORE INTO projects (id, name, key, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)');
+      // Matched on the exact stored value, so a name padded with a newline is
+      // relabelled too rather than silently keeping a null key.
+      const relabel = database.prepare('UPDATE work_items SET project_name = ?, project_key = ? WHERE project_name = ?');
+      for (const [key, spellings] of grouped) {
+        // The spelling already on the most tasks wins, so the migration keeps
+        // the name Jeffrey actually recognises. Recency breaks a tie.
+        spellings.sort((left, right) => right.uses - left.uses
+          || String(right.lastUsed ?? '').localeCompare(String(left.lastUsed ?? ''))
+          || left.name.localeCompare(right.name));
+        const canonical = spellings[0].name;
+        insertProject.run(`project-${key}`, canonical, key, now, now, spellings[0].lastUsed ?? now);
+        for (const spelling of spellings) relabel.run(canonical, key, spelling.raw);
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

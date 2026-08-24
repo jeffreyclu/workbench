@@ -4,7 +4,7 @@ export const authCookieName = 'workbench_token';
 const openPaths = new Set(['/api/health']);
 const artifactCommentPath = /^\/api\/artifacts\/[A-Za-z0-9_-]{1,64}\/comments$/;
 
-interface GateRequest {
+export interface GateRequest {
   url?: string;
   method?: string;
   headers: Record<string, string | string[] | undefined>;
@@ -199,6 +199,23 @@ export function isOpenRequest(pathname: string, method = 'GET', env: NodeJS.Proc
 }
 
 /**
+ * Shared by the HTTP gate and WebSocket upgrade handler. WebSocket clients do
+ * not get a request body or a redirect, so they authenticate with the existing
+ * same-site cookie (or a trusted proxy's Authorization header) only.
+ */
+export function isRequestAuthorized(request: GateRequest, token: string | null | undefined = undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  const expected = token === undefined ? configuredToken() : token;
+  if (!expected) return true;
+  const trustedProxies = trustedProxyList(env);
+  const client = resolveClientAddress(request, trustedProxies);
+  if (client && isLoopbackIp(client)) return true;
+  const url = new URL(request.url ?? '/', 'http://workbench.invalid');
+  if (isOpenRequest(url.pathname, request.method, env)) return true;
+  const presented = bearerToken(request) ?? readCookie(request.headers.cookie as string | undefined, authCookieName);
+  return Boolean(presented && tokensMatch(expected, presented));
+}
+
+/**
  * Connect-style shared-secret gate, used by both Express and the Vite dev server
  * so a tunnelled Workbench cannot be read or driven by whoever finds the URL.
  * Trust is decided from the verified TCP peer address (never the client-supplied
@@ -229,8 +246,7 @@ export function createAuthGate(token: string | null | undefined, env: NodeJS.Pro
       return;
     }
 
-    const presented = bearerToken(request) ?? readCookie(request.headers.cookie as string | undefined, authCookieName);
-    if (presented && tokensMatch(expected, presented)) return next();
+    if (isRequestAuthorized(request, expected, env)) return next();
 
     response.statusCode = 401;
     if (url.pathname.startsWith('/api/') || url.pathname === '/mcp') {

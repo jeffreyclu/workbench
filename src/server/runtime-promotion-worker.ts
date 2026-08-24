@@ -1,6 +1,7 @@
 import type { WorkItemRepository } from './repository.js';
 import { promoteRuntime } from './runtime-promotion.js';
 import { runSharedBackgroundJob } from './shared-room.js';
+import { waitForPromotionSlot } from './orchestrator.js';
 
 const POLL_MS = 1_000;
 
@@ -11,18 +12,29 @@ const POLL_MS = 1_000;
 export function startRuntimePromotionWorker(
   repository: WorkItemRepository,
 ): { stop: () => void } {
-  const dispatch = () => {
-    for (const id of repository.listRunningPromotionMessageIds()) {
-      void runSharedBackgroundJob(
-        repository,
-        id,
-        (signal, onProgress) => promoteRuntime(signal, onProgress),
-      );
-    }
+  let dispatching = false;
+  const dispatch = async () => {
+    repository.requeueExpiredPromotionMessages();
+    if (dispatching || repository.hasLiveWork()) return;
+    const id = repository.listQueuedPromotionMessageIds()[0];
+    if (!id) return;
+    dispatching = true;
+    await runSharedBackgroundJob(
+      repository,
+      id,
+      async (signal, onProgress) => {
+        await waitForPromotionSlot(repository, signal, onProgress);
+        const result = await promoteRuntime(signal, onProgress);
+        repository.completeQueuedPromotionMessages(id, 'Preview approval was combined into the release that just promoted.');
+        return result;
+      },
+      { claimQueuedPromotion: true },
+    );
+    dispatching = false;
   };
 
-  dispatch();
-  const timer = setInterval(dispatch, POLL_MS);
+  void dispatch();
+  const timer = setInterval(() => void dispatch(), POLL_MS);
   timer.unref();
   return { stop: () => clearInterval(timer) };
 }

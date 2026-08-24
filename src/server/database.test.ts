@@ -32,6 +32,12 @@ const EXPECTED_MIGRATIONS = [
   '019_editable_shared_brief',
   '020_api_mutation_audit',
   '021_agent_run_origin',
+  '022_workspace_run_leases',
+  '023_usage_calibrations',
+  '024_budget_reservations',
+  '025_workbench_is_attention_focus',
+  '026_budget_reservation_run_link',
+  '027_project_registry',
 ];
 
 describe('openDatabase', () => {
@@ -137,6 +143,54 @@ describe('openDatabase', () => {
     upgraded.close();
   });
 
+  it('collapses legacy Workbench queue membership into the attention queue on upgrade', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.prepare("INSERT INTO work_items (id, title, description, status, priority, queue_position, source, is_queued, stack, created_at, updated_at, last_touched_at) VALUES ('legacy-workbench', 'Legacy', '', 'ready', 2, 1, 'manual', 1, 'workbench', '2026-08-23T00:00:00.000Z', '2026-08-23T00:00:00.000Z', '2026-08-23T00:00:00.000Z')").run();
+    current.prepare("DELETE FROM schema_migrations WHERE id = '025_workbench_is_attention_focus'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT stack FROM work_items WHERE id = 'legacy-workbench'").get()).toEqual({ stack: 'attention' });
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '025_workbench_is_attention_focus'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('registers the canonical project vocabulary and collapses spelling variants on upgrade', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    const insert = (id: string, projectName: string, updatedAt: string) => current
+      .prepare(`INSERT INTO work_items (id, title, description, status, priority, queue_position, source, is_queued, project_name, created_at, updated_at, last_touched_at)
+        VALUES (?, 'Task', '', 'ready', 2, 1, 'manual', 1, ?, '2026-08-23T00:00:00.000Z', ?, ?)`)
+      .run(id, projectName, updatedAt, updatedAt);
+    insert('variant-a', 'Workbench', '2026-08-23T00:00:00.000Z');
+    insert('variant-b', 'Workbench', '2026-08-23T00:00:01.000Z');
+    insert('variant-c', 'work bench', '2026-08-23T00:00:02.000Z');
+    insert('variant-d', 'workbench', '2026-08-23T00:00:03.000Z');
+    insert('distinct', 'Connectors', '2026-08-23T00:00:04.000Z');
+    // Rebuild the pre-027 shape: existing databases have already recorded the
+    // preceding migration set, so the upgrade must run against that, not a
+    // fresh schema.
+    current.exec('DROP INDEX IF EXISTS idx_work_items_project_key; DROP TABLE project_aliases; DROP TABLE projects;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '027_project_registry'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '027_project_registry'").get()).toBeTruthy();
+    expect((upgraded.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>).map((column) => column.name)).toContain('project_key');
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_work_items_project_key'").get()).toBeTruthy();
+
+    // The spelling on the most tasks wins, and every variant now reads the same.
+    expect(upgraded.prepare("SELECT DISTINCT project_name AS name FROM work_items WHERE project_key = 'workbench'").all())
+      .toEqual([{ name: 'Workbench' }]);
+    expect(upgraded.prepare("SELECT COUNT(*) AS count FROM work_items WHERE project_key = 'workbench'").get()).toEqual({ count: 4 });
+    expect(upgraded.prepare("SELECT name, key FROM projects ORDER BY key").all())
+      .toEqual([{ name: 'Connectors', key: 'connectors' }, { name: 'Workbench', key: 'workbench' }]);
+    upgraded.close();
+  });
+
   it('creates an append-only audit_log table with the expected columns and category constraint', () => {
     const database = openDatabase(':memory:');
     const columns = database.prepare('PRAGMA table_info(audit_log)').all() as Array<{ name: string }>;
@@ -233,6 +287,110 @@ describe('openDatabase', () => {
       VALUES ('r1', 'w1', 'analysis', 'claude', 'claude', 'claude', 'queued', '', '2026-01-01T00:00:00.000Z')
     `).run();
     expect(upgraded.prepare("SELECT origin FROM agent_runs WHERE id = 'r1'").get()).toEqual({ origin: 'manual' });
+    upgraded.close();
+  });
+
+  it('upgrades a database recorded through 021 with the workspace lease schema', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    // Simulate a database recorded through 021: rebuild agent_runs without the
+    // resolved_workspace column, drop the lease table, then drop the migration
+    // record so the next open() must re-run 022 for real.
+    current.exec(`
+      CREATE TABLE agent_runs_pre_leases AS SELECT
+        id, work_item_id, kind, requested_target, requested_agent, agent, status,
+        instructions, output, error, started_at, completed_at, created_at,
+        conversation_id, message_id, model, execution_profile, input_tokens,
+        output_tokens, estimated_cost_usd, fallback_from, fallback_reason,
+        cancel_requested, cancel_requested_at, origin
+      FROM agent_runs;
+      DROP TABLE agent_runs;
+      ALTER TABLE agent_runs_pre_leases RENAME TO agent_runs;
+      DROP TABLE IF EXISTS workspace_leases;
+    `);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '022_workspace_run_leases'").run();
+    current.close();
+
+    const raw = new DatabaseSync(path);
+    const columnsBefore = (raw.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columnsBefore).not.toContain('resolved_workspace');
+    raw.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toContain('resolved_workspace');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '022_workspace_run_leases'").get()).toBeTruthy();
+    expect(() => upgraded.prepare(`
+      INSERT INTO workspace_leases (workspace, run_id, owner_id, acquired_at, expires_at)
+      VALUES ('/Users/jeffrey.lu/dev/workbench', 'r1', 'owner-1', '2026-01-01T00:00:00.000Z', '2026-01-01T00:02:00.000Z')
+    `).run()).not.toThrow();
+    upgraded.close();
+  });
+
+  it('upgrades a database recorded through 022 with the usage_calibrations table', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE IF EXISTS usage_calibrations;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '023_usage_calibrations'").run();
+    current.close();
+
+    const raw = new DatabaseSync(path);
+    const tablesBefore = raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usage_calibrations'").all();
+    expect(tablesBefore).toEqual([]);
+    raw.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '023_usage_calibrations'").get()).toBeTruthy();
+    expect(() => upgraded.prepare(`
+      INSERT INTO usage_calibrations (id, provider, observed_at, observed_percentage, workbench_set, interactive_set, computed_ceiling_set, created_at)
+      VALUES ('c1', 'claude', '2026-08-19T12:00:00.000Z', 10, 15000, 0, 150000, '2026-08-19T12:00:00.000Z')
+    `).run()).not.toThrow();
+    upgraded.close();
+  });
+
+  it('upgrades a database recorded through 023 with the budget_reservations table', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE IF EXISTS budget_reservations;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '024_budget_reservations'").run();
+    current.close();
+
+    const raw = new DatabaseSync(path);
+    const tablesBefore = raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'budget_reservations'").all();
+    expect(tablesBefore).toEqual([]);
+    raw.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '024_budget_reservations'").get()).toBeTruthy();
+    expect(() => upgraded.prepare(`
+      INSERT INTO budget_reservations (id, provider, origin, model, work_item_id, reserved_set, status, created_at)
+      VALUES ('b1', 'claude', 'autonomous', 'sonnet', 'w1', 107000, 'held', '2026-08-19T12:00:00.000Z')
+    `).run()).not.toThrow();
+    upgraded.close();
+  });
+
+  it('upgrades a database recorded through 025 with the budget reservation run link', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE budget_reservations RENAME TO budget_reservations_pre_run_link;');
+    current.exec(`CREATE TABLE budget_reservations (
+      id TEXT PRIMARY KEY, provider TEXT NOT NULL, origin TEXT NOT NULL, model TEXT NOT NULL,
+      work_item_id TEXT NOT NULL, reserved_set REAL NOT NULL, status TEXT NOT NULL,
+      created_at TEXT NOT NULL, released_at TEXT
+    );`);
+    current.exec('INSERT INTO budget_reservations SELECT id, provider, origin, model, work_item_id, reserved_set, status, created_at, released_at FROM budget_reservations_pre_run_link;');
+    current.exec('DROP TABLE budget_reservations_pre_run_link;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '026_budget_reservation_run_link'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(budget_reservations)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toContain('agent_run_id');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '026_budget_reservation_run_link'").get()).toBeTruthy();
     upgraded.close();
   });
 

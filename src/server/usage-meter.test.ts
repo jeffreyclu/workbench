@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { computeWorkbenchUsage, scanClaudeInteractiveUsage, startOfIsoWeekUtc } from './usage-meter.js';
+import { AUTONOMOUS_TARGET_FRACTION, CALIBRATION_MAX_AGE_DAYS, CLAUDE_PESSIMISTIC_CEILING_SET, computeWeeklyUsageReport, computeWorkbenchUsage, currentUsageCalibration, recordUsageCalibration, scanClaudeInteractiveUsage, startOfIsoWeekUtc } from './usage-meter.js';
 
 describe('startOfIsoWeekUtc', () => {
   it('returns the preceding Monday 00:00 UTC', () => {
@@ -71,6 +71,104 @@ describe('computeWorkbenchUsage', () => {
     const { repository, item } = seed();
     const run = repository.createRun(item.id, 'execute', 'claude', 'claude', '');
     expect(run.origin).toBe('manual');
+  });
+});
+
+describe('computeWeeklyUsageReport', () => {
+  let directory: string;
+  afterEach(() => { if (directory) rmSync(directory, { recursive: true, force: true }); });
+
+  it('reports the pessimistic Claude ceiling and a null Codex ceiling, with the 20% autonomous slice', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-usage-report-test-'));
+    const database = openDatabase(join(directory, 'workbench.db'));
+    const repository = new WorkItemRepository(database);
+
+    const report = computeWeeklyUsageReport(repository, new Date('2026-08-23T15:00:00.000Z'));
+
+    expect(report.claude.ceilingSet).toBe(CLAUDE_PESSIMISTIC_CEILING_SET);
+    expect(report.codex.ceilingSet).toBeNull();
+    expect(report.autonomousSliceFraction).toBe(0.2);
+    expect(report.autonomousTargetFraction).toBe(AUTONOMOUS_TARGET_FRACTION);
+    expect(report.autonomousTargetFraction).toBe(0.16);
+  });
+});
+
+describe('recordUsageCalibration / currentUsageCalibration', () => {
+  let directory: string;
+  afterEach(() => { if (directory) rmSync(directory, { recursive: true, force: true }); });
+
+  function seed() {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-calibration-test-'));
+    const database = openDatabase(join(directory, 'workbench.db'));
+    return new WorkItemRepository(database);
+  }
+
+  it('solves for the ceiling from this week\'s SET and the observed percentage, then replaces the pessimistic ceiling', () => {
+    const repository = seed();
+    const item = repository.create({
+      title: 'Task', description: '', priority: 2, status: 'backlog',
+      projectName: null, workspacePath: null, dueDate: null,
+    });
+    const observedAt = '2026-08-19T12:00:00.000Z'; // Wednesday, week of 2026-08-17
+    const run = repository.createRun(item.id, 'execute', 'claude', 'claude', '', null, null, 'manual');
+    // Sonnet multiplier 1: SET = 10000*1 + 1000*5 = 15000.
+    repository.updateRun(run.id, { model: 'sonnet', inputTokens: 10000, outputTokens: 1000 });
+
+    const calibration = recordUsageCalibration(repository, 'claude', observedAt, 10);
+
+    expect(calibration.workbenchSet).toBeCloseTo(15000, 5);
+    // interactiveSet comes from this machine's real ~/.claude/projects transcripts, so its exact
+    // value is environment-dependent; only the ceiling formula's shape is asserted here.
+    expect(calibration.interactiveSet).toBeGreaterThanOrEqual(0);
+    expect(calibration.computedCeilingSet).toBeCloseTo((calibration.workbenchSet + calibration.interactiveSet) / 0.1, 5);
+
+    const now = new Date('2026-08-20T00:00:00.000Z');
+    const report = computeWeeklyUsageReport(repository, now);
+    expect(report.claude.ceilingSet).toBeCloseTo(calibration.computedCeilingSet, 5);
+    expect(report.claude.ceilingSet).not.toBe(CLAUDE_PESSIMISTIC_CEILING_SET);
+    expect(report.claude.calibration?.id).toBe(calibration.id);
+  });
+
+  it('reads Codex calibrations the same way as Claude, replacing the null ceiling', () => {
+    const repository = seed();
+    const item = repository.create({
+      title: 'Task', description: '', priority: 2, status: 'backlog',
+      projectName: null, workspacePath: null, dueDate: null,
+    });
+    const observedAt = '2026-08-19T12:00:00.000Z'; // Wednesday, week of 2026-08-17
+    const run = repository.createRun(item.id, 'execute', 'codex', 'codex', '', null, null, 'manual');
+    repository.updateRun(run.id, { model: 'gpt-5', inputTokens: 10000, outputTokens: 1000 });
+
+    const calibration = recordUsageCalibration(repository, 'codex', observedAt, 10);
+
+    const now = new Date('2026-08-20T00:00:00.000Z');
+    const report = computeWeeklyUsageReport(repository, now);
+    expect(report.codex.ceilingSet).toBeCloseTo(calibration.computedCeilingSet, 5);
+    expect(report.codex.ceilingSet).not.toBeNull();
+    expect(report.codex.calibration?.id).toBe(calibration.id);
+  });
+
+  it('falls back to the pessimistic ceiling once the calibration is older than the max age', () => {
+    const repository = seed();
+    const observedAt = new Date('2026-08-01T00:00:00.000Z');
+    recordUsageCalibration(repository, 'claude', observedAt.toISOString(), 50);
+
+    const staleNow = new Date(observedAt.getTime() + (CALIBRATION_MAX_AGE_DAYS + 1) * 24 * 60 * 60 * 1000);
+    expect(currentUsageCalibration(repository, 'claude', staleNow)).toBeNull();
+
+    const report = computeWeeklyUsageReport(repository, staleNow);
+    expect(report.claude.ceilingSet).toBe(CLAUDE_PESSIMISTIC_CEILING_SET);
+    expect(report.claude.calibration).toBeNull();
+  });
+
+  it('uses the newest calibration when several have been recorded', () => {
+    const repository = seed();
+    recordUsageCalibration(repository, 'claude', '2026-08-17T00:00:00.000Z', 50);
+    const latest = recordUsageCalibration(repository, 'claude', '2026-08-19T00:00:00.000Z', 25);
+
+    const now = new Date('2026-08-20T00:00:00.000Z');
+    const found = currentUsageCalibration(repository, 'claude', now);
+    expect(found?.id).toBe(latest.id);
   });
 });
 

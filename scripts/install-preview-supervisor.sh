@@ -1,0 +1,13 @@
+#!/bin/zsh
+set -euo pipefail
+label="com.jeffrey.workbench.preview"
+plist="$HOME/Library/LaunchAgents/$label.plist"
+repo="/Users/jeffrey.lu/dev/workbench"
+node_dir="/Users/jeffrey.lu/.nvm/versions/node/v22.19.0/bin"
+node="$node_dir/node"
+agent_bin_dir="/Users/jeffrey.lu/.local/bin"
+mkdir -p "$HOME/Library/LaunchAgents" "$repo/data/logs"
+sed "s|__REPO__|$repo|g; s|__AGENT_BIN_DIR__|$agent_bin_dir|g; s|__NODE_DIR__|$node_dir|g; s|__NODE__|$node|g" "$repo/scripts/workbench-preview.plist.template" > "$plist"
+launchctl unload "$plist" 2>/dev/null || true
+launchctl load -w "$plist"
+echo "Installed persistent Workbench preview: $plist"

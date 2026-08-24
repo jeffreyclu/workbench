@@ -32,6 +32,7 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': {
           target: process.env.WORKBENCH_API_TARGET?.trim() || 'http://localhost:4317',
+          ws: true,
           // The Vite gate has already authenticated non-loopback requests. This
           // also lets local development reach an API process started before a
           // localhost-auth configuration change.

@@ -3,6 +3,7 @@ import { buildPrompt, claudeScopeRecoveryPrompt, classifyExecution, hasUnsupport
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
+import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
 
 const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
@@ -82,7 +83,7 @@ ${connectionContext}
 Current conversation:
 ${compactConversationHistory(thread)}
 
-Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. Start by naming the relevant decision, handoff, or blocker from the structured shared brief that you are continuing; if it conflicts with observed state, say so before acting. Both agents share the complete durable Workbench history through read-only retrieval: curl -sG http://localhost:5173/api/activity-memory --data-urlencode 'q=<focused terms>' --data 'limit=40'. Search it whenever historical work matters; do not claim history you did not retrieve or receive here. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential. Never launch detached/background work (including &, nohup, tmux, screen, or a subagent you will report on later): Workbench cannot track it after this CLI turn exits. Keep every command and delegated action foreground until its observed result is available, then report it in this response. If that is not possible, state that the work is blocked or incomplete.`;
+Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. Start by naming the relevant decision, handoff, or blocker from the structured shared brief that you are continuing; if it conflicts with observed state, say so before acting. Both agents share the complete durable Workbench history through read-only retrieval: curl -sG http://localhost:5173/api/activity-memory --data-urlencode 'q=<focused terms>' --data 'limit=40'. Search it whenever historical work matters; do not claim history you did not retrieve or receive here. Durable memory is shared, never per-agent: read docs/shared-memory.md in the Workbench repo for Jeffrey's standing preferences and corrections, and append anything durable you learn to that file in the same turn instead of writing a private per-agent memory. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential. Never launch detached/background work (including &, nohup, tmux, screen, or a subagent you will report on later): Workbench cannot track it after this CLI turn exits. Keep every command and delegated action foreground until its observed result is available, then report it in this response. If that is not possible, state that the work is blocked or incomplete.`;
 }
 
 export function linearContextForPrompt(repository: WorkItemRepository, message: string): string {
@@ -152,10 +153,14 @@ export async function runSharedBackgroundJob(
   repository: WorkItemRepository,
   messageId: string,
   job: (signal: AbortSignal, onProgress: (body: string) => void) => Promise<string>,
+  options: { claimQueuedPromotion?: boolean } = {},
 ): Promise<void> {
   const target = repository.getSharedMessageById(messageId);
   // Claim a lease so the scheduler knows this process is actively working on this message.
-  if (!repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS)) return;
+  const claimed = options.claimQueuedPromotion
+    ? repository.claimQueuedPromotionMessage(messageId, OWNER_ID, LEASE_MS)
+    : repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS);
+  if (!claimed) return;
   const leaseHeartbeat = setInterval(() => repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS), HEARTBEAT_MS);
   leaseHeartbeat.unref();
 
@@ -172,6 +177,13 @@ export async function runSharedBackgroundJob(
     clearInterval(leaseHeartbeat);
     activeReplies.delete(messageId);
     if (target) settleLinkedTask(repository, target.conversationId, 'Agent work finished; review the conversation.');
+    if (target) {
+      const completed = repository.getSharedMessageById(messageId);
+      publishRealtimeEvent('shared', 'work-items', 'insights');
+      publishRealtimeNotification(completed?.status === 'completed'
+        ? { tone: 'success', message: 'Agent finished', description: target.body.slice(0, 180), duration: 8_000, action: { label: 'Open conversation', route: `/conversations/${target.conversationId}` } }
+        : { tone: 'error', message: 'Agent needs your attention', description: target.body.slice(0, 180), duration: 0, action: { label: 'Open conversation', route: `/conversations/${target.conversationId}` } });
+    }
   }
 }
 
@@ -278,6 +290,13 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const synthesized = await synthesizeSharedTurn(repository, target.conversationId, target.createdAt);
     const dispatched = dispatchNextSharedTurn(repository, target.conversationId);
     if (!synthesized && !dispatched.length) settleLinkedTask(repository, target.conversationId, `${agent} finished responding; review the conversation.`);
+    if (!synthesized && !dispatched.length) {
+      const completed = repository.getSharedMessageById(messageId);
+      publishRealtimeEvent('shared', 'work-items', 'insights');
+      publishRealtimeNotification(completed?.status === 'completed'
+        ? { tone: 'success', message: 'Agent finished', description: target.body.slice(0, 180), duration: 8_000, action: { label: 'Open conversation', route: `/conversations/${target.conversationId}` } }
+        : { tone: 'error', message: 'Agent needs your attention', description: target.body.slice(0, 180), duration: 0, action: { label: 'Open conversation', route: `/conversations/${target.conversationId}` } });
+    }
   }
 }
 

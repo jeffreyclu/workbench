@@ -28,6 +28,7 @@ import type {
   WorkItemReference,
   WorkItemReferenceType,
   RunInsights,
+  WeeklyUsageReport,
   BulkWorkItemAction,
   BulkWorkItemResult,
   SavedWorkItemFilter,
@@ -36,6 +37,7 @@ import type {
   UpdateWorkItemInput,
   ProviderSyncField,
   ProviderSyncConflictResolution,
+  ProjectSummary,
 } from '../shared/contracts';
 
 /** Mirrors the server's QueuePlan (queue-intelligence.ts), which is not part of the shared contract. */
@@ -67,6 +69,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   getDiscoveryInbox: (view: 'pending' | 'reviewed' = 'pending') => request<DiscoveryInbox>(`/api/discovery?view=${view}`),
   getInsights: (days: 7 | 30 = 30) => request<RunInsights>(`/api/insights?days=${days}`),
+  getWeeklyUsage: () => request<WeeklyUsageReport>('/api/usage/weekly'),
   scanDiscovery: () => request<{ started: boolean }>('/api/discovery/scan', { method: 'POST' }),
   resolveDiscovery: (id: string, action: 'convert' | 'dismiss' | 'snooze' | 'merge', workItemId?: string) =>
     request(`/api/discovery/${id}/${action}`, { method: 'POST', body: JSON.stringify({ workItemId }) }),
@@ -193,6 +196,7 @@ export const api = {
     return { count: page.totalCount };
   },
   getWorkItemCounts: () => request<{ active: number; workbench: number; archive: number }>('/api/work-item-counts'),
+  getProjects: () => request<{ projects: ProjectSummary[] }>('/api/projects'),
   getRuntimePreviewStatus: () => request<{ pending: boolean; currentFingerprint: string; promotedFingerprint: string | null; promotedAt: string | null }>('/api/runtime/preview-status'),
   searchShared: (query: string, limit?: number) => {
     const params = new URLSearchParams({ q: query });

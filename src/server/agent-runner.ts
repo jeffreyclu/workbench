@@ -7,9 +7,26 @@ import { describeAgentFallback, describeModelSelection, type ExecutionProfileSou
 import { agentSubprocessEnv } from './agent-security.js';
 import { estimateModelCost } from './model-pricing.js';
 import { WorkItemRepository } from './repository.js';
+import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
 
 const MAX_OUTPUT_BYTES = 1_000_000;
+/** How long a run may produce no stream event before its output gets a visible elapsed marker. */
+const QUIET_PROGRESS_MS = 8_000;
+const HEARTBEAT_TICK_MS = 4_000;
+/**
+ * Partial messages arrive a token at a time and every emit rewrites the whole
+ * growing body in SQLite. Four writes a second still reads as live typing while
+ * keeping the database out of the run's critical path.
+ */
+const PROGRESS_FLUSH_MS = 250;
+
+/**
+ * Appended to every Claude invocation. Delegation is allowed, so the contract's
+ * job is to make delegated work reportable: each subagent reports its files,
+ * commands, and observed output, and the parent carries all of it forward.
+ */
+export const CLAUDE_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Delegate to subagents when the work genuinely splits, and require each one to report back what it did, every file it changed, the exact commands it ran, and their observed output. Carry all of that into your own report: name each subagent, what it was asked for, and what it actually returned. Never summarize delegated work you did not see, and never write "see the subagent output" in place of the result. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Report a command as passing only if it ran in this run — yours or a subagent's — and its output was observed.`;
 const activeRunControllers = new Map<string, AbortController>();
 export const isAgentRunActive = (id: string) => activeRunControllers.has(id);
 
@@ -176,6 +193,9 @@ Before acting, explicitly identify the relevant decision, handoff, or blocker fr
 
 Full Workbench activity memory:
 Both Codex and Claude share the complete durable Workbench history. Search it whenever prior work may matter with: curl -sG http://localhost:5173/api/activity-memory --data-urlencode 'q=<focused terms>' --data 'limit=40'. This is read-only retrieval over conversations, task activity, and prior run output; do not claim historical context you did not retrieve or receive in the brief.
+
+Shared memory:
+Durable memory is shared, never per-agent. docs/shared-memory.md in the Workbench repo holds every standing preference, correction, and constraint Jeffrey has given. Read it before acting, and when you learn something durable, append it there in the same turn. Do not write private per-agent memory files.
 
 Live progress protocol:
 During execution, emit brief user-facing updates before and after meaningful steps. Explain what you are checking, why it matters, what you learned, and what comes next. Keep these updates concise. Provide reasoning summaries and decisions, not private chain-of-thought.
@@ -355,13 +375,20 @@ export function selectAutoExecutionProfile(item: WorkItem, run: Pick<AgentRun, '
   return resolveExecutionProfileDecision(item, run, requestedInstructions).profile;
 }
 
+/**
+ * Reasoning effort actually sent to the provider CLI. Both agents use the same
+ * ladder: a tier must mean the same amount of thinking whichever agent runs it.
+ * Claude was previously capped a rung lower to conserve its session allowance,
+ * which quietly made every standard-tier Claude run weaker than the Codex run
+ * it was compared against. The activity log reads this same function, so what
+ * Jeffrey sees recorded is what the CLI received.
+ */
+export function effortFor(profile: ExecutionProfile): 'low' | 'medium' | 'high' {
+  return profile === 'economy' ? 'low' : profile === 'standard' ? 'medium' : 'high';
+}
+
 export function commandFor(agent: AgentRun['agent'], cwd: string, profile: ExecutionProfile): { command: string; args: string[] } {
-  // Claude consumes its separate session allowance aggressively during long
-  // autonomous tool loops. Keep the chosen model tier intact while reserving
-  // higher reasoning effort for genuinely deep work.
-  const effort = agent === 'claude'
-    ? profile === 'deep' ? 'medium' : 'low'
-    : profile === 'economy' ? 'low' : profile === 'standard' ? 'medium' : 'high';
+  const effort = effortFor(profile);
   if (agent === 'codex') {
     const model = modelFor(agent, profile);
     return {
@@ -375,10 +402,11 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
     command: 'claude',
     // Claude treats --add-dir as an allowlist. Include the home directory so
     // a task-linked agent can access sibling repos and user documents.
-    // Keep the parent stream observable while Claude delegates work. Forwarded
-    // child events are non-terminal assistant/user events, so they cannot be
-    // mistaken for completion of the parent response.
-    args: ['-p', '--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--output-format', 'stream-json', '--forward-subagent-text', '--verbose', '--effort', effort, '--model', model, '--no-session-persistence', '--disable-slash-commands', '--add-dir', cwd, homedir()],
+    // Delegation is allowed and expected. --forward-subagent-text carries each
+    // subagent's text and thinking back as assistant/user events tagged with
+    // parent_tool_use_id, which readableAgentEvent attributes to the worker
+    // that produced it. Forwarded events are progress only, never terminal.
+    args: ['-p', '--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--output-format', 'stream-json', '--include-partial-messages', '--forward-subagent-text', '--verbose', '--effort', effort, '--model', model, '--no-session-persistence', '--disable-slash-commands', '--add-dir', cwd, homedir()],
   };
 }
 
@@ -418,7 +446,15 @@ function terminateAgentProcessTree(child: ReturnType<typeof spawn>, signal: Node
   try { child.kill(signal); } catch { /* already stopped */ }
 }
 
-export function readableAgentEvent(agent: AgentRun['agent'], line: string): { progress: string; final: string | null; audit: AgentAuditCandidate[] } {
+/**
+ * Names the subagents a run has spawned, keyed by the parent tool_use id that
+ * forwarded events carry. Delegated work is only trackable if every line can be
+ * traced back to the worker that produced it, so the runner keeps this for the
+ * life of one invocation and hands it to each parsed event.
+ */
+export interface AgentEventContext { subagents: Map<string, string> }
+
+export function readableAgentEvent(agent: AgentRun['agent'], line: string, context?: AgentEventContext): { progress: string; final: string | null; audit: AgentAuditCandidate[]; delta?: string } {
   try {
     const event = JSON.parse(line) as Record<string, unknown>;
     if (agent === 'codex') {
@@ -447,25 +483,62 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string): { pr
       if (event.type === 'turn.started') return { progress: '● Analyzing the task', final: null, audit: [] };
       return { progress: '', final: null, audit: [] };
     }
+    // Every forwarded event names its worker so a delegated line is never
+    // mistaken for the parent's, in the live stream or in the audit trail.
+    const subagent = typeof event.parent_tool_use_id === 'string' ? context?.subagents.get(event.parent_tool_use_id) ?? 'subagent' : null;
+    const attribute = (text: string) => subagent ? `[${subagent}] ${text}` : text;
+    if (event.type === 'stream_event') {
+      // Partial-message events are how a long answer stays visible while it is
+      // still being written. Text arrives character by character; a thinking
+      // block announces itself so a silent reasoning pause still reads as work.
+      const streamed = (event.event ?? {}) as Record<string, unknown>;
+      if (streamed.type === 'content_block_delta') {
+        const delta = (streamed.delta ?? {}) as Record<string, unknown>;
+        if (delta.type === 'text_delta' && typeof delta.text === 'string') return { progress: '', final: null, audit: [], delta: delta.text };
+        return { progress: '', final: null, audit: [] };
+      }
+      // A forwarded block opens with its worker's name; the deltas that follow
+      // append to that line rather than repeating the label per token.
+      if (streamed.type === 'content_block_start' && subagent) {
+        const block = (streamed.content_block ?? {}) as Record<string, unknown>;
+        if (block.type === 'text') return { progress: `[${subagent}]`, final: null, audit: [] };
+      }
+      // A thinking block prints nothing. Announcing each one buried the real
+      // answer under dozens of identical markers; the quiet-run heartbeat is
+      // what proves the run is alive.
+      return { progress: '', final: null, audit: [] };
+    }
     if (event.type === 'assistant') {
       const message = event.message as { content?: Array<Record<string, unknown>> } | undefined;
       const audit: AgentAuditCandidate[] = [];
       const parts = (message?.content ?? []).flatMap((content) => {
-        if (content.type === 'text' && typeof content.text === 'string') return [content.text];
+        if (content.type === 'text' && typeof content.text === 'string') return [attribute(content.text)];
         if (content.type === 'tool_use') {
           const name = String(content.name ?? 'tool');
           const input = (content.input ?? {}) as Record<string, unknown>;
           const description = typeof input.description === 'string' ? input.description : '';
           const filePath = String(input.file_path ?? input.file ?? '');
-          if (name === 'Read') audit.push({ category: 'agent_file_read', detail: filePath || 'unknown file' });
-          else if (name === 'Edit' || name === 'Write') audit.push({ category: 'agent_file_write', detail: filePath || 'unknown file' });
-          else audit.push({ category: 'agent_tool_use', detail: description ? `${name}: ${description}` : name });
-          if (description) return [`● ${description.charAt(0).toUpperCase()}${description.slice(1)}`];
-          if (name === 'Read') return [`● Reading ${String(input.file_path ?? input.file ?? 'a project file')}`];
-          if (name === 'Edit' || name === 'Write') return [`● Editing ${String(input.file_path ?? input.file ?? 'project files')}`];
-          if (name === 'Glob' || name === 'Grep') return ['● Searching the codebase'];
-          if (name === 'Bash') return ['● Running a workspace command'];
-          return [`● Using ${name}`];
+          // Delegation is a tracked event in its own right: remember which
+          // worker this id belongs to so its forwarded lines can be attributed.
+          if (name === 'Task' || name === 'Agent') {
+            const worker = String(input.subagent_type ?? input.agentType ?? 'subagent');
+            const assignment = description || String(input.prompt ?? '').slice(0, 120);
+            if (typeof content.id === 'string') context?.subagents.set(content.id, worker);
+            // audit_log.category is a CHECK-constrained enum; delegation records
+            // under tool use with the worker named in the detail rather than
+            // requiring a table rebuild to add a category.
+            audit.push({ category: 'agent_tool_use', detail: attribute(`delegated to ${worker}${assignment ? `: ${assignment}` : ''}`) });
+            return [attribute(`● Delegating to ${worker}${assignment ? `: ${assignment}` : ''}`)];
+          }
+          if (name === 'Read') audit.push({ category: 'agent_file_read', detail: attribute(filePath || 'unknown file') });
+          else if (name === 'Edit' || name === 'Write') audit.push({ category: 'agent_file_write', detail: attribute(filePath || 'unknown file') });
+          else audit.push({ category: 'agent_tool_use', detail: attribute(description ? `${name}: ${description}` : name) });
+          if (description) return [attribute(`● ${description.charAt(0).toUpperCase()}${description.slice(1)}`)];
+          if (name === 'Read') return [attribute(`● Reading ${String(input.file_path ?? input.file ?? 'a project file')}`)];
+          if (name === 'Edit' || name === 'Write') return [attribute(`● Editing ${String(input.file_path ?? input.file ?? 'project files')}`)];
+          if (name === 'Glob' || name === 'Grep') return [attribute('● Searching the codebase')];
+          if (name === 'Bash') return [attribute('● Running a workspace command')];
+          return [attribute(`● Using ${name}`)];
         }
         return [];
       });
@@ -524,7 +597,7 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     const efficientPrompt = agent === 'claude' ? `${prompt}
 
 Claude execution budget:
-Use the shortest tool path that can complete the requested work correctly. Do not spawn subagents unless the task explicitly requires independent parallel work. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result.` : prompt;
+${CLAUDE_EXECUTION_CONTRACT}` : prompt;
     let stdout = '';
     let stderr = '';
     let buffered = '';
@@ -532,6 +605,7 @@ Use the shortest tool path that can complete the requested work correctly. Do no
     let finalOutput = '';
     let terminalError = '';
     let lastProgressEvent = '';
+    const eventContext: AgentEventContext = { subagents: new Map() };
     const runModel = modelFor(agent, profile);
     let reportedUsage: { inputTokens: number | null; outputTokens: number | null } = { inputTokens: null, outputTokens: null };
     // Set only by the provider's own billed total (Claude `result.total_cost_usd`).
@@ -572,31 +646,67 @@ Use the shortest tool path that can complete the requested work correctly. Do no
       terminationError = new Error('Agent run timed out after 30 minutes.');
       stopProcessTree();
     }, 30 * 60 * 1000);
+    // Silence is the failure Jeffrey actually feels: a long tool loop or a long
+    // thinking block can pass minutes without a single stream event, and the run
+    // looks hung. The elapsed marker is appended at emit time and never stored
+    // in `progress`, so it cannot leak into the accumulated output or the report.
+    const startedAt = Date.now();
+    let lastEventAt = startedAt;
+    let lastFlushAt = 0;
+    let pendingFlush: NodeJS.Timeout | null = null;
+    const flushProgress = (force = false) => {
+      const sinceLastFlush = Date.now() - lastFlushAt;
+      if (!force && sinceLastFlush < PROGRESS_FLUSH_MS) {
+        // Trailing edge: the tokens written inside this window must still land,
+        // otherwise the last sentence of a reply never appears until it finishes.
+        if (!pendingFlush) {
+          pendingFlush = setTimeout(() => { pendingFlush = null; flushProgress(); }, PROGRESS_FLUSH_MS - sinceLastFlush);
+          pendingFlush.unref();
+        }
+        return;
+      }
+      lastFlushAt = Date.now();
+      const visibleProgress = progress.slice(-MAX_OUTPUT_BYTES);
+      onProgress?.(visibleProgress);
+      // Codex does not provide authoritative totals until turn.completed.
+      // A conservative character-based estimate keeps the live counter moving;
+      // the terminal provider event replaces it with the real total.
+      estimatedOutputTokens = Math.max(estimatedOutputTokens, Math.ceil(visibleProgress.length / 4));
+      emitLiveUsage();
+    };
+    const heartbeat = setInterval(() => {
+      if (Date.now() - lastEventAt < QUIET_PROGRESS_MS) return;
+      const elapsedSeconds = Math.round((Date.now() - startedAt) / 1_000);
+      const elapsed = elapsedSeconds < 90 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
+      const visible = progress.slice(-MAX_OUTPUT_BYTES);
+      onProgress?.(`${visible}${visible ? '\n\n' : ''}● Still working… (${elapsed} elapsed)`);
+    }, HEARTBEAT_TICK_MS);
+    heartbeat.unref();
     child.stdout.on('data', (chunk: Buffer) => {
       if (stdout.length < MAX_OUTPUT_BYTES) stdout += chunk.toString();
       buffered += chunk.toString();
       const lines = buffered.split('\n');
       buffered = lines.pop() ?? '';
       for (const line of lines.filter(Boolean)) {
+        lastEventAt = Date.now();
         terminalError ||= terminalAgentError(agent, line) ?? '';
         try { const usage = usageFromEvent(agent, JSON.parse(line)); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
-        const event = readableAgentEvent(agent, line);
-        if (event.progress && event.progress !== lastProgressEvent) {
+        const event = readableAgentEvent(agent, line, eventContext);
+        // Streamed text is appended verbatim: it is one message arriving in
+        // pieces, not a separate progress line.
+        if (event.delta) {
+          progress += event.delta;
+          lastProgressEvent = '';
+        }
+        // The completed block repeats text already streamed piece by piece.
+        if (event.progress && event.progress !== lastProgressEvent && !progress.endsWith(event.progress)) {
           progress += `${progress ? '\n\n' : ''}${event.progress}`;
           lastProgressEvent = event.progress;
         }
         if (event.final) finalOutput = event.final;
         if (event.audit.length) onAudit?.(event.audit, agent);
       }
-      if (progress) {
-        const visibleProgress = progress.slice(-MAX_OUTPUT_BYTES);
-        onProgress?.(visibleProgress);
-        // Codex does not provide authoritative totals until turn.completed.
-        // A conservative character-based estimate keeps the live counter moving;
-        // the terminal provider event replaces it with the real total.
-        estimatedOutputTokens = Math.max(estimatedOutputTokens, Math.ceil(visibleProgress.length / 4));
-        emitLiveUsage();
-      }
+      if (progress) flushProgress();
     });
     child.stderr.on('data', (chunk: Buffer) => {
       if (stderr.length < MAX_OUTPUT_BYTES) stderr += chunk.toString();
@@ -607,16 +717,22 @@ Use the shortest tool path that can complete the requested work correctly. Do no
     });
     child.on('close', (code) => {
       clearTimeout(timeout);
+      clearInterval(heartbeat);
+      if (pendingFlush) clearTimeout(pendingFlush);
       if (forceKillTimer) clearTimeout(forceKillTimer);
       signal?.removeEventListener('abort', cancel);
       if (buffered.trim()) {
         terminalError ||= terminalAgentError(agent, buffered.trim()) ?? '';
         try { const usage = usageFromEvent(agent, JSON.parse(buffered.trim())); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
-        const event = readableAgentEvent(agent, buffered.trim());
+        const event = readableAgentEvent(agent, buffered.trim(), eventContext);
         if (event.progress && event.progress !== lastProgressEvent) progress += `${progress ? '\n\n' : ''}${event.progress}`;
         if (event.final) finalOutput = event.final;
         if (event.audit.length) onAudit?.(event.audit, agent);
       }
+      // The tokens written inside the last throttle window still belong to the
+      // run: without this, a run that ends without a terminal `result` event
+      // keeps whatever partial text the previous flush happened to catch.
+      if (progress) flushProgress(true);
       if (cancellationRequested || signal?.aborted) reject(new Error('Agent run canceled.'));
       else if (terminationError) reject(terminationError);
       else if (code === 0 && !terminalError) {
@@ -715,10 +831,44 @@ export function backoffDelayMs(attempt: number, baseMs = 5_000, capMs = 5 * 60_0
 /** Run kinds safe to silently retry: they only read/produce text, no filesystem edits to redo. `execute` is excluded because it performs non-idempotent filesystem edits. */
 const RETRYABLE_KINDS = new Set<string>(['analysis', 'research', 'review', 'strategy', 'bugfix']);
 
+/** Run kinds that edit the working tree, and therefore serialize on it. Read-only kinds never wait for a workspace. */
+export const MUTATING_RUN_KINDS = new Set<string>(['execute']);
+
+/** How long a run whose workspace is busy waits before the scheduler offers it the workspace again. */
+const WORKSPACE_WAIT_RETRY_MS = 5_000;
+
 export async function executeAgentRun(repository: WorkItemRepository, run: AgentRun, ownerId: string, leaseMs: number, externalContext = ''): Promise<void> {
   if (!repository.claimRun(run.id, ownerId, leaseMs)) return;
   const item = repository.get(run.workItemId);
   if (!item) return;
+  // Serialize on the working tree before anything visible happens: a run that
+  // has to wait for its workspace should read as still queued, not as started
+  // and then reverted. An unresolvable workspace falls through to the normal
+  // failure path inside the try below.
+  let workspace: string | null = null;
+  try { workspace = resolveWorkingDirectory(item); } catch { workspace = null; }
+  if (workspace) {
+    if (MUTATING_RUN_KINDS.has(run.kind) && !repository.claimWorkspace(workspace, run.id, ownerId, leaseMs)) {
+      const alreadyWaiting = run.resolvedWorkspace !== null;
+      repository.updateRun(run.id, { resolvedWorkspace: workspace });
+      repository.releaseRunToQueue(run.id, ownerId, WORKSPACE_WAIT_RETRY_MS);
+      // Say it once. The scheduler re-offers the run every few seconds and the
+      // activity feed is Jeffrey's, not a polling log.
+      if (!alreadyWaiting) repository.addActivity(item.id, 'system', 'progress', `Waiting: another run is editing ${workspace}.`);
+      // Re-offer it from this process too. Dispatch can originate from the
+      // preview API, which has no scheduler to pick the run back up, and a
+      // double offer is harmless: whichever attempt claims the run first wins.
+      const retry = setTimeout(() => {
+        try {
+          const requeued = repository.getRun(run.id);
+          if (requeued?.status === 'queued') void executeAgentRun(repository, requeued, ownerId, leaseMs, externalContext).catch(() => { /* The claim path reports its own failures. */ });
+        } catch { /* The process (or its database) went away while this run waited. The scheduler owns it now. */ }
+      }, WORKSPACE_WAIT_RETRY_MS);
+      retry.unref();
+      return;
+    }
+    repository.updateRun(run.id, { resolvedWorkspace: workspace });
+  }
   const controller = new AbortController();
   activeRunControllers.set(run.id, controller);
   // Requests can originate from the preview API, which intentionally has no
@@ -730,6 +880,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     try {
       if (repository.isCancellationRequested(run.id)) controller.abort(new Error('Agent run cancellation requested.'));
       else if (!repository.renewRunLease(run.id, ownerId, leaseMs)) controller.abort(new Error('Agent run lease ownership lost.'));
+      else repository.renewWorkspaceLease(run.id, leaseMs);
     } catch (error) {
       controller.abort(error);
     }
@@ -740,8 +891,12 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   repository.update(item.id, { status: 'in_progress' });
   repository.moveForAttention(item.id, 'bottom', `${run.agent} started ${run.kind}.`);
   repository.addActivity(item.id, run.agent, 'progress', `Started ${run.kind}.`);
+  // Seed the reply bubble immediately. Assembling the prompt reads shared
+  // context and source systems, so without this the chat sits empty for the
+  // first few seconds of every run and the run reads as hung.
+  if (run.messageId) repository.updateSharedMessage(run.messageId, { body: `● Starting ${run.kind}…` });
   try {
-    const cwd = resolveWorkingDirectory(item);
+    const cwd = workspace ?? resolveWorkingDirectory(item);
     // The resolved workspace is explicit in the CLI command and surfaced in
     // activity so a run's filesystem boundary is never implicit.
     repository.addActivity(item.id, 'system', 'progress', `Workspace resolved to ${cwd}.`);
@@ -822,6 +977,10 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.moveForAttention(item.id, 'top', `${result.agent} completed ${run.kind}; review the result.`);
     }
     repository.addActivity(item.id, result.agent, 'progress', `Completed ${run.kind}.`);
+    publishRealtimeEvent('work-items', 'shared', 'insights');
+    publishRealtimeNotification(executionPlan
+      ? { tone: 'info', message: 'Agent has follow-ups for review', description: item.title, duration: 0, action: { label: 'Review suggestions', route: run.conversationId ? `/conversations/${run.conversationId}` : `/tasks/${item.id}` } }
+      : { tone: 'success', message: 'Agent finished', description: item.title, duration: 8_000, action: { label: run.conversationId ? 'Open conversation' : 'Open task', route: run.conversationId ? `/conversations/${run.conversationId}` : `/tasks/${item.id}` } });
     notifyAgentRunFinished(item, { agent: result.agent, kind: run.kind }, 'completed', output);
   } catch (error) {
     if (controller.signal.aborted) {
@@ -846,10 +1005,14 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.moveForAttention(item.id, 'top', `${activeAgent} execution failed and needs intervention.`);
     }
     repository.addActivity(item.id, activeAgent, 'blocker', `${run.kind} failed: ${message}`);
+    publishRealtimeEvent('work-items', 'shared', 'insights');
+    publishRealtimeNotification({ tone: 'error', message: 'Agent needs your attention', description: item.title, duration: 0, action: { label: run.conversationId ? 'Open conversation' : 'Open task', route: run.conversationId ? `/conversations/${run.conversationId}` : `/tasks/${item.id}` } });
     notifyAgentRunFinished(item, repository.getRun(run.id) ?? run, 'failed', message);
   } finally {
     clearInterval(leaseHeartbeat);
     activeRunControllers.delete(run.id);
+    // Free the working tree for whatever is waiting on it, whatever the outcome.
+    repository.releaseWorkspace(run.id);
   }
 }
 

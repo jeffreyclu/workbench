@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { CLAUDE_EXECUTION_CONTRACT, backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 
@@ -84,6 +84,97 @@ describe('classifyExecution', () => {
     expect(commandFor('claude', '/tmp/project', 'standard').args).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions']));
   });
 
+  it('streams Claude partial messages so a long answer is visible while it is written', () => {
+    expect(commandFor('claude', '/tmp/project', 'standard').args).toContain('--include-partial-messages');
+    const delta = readableAgentEvent('claude', JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Reading ' } } }));
+    expect(delta).toEqual(expect.objectContaining({ delta: 'Reading ', progress: '', final: null }));
+    // Thinking is silent in both forms. Announcing every block buried the answer
+    // under dozens of identical markers, and the raw reasoning is never printed.
+    expect(readableAgentEvent('claude', JSON.stringify({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'thinking' } } }))).toEqual({ progress: '', final: null, audit: [] });
+    expect(readableAgentEvent('claude', JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'private' } } }))).toEqual({ progress: '', final: null, audit: [] });
+  });
+
+  it('shows streamed text once rather than twice when the completed block arrives', async () => {
+    // Real deltas arrive over time. The pause exceeds the progress flush window,
+    // so this tests incremental visibility rather than chunk luck.
+    const streamed = [
+      { type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'thinking' } } },
+      { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Checking the ' } } },
+      { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'failing test.' } } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Checking the failing test.' }] } },
+      { type: 'result', result: 'Fixed it.' },
+    ].map((event) => `printf '%s\\n' '${JSON.stringify(event)}'`).join('\nsleep 0.3\n');
+    const { directory } = fakeAgentDirectory('exit 1', streamed);
+    const snapshots: string[] = [];
+
+    const result = await runAgentCommandWithFallback('claude', directory, 'Do it.', (partial) => snapshots.push(partial));
+
+    const streamedProgress = snapshots.at(-1) ?? '';
+    expect(streamedProgress).not.toContain('Thinking');
+    expect(streamedProgress.match(/Checking the failing test\./g)).toHaveLength(1);
+    // The text was visible in pieces before the block completed.
+    expect(snapshots.some((snapshot) => snapshot.includes('Checking the ') && !snapshot.includes('failing test.'))).toBe(true);
+    expect(result.output).toBe('Fixed it.');
+  });
+
+  it('lets Claude delegate and forwards what each subagent reports', () => {
+    for (const profile of ['economy', 'standard', 'deep'] as const) {
+      const args = commandFor('claude', '/tmp/project', profile).args;
+      expect(args).not.toContain('--disallowedTools');
+      expect(args).toContain('--forward-subagent-text');
+    }
+
+    const context = { subagents: new Map<string, string>() };
+    const delegation = readableAgentEvent('claude', JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: 'toolu_42', name: 'Task', input: { subagent_type: 'backend-engineer', description: 'migrate the lease table' } }] },
+    }), context);
+    expect(delegation.progress).toBe('● Delegating to backend-engineer: migrate the lease table');
+    expect(delegation.audit).toEqual([{ category: 'agent_tool_use', detail: 'delegated to backend-engineer: migrate the lease table' }]);
+
+    // Everything that subagent reports afterwards is attributed to it, in the
+    // live stream and in the audit trail.
+    const forwardedText = readableAgentEvent('claude', JSON.stringify({
+      type: 'assistant', parent_tool_use_id: 'toolu_42',
+      message: { content: [{ type: 'text', text: 'The migration applies cleanly.' }] },
+    }), context);
+    expect(forwardedText.progress).toBe('[backend-engineer] The migration applies cleanly.');
+
+    const forwardedWrite = readableAgentEvent('claude', JSON.stringify({
+      type: 'assistant', parent_tool_use_id: 'toolu_42',
+      message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'src/server/repository.ts' } }] },
+    }), context);
+    expect(forwardedWrite.progress).toBe('[backend-engineer] ● Editing src/server/repository.ts');
+    expect(forwardedWrite.audit).toEqual([{ category: 'agent_file_write', detail: '[backend-engineer] src/server/repository.ts' }]);
+
+    // An unknown parent id still reads as delegated rather than as the parent's own work.
+    const orphan = readableAgentEvent('claude', JSON.stringify({
+      type: 'assistant', parent_tool_use_id: 'toolu_unknown',
+      message: { content: [{ type: 'text', text: 'Found it.' }] },
+    }), context);
+    expect(orphan.progress).toBe('[subagent] Found it.');
+  });
+
+  it('tells a delegating run to carry every subagent result into its own report', () => {
+    expect(CLAUDE_EXECUTION_CONTRACT).toContain('report back what it did, every file it changed, the exact commands it ran, and their observed output');
+    expect(CLAUDE_EXECUTION_CONTRACT).toContain('Never summarize delegated work you did not see');
+    expect(CLAUDE_EXECUTION_CONTRACT).toContain('Report a command as passing only if it ran in this run');
+    expect(CLAUDE_EXECUTION_CONTRACT).not.toContain('subagent delegation is disabled');
+  });
+
+  it('sends both agents the same reasoning effort for a given tier', () => {
+    const effortOf = (agent: 'codex' | 'claude', profile: 'economy' | 'standard' | 'deep') => {
+      const args = commandFor(agent, '/tmp/project', profile).args;
+      const flag = args.indexOf('--effort');
+      return flag >= 0 ? args[flag + 1] : args.find((arg) => arg.startsWith('model_reasoning_effort='))?.split('"')[1];
+    };
+    for (const profile of ['economy', 'standard', 'deep'] as const) {
+      expect(effortOf('claude', profile)).toBe(effortOf('codex', profile));
+    }
+    expect(effortOf('claude', 'standard')).toBe('medium');
+    expect(effortOf('claude', 'deep')).toBe('high');
+  });
+
   it('detects imaginary Claude scope claims and states the concrete fresh-session contract', () => {
     expect(hasUnsupportedClaudeScopeClaim('This session is read-only and my allowed directory is fixed elsewhere.')).toBe(true);
     expect(hasUnsupportedClaudeScopeClaim('The GitHub credential is unavailable.')).toBe(false);
@@ -122,6 +213,55 @@ describe('classifyExecution', () => {
     expect(repository.getRun(run.id)).toEqual(expect.objectContaining({
       status: 'completed', requestedAgent: 'codex', agent: 'claude', fallbackFrom: 'codex', fallbackReason: expect.stringContaining('429'),
     }));
+    database.close();
+  });
+
+  it('makes a second mutating run wait for a workspace another run is editing', async () => {
+    const { directory, log } = fakeAgentDirectory(
+      `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Edited it.' } })}'`,
+      `printf '%s\\n' '${JSON.stringify({ type: 'result', result: 'Edited it.' })}'`,
+    );
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    // Two different tasks, one working tree. The per-task guard never saw this.
+    const editing = repository.create({ title: 'Task already editing', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const waiting = repository.create({ title: 'Task that must wait', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const holder = repository.createRun(editing.id, 'execute', 'codex', 'codex', 'Implement it.');
+    const blocked = repository.createRun(waiting.id, 'execute', 'claude', 'claude', 'Implement it too.');
+    expect(repository.claimWorkspace(directory, holder.id, 'owner-a', 60_000)).toBe(true);
+
+    await executeAgentRun(repository, blocked, 'owner-b', 60_000);
+
+    expect(existsSync(log)).toBe(false);
+    expect(repository.getRun(blocked.id)).toEqual(expect.objectContaining({ status: 'queued', startedAt: null, attempt: 0, resolvedWorkspace: directory }));
+    expect(repository.listActivity(waiting.id).some((entry) => entry.body.includes(`Waiting: another run is editing ${directory}`))).toBe(true);
+
+    // Once the holder is done the same run proceeds without being re-requested.
+    repository.releaseWorkspace(holder.id);
+    await executeAgentRun(repository, repository.getRun(blocked.id)!, 'owner-b', 60_000);
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['claude']);
+    expect(repository.getRun(blocked.id)).toEqual(expect.objectContaining({ status: 'completed' }));
+    database.close();
+  });
+
+  it('lets a read-only run start while another run holds the workspace', async () => {
+    const { directory, log } = fakeAgentDirectory(
+      `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Analyzed it.' } })}'`,
+      `printf '%s\\n' '${JSON.stringify({ type: 'result', result: 'Analyzed it.' })}'`,
+    );
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const editing = repository.create({ title: 'Task already editing', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const reading = repository.create({ title: 'Task only reading', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const holder = repository.createRun(editing.id, 'execute', 'codex', 'codex', 'Implement it.');
+    const analysis = repository.createRun(reading.id, 'analysis', 'claude', 'claude', 'Explain it.');
+    expect(repository.claimWorkspace(directory, holder.id, 'owner-a', 60_000)).toBe(true);
+
+    await executeAgentRun(repository, analysis, 'owner-b', 60_000);
+
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['claude']);
+    expect(repository.getRun(analysis.id)).toEqual(expect.objectContaining({ status: 'completed' }));
+    expect(repository.workspaceLeaseHolder(directory)).toBe(holder.id);
     database.close();
   });
 
@@ -454,7 +594,9 @@ describe('classifyExecution', () => {
     expect(readableAgentEvent('codex', JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'npm test' } })).progress).toBe('● Running tests');
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'App.tsx' } }] } })).progress).toBe('● Reading App.tsx');
     const forwardedSubagentText = readableAgentEvent('claude', JSON.stringify({ type: 'assistant', parent_tool_use_id: 'toolu_subagent', message: { content: [{ type: 'text', text: 'I found the failing test.' }] } }));
-    expect(forwardedSubagentText).toEqual(expect.objectContaining({ progress: 'I found the failing test.', final: null }));
+    // Forwarded subagent text is now attributed to its worker: delegated work
+    // must be traceable rather than read as the parent agent's own.
+    expect(forwardedSubagentText).toEqual(expect.objectContaining({ progress: '[subagent] I found the failing test.', final: null }));
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'system', subtype: 'init' })).progress).toBe('');
     expect(readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'reasoning', text: 'The failing test points to stale state.' } })).progress).toContain('Reasoning summary');
   });

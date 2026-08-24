@@ -1,15 +1,19 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createServer, get as httpGet, request as httpRequest } from 'node:http';
+import { createServer, get as httpGet, request as httpRequest, type IncomingMessage } from 'node:http';
+import type { Socket } from 'node:net';
 import { existsSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { isDatabaseCompatible, newestCompatibleRelease } from '../src/server/runtime-compatibility.js';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
 const currentLink = join(root, '.workbench-runtime/current');
+const releasesRoot = join(root, '.workbench-runtime/releases');
 const publicPort = Number(process.env.PORT?.trim() || 5173);
 // Keep blue/green backends away from the low 4xxx range used by local product
 // apps. These ports are loopback-only implementation details behind 5173.
 const runtimePorts = [45173, 45174] as const;
 const tsx = join(root, 'node_modules/.bin/tsx');
+const databasePath = process.env.DATABASE_PATH?.trim() || join(root, 'data/workbench.db');
 
 interface Runtime { releasePath: string; port: number; child: ChildProcess }
 let active: Runtime | null = null;
@@ -18,7 +22,14 @@ let stopping = false;
 
 function currentRelease(): string {
   if (!existsSync(currentLink)) throw new Error('No promoted runtime exists. Run npm run runtime:promote first.');
-  return realpathSync(currentLink);
+  const requested = realpathSync(currentLink);
+  if (isDatabaseCompatible(requested, databasePath)) return requested;
+  const fallback = newestCompatibleRelease(releasesRoot, databasePath);
+  if (fallback) {
+    console.error(`Promoted release ${requested.split('/').at(-1)} cannot open the current database; retaining compatible release ${fallback.split('/').at(-1)}.`);
+    return fallback;
+  }
+  throw new Error(`No runtime release is compatible with the current database schema.`);
 }
 
 function healthy(port: number): Promise<boolean> {
@@ -93,7 +104,7 @@ async function deploy(releasePath = currentRelease()): Promise<void> {
       ...process.env,
       PORT: String(port),
       WORKBENCH_CLIENT_PATH: clientPath,
-      DATABASE_PATH: process.env.DATABASE_PATH?.trim() || join(root, 'data/workbench.db'),
+      DATABASE_PATH: databasePath,
     },
     stdio: 'inherit',
   });
@@ -141,6 +152,42 @@ const gateway = createServer((incoming, outgoing) => {
     outgoing.end(`Workbench runtime unavailable: ${error.message}`);
   });
   incoming.pipe(proxied);
+});
+
+/**
+ * HTTP requests and WebSocket upgrades share the public gateway. Keep the
+ * upgrade connection byte-for-byte intact after the backend accepts it.
+ */
+gateway.on('upgrade', (incoming: IncomingMessage, socket: Socket, head: Buffer) => {
+  if (!active) {
+    socket.destroy();
+    return;
+  }
+  const proxied = httpRequest({
+    hostname: '127.0.0.1',
+    port: active.port,
+    method: incoming.method,
+    path: incoming.url,
+    headers: incoming.headers,
+  });
+  proxied.once('upgrade', (response, backendSocket, backendHead) => {
+    const statusLine = `HTTP/${response.httpVersion} ${response.statusCode ?? 101} ${response.statusMessage ?? 'Switching Protocols'}`;
+    const headers = response.rawHeaders.reduce<string[]>((lines, value, index) => {
+      if (index % 2 === 0) lines.push(`${value}: ${response.rawHeaders[index + 1] ?? ''}`);
+      return lines;
+    }, []);
+    socket.write(`${statusLine}\r\n${headers.join('\r\n')}\r\n\r\n`);
+    if (head.length) backendSocket.write(head);
+    if (backendHead.length) backendSocket.unshift(backendHead);
+    backendSocket.pipe(socket);
+    socket.pipe(backendSocket);
+  });
+  proxied.once('response', (response) => {
+    response.resume();
+    socket.destroy();
+  });
+  proxied.once('error', () => socket.destroy());
+  proxied.end();
 });
 
 await deploy();

@@ -6,6 +6,7 @@ import { versionUrl } from './artifact-url';
 import { ConfirmationDialog } from './confirmation-dialog';
 import { toast, toastError } from './toast-store';
 import { MarkdownComposer } from './markdown-composer.js';
+import { ListRowSkeleton } from './skeleton';
 import type { ArtifactComment, ArtifactEvent, ArtifactSummary, ArtifactVersion } from '../shared/contracts';
 
 type LibraryView = 'published' | 'revoked' | 'all';
@@ -125,7 +126,7 @@ function CommentThread({ artifactId, comments }: { artifactId: string; comments:
 
 function ArtifactDetailPanel({ artifact }: { artifact: ArtifactSummary }) {
   const detail = useQuery({ queryKey: ['artifact', artifact.id], queryFn: () => api.getArtifact(artifact.id) });
-  if (detail.isLoading) return <div className="page-state"><LoaderCircle className="spin" size={14} /> Loading history…</div>;
+  if (detail.isLoading) return <ListRowSkeleton count={4} />;
   if (detail.isError || !detail.data) return <p className="error-message">Could not load this artifact&rsquo;s history.</p>;
   return (
     <div className="artifact-detail">
@@ -228,7 +229,7 @@ export function ArtifactLibraryView({ onOpenTask, onOpenConversation }: {
         <button className={view === 'all' ? 'active' : ''} onClick={() => setView('all')}>All</button>
       </div>
       <div className="artifact-list">
-        {library.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading artifacts…</div>}
+        {library.isLoading && <ListRowSkeleton count={6} />}
         {library.isError && <div className="list-state error-message">Could not load the artifact library. <button className="button secondary compact" onClick={() => library.refetch()}>Retry</button></div>}
         {!library.isLoading && !library.data?.artifacts.length && (
           <div className="discovery-empty">

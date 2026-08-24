@@ -8,6 +8,36 @@ import type { AgentRun } from '../shared/contracts';
 const conversationModelStorageKey = 'workbench:conversation-model-profiles';
 const taskModelStorageKey = 'workbench:task-model-profiles';
 const conversationDraftStorageKey = 'workbench:conversation-drafts';
+const lastOpenedItemStorageKeys = {
+  conversation: 'workbench:last-opened-conversation',
+  attention: 'workbench:last-opened-attention-item',
+  workbench: 'workbench:last-opened-workbench-item',
+} as const;
+
+/**
+ * Primary surfaces deliberately keep separate return points. Opening a task
+ * in Workbench must not replace the task we return to in Attention, and vice
+ * versa.
+ */
+export type LastOpenedSurface = keyof typeof lastOpenedItemStorageKeys;
+
+export function readLastOpenedItem(surface: LastOpenedSurface): string | null {
+  try {
+    const value = window.localStorage.getItem(lastOpenedItemStorageKeys[surface]);
+    return value?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeLastOpenedItem(surface: LastOpenedSurface, itemId: string): void {
+  try {
+    window.localStorage.setItem(lastOpenedItemStorageKeys[surface], itemId);
+  } catch {
+    // Storage can be disabled in a private browser context. Navigation still
+    // works; it just cannot survive a later visit.
+  }
+}
 export function readTaskModelProfiles(): Record<string, NonNullable<AgentRun['executionProfile']>> {
   try {
     const value = JSON.parse(window.localStorage.getItem(taskModelStorageKey) ?? '{}') as Record<string, unknown>;

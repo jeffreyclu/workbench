@@ -1,3 +1,4 @@
+import '@testing-library/jest-dom/vitest';
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -7,11 +8,42 @@ import { hideWorkbenchControlBlocks, humanizeRunOutput } from './run-output';
 import { Toaster } from './toast';
 import { getToasts, toast } from './toast-store';
 
+class TestWebSocket {
+  static instances: TestWebSocket[] = [];
+  readonly listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
+
+  constructor(_url: string) { TestWebSocket.instances.push(this); }
+  addEventListener(type: string, listener: (event: { data?: unknown }) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+  close() { this.emit('close'); }
+  emit(type: string, data?: unknown) { for (const listener of this.listeners.get(type) ?? []) listener({ data }); }
+}
+
 // The URL is real navigation state now, so it has to be reset between tests
 // the same way the store and the DOM are.
-afterEach(() => { cleanup(); toast.clear(); window.localStorage.clear(); window.history.replaceState(null, '', '/'); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); toast.clear(); TestWebSocket.instances = []; window.localStorage.clear(); window.history.replaceState(null, '', '/'); vi.unstubAllGlobals(); });
 
 describe('primary navigation', () => {
+  it('reopens the independently saved attention, Workbench, and conversation items', () => {
+    const attentionId = '00000000-0000-4000-8000-000000000101';
+    const workbenchId = '00000000-0000-4000-8000-000000000102';
+    const conversationId = '00000000-0000-4000-8000-000000000103';
+    window.localStorage.setItem('workbench:last-opened-attention-item', attentionId);
+    window.localStorage.setItem('workbench:last-opened-workbench-item', workbenchId);
+    window.localStorage.setItem('workbench:last-opened-conversation', conversationId);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ items: [], conversations: [], messages: [], active: 0, workbench: 0, archive: 0, proposal: null, nextCursor: null }), { headers: { 'Content-Type': 'application/json' } })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    fireEvent.click(screen.getByRole('button', { name: /Attention stack/i }));
+    expect(window.location.pathname).toBe(`/tasks/${attentionId}`);
+    window.history.replaceState(null, '', '/insights');
+    fireEvent.click(screen.getByRole('button', { name: /Workbench/i }));
+    expect(window.location.pathname).toBe(`/tasks/${workbenchId}`);
+    window.history.replaceState(null, '', '/insights');
+    fireEvent.click(screen.getByRole('button', { name: /Conversations/i }));
+    expect(window.location.pathname).toBe(`/conversations/${conversationId}`);
+  });
+
   it('opens the active stack and scrolls to pinned tasks from the reminder toast', async () => {
     const pinnedItem = {
       id: '00000000-0000-4000-8000-000000000401', title: 'Return to this later', description: '', status: 'pinned', priority: 2, queuePosition: 0,
@@ -66,7 +98,8 @@ describe('primary navigation', () => {
     expect(await screen.findByRole('heading', { name: 'Insights' })).toBeTruthy();
   });
 
-  it('notifies once when a scan adds discoveries and opens the Discovery inbox from the toast', async () => {
+  it('opens the Discovery inbox from a socket notification', async () => {
+    vi.stubGlobal('WebSocket', TestWebSocket);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       const body = url.startsWith('/api/discovery')
@@ -81,11 +114,11 @@ describe('primary navigation', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
-    await waitFor(() => expect(client.getQueryData(['discovery', 'pending'])).toBeTruthy());
-    act(() => client.setQueryData(['discovery', 'pending'], {
-      candidates: [{ id: 'discovery-1', provider: 'github', title: 'Fix search results', description: '', sourceUrl: null, occurredAt: null, status: 'pending', discoveredAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', snoozedUntil: null, workItemId: null, relevance: 1, suggestedWorkItemId: null }],
-      pendingCount: 1, reviewedCount: 0, lastRun: null, running: false, queueProposal: null,
-    }));
+    const socket = TestWebSocket.instances[0];
+    act(() => socket.emit('message', JSON.stringify({
+      type: 'notification', tone: 'info', message: '1 new discovery ready to review.',
+      action: { label: 'Review discoveries', route: '/discovery' },
+    })));
 
     expect(await screen.findByText('1 new discovery ready to review.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Review discoveries: 1 new discovery ready to review/i }));
@@ -183,6 +216,70 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     expect(await screen.findByTitle('Pinned task')).toBeTruthy();
+  });
+
+  it('uses the linked task project color in the conversation stack', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000109';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Project conversation', workItemId: '00000000-0000-4000-8000-000000000110', linkedProjectName: 'Workbench', archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    const projectColor = await screen.findByLabelText('Workbench project');
+    expect(projectColor).toHaveStyle({ background: '#c06ca8' });
+  });
+
+  it('groups active conversations into progress, attention, and pinned sections', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversations = [
+      { id: '00000000-0000-4000-8000-000000000011', title: 'Running conversation', workItemId: null, state: 'working', archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+      { id: '00000000-0000-4000-8000-000000000012', title: 'Needs review', workItemId: null, state: 'waiting_approval', archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+      { id: '00000000-0000-4000-8000-000000000013', title: 'Pinned conversation', workItemId: '00000000-0000-4000-8000-000000000113', linkedWorkItemPinned: true, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations, nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace /></QueryClientProvider>);
+
+    expect(await screen.findAllByText('Running conversation')).toHaveLength(2);
+    expect(screen.getByText('In progress')).toBeTruthy();
+    expect(screen.getByText('Attention stack')).toBeTruthy();
+    expect(screen.getByText('Pinned for you')).toBeTruthy();
+    expect(screen.getByText('Needs review')).toBeTruthy();
+    expect(screen.getByText('Pinned conversation')).toBeTruthy();
+  });
+
+  it('keeps the pinned section visible in the conversation rail even with no pinned conversations', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversations = [{ id: '00000000-0000-4000-8000-000000000014', title: 'Unpinned conversation', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations, nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace /></QueryClientProvider>);
+
+    expect((await screen.findAllByText('Unpinned conversation')).length).toBeGreaterThan(0);
+    expect(screen.getByText('Pinned for you')).toBeTruthy();
+  });
+
+  it('keeps a finished conversation visible in the attention stack instead of dropping it', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversations = [{ id: '00000000-0000-4000-8000-000000000015', title: 'Finished conversation', workItemId: null, state: 'finished', archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations, nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace /></QueryClientProvider>);
+
+    expect((await screen.findAllByText('Finished conversation')).length).toBeGreaterThan(0);
   });
 
   it('opens the requested task conversation and still allows switching tabs', async () => {
@@ -316,11 +413,56 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Complete linked task' }));
+    // Keep task controls compact and icon-only; accessible names and tooltips
+    // distinguish them from the adjacent conversation actions.
+    expect((await screen.findByRole('button', { name: 'Unlink task' })).textContent).toBe('');
+    const completeTask = await screen.findByRole('button', { name: 'Complete linked task' });
+    expect(completeTask.textContent).toBe('');
+    fireEvent.click(completeTask);
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === `/api/work-items/${taskId}/complete` && init?.method === 'POST')).toBe(true));
     expect(await screen.findByRole('heading', { name: 'New conversation' })).toBeTruthy();
     expect(screen.queryByText(/Archived conversation · restore or fork it to continue/)).toBeNull();
+  });
+
+  it('pins the linked task from the conversation window and moves its conversation into the pinned stack', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000017';
+    const taskId = '00000000-0000-4000-8000-000000000018';
+    const timestamp = '2026-01-01T00:00:00Z';
+    const conversation = { id: conversationId, title: 'Pin from conversation', workItemId: taskId, archivedAt: null, createdAt: timestamp, updatedAt: timestamp };
+    const baseItem = {
+      id: taskId, title: 'Linked task', description: '', status: 'ready', priority: 2, queuePosition: 0,
+      source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete',
+      agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: ['Manual'], projectName: 'Workbench', stack: 'attention', workspacePath: null,
+      strategy: '', assignees: ['codex'], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [],
+      createdAt: timestamp, updatedAt: timestamp, lastTouchedAt: timestamp,
+    };
+    let pinned = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/work-items/${taskId}` && init?.method === 'PATCH') {
+        pinned = true;
+        return new Response(JSON.stringify({ item: { ...baseItem, status: 'pinned' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item: { ...baseItem, status: pinned ? 'pinned' : 'ready' }, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], references: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ ...conversation, linkedWorkItemPinned: pinned }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ conversation }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Put a pin in it' }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input) === `/api/work-items/${taskId}`
+      && init?.method === 'PATCH'
+      && JSON.parse(String(init.body)).status === 'pinned',
+    )).toBe(true));
+    expect(await screen.findByTitle('Pinned task')).toBeTruthy();
+    expect(screen.getByText('Pinned for you').parentElement?.textContent).toContain('1');
   });
 
   it('ignores a stale owner-mutation response that resolves after a newer one', async () => {
@@ -480,6 +622,7 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={firstId} /></QueryClientProvider>);
 
     await screen.findByRole('heading', { name: 'First conversation' });
+    expect(screen.getByRole('button', { name: 'Attach files' }).textContent).toBe('');
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
     const file = new File(['content'], 'notes.txt', { type: 'text/plain' });
     fireEvent.change(fileInput, { target: { files: [file] } });
@@ -1201,7 +1344,7 @@ describe('addressable navigation', () => {
     renderApp();
 
     fireEvent.click(await screen.findByRole('button', { name: /workbench/i }));
-    expect(await screen.findByRole('heading', { name: 'Workbench roadmap' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workbench focus' })).toBeTruthy();
     expect(window.location.pathname).toBe('/workbench');
 
     fireEvent.click(screen.getByRole('button', { name: /archive/i }));
@@ -1210,7 +1353,7 @@ describe('addressable navigation', () => {
 
     await goBack();
     expect(window.location.pathname).toBe('/workbench');
-    expect(await screen.findByRole('heading', { name: 'Workbench roadmap' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workbench focus' })).toBeTruthy();
   });
 
   it('puts an opened task in the address and returns to the stack on back', async () => {

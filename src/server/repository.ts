@@ -1,13 +1,29 @@
 import { randomUUID } from 'node:crypto';
 
-import { isSelfAssigned, workItemFilterSchema, type Activity, type AgentRun, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryCandidateStatus, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType } from '../shared/contracts.js';
+import { isSelfAssigned, workItemFilterSchema, type Activity, type ProjectSummary, type AgentRun, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryCandidateStatus, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type UsageCalibration, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType } from '../shared/contracts.js';
 import { learnFeedbackWeights, planQueue, type FeedbackWeight, type QueueContext, type QueuePlan } from './queue-intelligence.js';
+import { listProjects, resolveProjectName } from './project-registry.js';
+import { projectKey, WORKBENCH_PROJECT_KEY, WORKBENCH_PROJECT_NAME } from '../shared/project-name.js';
 import type { WorkbenchDatabase } from './database.js';
 import { ArtifactLibrary } from './artifact-library.js';
 import { DEFAULT_WORKBENCH_TIMEZONE, localCalendarDate } from '../shared/due-date.js';
 import { describeLifecycleChange, summarizeWorkItemChanges } from './activity-log.js';
 import { summarizeCursing } from './profanity.js';
 import { estimateModelCost, resolveModelRate } from './model-pricing.js';
+
+/**
+ * Workbench is a project focus on the one attention queue (migration 025), so
+ * membership is matched on the canonical project key rather than an exact
+ * display string. `Workbench`, `workbench`, and a learned `wkbnch` are the same
+ * stack; a task cannot fall out of it by being typed differently.
+ *
+ * The `project_key IS NULL` arm keeps rows written by an older runtime during a
+ * release handoff in the right stack until this build rewrites them. COALESCE
+ * keeps both arms strictly boolean so `NOT` still admits project-less tasks.
+ */
+const workbenchProjectPredicate = `(COALESCE(project_key, '') = '${WORKBENCH_PROJECT_KEY}'
+  OR (project_key IS NULL AND COALESCE(project_name, '') = '${WORKBENCH_PROJECT_NAME}' COLLATE NOCASE))`;
+const nonWorkbenchProjectPredicate = `NOT ${workbenchProjectPredicate}`;
 
 /** Who applied a lifecycle move, and what forced it when Workbench applied it as a cascade. */
 export interface LifecycleContext { actor?: Activity['actor']; reason?: string }
@@ -67,6 +83,7 @@ interface RunPatch {
   leaseExpiresAt?: string | null;
   nextAttemptAt?: string | null;
   attempt?: number;
+  resolvedWorkspace?: string | null;
 }
 
 function percentile(values: number[], fraction: number): number | null {
@@ -105,6 +122,19 @@ interface SavedWorkItemFilterRow {
 
 function mapSavedWorkItemFilter(row: SavedWorkItemFilterRow): SavedWorkItemFilter {
   return { id: row.id, name: row.name, view: row.view, filter: workItemFilterSchema.parse(JSON.parse(row.filter_json)), sortOrder: row.sort_order, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+interface UsageCalibrationRow {
+  id: string; provider: UsageCalibration['provider']; observed_at: string; observed_percentage: number;
+  workbench_set: number; interactive_set: number; computed_ceiling_set: number; created_at: string;
+}
+
+function mapUsageCalibrationRow(row: UsageCalibrationRow): UsageCalibration {
+  return {
+    id: row.id, provider: row.provider, observedAt: row.observed_at, observedPercentage: row.observed_percentage,
+    workbenchSet: row.workbench_set, interactiveSet: row.interactive_set, computedCeilingSet: row.computed_ceiling_set,
+    createdAt: row.created_at,
+  };
 }
 
 function mapWorkItem(row: WorkItemRow): WorkItem {
@@ -277,6 +307,10 @@ export class WorkItemRepository {
       .run(failed ? 'failed' : 'completed', new Date().toISOString(), candidateCount, JSON.stringify(errors), id);
   }
 
+  discoveryCandidateExists(fingerprint: string): boolean {
+    return this.database.prepare('SELECT 1 FROM discovery_candidates WHERE fingerprint = ?').get(fingerprint) !== undefined;
+  }
+
   upsertDiscoveryCandidate(input: { fingerprint: string; provider: string; title: string; description: string; sourceUrl: string | null; occurredAt: string | null; runId: string; relevance?: number }): boolean {
     const now = new Date().toISOString();
     const suggested = input.sourceUrl ? this.database.prepare(`SELECT id FROM work_items WHERE source_url = ? AND archived_at IS NULL AND deleted_at IS NULL ORDER BY is_queued DESC, updated_at DESC LIMIT 1`).get(input.sourceUrl) as { id: string } | undefined : undefined;
@@ -374,13 +408,14 @@ export class WorkItemRepository {
         ) AS is_unread,
         CASE WHEN (
           SELECT status FROM work_items WHERE work_items.id = shared_conversations.work_item_id
-        ) = 'pinned' THEN 1 ELSE 0 END AS linked_work_item_pinned
+        ) = 'pinned' THEN 1 ELSE 0 END AS linked_work_item_pinned,
+        (SELECT project_name FROM work_items WHERE work_items.id = shared_conversations.work_item_id) AS linked_project_name
       FROM shared_conversations
       WHERE deleted_at IS NULL AND (? = 'all' OR (? = 'active' AND archived_at IS NULL) OR (? = 'archive' AND archived_at IS NOT NULL))
       ORDER BY linked_work_item_pinned DESC, is_working DESC, updated_at DESC
     `).all(view, view, view) as Array<Record<string, string | number | null>>).map((row) => this.withConversationState({
       id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
-      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), linkedWorkItemPinned: Boolean(row.linked_work_item_pinned), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
+      linkedProjectName: row.linked_project_name ? String(row.linked_project_name) : null, forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), linkedWorkItemPinned: Boolean(row.linked_work_item_pinned), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
     }));
   }
 
@@ -402,7 +437,8 @@ export class WorkItemRepository {
         EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.status = 'running') AS is_active,
         EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.status IN ('queued', 'running')) AS is_working,
         EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.author IN ('codex', 'claude') AND shared_messages.created_at > COALESCE(shared_conversations.last_read_at, '')) AS is_unread,
-        CASE WHEN (SELECT status FROM work_items WHERE work_items.id = shared_conversations.work_item_id) = 'pinned' THEN 1 ELSE 0 END AS linked_work_item_pinned
+        CASE WHEN (SELECT status FROM work_items WHERE work_items.id = shared_conversations.work_item_id) = 'pinned' THEN 1 ELSE 0 END AS linked_work_item_pinned,
+        (SELECT project_name FROM work_items WHERE work_items.id = shared_conversations.work_item_id) AS linked_project_name
         FROM shared_conversations
       )
       SELECT * FROM conversations
@@ -413,7 +449,7 @@ export class WorkItemRepository {
     const hasMore = rows.length > safeLimit;
     const conversations = rows.slice(0, safeLimit).map((row) => this.withConversationState({
       id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
-      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), linkedWorkItemPinned: Boolean(row.linked_work_item_pinned), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
+      linkedProjectName: row.linked_project_name ? String(row.linked_project_name) : null, forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), linkedWorkItemPinned: Boolean(row.linked_work_item_pinned), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
     }));
     const last = conversations.at(-1);
     return { conversations, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ isPinned: Boolean(last.linkedWorkItemPinned), isWorking: last.state === 'working', updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null,
@@ -940,19 +976,21 @@ export class WorkItemRepository {
     return this.listStack('attention');
   }
 
+  /** Workbench is the Workbench-project slice of the one attention queue. */
   listWorkbench(): WorkItem[] {
     return this.listStack('workbench');
   }
 
   private listStack(stack: 'attention' | 'workbench'): WorkItem[] {
+    const focus = stack === 'workbench' ? `AND ${workbenchProjectPredicate}` : '';
     const rows = this.database
       .prepare(`
         SELECT * FROM work_items
         WHERE is_queued = 1 AND archived_at IS NULL AND deleted_at IS NULL AND status NOT IN ('done', 'canceled')
-          AND stack = ?
+          ${focus}
         ORDER BY queue_position ASC, created_at ASC
       `)
-      .all(stack) as unknown as WorkItemRow[];
+      .all() as unknown as WorkItemRow[];
     return this.withDependencies(this.withLineage(rows.map((row) => this.withAgentOutcome(mapWorkItem(row)))));
   }
 
@@ -974,9 +1012,10 @@ export class WorkItemRepository {
     }
     const search = `(? IS NULL OR title LIKE ? COLLATE NOCASE OR source_identifier LIKE ? COLLATE NOCASE OR project_name LIKE ? COLLATE NOCASE)`;
     const searchArgs = [needle, needle, needle, needle];
-    const active = `is_queued = 1 AND archived_at IS NULL AND deleted_at IS NULL AND status NOT IN ('done', 'canceled') AND stack = 'attention'`;
-    const workbench = `is_queued = 1 AND archived_at IS NULL AND deleted_at IS NULL AND status NOT IN ('done', 'canceled') AND stack = 'workbench'`;
-    const where = view === 'active' ? active : view === 'workbench' ? workbench : 'archived_at IS NOT NULL AND deleted_at IS NULL';
+    const active = `is_queued = 1 AND archived_at IS NULL AND deleted_at IS NULL AND status NOT IN ('done', 'canceled')`;
+    const workbench = `${active} AND ${workbenchProjectPredicate}`;
+    const attention = `${active} AND ${nonWorkbenchProjectPredicate}`;
+    const where = view === 'active' ? attention : view === 'workbench' ? workbench : 'archived_at IS NOT NULL AND deleted_at IS NULL';
     const clauses: string[] = []; const args: string[] = [];
     const addIn = (column: string, values: string[]) => { if (values.length) { clauses.push(`${column} IN (${values.map(() => '?').join(', ')})`); args.push(...values); } };
     addIn('project_name', normalizedFilter.projectNames); addIn('status', normalizedFilter.statuses); addIn('source', normalizedFilter.sources);
@@ -1023,10 +1062,15 @@ export class WorkItemRepository {
 
   deleteSavedFilter(id: string): boolean { return Number(this.database.prepare('DELETE FROM saved_work_item_filters WHERE id = ?').run(id).changes) > 0; }
 
+  /** The canonical project vocabulary, for pickers and for agents choosing a project. */
+  listProjects(): ProjectSummary[] {
+    return listProjects(this.database);
+  }
+
   getWorkItemCounts(): { active: number; workbench: number; archive: number } {
     const row = this.database.prepare(`SELECT
-      SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled') AND stack = 'attention' THEN 1 ELSE 0 END) AS active,
-      SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled') AND stack = 'workbench' THEN 1 ELSE 0 END) AS workbench,
+      SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled') AND ${nonWorkbenchProjectPredicate} THEN 1 ELSE 0 END) AS active,
+      SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled') AND ${workbenchProjectPredicate} THEN 1 ELSE 0 END) AS workbench,
       SUM(CASE WHEN archived_at IS NOT NULL THEN 1 ELSE 0 END) AS archive FROM work_items WHERE deleted_at IS NULL`).get() as { active: number | null; workbench: number | null; archive: number | null };
     return { active: Number(row.active ?? 0), workbench: Number(row.workbench ?? 0), archive: Number(row.archive ?? 0) };
   }
@@ -1167,7 +1211,7 @@ export class WorkItemRepository {
     const parentTitles = new Map<string, string>();
     if (parentIds.length) {
       const parentPlaceholders = parentIds.map(() => '?').join(', ');
-      const parents = this.database.prepare(`SELECT id, title FROM work_items WHERE id IN (${parentPlaceholders}) AND deleted_at IS NULL AND archived_at IS NULL`).all(...parentIds) as Array<{ id: string; title: string }>;
+      const parents = this.database.prepare(`SELECT id, title FROM work_items WHERE id IN (${parentPlaceholders}) AND deleted_at IS NULL`).all(...parentIds) as Array<{ id: string; title: string }>;
       for (const parent of parents) parentTitles.set(parent.id, parent.title);
     }
     const counts = new Map(countRows.map((row) => [row.parentId, row]));
@@ -1245,8 +1289,10 @@ export class WorkItemRepository {
   }
 
   reorder(orderedItemIds: string[], stack?: 'attention' | 'workbench', change?: { actor: QueueOrderChange['actor']; reason: string }): WorkItem[] {
-    const inferredStack = stack ?? this.get(orderedItemIds[0] ?? '')?.stack ?? 'attention';
-    const stackItems = inferredStack === 'workbench' ? this.listWorkbench() : this.list();
+    // There is only one order. The Workbench route is a filtered rendering of
+    // it, so it must never write an independent queue order.
+    const inferredStack = 'attention';
+    const stackItems = this.list();
     const currentIds = stackItems.map((item) => item.id);
     if (currentIds.length !== orderedItemIds.length || !currentIds.every((id) => orderedItemIds.includes(id))) {
       throw new Error('Queue order must contain every active queued item exactly once.');
@@ -1270,7 +1316,7 @@ export class WorkItemRepository {
       this.incrementQueueVersion(inferredStack);
     };
     this.transaction(apply);
-    return inferredStack === 'workbench' ? this.listWorkbench() : this.list();
+    return this.list();
   }
 
   listQueueHistory(stack: 'attention' | 'workbench' = 'attention', limit = 20): QueueOrderChange[] {
@@ -1323,8 +1369,7 @@ export class WorkItemRepository {
   }
 
   move(itemId: string, neighbor: { beforeId?: string; afterId?: string }): WorkItem[] {
-    const stack = this.get(itemId)?.stack ?? 'attention';
-    const ids = (stack === 'workbench' ? this.listWorkbench() : this.list()).map((item) => item.id);
+    const ids = this.list().map((item) => item.id);
     const from = ids.indexOf(itemId);
     const neighborId = neighbor.beforeId ?? neighbor.afterId;
     const target = neighborId ? ids.indexOf(neighborId) : -1;
@@ -1332,20 +1377,19 @@ export class WorkItemRepository {
     ids.splice(from, 1);
     const updatedTarget = ids.indexOf(neighborId!);
     ids.splice(updatedTarget + (neighbor.afterId ? 1 : 0), 0, itemId);
-    return this.reorder(ids, stack, { actor: 'jeffrey', reason: `Manually moved “${this.get(itemId)?.title ?? itemId}”.` });
+    return this.reorder(ids, 'attention', { actor: 'jeffrey', reason: `Manually moved “${this.get(itemId)?.title ?? itemId}”.` });
   }
 
   moveForAttention(id: string, destination: 'top' | 'bottom', reason: string): WorkItem[] {
-    const stack = this.get(id)?.stack ?? 'attention';
-    const stackItems = stack === 'workbench' ? this.listWorkbench() : this.list();
+    const stackItems = this.list();
     const ids = stackItems.map((item) => item.id);
     if (!ids.includes(id) || ids.length < 2) return stackItems;
     const now = new Date().toISOString();
     this.database.prepare("UPDATE queue_proposals SET status = 'superseded', resolved_at = ? WHERE status = 'pending'").run(now);
     const without = ids.filter((itemId) => itemId !== id);
-    this.reorder(destination === 'top' ? [id, ...without] : [...without, id], stack, { actor: 'agent', reason: `${destination === 'top' ? 'Promoted for attention' : 'Demoted while the agent works'}: ${reason}` });
+    this.reorder(destination === 'top' ? [id, ...without] : [...without, id], 'attention', { actor: 'agent', reason: `${destination === 'top' ? 'Promoted for attention' : 'Demoted while the agent works'}: ${reason}` });
     this.addActivity(id, 'system', 'queue_moved', `${destination === 'top' ? 'Promoted for attention' : 'Demoted while the agent works'}: ${reason}`);
-    return stack === 'workbench' ? this.listWorkbench() : this.list();
+    return this.list();
   }
 
   getPendingProposal(stack: 'attention' | 'workbench' = 'attention'): QueueProposal | null {
@@ -1354,20 +1398,21 @@ export class WorkItemRepository {
   }
 
   createProposal(orderedItemIds: string[], rationale: string, explanations: QueueItemExplanation[] = [], stack: 'attention' | 'workbench' = 'attention'): QueueProposal {
-    const previousOrder = (stack === 'workbench' ? this.listWorkbench() : this.list()).map((item) => item.id);
+    const canonicalStack = 'attention';
+    const previousOrder = this.list().map((item) => item.id);
     if (previousOrder.length !== orderedItemIds.length || !previousOrder.every((id) => orderedItemIds.includes(id))) {
       throw new Error('Proposal must contain every active queued item exactly once.');
     }
     const now = new Date().toISOString();
     const id = randomUUID();
     this.transaction(() => {
-      this.database.prepare("UPDATE queue_proposals SET status = 'superseded', resolved_at = ? WHERE status = 'pending' AND stack = ?").run(now, stack);
+      this.database.prepare("UPDATE queue_proposals SET status = 'superseded', resolved_at = ? WHERE status = 'pending' AND stack = ?").run(now, canonicalStack);
       this.database.prepare(`
         INSERT INTO queue_proposals (id, stack, status, previous_order_json, proposed_order_json, rationale, explanations_json, queue_version, created_at)
         VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)
-      `).run(id, stack, JSON.stringify(previousOrder), JSON.stringify(orderedItemIds), rationale, JSON.stringify(explanations), this.queueVersion(stack), now);
+      `).run(id, canonicalStack, JSON.stringify(previousOrder), JSON.stringify(orderedItemIds), rationale, JSON.stringify(explanations), this.queueVersion(canonicalStack), now);
     });
-    return this.getPendingProposal(stack)!;
+    return this.getPendingProposal(canonicalStack)!;
   }
 
   /**
@@ -1448,10 +1493,10 @@ export class WorkItemRepository {
   }
 
   buildDailyProposal(now = Date.now(), stack: 'attention' | 'workbench' = 'attention'): QueueProposal {
-    const items = stack === 'workbench' ? this.listWorkbench() : this.list();
+    const items = this.list();
     if (!items.length) throw new Error('Add at least one task before planning the stack.');
     const plan = planQueue(items, this.buildQueueContext(now));
-    return this.createProposal(plan.orderedItemIds, plan.rationale, plan.explanations, stack);
+    return this.createProposal(plan.orderedItemIds, plan.rationale, plan.explanations, 'attention');
   }
 
   getPendingExecutionPlan(workItemId: string): ExecutionPlan | null {
@@ -1566,9 +1611,15 @@ export class WorkItemRepository {
     // Callers that predate the explicit field still express intent through the
     // project name, so it seeds the stack once here. After this insert the
     // stored value is authoritative and project renames never move the task.
-    const stack: WorkItem['stack'] = input.stack ?? (input.projectName?.toLowerCase() === 'workbench' ? 'workbench' : 'attention');
+    // `stack` remains in the persisted shape for compatibility with promoted
+    // runtimes, but every newly written task belongs to the single attention
+    // queue. Workbench membership is a project focus filter.
+    const stack: WorkItem['stack'] = 'attention';
     const id = randomUUID();
     const now = new Date().toISOString();
+    // Locally authored, so typos are forgiven: `wkbnch` lands on Workbench and
+    // is remembered as an alias instead of becoming a 113th project.
+    const project = resolveProjectName(this.database, input.projectName, { fuzzy: true, now });
     const position = Number(
       (this.database.prepare('SELECT COALESCE(MAX(queue_position), 0) + 1 AS value FROM work_items').get() as {
         value: number;
@@ -1579,8 +1630,8 @@ export class WorkItemRepository {
       .prepare(`
         INSERT INTO work_items (
           id, title, description, status, priority, queue_position, source, is_queued,
-          project_name, stack, workspace_path, due_date, source_url, parent_work_item_id, created_at, updated_at, last_touched_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          project_name, project_key, stack, workspace_path, due_date, source_url, parent_work_item_id, created_at, updated_at, last_touched_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         id,
@@ -1589,7 +1640,8 @@ export class WorkItemRepository {
         input.status,
         input.priority,
         position,
-        input.projectName,
+        project?.name ?? null,
+        project?.key ?? null,
         stack,
         input.workspacePath,
         input.dueDate,
@@ -1601,8 +1653,8 @@ export class WorkItemRepository {
       );
 
     this.addActivity(id, 'system', 'created', 'Manual work item created.');
-    const stackItems = stack === 'workbench' ? this.listWorkbench() : this.list();
-    this.reorder([id, ...stackItems.map((item) => item.id).filter((itemId) => itemId !== id)], stack);
+    const stackItems = this.list();
+    this.reorder([id, ...stackItems.map((item) => item.id).filter((itemId) => itemId !== id)], 'attention');
     return this.get(id)!;
   }
 
@@ -1805,45 +1857,53 @@ export class WorkItemRepository {
   update(id: string, changes: Partial<Pick<WorkItem, 'title' | 'description' | 'priority' | 'status' | 'projectName' | 'stack' | 'workspacePath' | 'dueDate' | 'labels' | 'strategy' | 'assignees' | 'queuePosition'>> & { blockedByIds?: string[] }, withinTransaction = false): WorkItem | null {
     const before = this.get(id);
     if (!before) return null;
+    // Canonicalise before anything reads the change set, so a re-typed
+    // `workbench` on a Linear task is recognised as the same value it already
+    // holds rather than logged as a local edit that conflicts with the provider.
+    const project = changes.projectName === undefined ? undefined : resolveProjectName(this.database, changes.projectName, { fuzzy: true });
+    const resolved = project === undefined ? changes : { ...changes, projectName: project?.name ?? null };
     const columns = new Map<string, string | number | null | undefined>([
-      ['title', changes.title],
-      ['description', changes.description],
-      ['priority', changes.priority],
-      ['status', changes.status],
-      ['project_name', changes.projectName],
-      ['stack', changes.stack],
-      ['workspace_path', changes.workspacePath],
-      ['due_date', changes.dueDate],
-      ['labels_json', changes.labels !== undefined ? JSON.stringify(normalizeLabels(changes.labels)) : undefined],
-      ['strategy', changes.strategy],
-      ['assignees_json', changes.assignees ? JSON.stringify(changes.assignees) : undefined],
-      ['queue_position', changes.queuePosition],
+      ['title', resolved.title],
+      ['description', resolved.description],
+      ['priority', resolved.priority],
+      ['status', resolved.status],
+      ['project_name', project === undefined ? undefined : project?.name ?? null],
+      ['project_key', project === undefined ? undefined : project?.key ?? null],
+      // Compatibility field only: Workbench is selected by project, never by
+      // a second stack membership value.
+      ['stack', undefined],
+      ['workspace_path', resolved.workspacePath],
+      ['due_date', resolved.dueDate],
+      ['labels_json', resolved.labels !== undefined ? JSON.stringify(normalizeLabels(resolved.labels)) : undefined],
+      ['strategy', resolved.strategy],
+      ['assignees_json', resolved.assignees ? JSON.stringify(resolved.assignees) : undefined],
+      ['queue_position', resolved.queuePosition],
     ]);
     const entries = [...columns].filter(
       (entry): entry is [string, string | number | null] => entry[1] !== undefined,
     );
-    if (entries.length === 0 && changes.blockedByIds === undefined) return this.get(id);
+    if (entries.length === 0 && resolved.blockedByIds === undefined) return this.get(id);
 
     const locallyChangedProviderFields = before.source === 'linear'
-      ? providerSyncFields.filter((field) => changes[field as keyof typeof changes] !== undefined
-        && !sameProviderValue(providerValues(before)[field], changes[field as keyof typeof changes] as ProviderFieldValue))
+      ? providerSyncFields.filter((field) => resolved[field as keyof typeof resolved] !== undefined
+        && !sameProviderValue(providerValues(before)[field], resolved[field as keyof typeof resolved] as ProviderFieldValue))
       : [];
-    const managesTransaction = (changes.blockedByIds !== undefined || locallyChangedProviderFields.length > 0) && !withinTransaction;
+    const managesTransaction = (resolved.blockedByIds !== undefined || locallyChangedProviderFields.length > 0) && !withinTransaction;
     if (managesTransaction) this.database.exec('BEGIN IMMEDIATE');
     try {
-      if (changes.blockedByIds !== undefined) this.replaceDependencyRows(id, changes.blockedByIds);
+      if (resolved.blockedByIds !== undefined) this.replaceDependencyRows(id, resolved.blockedByIds);
       if (entries.length) {
         const assignments = entries.map(([column]) => `${column} = ?`).join(', ');
         const values = entries.map(([, value]) => value);
-        const assignmentMode = changes.assignees ? ", agent_assignment_mode = 'manual'" : '';
+        const assignmentMode = resolved.assignees ? ", agent_assignment_mode = 'manual'" : '';
         const now = new Date().toISOString();
         this.database
           .prepare(`UPDATE work_items SET ${assignments}${assignmentMode}, updated_at = ?, last_touched_at = ? WHERE id = ?`)
           .run(...values, now, now, id);
         if (locallyChangedProviderFields.length) {
-          this.recordLocalProviderOverrides(id, providerValues(before), changes, locallyChangedProviderFields, now);
+          this.recordLocalProviderOverrides(id, providerValues(before), resolved, locallyChangedProviderFields, now);
         }
-        if (changes.title !== undefined || changes.description !== undefined) {
+        if (resolved.title !== undefined || resolved.description !== undefined) {
           this.database.prepare("DELETE FROM work_item_classifications WHERE work_item_id = ? AND source != 'manual'").run(id);
         }
       }
@@ -1851,16 +1911,6 @@ export class WorkItemRepository {
     } catch (error) {
       if (managesTransaction) this.database.exec('ROLLBACK');
       throw error;
-    }
-    // Queue positions are numbered per stack, so a task that changes stack is
-    // still carrying a position from the stack it left. Reseat it at the top of
-    // its new stack and close the gap in the old one. Callers already inside a
-    // transaction renumber themselves, because reorder opens its own.
-    if (changes.stack !== undefined && changes.stack !== before.stack && !withinTransaction) {
-      const target = this.listStack(changes.stack);
-      this.reorder([id, ...target.map((item) => item.id).filter((itemId) => itemId !== id)], changes.stack);
-      this.reorder(this.listStack(before.stack).map((item) => item.id), before.stack);
-      this.addActivity(id, 'system', 'stack_changed', `Moved to the ${changes.stack} stack.`);
     }
     return this.get(id);
   }
@@ -1952,6 +2002,7 @@ export class WorkItemRepository {
           fallbackFrom: row.fallback_from as AgentRun['fallbackFrom'] ?? null, fallbackReason: row.fallback_reason,
           attempt: Number(row.attempt ?? 0), maxAttempts: Number(row.max_attempts ?? 3),
           nextAttemptAt: row.next_attempt_at ?? null,
+          resolvedWorkspace: row.resolved_workspace ?? null,
           origin: (row.origin ?? 'manual') as AgentRun['origin'],
         };
       });
@@ -2027,7 +2078,7 @@ export class WorkItemRepository {
       ['agent', changes.agent], ['status', changes.status], ['output', changes.output], ['error', error], ['model', changes.model], ['execution_profile', changes.executionProfile],
       ['input_tokens', changes.inputTokens], ['output_tokens', changes.outputTokens], ['estimated_cost_usd', changes.estimatedCostUsd], ['fallback_from', changes.fallbackFrom], ['fallback_reason', changes.fallbackReason],
       ['started_at', changes.startedAt], ['completed_at', changes.completedAt], ['owner_id', changes.ownerId], ['lease_expires_at', changes.leaseExpiresAt],
-      ['next_attempt_at', changes.nextAttemptAt], ['attempt', changes.attempt],
+      ['next_attempt_at', changes.nextAttemptAt], ['attempt', changes.attempt], ['resolved_workspace', changes.resolvedWorkspace],
     ]);
     return [...columns].filter((entry): entry is [string, string | number | null] => entry[1] !== undefined);
   }
@@ -2064,12 +2115,19 @@ export class WorkItemRepository {
     return changed ? this.getSharedMessageById(id) : null;
   }
 
-  upsertLinearItem(input: ProviderWorkItem): 'imported' | 'updated' | 'skipped' {
+  upsertLinearItem(providerInput: ProviderWorkItem): 'imported' | 'updated' | 'skipped' {
     const existing = this.database
       .prepare("SELECT * FROM work_items WHERE source = 'linear' AND source_identifier = ?")
-      .get(input.sourceIdentifier) as WorkItemRow | undefined;
+      .get(providerInput.sourceIdentifier) as WorkItemRow | undefined;
 
     const now = new Date().toISOString();
+    // Linear owns its project names, so resolution is exact-key only: casing and
+    // punctuation are unified with what Workbench already knows, but two
+    // similar Linear projects stay two projects. Canonicalising here rather than
+    // at each write keeps the row, the snapshot, and the conflict baseline
+    // agreeing on one spelling.
+    const project = resolveProjectName(this.database, providerInput.projectName, { fuzzy: false, now });
+    const input: ProviderWorkItem = { ...providerInput, projectName: project?.name ?? null };
     const incoming = providerValues(input);
 
     if (existing) {
@@ -2098,6 +2156,8 @@ export class WorkItemRepository {
             if (!sameProviderValue(effective[field], incoming[field])) {
               assignments.push(`${providerFieldColumns[field]} = ?`);
               values.push(databaseProviderValue(field, incoming[field]));
+              // The key is derived, so it moves with the name it belongs to.
+              if (field === 'projectName') { assignments.push('project_key = ?'); values.push(project?.key ?? null); }
               visibleChanged = true;
             }
             continue;
@@ -2137,9 +2197,9 @@ export class WorkItemRepository {
       .prepare(`
         INSERT INTO work_items (
           id, title, description, status, priority, queue_position, source, is_queued,
-          source_identifier, source_url, project_name, labels_json, due_date,
+          source_identifier, source_url, project_name, project_key, labels_json, due_date,
           provider_payload_json, provider_updated_at, created_at, updated_at, last_touched_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'linear', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, 'linear', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         id,
@@ -2151,6 +2211,7 @@ export class WorkItemRepository {
         input.sourceIdentifier,
         input.sourceUrl,
         input.projectName,
+        project?.key ?? null,
         JSON.stringify(input.labels),
         input.dueDate,
         JSON.stringify(input.providerPayload),
@@ -2195,8 +2256,12 @@ export class WorkItemRepository {
     this.database.exec('BEGIN IMMEDIATE');
     try {
       if (resolution === 'use_provider') {
-        this.database.prepare(`UPDATE work_items SET ${providerFieldColumns[field]} = ?, updated_at = ?, last_touched_at = ? WHERE id = ?`)
-          .run(databaseProviderValue(field, provider[field]), now, now, workItemId);
+        // Accepting the provider's project name must carry its key across too,
+        // or the task keeps the old key and stays in the wrong stack.
+        const keyColumn = field === 'projectName' ? ', project_key = ?' : '';
+        const keyValue = field === 'projectName' ? [projectKey(provider[field] as string | null) || null] : [];
+        this.database.prepare(`UPDATE work_items SET ${providerFieldColumns[field]} = ?${keyColumn}, updated_at = ?, last_touched_at = ? WHERE id = ?`)
+          .run(databaseProviderValue(field, provider[field]), ...keyValue, now, now, workItemId);
         this.database.prepare('DELETE FROM provider_field_overrides WHERE work_item_id = ? AND field = ?').run(workItemId, field);
       } else {
         this.database.prepare('UPDATE provider_field_overrides SET provider_baseline_json = ?, conflicted_at = NULL, updated_at = ? WHERE work_item_id = ? AND field = ?')
@@ -2346,6 +2411,56 @@ export class WorkItemRepository {
     return Number(changed) > 0;
   }
 
+  /**
+   * Serializes mutating runs on the directory they actually edit. The per-task
+   * guard never covered this: two runs on two different tasks routinely resolve
+   * to the same repository and then edit, test, and read one moving tree.
+   * Returns false when another live run holds the workspace.
+   */
+  claimWorkspace(workspace: string, runId: string, ownerId: string, leaseMs: number): boolean {
+    const now = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + leaseMs).toISOString();
+    this.database.prepare('DELETE FROM workspace_leases WHERE expires_at <= ?').run(now);
+    this.database.prepare(`
+      INSERT INTO workspace_leases (workspace, run_id, owner_id, acquired_at, expires_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(workspace) DO UPDATE
+        SET run_id = excluded.run_id, owner_id = excluded.owner_id, acquired_at = excluded.acquired_at, expires_at = excluded.expires_at
+        WHERE workspace_leases.run_id = excluded.run_id
+    `).run(workspace, runId, ownerId, now, expiresAt);
+    const row = this.database.prepare('SELECT run_id FROM workspace_leases WHERE workspace = ?').get(workspace) as { run_id: string } | undefined;
+    return row?.run_id === runId;
+  }
+
+  /** Keeps a held workspace lease alive for as long as its run is still executing. */
+  renewWorkspaceLease(runId: string, leaseMs: number): void {
+    this.database.prepare('UPDATE workspace_leases SET expires_at = ? WHERE run_id = ?')
+      .run(new Date(Date.now() + leaseMs).toISOString(), runId);
+  }
+
+  releaseWorkspace(runId: string): void {
+    this.database.prepare('DELETE FROM workspace_leases WHERE run_id = ?').run(runId);
+  }
+
+  /** Run currently holding an unexpired lease on `workspace`, if any. */
+  workspaceLeaseHolder(workspace: string): string | null {
+    const row = this.database.prepare('SELECT run_id FROM workspace_leases WHERE workspace = ? AND expires_at > ?')
+      .get(workspace, new Date().toISOString()) as { run_id: string } | undefined;
+    return row?.run_id ?? null;
+  }
+
+  /**
+   * Hands a claimed run back to the queue without consuming an attempt. Used
+   * when the run is well-formed but its workspace is busy: waiting is not a
+   * failure, so it must not count against the retry budget.
+   */
+  releaseRunToQueue(runId: string, ownerId: string, retryAfterMs: number): void {
+    this.database.prepare(`
+      UPDATE agent_runs SET status = 'queued', owner_id = NULL, lease_expires_at = NULL, started_at = NULL, next_attempt_at = ?
+      WHERE id = ? AND owner_id = ? AND status = 'running'
+    `).run(new Date(Date.now() + retryAfterMs).toISOString(), runId, ownerId);
+  }
+
   claimSharedMessage(id: string, ownerId: string, leaseMs: number): boolean {
     const now = new Date().toISOString();
     const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
@@ -2353,6 +2468,17 @@ export class WorkItemRepository {
       UPDATE shared_messages SET owner_id = ?, lease_expires_at = ?
       WHERE id = ? AND status = 'running' AND (owner_id IS NULL OR lease_expires_at < ?)
     `).run(ownerId, leaseExpiresAt, id, now).changes;
+    return Number(changed) > 0;
+  }
+
+  /** Atomically starts a queued control-plane job. Kept separate from normal
+   * messages so a promotion can visibly wait without pretending it is building. */
+  claimQueuedPromotionMessage(id: string, ownerId: string, leaseMs: number): boolean {
+    const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
+    const changed = this.database.prepare(`
+      UPDATE shared_messages SET status = 'running', owner_id = ?, lease_expires_at = ?
+      WHERE id = ? AND author = 'system' AND dispatch_target = 'promotion' AND status = 'queued'
+    `).run(ownerId, leaseExpiresAt, id).changes;
     return Number(changed) > 0;
   }
 
@@ -2491,17 +2617,20 @@ export class WorkItemRepository {
         if (this.finishExpiredRun(run.id, run.owner_id, recoveryCutoff, { status: 'failed', error: 'Retry attempts exhausted after interruption.', completedAt: now, ownerId: null, leaseExpiresAt: null })) failedRunIds.push(run.id);
       }
     }
-    // Shared messages with expired leases are interrupted (not retried). If there's
-    // an associated agent run, that run will be recovered separately. When the run
-    // completes, it will update the message to its final status (completed/failed).
+    // Shared messages with expired leases are interrupted (not retried). This also
+    // catches a reply that was persisted as `running` but whose dispatch process
+    // died before it could claim its first lease. If there's an associated agent
+    // run, that run will be recovered separately. When the run completes, it will
+    // update the message to its final status (completed/failed).
     const expiredMessages = this.database.prepare(`SELECT id FROM shared_messages
-      WHERE status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at < ?
+      WHERE status = 'running'
+        AND (lease_expires_at < ? OR (owner_id IS NULL AND lease_expires_at IS NULL AND created_at <= ?))
         AND dispatch_target != 'promotion'
         AND NOT EXISTS (
           SELECT 1 FROM agent_runs
           WHERE agent_runs.message_id = shared_messages.id
             AND agent_runs.status IN ('queued', 'running')
-        )`).all(recoveryCutoff) as Array<{ id: string }>;
+        )`).all(recoveryCutoff, recoveryCutoff) as Array<{ id: string }>;
     const recoveredMessageIds: string[] = [];
     for (const message of expiredMessages) {
       this.database.prepare(`UPDATE shared_messages SET status = 'failed', error = 'Agent process stopped reporting progress. Retry or continue the conversation.', owner_id = NULL, lease_expires_at = NULL, completed_at = ? WHERE id = ?`).run(now, message.id);
@@ -2574,8 +2703,80 @@ export class WorkItemRepository {
       ORDER BY created_at ASC`).all() as Array<{ id: string }>).map(({ id }) => id);
   }
 
+  listQueuedPromotionMessageIds(): string[] {
+    return (this.database.prepare(`SELECT id FROM shared_messages
+      WHERE author = 'system' AND dispatch_target = 'promotion' AND status = 'queued'
+      ORDER BY created_at ASC`).all() as Array<{ id: string }>).map(({ id }) => id);
+  }
+
+  /** A promotion snapshots the complete idle tree, so later queued approvals
+   * waiting on that same idle point are fulfilled by the one release. */
+  completeQueuedPromotionMessages(exceptId: string, body: string): void {
+    this.database.prepare(`
+      UPDATE shared_messages
+      SET status = 'completed', body = ?, error = '', completed_at = ?, owner_id = NULL, lease_expires_at = NULL
+      WHERE author = 'system' AND dispatch_target = 'promotion' AND status = 'queued' AND id != ?
+    `).run(body, new Date().toISOString(), exceptId);
+  }
+
+  /** A crashed owner must not leave a control-plane approval displayed as an
+   * active deployment. It returns to the visible queue for the next worker. */
+  requeueExpiredPromotionMessages(): number {
+    const changed = this.database.prepare(`
+      UPDATE shared_messages
+      SET status = 'queued', owner_id = NULL, lease_expires_at = NULL
+      WHERE author = 'system' AND dispatch_target = 'promotion' AND status = 'running'
+        AND lease_expires_at IS NOT NULL AND lease_expires_at < ?
+    `).run(new Date().toISOString()).changes;
+    return Number(changed);
+  }
+
   activeRunsForItem(workItemId: string): AgentRun[] {
     return this.listRuns(workItemId).filter((run) => run.status === 'queued' || run.status === 'running');
+  }
+
+  activeAutonomousRunCount(): number {
+    const row = this.database.prepare("SELECT COUNT(*) AS n FROM agent_runs WHERE origin = 'autonomous' AND status IN ('queued', 'running')").get() as { n: number };
+    return Number(row.n);
+  }
+
+  averageSetEstimate(agent: AgentRun['agent'], model: string): number | null {
+    const row = this.database.prepare(`SELECT AVG(input_tokens + 5 * output_tokens) AS estimate
+      FROM agent_runs WHERE agent = ? AND model = ? AND input_tokens IS NOT NULL AND output_tokens IS NOT NULL`).get(agent, model) as { estimate: number | null };
+    return row.estimate === null ? null : Number(row.estimate);
+  }
+
+  heldBudgetReservationSet(provider: 'claude' | 'codex', sinceIso: string): number {
+    const row = this.database.prepare("SELECT COALESCE(SUM(reserved_set), 0) AS total FROM budget_reservations WHERE provider = ? AND status = 'held' AND created_at >= ?").get(provider, sinceIso) as { total: number };
+    return Number(row.total);
+  }
+
+  /**
+   * Atomically verifies the remaining autonomous budget and creates its hold.
+   * The caller supplies already-measured committed usage; concurrent callers
+   * are serialized by this transaction and see each other's held amounts.
+   */
+  tryReserveAutonomousBudget(input: {
+    provider: 'claude' | 'codex'; model: string; workItemId: string;
+    requiredTokenCount: number; spentTokenCount: number; budgetTokenLimit: number;
+    windowStart: string; now?: string;
+  }): { reservationId: string } | null {
+    return this.transaction(() => {
+      const held = this.heldBudgetReservationSet(input.provider, input.windowStart);
+      if (input.spentTokenCount + held + input.requiredTokenCount > input.budgetTokenLimit) return null;
+
+      const reservationId = randomUUID();
+      this.database.prepare(`INSERT INTO budget_reservations (id, provider, origin, model, work_item_id, reserved_set, status, created_at)
+        VALUES (?, ?, 'autonomous', ?, ?, ?, 'held', ?)`)
+        .run(reservationId, input.provider, input.model, input.workItemId, input.requiredTokenCount, input.now ?? new Date().toISOString());
+      return { reservationId };
+    });
+  }
+
+  createBudgetReservation(input: { provider: 'claude' | 'codex'; model: string; workItemId: string; agentRunId?: string; reservedSet: number }): void {
+    this.database.prepare(`INSERT INTO budget_reservations (id, provider, origin, model, work_item_id, agent_run_id, reserved_set, status, created_at)
+      VALUES (?, ?, 'autonomous', ?, ?, ?, ?, 'held', ?)`)
+      .run(randomUUID(), input.provider, input.model, input.workItemId, input.agentRunId ?? null, input.reservedSet, new Date().toISOString());
   }
 
   /** Token usage for every run created since `sinceIso`, for the usage meter. Not scoped to one work item. */
@@ -2586,6 +2787,37 @@ export class WorkItemRepository {
       WHERE created_at >= ?
     `).all(sinceIso) as Array<{ agent: AgentRun['agent']; origin: AgentRun['origin']; model: string | null; input_tokens: number | null; output_tokens: number | null }>)
       .map((row) => ({ agent: row.agent, origin: row.origin, model: row.model, inputTokens: row.input_tokens, outputTokens: row.output_tokens }));
+  }
+
+  // --- Usage calibration -----------------------------------------------------
+
+  createUsageCalibration(input: { provider: UsageCalibration['provider']; observedAt: string; observedPercentage: number; workbenchSet: number; interactiveSet: number; computedCeilingSet: number }): UsageCalibration {
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    this.database.prepare(`
+      INSERT INTO usage_calibrations (id, provider, observed_at, observed_percentage, workbench_set, interactive_set, computed_ceiling_set, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, input.provider, input.observedAt, input.observedPercentage, input.workbenchSet, input.interactiveSet, input.computedCeilingSet, createdAt);
+    return { id, provider: input.provider, observedAt: input.observedAt, observedPercentage: input.observedPercentage, workbenchSet: input.workbenchSet, interactiveSet: input.interactiveSet, computedCeilingSet: input.computedCeilingSet, createdAt };
+  }
+
+  /** Most recent calibration for `provider` observed at or before `asOfIso`, or null if none exists. */
+  getLatestUsageCalibration(provider: UsageCalibration['provider'], asOfIso: string): UsageCalibration | null {
+    const row = this.database.prepare(`
+      SELECT * FROM usage_calibrations
+      WHERE provider = ? AND observed_at <= ?
+      ORDER BY observed_at DESC LIMIT 1
+    `).get(provider, asOfIso) as UsageCalibrationRow | undefined;
+    return row ? mapUsageCalibrationRow(row) : null;
+  }
+
+  listUsageCalibrations(provider: UsageCalibration['provider'], limit = 20): UsageCalibration[] {
+    const rows = this.database.prepare(`
+      SELECT * FROM usage_calibrations
+      WHERE provider = ?
+      ORDER BY observed_at DESC LIMIT ?
+    `).all(provider, Math.max(1, Math.min(200, limit))) as unknown as UsageCalibrationRow[];
+    return rows.map(mapUsageCalibrationRow);
   }
 
   // --- Audit log -----------------------------------------------------------

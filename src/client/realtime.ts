@@ -1,0 +1,105 @@
+import { useEffect } from 'react';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
+import type { ToastTone } from './toast-store';
+
+const realtimeTopics = ['work-items', 'shared', 'discovery', 'runtime', 'insights', 'artifacts'] as const;
+type RealtimeTopic = typeof realtimeTopics[number];
+
+type RealtimeMessage =
+  | { type: 'ready' }
+  | { type: 'invalidate'; topics: RealtimeTopic[] }
+  | { type: 'notification'; tone: ToastTone; message: string; description?: string; duration?: number; action?: { label: string; route: string } };
+
+export type RealtimeNotification = Extract<RealtimeMessage, { type: 'notification' }>;
+
+const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
+  'work-items': [
+    ['work-items'], ['work-item'], ['work-item-counts'], ['archived-work-items'],
+    ['pinned-reminder'], ['conversation-linkable-tasks'], ['dependency-candidates'], ['task-link-candidates'],
+  ],
+  shared: [
+    ['shared-conversations'], ['shared-conversation'], ['shared-messages'], ['shared-message-activity'],
+    ['conversation-count'], ['notification-conversations'], ['conversation-unread-count'], ['shared-search'],
+  ],
+  discovery: [['discovery'], ['discovery-merge-targets']],
+  runtime: [['runtime-preview-status']],
+  insights: [['insights'], ['usage']],
+  artifacts: [['artifacts'], ['artifact']],
+};
+
+function isRealtimeMessage(value: unknown): value is RealtimeMessage {
+  if (!value || typeof value !== 'object' || !('type' in value)) return false;
+  if (value.type === 'ready') return true;
+  if (value.type === 'notification') {
+    const notification = value as Partial<RealtimeNotification>;
+    return (notification.tone === 'success' || notification.tone === 'error' || notification.tone === 'info')
+      && typeof notification.message === 'string'
+      && (notification.description === undefined || typeof notification.description === 'string')
+      && (notification.duration === undefined || (typeof notification.duration === 'number' && Number.isFinite(notification.duration) && notification.duration >= 0))
+      && (notification.action === undefined || (typeof notification.action.label === 'string' && typeof notification.action.route === 'string' && notification.action.route.startsWith('/')));
+  }
+  return value.type === 'invalidate'
+    && 'topics' in value
+    && Array.isArray(value.topics)
+    && value.topics.every((topic) => typeof topic === 'string' && realtimeTopics.includes(topic as RealtimeTopic));
+}
+
+export function realtimeUrl(location: Pick<Location, 'protocol' | 'host'> = window.location): string {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${location.host}/api/realtime`;
+}
+
+export function invalidateRealtimeTopics(queryClient: QueryClient, topics: readonly RealtimeTopic[]): void {
+  for (const topic of new Set(topics)) {
+    for (const queryKey of topicQueryKeys[topic]) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
+  }
+}
+
+/**
+ * Keeps cached server data fresh across Workbench tabs and clients. The socket
+ * transports cache invalidations and server-authored user notifications. Records
+ * still come from REST, so socket payloads never need to carry application data.
+ */
+export function useRealtimeNotifications(onNotification: (notification: RealtimeNotification) => void): void {
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (typeof WebSocket === 'undefined') return;
+
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+    let attempts = 0;
+    let disposed = false;
+
+    const connect = () => {
+      if (disposed) return;
+      socket = new WebSocket(realtimeUrl());
+      socket.addEventListener('open', () => { attempts = 0; });
+      socket.addEventListener('message', (event) => {
+        try {
+          const message: unknown = JSON.parse(typeof event.data === 'string' ? event.data : '');
+          if (!isRealtimeMessage(message)) return;
+          if (message.type === 'invalidate') invalidateRealtimeTopics(queryClient, message.topics);
+          if (message.type === 'notification') onNotification(message);
+        } catch {
+          // Ignore malformed frames. The server never sends application data.
+        }
+      });
+      socket.addEventListener('close', () => {
+        if (disposed) return;
+        const delay = Math.min(30_000, 1_000 * 2 ** attempts++);
+        const jitter = Math.round(delay * (0.2 * Math.random()));
+        reconnectTimer = window.setTimeout(connect, delay + jitter);
+      });
+    };
+
+    connect();
+    return () => {
+      disposed = true;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      socket?.close();
+    };
+  }, [onNotification, queryClient]);
+}

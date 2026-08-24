@@ -94,6 +94,7 @@ describe('Workbench MCP', () => {
       'list_conversations',
       'list_discoveries',
       'list_execution_plans',
+      'list_projects',
       'list_results',
       'list_source_connections',
       'list_stacks',

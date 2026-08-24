@@ -357,7 +357,7 @@ describe('WorkItemRepository', () => {
     expect(repository.list().map((item) => item.id)).toEqual([second.id, first.id]);
   });
 
-  it('plans the Workbench roadmap without reordering the attention stack', () => {
+  it('plans the canonical attention stack from the Workbench route', () => {
     const attention = repository.create({ title: 'Customer task', description: '', priority: 2, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
     const fresh = repository.create({ title: 'Fresh Workbench task', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     const stale = repository.create({ title: 'Stale Workbench task', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
@@ -365,11 +365,10 @@ describe('WorkItemRepository', () => {
 
     const proposal = repository.buildDailyProposal(Date.now(), 'workbench');
 
-    expect(proposal.stack).toBe('workbench');
+    expect(proposal.stack).toBe('attention');
     expect(repository.listWorkbench().map((item) => item.id)).toEqual([stale.id, fresh.id]);
-    expect(repository.list().map((item) => item.id)).toEqual([attention.id]);
-    expect(repository.getPendingProposal('workbench')?.id).toBe(proposal.id);
-    expect(repository.getPendingProposal('attention')).toBeNull();
+    expect(repository.list().map((item) => item.id)).toEqual([stale.id, fresh.id, attention.id]);
+    expect(repository.getPendingProposal('attention')?.id).toBe(proposal.id);
   });
 
   it('shares recent completed room context without synthesizing durable records', () => {
@@ -1012,14 +1011,21 @@ describe('WorkItemRepository', () => {
     expect(repository.getWorkItemCounts()).toEqual({ active: 1, workbench: 0, archive: 1 });
   });
 
-  it('keeps Workbench roadmap tasks in an independently ordered stack', () => {
+  it('renders Workbench-project tasks as an ordered focus of the attention stack', () => {
     const attention = repository.create({ title: 'Customer task', description: '', priority: 2, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
     const first = repository.create({ title: 'Workbench one', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     const second = repository.create({ title: 'Workbench two', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     repository.move(first.id, { beforeId: second.id });
-    expect(repository.list().map((item) => item.id)).toEqual([attention.id]);
+    expect(repository.list().map((item) => item.id)).toEqual([first.id, second.id, attention.id]);
     expect(repository.listWorkbench().map((item) => item.id)).toEqual([first.id, second.id]);
     expect(repository.getWorkItemCounts()).toEqual({ active: 1, workbench: 2, archive: 0 });
+  });
+
+  it('never surfaces Workbench-project tasks in the paginated active view', () => {
+    const attention = repository.create({ title: 'Customer task', description: '', priority: 2, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
+    repository.create({ title: 'Workbench one', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const page = repository.listPage('active', 50, null, { query: '', projectNames: [], statuses: [], assignees: [], sources: [], labels: [], dueStates: [] });
+    expect(page.items.map((item) => item.id)).toEqual([attention.id]);
   });
 
   it('deduplicates discoveries and only creates a task after approval', () => {
@@ -1245,6 +1251,51 @@ describe('WorkItemRepository', () => {
       expect(repository.activeRunsForItem(item.id)).toHaveLength(0);
     });
 
+    it('grants a workspace to one run at a time and frees it on release', () => {
+      const item = repository.create({ title: 'Edit the tree', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const first = repository.createRun(item.id, 'execute', 'codex', 'codex', '');
+      const second = repository.createRun(item.id, 'execute', 'claude', 'claude', '');
+      const workspace = '/Users/jeffrey.lu/dev/workbench';
+
+      expect(repository.claimWorkspace(workspace, first.id, 'owner-1', 60_000)).toBe(true);
+      expect(repository.claimWorkspace(workspace, second.id, 'owner-2', 60_000)).toBe(false);
+      expect(repository.workspaceLeaseHolder(workspace)).toBe(first.id);
+      // Re-claiming what you already hold is a renewal, not a conflict.
+      expect(repository.claimWorkspace(workspace, first.id, 'owner-1', 60_000)).toBe(true);
+      // A different tree is never blocked by this one.
+      expect(repository.claimWorkspace('/Users/jeffrey.lu/dev/fe.web-app', second.id, 'owner-2', 60_000)).toBe(true);
+
+      repository.releaseWorkspace(first.id);
+      expect(repository.workspaceLeaseHolder(workspace)).toBeNull();
+      expect(repository.claimWorkspace(workspace, second.id, 'owner-2', 60_000)).toBe(true);
+    });
+
+    it('hands an expired workspace lease to the next run', () => {
+      const item = repository.create({ title: 'Edit the tree', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const dead = repository.createRun(item.id, 'execute', 'codex', 'codex', '');
+      const next = repository.createRun(item.id, 'execute', 'claude', 'claude', '');
+      const workspace = '/Users/jeffrey.lu/dev/workbench';
+      // A killed process cannot hold a workspace hostage: the lease expires.
+      expect(repository.claimWorkspace(workspace, dead.id, 'owner-1', -1_000)).toBe(true);
+      expect(repository.workspaceLeaseHolder(workspace)).toBeNull();
+      expect(repository.claimWorkspace(workspace, next.id, 'owner-2', 60_000)).toBe(true);
+    });
+
+    it('releaseRunToQueue returns a waiting run to the queue without spending an attempt', () => {
+      const item = repository.create({ title: 'Waits its turn', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const run = repository.createRun(item.id, 'execute', 'codex', 'codex', '');
+      expect(repository.claimRun(run.id, 'owner-1', 60_000)).toBe(true);
+      repository.updateRun(run.id, { startedAt: new Date().toISOString(), resolvedWorkspace: '/Users/jeffrey.lu/dev/workbench' });
+
+      repository.releaseRunToQueue(run.id, 'owner-1', 5_000);
+
+      const requeued = repository.getRun(run.id)!;
+      expect(requeued.status).toBe('queued');
+      expect(requeued.attempt).toBe(0);
+      expect(requeued.startedAt).toBeNull();
+      expect(requeued.resolvedWorkspace).toBe('/Users/jeffrey.lu/dev/workbench');
+    });
+
     it('claimQueuedTurn promotes a queued jeffrey message exactly once', () => {
       const conversation = repository.createConversation();
       const message = repository.createSharedMessage('jeffrey', 'hi', 'queued', conversation.id);
@@ -1285,6 +1336,96 @@ describe('WorkItemRepository', () => {
       expect(recovered?.error).toMatch(/stopped reporting progress/);
       expect(recovered?.body).toBe('partial output'); // Partial output is preserved for inspection.
     });
+
+    it('reclaimExpired marks an unclaimed running reply as failed after the recovery grace period', () => {
+      const conversation = repository.createConversation();
+      const message = repository.createSharedMessage('claude', 'partial output', 'running', conversation.id);
+
+      const result = repository.reclaimExpired(0);
+
+      expect(result.recoveredMessageIds).toContain(message.id);
+      const recovered = repository.getSharedMessageById(message.id);
+      expect(recovered?.status).toBe('failed');
+      expect(recovered?.error).toMatch(/stopped reporting progress/);
+      expect(recovered?.body).toBe('partial output');
+    });
+  });
+
+  describe('promotion queue', () => {
+    it('claimQueuedPromotionMessage is atomic: only one of two concurrent claimants wins', () => {
+      const conversation = repository.createConversation();
+      const promotion = repository.createSharedMessage('system', 'Promotion queued.', 'queued', conversation.id, [], 'promotion');
+      expect(repository.claimQueuedPromotionMessage(promotion.id, 'owner-a', 60_000)).toBe(true);
+      expect(repository.claimQueuedPromotionMessage(promotion.id, 'owner-b', 60_000)).toBe(false);
+      expect(repository.getSharedMessageById(promotion.id)?.status).toBe('running');
+    });
+
+    it('refuses to claim a promotion message that is not queued, or not a promotion', () => {
+      const conversation = repository.createConversation();
+      const running = repository.createSharedMessage('system', 'Already running.', 'running', conversation.id, [], 'promotion');
+      expect(repository.claimQueuedPromotionMessage(running.id, 'owner-a', 60_000)).toBe(false);
+
+      const notPromotion = repository.createSharedMessage('codex', 'Not a promotion.', 'queued', conversation.id);
+      expect(repository.claimQueuedPromotionMessage(notPromotion.id, 'owner-a', 60_000)).toBe(false);
+    });
+
+    it('listQueuedPromotionMessageIds returns only queued promotions, oldest first', () => {
+      const conversation = repository.createConversation();
+      const first = repository.createSharedMessage('system', 'First.', 'queued', conversation.id, [], 'promotion');
+      const second = repository.createSharedMessage('system', 'Second.', 'queued', conversation.id, [], 'promotion');
+      repository.claimQueuedPromotionMessage(first.id, 'owner-a', 60_000);
+      expect(repository.listQueuedPromotionMessageIds()).toEqual([second.id]);
+    });
+
+    it('requeueExpiredPromotionMessages returns a running promotion to the queue once its lease expires', () => {
+      const conversation = repository.createConversation();
+      const promotion = repository.createSharedMessage('system', 'Promotion queued.', 'queued', conversation.id, [], 'promotion');
+      repository.claimQueuedPromotionMessage(promotion.id, 'dead-owner', -1); // lease already expired
+
+      expect(repository.requeueExpiredPromotionMessages()).toBe(1);
+      expect(repository.getSharedMessageById(promotion.id)?.status).toBe('queued');
+      expect(repository.listQueuedPromotionMessageIds()).toEqual([promotion.id]);
+    });
+
+    it('requeueExpiredPromotionMessages leaves a promotion alone while its lease is still valid', () => {
+      const conversation = repository.createConversation();
+      const promotion = repository.createSharedMessage('system', 'Promotion queued.', 'queued', conversation.id, [], 'promotion');
+      repository.claimQueuedPromotionMessage(promotion.id, 'live-owner', 60_000);
+
+      expect(repository.requeueExpiredPromotionMessages()).toBe(0);
+      expect(repository.getSharedMessageById(promotion.id)?.status).toBe('running');
+    });
+
+    it('completeQueuedPromotionMessages folds every other queued approval into the one release that ran', () => {
+      const conversation = repository.createConversation();
+      const winner = repository.createSharedMessage('system', 'Promotion queued.', 'queued', conversation.id, [], 'promotion');
+      const rider = repository.createSharedMessage('system', 'Promotion queued.', 'queued', conversation.id, [], 'promotion');
+      repository.claimQueuedPromotionMessage(winner.id, 'owner-a', 60_000);
+
+      repository.completeQueuedPromotionMessages(winner.id, 'Combined into the release that just promoted.');
+
+      expect(repository.getSharedMessageById(winner.id)?.status).toBe('running'); // The winner is finished separately by the caller.
+      expect(repository.getSharedMessageById(rider.id)?.status).toBe('completed');
+      expect(repository.getSharedMessageById(rider.id)?.body).toBe('Combined into the release that just promoted.');
+    });
+
+    it('hasLiveWork is true for a queued or running agent run or shared message, and false once both settle', () => {
+      const conversation = repository.createConversation();
+      expect(repository.hasLiveWork()).toBe(false);
+
+      const item = repository.create({ title: 'Live work', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const run = repository.createRun(item.id, 'analysis', 'codex', 'codex', '');
+      expect(repository.hasLiveWork()).toBe(true);
+
+      repository.updateRun(run.id, { status: 'completed' });
+      expect(repository.hasLiveWork()).toBe(false);
+
+      const message = repository.createSharedMessage('codex', 'Working…', 'running', conversation.id);
+      expect(repository.hasLiveWork()).toBe(true);
+
+      repository.updateSharedMessage(message.id, { status: 'completed' });
+      expect(repository.hasLiveWork()).toBe(false);
+    });
   });
 
   describe('audit log', () => {
@@ -1318,47 +1459,48 @@ describe('WorkItemRepository', () => {
     });
   });
 
-  describe('stack ownership', () => {
+  describe('Workbench focus', () => {
     const make = (title: string, projectName: string | null, stack?: 'attention' | 'workbench') =>
       repository.create({ title, description: '', priority: 2, status: 'ready', projectName, stack, workspacePath: null, dueDate: null });
 
-    it('seeds the stack from the project name once, then stores it explicitly', () => {
-      expect(make('Build it', 'Workbench').stack).toBe('workbench');
+    it('keeps every task in attention and focuses Workbench by project', () => {
+      expect(make('Build it', 'Workbench').stack).toBe('attention');
       expect(make('Ship it', 'Writer').stack).toBe('attention');
       expect(make('No project', null).stack).toBe('attention');
       // Case-insensitively, matching the predicate this replaced.
-      expect(make('Lowercase', 'workbench').stack).toBe('workbench');
+      expect(make('Lowercase', 'workbench').stack).toBe('attention');
+      expect(repository.listWorkbench().map((item) => item.title)).toEqual(['Lowercase', 'Build it']);
     });
 
-    it('honours an explicit stack over the project name', () => {
+    it('ignores legacy stack input when creating work', () => {
       expect(make('Explicit attention', 'Workbench', 'attention').stack).toBe('attention');
-      expect(make('Explicit workbench', 'Writer', 'workbench').stack).toBe('workbench');
-      expect(repository.listWorkbench().map((item) => item.title)).toEqual(['Explicit workbench']);
-      expect(repository.list().map((item) => item.title)).toEqual(['Explicit attention']);
+      expect(make('Explicit workbench', 'Writer', 'workbench').stack).toBe('attention');
+      expect(repository.listWorkbench().map((item) => item.title)).toEqual(['Explicit attention']);
+      expect(repository.list().map((item) => item.title)).toEqual(['Explicit workbench', 'Explicit attention']);
     });
 
-    it('does not move a task between stacks when its project is renamed', () => {
+    it('updates the Workbench focus when its project is renamed', () => {
       const item = make('Roadmap work', 'Workbench');
       expect(repository.listWorkbench().map((entry) => entry.id)).toEqual([item.id]);
 
       const renamed = repository.update(item.id, { projectName: 'Workbench Platform' })!;
 
-      expect(renamed.stack).toBe('workbench');
-      expect(repository.listWorkbench().map((entry) => entry.id)).toEqual([item.id]);
-      expect(repository.list()).toHaveLength(0);
-      expect(repository.getWorkItemCounts()).toEqual(expect.objectContaining({ active: 0, workbench: 1 }));
+      expect(renamed.stack).toBe('attention');
+      expect(repository.listWorkbench()).toHaveLength(0);
+      expect(repository.list().map((entry) => entry.id)).toEqual([item.id]);
+      expect(repository.getWorkItemCounts()).toEqual(expect.objectContaining({ active: 1, workbench: 0 }));
     });
 
-    it('does not pull a task into the workbench stack by naming its project Workbench', () => {
+    it('pulls a task into the Workbench focus by naming its project Workbench', () => {
       const item = make('Attention work', 'Writer');
       const renamed = repository.update(item.id, { projectName: 'Workbench' })!;
 
       expect(renamed.stack).toBe('attention');
-      expect(repository.listWorkbench()).toHaveLength(0);
+      expect(repository.listWorkbench().map((entry) => entry.id)).toEqual([item.id]);
       expect(repository.list().map((entry) => entry.id)).toEqual([item.id]);
     });
 
-    it('moves a task only on an explicit stack change and reseats its queue position', () => {
+    it('does not split the canonical queue when legacy stack input changes', () => {
       const first = make('Workbench first', 'Workbench');
       const second = make('Workbench second', 'Workbench');
       const attention = make('Attention only', null);
@@ -1366,25 +1508,22 @@ describe('WorkItemRepository', () => {
       const moved = repository.update(second.id, { stack: 'attention' })!;
 
       expect(moved.stack).toBe('attention');
-      expect(repository.listWorkbench().map((item) => item.id)).toEqual([first.id]);
-      // Reseated at the top of its new stack rather than keeping a position
-      // that belonged to the stack it left.
-      expect(repository.list().map((item) => item.id)).toEqual([second.id, attention.id]);
-      expect(repository.listActivity(second.id).some((entry) => entry.kind === 'stack_changed')).toBe(true);
+      expect(repository.listWorkbench().map((item) => item.id)).toEqual([second.id, first.id]);
+      expect(repository.list().map((item) => item.id)).toEqual([attention.id, second.id, first.id]);
+      expect(repository.listActivity(second.id).some((entry) => entry.kind === 'stack_changed')).toBe(false);
     });
 
-    it('keeps the stack local when Linear sync rewrites the project name', () => {
+    it('updates the Workbench focus when Linear sync rewrites the project name', () => {
       repository.upsertLinearItem({
         sourceIdentifier: 'CON-1', sourceUrl: null, title: 'Imported', description: '', status: 'ready',
         priority: 2, projectName: 'Workbench', labels: [], dueDate: null,
         providerUpdatedAt: '2026-08-20T09:00:00.000Z', providerPayload: {},
       });
       const imported = repository.searchLinear('Imported')[0];
-      // A provider project literally named "Workbench" no longer captures the task.
+      // A provider project named Workbench is in the focused view.
       expect(imported.stack).toBe('attention');
 
       repository.queueLinearItem(imported.id);
-      repository.update(imported.id, { stack: 'workbench' });
       expect(repository.listWorkbench().map((item) => item.id)).toEqual([imported.id]);
 
       repository.upsertLinearItem({
@@ -1395,36 +1534,36 @@ describe('WorkItemRepository', () => {
 
       const synced = repository.get(imported.id)!;
       expect(synced.projectName).toBe('Something Else');
-      expect(synced.stack).toBe('workbench');
-      expect(repository.listWorkbench().map((item) => item.id)).toEqual([imported.id]);
+      expect(synced.stack).toBe('attention');
+      expect(repository.listWorkbench()).toEqual([]);
     });
 
-    it('gives follow-ups and approved plan children the parent stack, not its project name', () => {
+    it('keeps follow-ups and approved plan children in the canonical queue', () => {
       const parent = make('Parent', 'Writer', 'workbench');
       const followUp = repository.createFollowUp(parent.id, 'Follow up', '')!;
-      expect(followUp.stack).toBe('workbench');
-      expect(repository.listWorkbench().map((item) => item.id)).toEqual([parent.id, followUp.id]);
+      expect(followUp.stack).toBe('attention');
+      expect(repository.listWorkbench()).toEqual([]);
 
       const plan = repository.createExecutionPlan(parent.id, 'Split it.', [
         { title: 'Child task', description: 'Do the work.', workspacePath: null },
       ]);
       repository.resolveExecutionPlan(plan.id, 'accepted');
-      expect(repository.listWorkbench().map((item) => item.title)).toContain('Child task');
-      expect(repository.listWorkbench().every((item) => item.stack === 'workbench')).toBe(true);
+      expect(repository.list().map((item) => item.title)).toContain('Child task');
+      expect(repository.list().every((item) => item.stack === 'attention')).toBe(true);
     });
 
-    it('restores an archived task to the stack it was archived from', () => {
+    it('restores an archived task to the canonical queue', () => {
       const item = make('Archived roadmap task', 'Writer', 'workbench');
       repository.archive(item.id, false);
       expect(repository.listWorkbench()).toHaveLength(0);
 
       const restored = repository.restore(item.id)!;
-      expect(restored.stack).toBe('workbench');
-      expect(repository.listWorkbench().map((entry) => entry.id)).toEqual([item.id]);
-      expect(repository.list()).toHaveLength(0);
+      expect(restored.stack).toBe('attention');
+      expect(repository.listWorkbench()).toEqual([]);
+      expect(repository.list().map((entry) => entry.id)).toEqual([item.id]);
     });
 
-    it('moves tasks in bulk through set_stack and renumbers both stacks', () => {
+    it('keeps legacy bulk stack changes in the canonical queue', () => {
       const first = make('First', 'Workbench');
       const second = make('Second', 'Workbench');
       const attention = make('Attention', null);
@@ -1433,17 +1572,17 @@ describe('WorkItemRepository', () => {
 
       expect(result.conflicts).toEqual([]);
       expect(result.appliedIds).toEqual([first.id, second.id]);
-      expect(repository.listWorkbench()).toHaveLength(0);
-      expect(repository.list().map((item) => item.id)).toEqual([first.id, second.id, attention.id]);
+      expect(repository.listWorkbench().map((item) => item.id)).toEqual([second.id, first.id]);
+      expect(repository.list().map((item) => item.id)).toEqual([attention.id, second.id, first.id]);
       expect(repository.list().map((item) => item.queuePosition)).toEqual([1, 2, 3]);
     });
 
-    it('leaves a bulk project rename from moving anything between stacks', () => {
+    it('removes a task from the Workbench focus after a bulk project rename', () => {
       const item = make('Roadmap', 'Workbench');
       repository.bulkUpdate({ action: 'set_project', ids: [item.id], projectName: 'Renamed' });
 
-      expect(repository.get(item.id)!.stack).toBe('workbench');
-      expect(repository.listWorkbench().map((entry) => entry.id)).toEqual([item.id]);
+      expect(repository.get(item.id)!.stack).toBe('attention');
+      expect(repository.listWorkbench()).toEqual([]);
     });
 
     it('logs an edit entry for each item touched by a bulk status or assignee change', () => {
@@ -1626,6 +1765,105 @@ describe('task dependencies', () => {
       repository.update(finished.id, { status: 'done' });
 
       expect(repository.buildQueueContext().openDependents.get(blocker.id)).toBe(1);
+    });
+  });
+  describe('canonical project names', () => {
+    const create = (title: string, projectName: string | null) =>
+      repository.create({ title, description: '', priority: 2, status: 'ready', projectName, workspacePath: null, dueDate: null });
+
+    it('stores one spelling however the project is typed', () => {
+      const first = create('Established the project', 'Workbench');
+      const variants = ['workbench', 'WORKBENCH', ' work bench ', 'wokrbench', 'wkbnch']
+        .map((typed, index) => create(`Variant ${index}`, typed));
+
+      for (const item of [first, ...variants]) expect(item.projectName).toBe('Workbench');
+      expect(repository.listProjects().map((project) => project.name)).toEqual(['Workbench']);
+    });
+
+    it('keeps every spelling of the project in the Workbench stack and out of attention', () => {
+      create('Typed correctly', 'Workbench');
+      create('Typed badly', 'wokrbench');
+      create('Abbreviated', 'wkbnch');
+      create('A different project', 'Connectors');
+      create('No project at all', null);
+
+      expect(repository.listWorkbench().map((item) => item.title).sort())
+        .toEqual(['Abbreviated', 'Typed badly', 'Typed correctly']);
+      // The attention queue is the full canonical queue and Workbench is a
+      // slice of it, so exclusion shows up in the paged view and the counts.
+      const emptyFilter = { query: '', projectNames: [], statuses: [], assignees: [], sources: [], labels: [], dueStates: [] };
+      expect(repository.listPage('active', 50, null, emptyFilter).items.map((item) => item.title).sort())
+        .toEqual(['A different project', 'No project at all']);
+      expect(repository.listPage('workbench', 50, null, emptyFilter).items.map((item) => item.title).sort())
+        .toEqual(['Abbreviated', 'Typed badly', 'Typed correctly']);
+      expect(repository.getWorkItemCounts()).toMatchObject({ active: 2, workbench: 3 });
+    });
+
+    it('leaves an unrelated name as its own project rather than guessing', () => {
+      create('First', 'Workbench');
+      const other = create('Second', 'Quarterly planning');
+
+      expect(other.projectName).toBe('Quarterly planning');
+      expect(repository.listProjects().map((project) => project.key).sort()).toEqual(['quarterlyplanning', 'workbench']);
+    });
+
+    it('canonicalises a project set after the fact, including through a bulk edit', () => {
+      const item = create('Needs a project', null);
+      expect(repository.update(item.id, { projectName: 'Workbench' })!.projectName).toBe('Workbench');
+
+      const bulkTarget = create('Bulk target', null);
+      repository.bulkUpdate({ action: 'set_project', ids: [bulkTarget.id], projectName: 'wkbnch' });
+      expect(repository.get(bulkTarget.id)!.projectName).toBe('Workbench');
+
+      expect(repository.update(item.id, { projectName: null })!.projectName).toBeNull();
+      expect(repository.listWorkbench().map((entry) => entry.id)).toEqual([bulkTarget.id]);
+    });
+
+    it('remembers a resolved misspelling as an alias so it no longer depends on the matcher', () => {
+      create('Established the project', 'Workbench');
+      create('Typed badly', 'wkbnch');
+
+      expect(database.prepare("SELECT alias_key, alias_text FROM project_aliases").all())
+        .toEqual([{ alias_key: 'wkbnch', alias_text: 'wkbnch' }]);
+    });
+
+    it('unifies casing from Linear without merging two distinct provider projects', () => {
+      const providerItem = {
+        sourceIdentifier: 'ENG-1', sourceUrl: null, title: 'Imported', description: '',
+        status: 'ready' as const, priority: 2, projectName: 'Workbench', labels: [], dueDate: null,
+        providerUpdatedAt: '2026-08-18T10:00:00.000Z', providerPayload: {},
+      };
+      repository.upsertLinearItem(providerItem);
+      repository.upsertLinearItem({ ...providerItem, sourceIdentifier: 'ENG-2', projectName: 'workbench' });
+      // One edit from `Workbench`, but Linear owns its names: this is a real,
+      // separate provider project and must not be folded into the other.
+      repository.upsertLinearItem({ ...providerItem, sourceIdentifier: 'ENG-3', projectName: 'Workbenches' });
+
+      expect(repository.searchLinear('ENG-2')[0].projectName).toBe('Workbench');
+      expect(repository.searchLinear('ENG-3')[0].projectName).toBe('Workbenches');
+      expect(repository.listProjects().map((project) => project.name).sort()).toEqual(['Workbench', 'Workbenches']);
+    });
+
+    it('does not log a provider conflict when a Linear task is re-typed in different casing', () => {
+      repository.upsertLinearItem({
+        sourceIdentifier: 'ENG-7', sourceUrl: null, title: 'Imported', description: '',
+        status: 'ready' as const, priority: 2, projectName: 'Workbench', labels: [], dueDate: null,
+        providerUpdatedAt: '2026-08-18T10:00:00.000Z', providerPayload: {},
+      });
+      const item = repository.searchLinear('ENG-7')[0];
+      repository.update(item.id, { projectName: 'workbench' });
+
+      expect(repository.get(item.id)!.projectName).toBe('Workbench');
+      expect(repository.countProviderConflicts()).toBe(0);
+    });
+
+    it('ranks the vocabulary by live task count for the picker', () => {
+      create('One', 'Connectors');
+      create('Two', 'Workbench');
+      create('Three', 'Workbench');
+
+      expect(repository.listProjects().map((project) => ({ name: project.name, taskCount: project.taskCount })))
+        .toEqual([{ name: 'Workbench', taskCount: 2 }, { name: 'Connectors', taskCount: 1 }]);
     });
   });
 });

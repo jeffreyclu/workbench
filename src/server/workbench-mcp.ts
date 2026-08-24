@@ -101,7 +101,12 @@ async function runTool(name: string, operation: () => unknown | Promise<unknown>
  */
 export interface WorkbenchAdminActions {
   startWorkItemExecution(workItemId: string, options: { executionProfile: 'economy' | 'standard' | 'deep' | null; force: boolean }): Promise<unknown>;
-  startAgentRun(workItemId: string, input: { kind: string; target: string; instructions: string; executionProfile: 'economy' | 'standard' | 'deep' | null }, options: { actor: 'codex' | 'claude'; force: boolean }): Promise<unknown>;
+  startAgentRun(workItemId: string, input: {
+    kind: z.infer<typeof runKindSchema>;
+    target: z.infer<typeof agentTargetSchema>;
+    instructions: string;
+    executionProfile: 'economy' | 'standard' | 'deep' | null;
+  }, options: { actor: 'codex' | 'claude'; force: boolean }): Promise<unknown>;
   cancelRun(runId: string): unknown;
   retryRun(runId: string, options: { force: boolean }): Promise<unknown>;
   resolvePlan(planId: string, resolution: 'accepted' | 'rejected', selectedTaskIndexes?: number[], archiveParent?: boolean): unknown;
@@ -144,7 +149,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       'Codex and Claude hold complete Workbench admin control: destructive task actions, execution dispatch/cancel/retry, plan approval, artifact publication/revocation, source/provider administration, discovery scans, and runtime promotion are all available here.',
       'Read current state before mutating it, and use the actor that represents the calling assistant so the shared log stays truthful.',
       'The only things outside this surface are outside Workbench itself: provider credentials, direct database access, and general machine administration.',
-      'Refusals you may see are state-integrity refusals — a run is already active, a dependency edge would create a cycle, a plan is no longer pending — not permission refusals. Where a workflow gate exists (a task Jeffrey claimed, an open prerequisite, a task already executed), pass force: true to proceed deliberately.',
+      'You are an autonomous Workbench administrator. Execute requested Workbench actions directly; do not ask Jeffrey for approval, force flags, or a handoff. Only concrete state-integrity conflicts — such as an active run, dependency cycle, or stale plan — can reject an action.',
     ].join(' '),
   });
 
@@ -163,6 +168,13 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       ],
     };
   }));
+
+  server.registerTool('list_projects', {
+    title: 'List the canonical project vocabulary',
+    description: 'Returns every project Workbench knows, most-used first. Read this before setting `projectName` so a new task joins an existing project instead of inventing a near-duplicate of it. Names given to create_work_item and update_work_item are resolved against this vocabulary, so casing and typos are corrected automatically, but an unrelated new name creates a new project.',
+    inputSchema: {},
+    annotations: readOnlyAnnotations,
+  }, async () => runTool('list_projects', () => ({ projects: repository.listProjects() })));
 
   server.registerTool('list_work_items', {
     title: 'List work items',
@@ -214,7 +226,8 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       description: z.string().max(20_000).default(''),
       priority: z.number().int().min(0).max(4).default(2),
       status: activeWorkItemStatusSchema.default('backlog'),
-      projectName: z.string().trim().max(200).nullable().default(null),
+      projectName: z.string().trim().max(200).nullable().default(null)
+        .describe('Resolved against the canonical project vocabulary, so casing and typos are corrected. Call list_projects first rather than guessing a spelling.'),
       stack: activeStackSchema.optional(),
       workspacePath: z.string().trim().max(1_000).nullable().default(null),
       dueDate: calendarDateSchema.nullable().default(null),
@@ -518,7 +531,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
 
   server.registerTool('execute_work_item', {
     title: 'Execute a work item',
-    description: 'Runs the standard Workbench execution: classify the task if needed, pick the agent, open the work conversation, and dispatch. Identical to Jeffrey pressing Execute. Set force to override the workflow gates — a task Jeffrey has claimed, open prerequisites, or a task that already has a completed run.',
+    description: 'Runs the standard Workbench execution: classify the task if needed, pick the agent, open the work conversation, and dispatch. Agents may execute claimed, blocked, archived, completed, and previously-run tasks without a separate approval.',
     inputSchema: {
       workItemId: z.string().uuid(),
       executionProfile: executionProfileOverrideSchema,
@@ -553,7 +566,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
 
   server.registerTool('retry_agent_run', {
     title: 'Retry a failed or canceled run',
-    description: 'Re-dispatches a failed or canceled run against the same task and conversation. Set force to retry past the claimed-task and open-prerequisite gates.',
+    description: 'Re-dispatches a failed or canceled run against the same task and conversation without workflow gates.',
     inputSchema: { runId: z.string().uuid(), force: z.boolean().default(false) },
     annotations: mutationAnnotations(),
   }, async ({ runId, force }) => runTool('retry_agent_run', async () => unwrap(await admin.retryRun(runId, { force }))));

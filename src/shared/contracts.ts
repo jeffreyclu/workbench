@@ -49,11 +49,7 @@ export interface WorkItemLineage {
   openFollowUpCount: number;
 }
 
-/**
- * Which stack a task belongs to. This is locally owned and explicit: it is never
- * derived from `projectName`, so renaming or bulk-reassigning a project can no
- * longer silently move tasks between stacks.
- */
+/** Legacy persistence field retained while older runtimes drain. New work uses attention. */
 export const workItemStackSchema = z.enum(['attention', 'workbench']);
 export type WorkItemStack = z.infer<typeof workItemStackSchema>;
 
@@ -143,6 +139,18 @@ export const workItemFilterSchema = z.object({
 }).strict();
 export type WorkItemFilter = z.infer<typeof workItemFilterSchema>;
 
+/**
+ * One entry in the canonical project vocabulary. `key` is the comparison
+ * identity from `project-name.ts`; `name` is the spelling every task carries.
+ */
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  key: string;
+  taskCount: number;
+  lastUsedAt: string | null;
+}
+
 export const savedWorkItemFilterViewSchema = z.enum(['active', 'workbench', 'archive']);
 export type SavedWorkItemFilterView = z.infer<typeof savedWorkItemFilterViewSchema>;
 export const savedWorkItemFilterSchema = z.object({
@@ -217,8 +225,7 @@ export const createWorkItemSchema = z.object({
   priority: z.number().int().min(0).max(4).default(2),
   status: activeWorkItemStatusSchema.default('backlog'),
   projectName: z.string().trim().max(200).nullable().default(null),
-  // Omitted means "infer from projectName once, at creation time". The stored
-  // value is authoritative from then on.
+  // Compatibility-only. New work always enters the one attention queue.
   stack: workItemStackSchema.optional(),
   workspacePath: z.string().trim().max(1_000).nullable().default(null),
   dueDate: calendarDateSchema.nullable().default(null),
@@ -475,6 +482,8 @@ export interface AgentRun {
   attempt: number;
   maxAttempts: number;
   nextAttemptAt: string | null;
+  /** Directory this run resolved to and edits under. Recorded at dispatch so a run's filesystem target is durable, auditable, and lockable. */
+  resolvedWorkspace: string | null;
   /** How this run was dispatched: a direct human action, or (once phase 3 ships) the autonomy governor. */
   origin: 'manual' | 'autonomous';
 }
@@ -678,7 +687,7 @@ export const updateArtifactSchema = z.object({
 });
 
 export const artifactLibraryViewSchema = z.enum(['published', 'revoked', 'all']).catch('published');
-export interface SharedConversation { id: string; title: string; workItemId: string | null; forkedFromConversationId: string | null; archivedAt: string | null; sharedBrief?: string; preferredExecutionProfile?: AgentRun['executionProfile']; state?: 'working' | 'needs_attention' | 'waiting_approval' | 'promoting' | 'finished' | null; isUnread?: boolean; linkedWorkItemPinned?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
+export interface SharedConversation { id: string; title: string; workItemId: string | null; linkedProjectName?: string | null; forkedFromConversationId: string | null; archivedAt: string | null; sharedBrief?: string; preferredExecutionProfile?: AgentRun['executionProfile']; state?: 'working' | 'needs_attention' | 'waiting_approval' | 'promoting' | 'finished' | null; isUnread?: boolean; linkedWorkItemPinned?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
 
 export const setConversationTaskSchema = z.object({ workItemId: z.string().uuid().nullable() });
 export const updateSharedBriefSchema = z.object({ brief: z.string().trim().max(12_000) });
@@ -801,6 +810,102 @@ export interface RunInsightsByKind {
   failed: number;
   successRate: number | null;
 }
+
+// --- Weekly usage meter -------------------------------------------------------
+//
+// Sonnet-equivalent token (SET) totals for the current ISO week, split manual
+// vs autonomous per provider, plus each provider's weekly ceiling so the
+// frontend never has to know the ceiling values itself (see
+// docs/autonomy-strategy.md). `ceilingSet` is null when no ceiling estimate
+// exists yet — never fabricate one in the client.
+
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  setTokens: number;
+  runCount: number;
+}
+
+export interface WorkbenchUsageByOrigin {
+  manual: UsageTotals;
+  autonomous: UsageTotals;
+}
+
+export interface ClaudeInteractiveUsage {
+  setTokens: number;
+  scannedFiles: number;
+  /** Files that existed but could not be read/parsed; the scan still returns partial totals. */
+  unreadableFiles: number;
+}
+
+/** Current account window read directly from Codex app-server. */
+export interface CodexRateLimit {
+  usedPercent: number;
+  resetsAt: string | null;
+  windowDurationMins: number | null;
+  planType: string | null;
+}
+
+export interface WeeklyUsageReport {
+  weekStart: string;
+  weekEnd: string;
+  /** Alarm-line fraction of each provider's weekly ceiling reserved for autonomous work (see docs/autonomy-strategy.md). */
+  autonomousSliceFraction: number;
+  /** Target-line fraction autonomous work should spend to, 4 points below the alarm (see docs/autonomy-strategy.md "Spend to 16%, alarm at 20%"). */
+  autonomousTargetFraction: number;
+  claude: {
+    workbench: WorkbenchUsageByOrigin;
+    interactive: ClaudeInteractiveUsage;
+    /**
+     * SET/week ceiling. Comes from the most recent calibration within the
+     * last 14 days if one exists, otherwise the pessimistic estimate
+     * (`CLAUDE_PESSIMISTIC_CEILING_SET`) so the system under-spends rather
+     * than over-spends while uncalibrated.
+     */
+    ceilingSet: number;
+    /** Null until the first `/usage` calibration lands, or once the last one is more than 14 days old. */
+    calibration: UsageCalibration | null;
+  };
+  codex: {
+    workbench: WorkbenchUsageByOrigin;
+    /** Real account usage from `account/rateLimits/read`; null when Codex is unavailable. */
+    rateLimit: CodexRateLimit | null;
+    /** From the most recent Codex calibration within the last 14 days, or null until one is submitted. */
+    ceilingSet: number | null;
+    /** Null until the first `/usage` calibration lands for Codex, or once the last one is more than 14 days old. */
+    calibration: UsageCalibration | null;
+  };
+}
+
+// --- Usage calibration ---------------------------------------------------------
+//
+// Twice-weekly manual correction of the Claude ceiling: run `/usage` in an
+// interactive session, report the percentage it shows and when it was
+// observed, and Workbench solves for the real ceiling from the SET it
+// already measured for that week. Each submission is a standalone
+// observation — there is no automatic retry or correction, only newer
+// observations superseding older ones by recency (see
+// docs/autonomy-strategy.md "Calibration").
+
+export interface UsageCalibration {
+  id: string;
+  provider: 'claude' | 'codex';
+  observedAt: string;
+  observedPercentage: number;
+  /** Workbench-dispatched SET measured for the ISO week containing `observedAt`. */
+  workbenchSet: number;
+  /** Interactive (non-Workbench) SET measured for the same week. */
+  interactiveSet: number;
+  /** `(workbenchSet + interactiveSet) / (observedPercentage / 100)`. */
+  computedCeilingSet: number;
+  createdAt: string;
+}
+
+export const submitUsageCalibrationSchema = z.object({
+  provider: z.enum(['claude', 'codex']).default('claude'),
+  observedAt: z.string().datetime(),
+  observedPercentage: z.number().gt(0).lte(100),
+});
 
 // --- Audit log ---------------------------------------------------------------
 //

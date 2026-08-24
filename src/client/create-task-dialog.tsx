@@ -4,6 +4,7 @@ import { type FormEvent, useState } from 'react';
 import type { AgentRun, BrokerSourceId, WorkItem } from '../shared/contracts';
 import { api } from './api';
 import { MarkdownComposer } from './markdown-composer.js';
+import { ProjectField } from './project-field';
 import { toast, toastError } from './toast-store';
 
 export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { onClose: () => void; onCreated: (item: WorkItem) => void; defaultProjectName?: string }) {
@@ -148,7 +149,7 @@ export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { on
               <div className="ai-draft-banner"><Sparkles size={14} /><span><strong>AI draft</strong><small>Review and edit before adding it to the stack.</small></span><button type="button" onClick={() => setAiDraftReady(false)}>Start over</button></div>
               <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
               <label>Description<MarkdownComposer conversationId="create-task-ai" value={description} onChange={setDescription} placeholder="Task description" ariaLabel="Task description" /></label>
-              <label>Project<input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Optional" /></label>{taskTypeField}
+              <ProjectField value={projectName} onChange={setProjectName} placeholder="Optional" />{taskTypeField}
               {createManual.error && <p className="error-message">{createManual.error.message}</p>}
               <div className="dialog-actions"><button type="button" className="button secondary" onClick={() => setAiDraftReady(false)}>Back</button><button className="button primary" disabled={!title.trim() || createManual.isPending}><Plus size={16} /> Add to stack</button></div>
             </>}
@@ -163,10 +164,7 @@ export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { on
               Description
               <MarkdownComposer conversationId="create-task-manual" value={description} onChange={setDescription} placeholder="Notes, constraints, links…" ariaLabel="Task description" />
             </label>
-            <label>
-              Project
-              <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Personal" />
-            </label>
+            <ProjectField value={projectName} onChange={setProjectName} />
             {taskTypeField}
             {createManual.error && <p className="error-message">{createManual.error.message}</p>}
             <div className="dialog-actions">

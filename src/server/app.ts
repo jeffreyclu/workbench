@@ -40,6 +40,7 @@ import {
   listAuditLogQuerySchema,
   isSelfAssigned,
   SELF_ASSIGNED_EXECUTION_MESSAGE,
+  submitUsageCalibrationSchema,
 } from '../shared/contracts.js';
 import { generateFastAiTaskDraft } from './fast-task-draft-ai.js';
 import type { Activity, AgentRun, WorkItem } from '../shared/contracts.js';
@@ -58,7 +59,7 @@ import { contextForPrompt, listBrokerConnections, resolveBrokerUrl, searchBroker
 import { artifactContentHash, CloudflarePagesPublisher, createArtifactId, renderArtifactPage, repairLegacyArtifactSnapshots } from './artifact-publisher.js';
 import { ArtifactLibrary, artifactFeedbackConfig, createCommentRateLimiter } from './artifact-library.js';
 import { runDiscovery, shouldRunDiscoveryCatchUp } from './discovery.js';
-import { isRuntimeApproval, promoteRuntime } from './runtime-promotion.js';
+import { isRuntimeApproval } from './runtime-promotion.js';
 import { runtimePreviewStatus } from './runtime-preview.js';
 import { startManagedMcpLogin } from './managed-mcp-login.js';
 import { isArtifactAllowed } from './artifact-access.js';
@@ -69,7 +70,9 @@ import { liveRuntimeCapabilities, type RuntimeCapabilities } from './runtime-cap
 import { createRequestAuditMiddleware } from './request-audit.js';
 import { isActionFailure, type ActionFailure } from './action-result.js';
 import { createWorkItemActivityMiddleware } from './work-item-activity.js';
-import { computeWeeklyUsageReport } from './usage-meter.js';
+import { computeWeeklyUsageReport, recordUsageCalibration } from './usage-meter.js';
+import { readCodexRateLimit } from './codex-rate-limits.js';
+import { dispatchAutonomousWork } from './autonomous-dispatcher.js';
 
 /**
  * Tagging Jeffrey as an owner claims the task for him, so the Execute button and
@@ -274,6 +277,11 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
 
   if (capabilities.runDiscoveryCatchUp) {
     setTimeout(() => {
+      // Test servers and short-lived control-plane processes can close their
+      // database before this deferred startup check runs. It is best-effort
+      // catch-up work, so a closed database is a normal no-op, not an uncaught
+      // exception after shutdown.
+      if (!database.isOpen) return;
       const lastRun = repository.getDiscoveryInbox().lastRun?.completedAt ?? null;
       if (shouldRunDiscoveryCatchUp(lastRun)) void runDiscovery(repository).catch((error) => console.error('Discovery catch-up failed:', error));
     }, 1_500).unref();
@@ -675,10 +683,7 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     });
     if (isRuntimeApproval(input.body)) {
       const message = repository.createSharedMessage('jeffrey', input.body, 'completed', input.conversationId, attachments, 'none');
-      const reply = repository.createSharedMessage('system', 'Approval received. Preparing the Workbench preview for promotion…', 'running', input.conversationId, [], 'promotion');
-      // Live owns promotion execution. Preview writes the same durable request;
-      // the live promotion worker claims it from the shared database.
-      if (capabilities.promoteRuntime) void runSharedBackgroundJob(repository, reply.id, (signal, onProgress) => promoteRuntime(signal, onProgress));
+      const reply = repository.createSharedMessage('system', 'Promotion queued. It will build once active agent work reaches a durable terminal state.', 'queued', input.conversationId, [], 'promotion');
       response.status(202).json({ message, replies: [reply] });
       return;
     }
@@ -796,6 +801,12 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     response.json(repository.getWorkItemCounts());
   });
 
+  // The canonical project vocabulary. Backs the picker, so choosing an existing
+  // project is a tap rather than a retyped name.
+  app.get('/api/projects', (_request, response) => {
+    response.json({ projects: repository.listProjects() });
+  });
+
   app.get('/api/work-items-archive', (_request, response) => {
     response.json({ items: repository.listArchived() });
   });
@@ -804,8 +815,34 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
   // token spend per provider, split manual vs autonomous. No dispatch or
   // guardrail logic reads this yet — it exists to prove the number is real
   // before anything is built against it.
-  app.get('/api/usage/weekly', (_request, response) => {
-    response.json(computeWeeklyUsageReport(repository));
+  app.get('/api/usage/weekly', async (_request, response) => {
+    response.json(computeWeeklyUsageReport(repository, new Date(), await readCodexRateLimit()));
+  });
+
+  // Phase 1a calibration (docs/autonomy-strategy.md "Calibration"): turn a
+  // `/usage` reading from an interactive Claude session into a measured
+  // ceiling. Call twice a week; each call is a standalone observation with
+  // no automatic retry or correction, and the ceiling it produces applies to
+  // the very next `/api/usage/weekly` read.
+  app.post('/api/usage/calibration', (request, response) => {
+    const input = submitUsageCalibrationSchema.parse(request.body);
+    const calibration = recordUsageCalibration(repository, input.provider, input.observedAt, input.observedPercentage);
+    response.status(201).json({ calibration });
+  });
+
+  app.get('/api/usage/calibration', (request, response) => {
+    const provider = z.enum(['claude', 'codex']).default('claude').parse(request.query.provider);
+    const limit = z.coerce.number().int().min(1).max(200).default(20).parse(request.query.limit);
+    response.json({ calibrations: repository.listUsageCalibrations(provider, limit) });
+  });
+
+  app.post('/api/autonomy/dispatch', async (_request, response) => {
+    if (!capabilities.executeAgents) return response.status(409).json({ error: 'This runtime does not execute agents.' });
+    const result = dispatchAutonomousWork(repository);
+    if (!result.dispatched) return response.status(409).json(result);
+    const sourceContext = await sourceContextFor(result.item);
+    void executeAgentRun(repository, result.run, OWNER_ID, LEASE_MS, sourceContext);
+    return response.status(202).json(result);
   });
 
   app.put('/api/queue/order', (request, response) => {
@@ -837,7 +874,7 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     try {
       const stack = z.enum(['attention', 'workbench']).default('attention').parse(request.body?.stack ?? 'attention');
       const proposal = repository.buildDailyProposal(Date.now(), stack);
-      response.status(201).json({ proposal, items: stack === 'workbench' ? repository.listWorkbench() : repository.list() });
+      response.status(201).json({ proposal, items: repository.list() });
     } catch (error) {
       next(error);
     }
@@ -1228,7 +1265,7 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
   async function startWorkItemExecution(workItemId: string, options: { executionProfile: AgentRun['executionProfile']; force: boolean }) {
     const item = repository.get(workItemId);
     if (!item) return { status: 404, body: { error: 'Work item not found.' } } as ActionFailure;
-    if (item.archivedAt || item.status === 'done' || item.status === 'canceled') return { status: 409, body: { error: 'Archived or completed tasks cannot be executed. Restore the task first.' } } as ActionFailure;
+    if (!options.force && (item.archivedAt || item.status === 'done' || item.status === 'canceled')) return { status: 409, body: { error: 'Archived or completed tasks cannot be executed. Restore the task first.' } } as ActionFailure;
     const refused = selfAssignedFailure(item, options.force) ?? openPrerequisiteFailure(repository, item.id, options.force);
     if (refused) return refused;
     if (repository.activeRunsForItem(item.id).length) return { status: 409, body: { error: 'This task already has an active agent run.' } } as ActionFailure;
@@ -1335,10 +1372,12 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
    * and machine administration are simply not Workbench operations.
    */
   const adminActions: WorkbenchAdminActions = {
-    startWorkItemExecution,
-    startAgentRun,
+    // MCP callers are autonomous administrators. The REST UI keeps its
+    // user-facing confirmation gates; agents never need a separate force flag.
+    startWorkItemExecution: (workItemId, options) => startWorkItemExecution(workItemId, { ...options, force: true }),
+    startAgentRun: (workItemId, input, options) => startAgentRun(workItemId, input as z.infer<typeof createAgentRunSchema>, { ...options, force: true }),
     cancelRun,
-    retryRun,
+    retryRun: (runId, options) => retryRun(runId, { ...options, force: true }),
     resolvePlan,
     deleteWorkItem: (workItemId, actor) => {
       if (!repository.delete(workItemId)) return { status: 404, body: { error: 'Work item not found.' } };
@@ -1379,8 +1418,7 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
     },
     promoteRuntime: (conversationId) => {
       if (!repository.getConversation(conversationId)) return { status: 404, body: { error: 'Conversation not found.' } };
-      const reply = repository.createSharedMessage('system', 'Promotion requested by an assistant. Preparing the Workbench preview for promotion…', 'running', conversationId, [], 'promotion');
-      if (capabilities.promoteRuntime) void runSharedBackgroundJob(repository, reply.id, (signal, onProgress) => promoteRuntime(signal, onProgress));
+      const reply = repository.createSharedMessage('system', 'Promotion queued. It will build once active agent work reaches a durable terminal state.', 'queued', conversationId, [], 'promotion');
       return { message: reply };
     },
     listSourceConnections,

@@ -4,9 +4,10 @@ import { useState } from 'react';
 import type { DiscoveryCandidate, WorkItem } from '../shared/contracts';
 import { api } from './api';
 import { MarkdownComposer } from './markdown-composer.js';
+import { ListRowSkeleton } from './skeleton';
 
 export function DiscoveryNav({ active, onClick }: { active: boolean; onClick: () => void }) {
-  const inbox = useQuery({ queryKey: ['discovery', 'pending'], queryFn: () => api.getDiscoveryInbox('pending'), refetchInterval: 5_000 });
+  const inbox = useQuery({ queryKey: ['discovery', 'pending'], queryFn: () => api.getDiscoveryInbox('pending'), refetchInterval: 10_000 });
   return <button className={`nav-item ${active ? 'active' : ''}`} onClick={onClick}><Search size={16} /> Discoveries <span>{inbox.data?.pendingCount ?? '…'}</span></button>;
 }
 
@@ -14,7 +15,7 @@ export function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (i
   const queryClient = useQueryClient();
   const [inboxView, setInboxView] = useState<'pending' | 'reviewed'>('pending');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const inbox = useQuery({ queryKey: ['discovery', inboxView], queryFn: () => api.getDiscoveryInbox(inboxView), refetchInterval: 2_000 });
+  const inbox = useQuery({ queryKey: ['discovery', inboxView], queryFn: () => api.getDiscoveryInbox(inboxView), refetchInterval: 10_000 });
   const activeTasks = useQuery({ queryKey: ['discovery-merge-targets'], queryFn: () => api.listWorkItems('active', '') });
   const scan = useMutation({ mutationFn: api.scanDiscovery, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['discovery'] }) });
   const resolveCandidate = useMutation({
@@ -61,7 +62,7 @@ export function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (i
       <button className="accept" disabled={!selected.size || bulkResolve.isPending} onClick={() => bulkResolve.mutate('convert')}>Add / update</button>
     </div>}
     <div className="discovery-list">
-      {inbox.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading discoveries…</div>}
+      {inbox.isLoading && <ListRowSkeleton count={5} />}
       {!inbox.isLoading && !inbox.data?.candidates.length && <div className="discovery-empty"><Search size={26} /><h3>{inboxView === 'pending' ? 'Inbox clear' : 'No reviewed discoveries'}</h3><p>{inboxView === 'pending' ? 'The 5:00 AM scan will put new signals here for review.' : 'Decisions you make in the inbox will appear here.'}</p></div>}
       {inboxView === 'reviewed' ? inbox.data?.candidates.map((candidate) => <article className="discovery-card reviewed" key={candidate.id}><div className="discovery-source"><label><span>{candidate.provider}</span><em className={`decision-${candidate.status}`}>{candidate.status}</em></label><time>{new Date(candidate.updatedAt).toLocaleString()}</time></div><h3>{candidate.title}</h3>{candidate.description && <p>{candidate.description}</p>}<div className="discovery-actions">{candidate.sourceUrl && <a className="button secondary compact" href={candidate.sourceUrl} target="_blank" rel="noreferrer"><ArrowUpRight size={13} /> Source</a>}{candidate.workItemId && <button className="button secondary compact" onClick={() => onOpenTask(candidate.workItemId!)}>Open task</button>}{(candidate.status === 'dismissed' || candidate.status === 'snoozed') && <button className="button primary compact" disabled={restore.isPending} onClick={() => restore.mutate(candidate.id)}><RefreshCw size={13} /> Restore to inbox</button>}</div></article>) : inbox.data?.candidates.map((candidate) => <DiscoveryCard key={candidate.id} candidate={candidate} selected={selected.has(candidate.id)} tasks={activeTasks.data?.items ?? []}
         onSelected={(checked) => setSelected((current) => { const next = new Set(current); if (checked) next.add(candidate.id); else next.delete(candidate.id); return next; })}

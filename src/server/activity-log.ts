@@ -1,5 +1,5 @@
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
-import type { ExecutionProfile } from './agent-runner.js';
+import { effortFor, type ExecutionProfile } from './agent-runner.js';
 
 /**
  * Human-readable text for the task activity log. Two kinds of events live here:
@@ -8,7 +8,12 @@ import type { ExecutionProfile } from './agent-runner.js';
  * place so the log reads consistently and stays testable without a database.
  */
 
-const profileEffort: Record<ExecutionProfile, string> = { economy: 'low effort', standard: 'medium effort', deep: 'high effort' };
+/**
+ * The effort named here is read from the same function that builds the CLI
+ * arguments. A hand-maintained copy of this mapping drifted from the flags and
+ * logged "medium effort" for Claude runs that actually ran at low.
+ */
+const profileEffort = (profile: ExecutionProfile): string => `${effortFor(profile)} effort`;
 
 /** Why a run ended up on a given model tier. */
 export type ExecutionProfileSource = 'requested' | 'task' | 'prompt';
@@ -38,7 +43,7 @@ export function describeModelSelection(input: {
     : input.source === 'prompt'
       ? 'raised by the assembled run prompt'
       : 'matched to the task context';
-  return `Model: ${input.agent} ${input.model} · ${input.profile} tier, ${profileEffort[input.profile]} (${why}). Running ${input.kind}.`;
+  return `Model: ${input.agent} ${input.model} · ${input.profile} tier, ${profileEffort(input.profile)} (${why}). Running ${input.kind}.`;
 }
 
 export function describeAgentFallback(input: {

@@ -7,6 +7,7 @@ import { WorkItemRepository } from './repository.js';
 import { cancelAgentRun, isAgentRunActive } from './agent-runner.js';
 import { OWNER_ID } from './scheduler.js';
 import { previewRuntimeCapabilities } from './runtime-capabilities.js';
+import type { ProjectSummary, WorkItem } from '../shared/contracts.js';
 
 async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolveClose) => {
@@ -34,6 +35,24 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
   afterEach(async () => {
     await closeServer(server);
     database.close();
+  });
+
+  it('serves the canonical project vocabulary and resolves a mistyped project on create', async () => {
+    repository.create({ title: 'Anchor', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+
+    const created = await fetch(`${baseUrl}/api/work-items`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Typed badly', projectName: 'wkbnch' }),
+    });
+    expect(created.status).toBe(201);
+    expect(((await created.json()) as { item: WorkItem }).item.projectName).toBe('Workbench');
+
+    const listed = await fetch(`${baseUrl}/api/projects`);
+    expect(listed.status).toBe(200);
+    expect(((await listed.json()) as { projects: ProjectSummary[] }).projects).toEqual([
+      expect.objectContaining({ name: 'Workbench', key: 'workbench', taskCount: 2 }),
+    ]);
   });
 
   it('reports only work owned by this backend in its runtime drain health', async () => {
@@ -291,8 +310,8 @@ describe('preview promotion delegation', () => {
 
     expect(response.status).toBe(202);
     const body = await response.json() as { replies: Array<{ status: string; dispatchTarget: string }> };
-    expect(body.replies).toEqual([expect.objectContaining({ status: 'running', dispatchTarget: 'promotion' })]);
-    expect(repository.listRunningPromotionMessageIds()).toHaveLength(1);
+    expect(body.replies).toEqual([expect.objectContaining({ status: 'queued', dispatchTarget: 'promotion' })]);
+    expect(repository.listQueuedPromotionMessageIds()).toHaveLength(1);
   });
 });
 
@@ -599,7 +618,7 @@ describe('queue explainability and undo routes', () => {
     expect(repository.list().map((entry) => entry.id)).toEqual([fresh.id, stale.id]);
   });
 
-  it('plans the Workbench roadmap independently from the attention stack', async () => {
+  it('plans the canonical attention stack from the Workbench focus route', async () => {
     const attention = create('Customer task');
     const fresh = repository.create({ title: 'Fresh roadmap task', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     const stale = repository.create({ title: 'Stale roadmap task', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
@@ -610,13 +629,14 @@ describe('queue explainability and undo routes', () => {
     });
     expect(response.status).toBe(201);
     const body = await response.json() as { proposal: { id: string; stack: string }; items: Array<{ id: string }> };
-    expect(body.proposal.stack).toBe('workbench');
-    expect(body.items.map((item) => item.id)).toEqual([stale.id, fresh.id]);
-    expect(repository.list().map((item) => item.id)).toEqual([attention.id]);
+    expect(body.proposal.stack).toBe('attention');
+    expect(body.items.map((item) => item.id)).toEqual([stale.id, fresh.id, attention.id]);
+    expect(repository.listWorkbench().map((item) => item.id)).toEqual([stale.id, fresh.id]);
+    expect(repository.list().map((item) => item.id)).toEqual([stale.id, fresh.id, attention.id]);
     const accepted = await fetch(`${baseUrl}/api/queue/proposals/${body.proposal.id}/accepted`, { method: 'POST' });
     const acceptedBody = await accepted.json() as { proposal: { stack: string }; items: Array<{ id: string }> };
-    expect(acceptedBody.proposal.stack).toBe('workbench');
-    expect(acceptedBody.items.map((item) => item.id)).toEqual([stale.id, fresh.id]);
+    expect(acceptedBody.proposal.stack).toBe('attention');
+    expect(acceptedBody.items.map((item) => item.id)).toEqual([stale.id, fresh.id, attention.id]);
   });
 });
 

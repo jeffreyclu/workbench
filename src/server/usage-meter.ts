@@ -1,9 +1,36 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentRun } from '../shared/contracts.js';
+import type { AgentRun, ClaudeInteractiveUsage, CodexRateLimit, UsageCalibration, UsageTotals, WeeklyUsageReport, WorkbenchUsageByOrigin } from '../shared/contracts.js';
 import { resolveModelRate } from './model-pricing.js';
 import type { WorkItemRepository } from './repository.js';
+
+/**
+ * Until the first `/usage` calibration (docs/autonomy-strategy.md "Calibration"),
+ * use this pessimistic SET/week estimate so the system under-spends rather than
+ * over-spends. Replaced by a measured ceiling once calibration lands — never
+ * raise this without a real calibration behind it.
+ */
+export const CLAUDE_PESSIMISTIC_CEILING_SET = 333_000_000;
+
+/** Fraction of each provider's weekly ceiling reserved for autonomous work — the alarm line (docs/autonomy-strategy.md "Spend to 16%, alarm at 20%"). */
+export const AUTONOMOUS_SLICE_FRACTION = 0.2;
+
+/**
+ * Fraction of each provider's weekly ceiling autonomous work should actually
+ * spend to — the target line, 4 points below the alarm. The gap absorbs the
+ * fact that SET weights are a proxy for accounting neither provider publishes
+ * (docs/autonomy-strategy.md "Spend to 16%, alarm at 20%").
+ */
+export const AUTONOMOUS_TARGET_FRACTION = 0.16;
+
+/**
+ * A calibration older than this no longer corrects for the current billing
+ * week's reset, so the ceiling falls back to the pessimistic estimate rather
+ * than trust a stale observation (docs/autonomy-strategy.md governor rule:
+ * "no calibration in the last 14 days" refuses autonomous dispatch).
+ */
+export const CALIBRATION_MAX_AGE_DAYS = 14;
 
 /**
  * Sonnet-equivalent tokens: every provider's usage normalized to what one
@@ -57,39 +84,8 @@ function setForTranscriptUsage(model: string | null, usage: {
   );
 }
 
-export interface UsageTotals {
-  inputTokens: number;
-  outputTokens: number;
-  setTokens: number;
-  runCount: number;
-}
-
 function emptyTotals(): UsageTotals {
   return { inputTokens: 0, outputTokens: 0, setTokens: 0, runCount: 0 };
-}
-
-export interface WorkbenchUsageByOrigin {
-  manual: UsageTotals;
-  autonomous: UsageTotals;
-}
-
-export interface ClaudeInteractiveUsage {
-  setTokens: number;
-  scannedFiles: number;
-  /** Files that existed but could not be read/parsed; the scan still returns partial totals. */
-  unreadableFiles: number;
-}
-
-export interface WeeklyUsageReport {
-  weekStart: string;
-  weekEnd: string;
-  claude: {
-    workbench: WorkbenchUsageByOrigin;
-    interactive: ClaudeInteractiveUsage;
-  };
-  codex: {
-    workbench: WorkbenchUsageByOrigin;
-  };
 }
 
 /** Monday 00:00:00.000 UTC of the week containing `now`, matching ISO week semantics. */
@@ -188,15 +184,56 @@ export function scanClaudeInteractiveUsage(weekStart: Date, weekEnd: Date, root 
   return { setTokens, scannedFiles, unreadableFiles };
 }
 
-export function computeWeeklyUsageReport(repository: WorkItemRepository, now = new Date()): WeeklyUsageReport {
+/**
+ * The most recent Claude calibration observed at or before `now`, only if it
+ * is younger than `CALIBRATION_MAX_AGE_DAYS` — otherwise null, so a stale
+ * observation never masquerades as a live one.
+ */
+export function currentUsageCalibration(repository: WorkItemRepository, provider: UsageCalibration['provider'], now: Date): UsageCalibration | null {
+  const calibration = repository.getLatestUsageCalibration(provider, now.toISOString());
+  if (!calibration) return null;
+  const ageMs = now.getTime() - new Date(calibration.observedAt).getTime();
+  if (ageMs > CALIBRATION_MAX_AGE_DAYS * 24 * 60 * 60 * 1000) return null;
+  return calibration;
+}
+
+export function computeWeeklyUsageReport(repository: WorkItemRepository, now = new Date(), codexRateLimit: CodexRateLimit | null = null): WeeklyUsageReport {
   const weekStart = startOfIsoWeekUtc(now);
   const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
   const workbench = computeWorkbenchUsage(repository, weekStart);
   const interactive = scanClaudeInteractiveUsage(weekStart, weekEnd);
+  const claudeCalibration = currentUsageCalibration(repository, 'claude', now);
+  const codexCalibration = currentUsageCalibration(repository, 'codex', now);
   return {
     weekStart: weekStart.toISOString(),
     weekEnd: weekEnd.toISOString(),
-    claude: { workbench: workbench.claude, interactive },
-    codex: { workbench: workbench.codex },
+    autonomousSliceFraction: AUTONOMOUS_SLICE_FRACTION,
+    autonomousTargetFraction: AUTONOMOUS_TARGET_FRACTION,
+    claude: { workbench: workbench.claude, interactive, ceilingSet: claudeCalibration?.computedCeilingSet ?? CLAUDE_PESSIMISTIC_CEILING_SET, calibration: claudeCalibration },
+    // Codex has no pessimistic default the way Claude does (docs/autonomy-strategy.md
+    // "The Codex side" never established one) — ceilingSet stays null until a real
+    // `/usage` calibration is submitted for Codex, never a fabricated estimate.
+    codex: { workbench: workbench.codex, rateLimit: codexRateLimit, ceilingSet: codexCalibration?.computedCeilingSet ?? null, calibration: codexCalibration },
   };
+}
+
+/**
+ * Records one `/usage` observation and solves for the real ceiling:
+ * `(this week's Workbench SET + this week's interactive SET) ÷ observed_fraction`
+ * (docs/autonomy-strategy.md "Calibration"). SET totals are measured for the
+ * ISO week containing `observedAt`, not the current week, so a calibration
+ * submitted for an earlier observation is scored against the usage that was
+ * actually live at that moment. This is a single explicit write — no retry,
+ * no averaging with prior calibrations; the newest observation simply
+ * supersedes older ones by recency when the ceiling is read back.
+ */
+export function recordUsageCalibration(repository: WorkItemRepository, provider: UsageCalibration['provider'], observedAt: string, observedPercentage: number): UsageCalibration {
+  const observedDate = new Date(observedAt);
+  const weekStart = startOfIsoWeekUtc(observedDate);
+  const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const workbench = computeWorkbenchUsage(repository, weekStart);
+  const workbenchSet = workbench[provider].manual.setTokens + workbench[provider].autonomous.setTokens;
+  const interactiveSet = provider === 'claude' ? scanClaudeInteractiveUsage(weekStart, weekEnd).setTokens : 0;
+  const computedCeilingSet = (workbenchSet + interactiveSet) / (observedPercentage / 100);
+  return repository.createUsageCalibration({ provider, observedAt, observedPercentage, workbenchSet, interactiveSet, computedCeilingSet });
 }

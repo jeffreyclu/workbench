@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.jeffrey.workbench.ngrok</string>
+  <key>ProgramArguments</key><array>
+    <string>/opt/homebrew/bin/ngrok</string><string>http</string><string>5173</string><string>--url=https://__NGROK_DOMAIN__</string><string>--pooling-enabled</string><string>--log</string><string>stdout</string>
+  </array>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>2</integer>
+  <key>StandardOutPath</key><string>__REPO__/data/logs/ngrok.out.log</string>
+  <key>StandardErrorPath</key><string>__REPO__/data/logs/ngrok.err.log</string>
+</dict></plist>

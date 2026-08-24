@@ -19,6 +19,7 @@ import {
   MessageSquarePlus,
   MoreHorizontal,
   Link2,
+  Link2Off,
   Paperclip,
   Pin,
   Plus,
@@ -42,8 +43,9 @@ import { api } from './api';
 import { ArtifactLibraryView, ArtifactNav } from './artifacts';
 import { ConfirmationDialog } from './confirmation-dialog';
 import { InsightsView, InsightsNav } from './insights';
-import { navigate, useRoute, type StackName } from './router';
+import { navigate, parseRoute, useRoute, type StackName } from './router';
 import { parseSnippet } from './search-snippet';
+import { ListRowSkeleton } from './skeleton';
 import { Toaster } from './toast';
 import { toast, toastError } from './toast-store';
 import { SortableQueueItem as TaskQueueItem, TaskClassificationSelect } from './task-queue';
@@ -53,9 +55,14 @@ import { CreateTask } from './create-task-dialog';
 import { DiscoveryInboxView, DiscoveryNav } from './discovery';
 import { FollowUpArchiveDialog } from './follow-up-archive-dialog';
 import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from './formatters';
-import { clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeTaskModelProfile } from './preferences';
+import { clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from './preferences';
 import { QueueExplanationList } from './queue-explanations';
+import { ProjectColorDot } from './project-color';
+import { InlineProjectEditor } from './project-field';
+import { isWorkbenchProject, WORKBENCH_PROJECT_NAME } from '../shared/project-name';
 import { SourcesDialog } from './sources-dialog';
+import { createTaskStackViewModel } from './stack-view-model';
+import { useRealtimeNotifications, type RealtimeNotification } from './realtime';
 
 export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectConversation }: { initialConversationId?: string | null; onOpenTask?: (taskId: string) => void; onSelectConversation?: (conversationId: string | null) => void }) {
   const queryClient = useQueryClient();
@@ -109,6 +116,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   useEffect(() => {
     // The rail keeps owning the live selection; the address bar just follows it,
     // so an open conversation can be reloaded, shared, and stepped back out of.
+    if (conversationId) writeLastOpenedItem('conversation', conversationId);
     selectConversationRef.current?.(conversationId);
   }, [conversationId]);
   function updateBody(nextBody: string) {
@@ -178,21 +186,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       pages: current.pages.map((page) => ({ ...page, conversations: page.conversations.filter((conversation) => conversation.id !== removedId) })),
     }));
   };
-  const conversationVirtualizer = useVirtualizer({ count: conversationList.length, getScrollElement: () => conversationScrollRef.current, estimateSize: () => 58, overscan: 5, initialRect: { width: 250, height: 600 } });
-  const conversationRows = conversationVirtualizer.getVirtualItems();
-  const displayedConversationRows = conversationRows.length ? conversationRows : conversationList.map((_, index) => ({ index, start: index * 58 }));
-  useEffect(() => {
-    // Removing one card shifts every later virtual index. Recompute immediately
-    // instead of waiting for a scroll event; otherwise a stale index set can
-    // leave unrelated conversations visually absent until a full remount.
-    conversationVirtualizer.measure();
-  }, [conversationList.length, conversationVirtualizer]);
-  useEffect(() => {
-    const last = conversationRows.at(-1);
-    if (last && last.index >= conversationList.length - 5 && conversations.hasNextPage && !conversations.isFetchingNextPage) void conversations.fetchNextPage();
-  }, [conversationList.length, conversationRows, conversations]);
   const conversationActivity = useQuery({ queryKey: ['shared-message-activity'], queryFn: () => api.listSharedMessages(), refetchInterval: 1_000 });
-  const activeConversationIds = new Set(conversationActivity.data?.messages.filter((message) => message.status === 'running').map((message) => message.conversationId) ?? []);
+  const activeConversationIds = useMemo(() => new Set(conversationActivity.data?.messages.filter((message) => message.status === 'running').map((message) => message.conversationId) ?? []), [conversationActivity.data?.messages]);
   const fallbackConversationStates = useMemo(() => {
     const states = new Map<string, SharedConversation['state']>();
     for (const message of conversationActivity.data?.messages ?? []) {
@@ -203,6 +198,40 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     }
     return states;
   }, [conversationActivity.data?.messages]);
+  const conversationStackRows = useMemo(() => {
+    const rows = conversationList.map((conversation) => {
+      const isActive = conversation.isActive || activeConversationIds.has(conversation.id);
+      const serverState = conversation.state ?? fallbackConversationStates.get(conversation.id) ?? null;
+      const state = serverState === 'promoting' ? 'promoting' : isActive ? 'working' : serverState;
+      return { type: 'conversation' as const, id: conversation.id, conversation, state };
+    });
+    if (conversationView === 'archive') return rows;
+
+    const progress = rows.filter((row) => !row.conversation.linkedWorkItemPinned && (row.state === 'working' || row.state === 'promoting'));
+    const pinned = rows.filter((row) => row.conversation.linkedWorkItemPinned);
+    const attention = rows.filter((row) => !row.conversation.linkedWorkItemPinned && row.state !== 'working' && row.state !== 'promoting');
+    const groups = [
+      { id: 'conversation-in-progress-header', label: 'In progress', group: 'progress' as const, rows: progress },
+      { id: 'conversation-attention-header', label: 'Attention stack', group: 'attention' as const, rows: attention },
+      { id: 'conversation-pinned-header', label: 'Pinned for you', group: 'pinned' as const, rows: pinned },
+    ];
+    return groups.flatMap((group) => group.rows.length === 0 && group.group !== 'pinned' ? [] : [
+      { type: 'header' as const, id: group.id, label: group.label, count: group.rows.length, group: group.group },
+      ...group.rows,
+    ]);
+  }, [activeConversationIds, conversationList, conversationView, fallbackConversationStates]);
+  const conversationVirtualizer = useVirtualizer({ count: conversationStackRows.length, getScrollElement: () => conversationScrollRef.current, estimateSize: (index) => conversationStackRows[index]?.type === 'header' ? 38 : 58, overscan: 5, initialRect: { width: 250, height: 600 } });
+  const conversationRows = conversationVirtualizer.getVirtualItems();
+  const displayedConversationRows = conversationRows.length ? conversationRows : conversationStackRows.map((row, index) => ({ index, start: conversationStackRows.slice(0, index).reduce((total, item) => total + (item.type === 'header' ? 38 : 58), 0) }));
+  useEffect(() => {
+    // Group headers change the virtual row geometry as conversations move
+    // between stacks, so recalculate instead of waiting for a scroll event.
+    conversationVirtualizer.measure();
+  }, [conversationStackRows, conversationVirtualizer]);
+  useEffect(() => {
+    const last = conversationRows.at(-1);
+    if (last && last.index >= conversationStackRows.length - 5 && conversations.hasNextPage && !conversations.isFetchingNextPage) void conversations.fetchNextPage();
+  }, [conversationStackRows.length, conversationRows, conversations]);
   const listedConversation = conversationList.find((conversation) => conversation.id === conversationId);
   // Deep links (e.g. archived or unpaginated conversations) aren't necessarily
   // in the currently loaded page of the active tab, so fall back to a direct
@@ -669,8 +698,19 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
             <div className="conversation-view-tabs"><button className={conversationView === 'active' ? 'active' : ''} onClick={() => { setConversationView('active'); setConversationId(null); }}>Active</button><button className={conversationView === 'archive' ? 'active' : ''} onClick={() => { setConversationView('archive'); setConversationId(null); }}>Archive</button></div>
             <div ref={conversationScrollRef} className="conversation-tabs">
               <div className="virtual-list" style={{ height: conversationVirtualizer.getTotalSize() }}>
-                {displayedConversationRows.map((row) => { const conversation = conversationList[row.index]; if (!conversation) return null; const isActive = conversation.isActive || activeConversationIds.has(conversation.id); const isUnread = Boolean(conversation.isUnread && !locallyReadConversationIds.has(conversation.id) && conversation.id !== conversationId); const serverState = conversation.state ?? fallbackConversationStates.get(conversation.id) ?? null; const state = serverState === 'promoting' ? 'promoting' : isActive ? 'working' : serverState; const stateLabel = state === 'working' ? 'Working' : state === 'needs_attention' ? 'Failed or canceled' : state === 'waiting_approval' ? 'Review follow-ups' : state === 'promoting' ? 'Approved · promoting preview' : state === 'finished' ? 'Finished' : null; return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={row.index} className="virtual-row" style={{ transform: `translateY(${row.start}px)` }}><button className={`${conversation.id === conversationId ? 'active' : ''} ${isUnread ? 'conversation-unread' : 'conversation-read'} ${state ? `conversation-${state}` : ''} ${exitingConversationIds.has(conversation.id) ? 'conversation-exiting' : ''}`} onClick={() => { setConversationId(conversation.id); setRailOpen(false); }}><span className="conversation-tab-title"><strong>{conversation.title}</strong>{conversation.linkedWorkItemPinned && <span className="conversation-pinned-marker" title="Pinned task"><Pin size={10} fill="currentColor" aria-hidden="true" /><span className="sr-only">Pinned task</span></span>}{isUnread && <span className="conversation-unread-marker">New</span>}{stateLabel && <span className={`conversation-state conversation-state-${state}`}>{(state === 'working' || state === 'promoting') && <LoaderCircle className="spin" size={10} />}{stateLabel}</span>}</span><small className="conversation-tab-meta"><ConversationOriginBadge workItemId={conversation.workItemId} /><span>{state === 'working' ? 'Agent working…' : state === 'promoting' ? 'Promoting preview…' : new Date(conversation.updatedAt).toLocaleDateString()}</span></small></button></div>; })}
+                {displayedConversationRows.map((virtualRow) => {
+                  const row = conversationStackRows[virtualRow.index];
+                  if (!row) return null;
+                  if (row.type === 'header') return <div key={row.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><div className={`stack-header conversation-stack-header stack-header-${row.group}`}><span>{row.label}</span><strong>{row.count}</strong></div></div>;
+
+                  const { conversation, state } = row;
+                  const isUnread = Boolean(conversation.isUnread && !locallyReadConversationIds.has(conversation.id) && conversation.id !== conversationId);
+                  const stateLabel = state === 'working' ? 'Working' : state === 'needs_attention' ? 'Failed or canceled' : state === 'waiting_approval' ? 'Review follow-ups' : state === 'promoting' ? 'Approved · promoting preview' : null;
+                  const stateClass = state === 'finished' ? null : state;
+                  return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><button className={`${conversation.id === conversationId ? 'active' : ''} ${isUnread ? 'conversation-unread' : 'conversation-read'} ${stateClass ? `conversation-${stateClass}` : ''} ${exitingConversationIds.has(conversation.id) ? 'conversation-exiting' : ''}`} onClick={() => { setConversationId(conversation.id); setRailOpen(false); }}><span className="conversation-tab-title">{conversation.linkedProjectName && <ProjectColorDot projectName={conversation.linkedProjectName} labelled />}<strong>{conversation.title}</strong>{conversation.linkedWorkItemPinned && <span className="conversation-pinned-marker" aria-label="Pinned task" title="Pinned task"><Pin size={10} fill="currentColor" aria-hidden="true" /></span>}{isUnread && <span className="conversation-unread-marker">New</span>}{stateLabel && <span className={`conversation-state conversation-state-${state}`}>{(state === 'working' || state === 'promoting') && <LoaderCircle className="spin" size={10} />}{stateLabel}</span>}</span><small className="conversation-tab-meta"><ConversationOriginBadge workItemId={conversation.workItemId} /><span>{state === 'working' ? 'Agent working…' : state === 'promoting' ? 'Promoting preview…' : new Date(conversation.updatedAt).toLocaleDateString()}</span></small></button></div>;
+                })}
               </div>
+              {conversations.isLoading && <ListRowSkeleton count={6} />}
               {conversations.isError && conversationList.length === 0 && (
                 <div className="page-state error-message">Could not load conversations. <button type="button" className="button secondary compact" onClick={() => conversations.refetch()}>Retry</button></div>
               )}
@@ -685,7 +725,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               ?? (pendingSelectedConversation?.id === conversationId ? pendingSelectedConversation.title
                 : conversationDetail.isLoading ? 'Loading conversation…'
                   : selectedConversationMissing ? 'Conversation not found'
-                    : 'New conversation')}</h2>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={12} /> Back to task</button>}</div>{conversationId && selectedConversation && <div className="conversation-window-actions">{!selectedConversation.workItemId && <label className="conversation-task-picker" title="Link this conversation to a task"><Link2 size={13} /><select aria-label="Link conversation to task" defaultValue="" disabled={linkableTasks.isLoading || setConversationTask.isPending} onChange={(event) => { if (event.target.value) setConversationTask.mutate(event.target.value); event.currentTarget.value = ''; }}><option value="">Link task…</option>{(linkableTasks.data?.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}{selectedConversation.workItemId && <button type="button" className="icon-button conversation-unlink-task" onClick={() => setConversationTask.mutate(null)} disabled={setConversationTask.isPending} title="Unlink task" aria-label="Unlink task"><Link2 size={13} /></button>}{linkedWorkItem.data?.item && <button type="button" className="icon-button complete-task-button" disabled={linkedTaskCompleted || completeLinkedTask.isPending} onClick={() => completeLinkedTask.mutate()} aria-label={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'} title={linkedTaskCompleted ? 'Task completed' : 'Complete task'}>{completeLinkedTask.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}</button>}<button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<span className={`conversation-delete-control ${selectedConversation.workItemId ? 'is-disabled' : ''}`} tabIndex={selectedConversation.workItemId ? 0 : undefined}><button className="icon-button delete-conversation-button" disabled={Boolean(selectedConversation.workItemId)} onClick={() => setDeleteConversationPromptOpen(true)} aria-label="Delete conversation" aria-describedby={selectedConversation.workItemId ? 'linked-conversation-delete-help' : undefined} title={selectedConversation.workItemId ? undefined : 'Delete permanently'}><Trash2 size={14} /></button>{selectedConversation.workItemId && <span id="linked-conversation-delete-help" className="action-tooltip" role="tooltip">Delete the related task to delete this conversation.</span>}</span></div>}</header>
+                    : 'New conversation')}</h2>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={12} /> Back to task</button>}</div>{conversationId && selectedConversation && <div className="conversation-window-actions">{!selectedConversation.workItemId && <label className="conversation-task-picker" title="Link this conversation to a task"><Link2 size={13} /><select aria-label="Link conversation to task" defaultValue="" disabled={linkableTasks.isLoading || setConversationTask.isPending} onChange={(event) => { if (event.target.value) setConversationTask.mutate(event.target.value); event.currentTarget.value = ''; }}><option value="">Link task…</option>{(linkableTasks.data?.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}{selectedConversation.workItemId && <button type="button" className="icon-button conversation-unlink-task" onClick={() => setConversationTask.mutate(null)} disabled={setConversationTask.isPending} aria-label="Unlink task" title="Unlink task"><Link2Off size={14} /></button>}{linkedWorkItem.data?.item && <button type="button" className="icon-button complete-task-button" disabled={linkedTaskCompleted || completeLinkedTask.isPending} onClick={() => completeLinkedTask.mutate()} aria-label={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'} title={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'}>{completeLinkedTask.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}</button>}<button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<span className={`conversation-delete-control ${selectedConversation.workItemId ? 'is-disabled' : ''}`} tabIndex={selectedConversation.workItemId ? 0 : undefined}><button className="icon-button delete-conversation-button" disabled={Boolean(selectedConversation.workItemId)} onClick={() => setDeleteConversationPromptOpen(true)} aria-label="Delete conversation" aria-describedby={selectedConversation.workItemId ? 'linked-conversation-delete-help' : undefined} title={selectedConversation.workItemId ? undefined : 'Delete permanently'}><Trash2 size={14} /></button>{selectedConversation.workItemId && <span id="linked-conversation-delete-help" className="action-tooltip" role="tooltip">Delete the related task to delete this conversation.</span>}</span></div>}</header>
         {linkedWorkItem.data?.item && <div className="thread-filter-bar"><TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} /><button type="button" className={`icon-button${linkedWorkItem.data.item.status === 'pinned' ? ' icon-button-active' : ''}`} onClick={() => toggleLinkedTaskPin.mutate()} disabled={toggleLinkedTaskPin.isPending} aria-pressed={linkedWorkItem.data.item.status === 'pinned'} aria-label={linkedWorkItem.data.item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'} title={linkedWorkItem.data.item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'}><Pin size={13} fill={linkedWorkItem.data.item.status === 'pinned' ? 'currentColor' : 'none'} /></button></div>}
         <div className="shared-thread" ref={threadScrollRef}>
           {conversationDetail.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading conversation…</div>}
@@ -695,7 +735,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               <button type="button" className="button secondary compact" onClick={() => conversationDetail.refetch()}>Retry</button>
             </div>
           )}
-          {messages.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading room…</div>}
+          {messages.isLoading && <ListRowSkeleton count={5} />}
           {messages.error && <div className="list-state compact-state error-message">Could not load shared messages: {messages.error.message} <button type="button" className="button secondary compact" onClick={() => messages.refetch()}>Retry</button></div>}
           {!messages.isLoading && !messages.error && !selectedConversationMissing && messages.data?.messages.length === 0 && <div className="list-state compact-state">No messages yet. Ask Codex or Claude to get started.</div>}
           {hasEarlierMessages && (
@@ -764,7 +804,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           }} disabled={send.isPending} />
           <div className="composer-toolbar">
             <input ref={fileRef} className="visually-hidden" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
-            <button type="button" className="composer-tool attach-button" onClick={() => fileRef.current?.click()}><Paperclip size={14} /> Attach</button>
+            <button type="button" className="composer-tool attach-button" onClick={() => fileRef.current?.click()} aria-label="Attach files" title="Attach files"><Paperclip size={14} /></button>
             <span className="composer-hint">Files, screenshots, or context</span>
             <ModelProfileSelect className="model-target" value={executionProfile} onChange={setExecutionProfile} />
             <select className="agent-target" value={dispatchTo} onChange={(event) => { const target = event.target.value as typeof dispatchTo; setDispatchTo(target); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond">
@@ -793,7 +833,6 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const [editingField, setEditingField] = useState<'title' | 'project' | 'description' | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
-  const [editProjectName, setEditProjectName] = useState('');
   const [followUpTitle, setFollowUpTitle] = useState('');
   const [followUpDescription, setFollowUpDescription] = useState('');
   const [showAddReference, setShowAddReference] = useState(false);
@@ -1039,14 +1078,13 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
     if (!detail.data?.item || editingField) return;
     setEditTitle(detail.data.item.title);
     setEditDescription(detail.data.item.description);
-    setEditProjectName(detail.data.item.projectName ?? '');
   }, [detail.data?.item, editingField]);
   useEffect(() => {
     setActivityVisibleCount(ACTIVITY_PAGE_SIZE);
     setRunsVisibleCount(RUNS_PAGE_SIZE);
   }, [id]);
 
-  if (detail.isLoading) return <div className="detail-empty"><LoaderCircle className="spin" /></div>;
+  if (detail.isLoading) return <ListRowSkeleton count={6} className="detail-empty-skeleton" />;
   if (!detail.data) return <div className="detail-empty">Unable to load this item.</div>;
   const { item, activity } = detail.data;
   const decisionCount = activity.filter((entry) => agentDecisionKinds.has(entry.kind)).length;
@@ -1137,9 +1175,9 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { event.currentTarget.value = item.title; setEditTitle(item.title); event.currentTarget.blur(); } }} />
         : <h1 className="inline-editable" onClick={() => setEditingField('title')} title="Click to edit title">{item.title}</h1>}
       {detail.data.parentItem && <button className="parent-task-link" onClick={() => onOpenTask(detail.data!.parentItem!.id)}><span>Follow-up to</span><strong>{detail.data.parentItem.title}</strong></button>}
-      <div className="detail-controls">{editingField === 'project' ? <input className="inline-project-editor" autoFocus value={editProjectName} onChange={(event) => setEditProjectName(event.target.value)} maxLength={200} placeholder="No project"
-        onBlur={() => { const projectName = editProjectName.trim() || null; if (projectName !== item.projectName) update.mutate({ projectName }); setEditingField(null); }}
-        onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { event.currentTarget.value = item.projectName ?? ''; setEditProjectName(item.projectName ?? ''); event.currentTarget.blur(); } }} />
+      <div className="detail-controls">{editingField === 'project' ? <InlineProjectEditor initialValue={item.projectName ?? ''}
+        onCommit={(projectName) => { if (projectName !== item.projectName) update.mutate({ projectName }); setEditingField(null); }}
+        onCancel={() => setEditingField(null)} />
         : <button className={`project-pill inline-editable ${item.projectName ? '' : 'empty'}`} onClick={() => setEditingField('project')} title="Click to edit project">{item.projectName || 'Add project'}</button>}<TaskClassificationSelect itemId={item.id} kind={item.classificationKind} /></div>
 
       <div className="detail-section">
@@ -1425,6 +1463,18 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
 
 export function App() {
   const queryClient = useQueryClient();
+  const handleRealtimeNotification = useMemo(() => (notification: RealtimeNotification) => {
+    const options = {
+      description: notification.description,
+      duration: notification.duration,
+      ...(notification.action ? {
+        action: () => navigate(parseRoute(notification.action!.route)),
+        actionLabel: notification.action.label,
+      } : {}),
+    };
+    toast[notification.tone](notification.message, options);
+  }, []);
+  useRealtimeNotifications(handleRealtimeNotification);
   const route = useRoute();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [exitingTaskIds, setExitingTaskIds] = useState<Set<string>>(new Set());
@@ -1456,7 +1506,7 @@ export function App() {
       });
     }, 560);
   };
-  const agentConversationId = route.name === 'conversations' ? route.conversationId : null;
+  const agentConversationId = route.name === 'conversations' ? route.conversationId ?? readLastOpenedItem('conversation') : null;
   const view = route.name === 'stack' ? route.stack : route.name === 'task' ? taskStack : route.name === 'conversations' ? 'context' : route.name;
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [isCompactNav, setIsCompactNav] = useState(() => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 820px)').matches);
@@ -1477,18 +1527,20 @@ export function App() {
     getNextPageParam: (page) => page.nextCursor ?? undefined,
     enabled: view === 'active' || view === 'workbench' || view === 'archive',
   });
-  const workItemCounts = useQuery({ queryKey: ['work-item-counts'], queryFn: api.getWorkItemCounts, refetchInterval: 1_500 });
+  const workItemCounts = useQuery({ queryKey: ['work-item-counts'], queryFn: api.getWorkItemCounts, refetchInterval: 5_000 });
   const pinnedReminder = useQuery({ queryKey: ['pinned-reminder'], queryFn: () => api.listWorkItems('active', ''), staleTime: 60_000 });
-  const totalConversationCount = useQuery({ queryKey: ['conversation-count'], queryFn: api.getConversationCount, refetchInterval: 1_500 });
-  const notificationConversations = useQuery({ queryKey: ['notification-conversations'], queryFn: () => api.listSharedConversations('active'), refetchInterval: 1_000 });
-  // This query deliberately shares the Discovery tab's cache key. It lets scans
-  // surface new inbox items wherever Jeffrey is working without a second request.
-  const discoveryNotifications = useQuery({ queryKey: ['discovery', 'pending'], queryFn: () => api.getDiscoveryInbox('pending'), refetchInterval: 5_000 });
-  const previousConversationStates = useRef<Map<string, SharedConversation['state']> | null>(null);
-  const knownDiscoveryIds = useRef<Set<string> | null>(null);
+  const totalConversationCount = useQuery({ queryKey: ['conversation-count'], queryFn: api.getConversationCount, refetchInterval: 5_000 });
   const syncedConversationId = useRef<string | null>(route.name === 'conversations' ? route.conversationId : null);
   function openConversation(conversationId: string) {
     navigate({ name: 'conversations', conversationId });
+  }
+  function openPrimaryStack(stack: Extract<StackName, 'active' | 'workbench'>) {
+    const surface = stack === 'active' ? 'attention' : 'workbench';
+    const taskId = readLastOpenedItem(surface);
+    navigate(taskId ? { name: 'task', taskId } : { name: 'stack', stack });
+  }
+  function openConversations() {
+    navigate({ name: 'conversations', conversationId: readLastOpenedItem('conversation') });
   }
   function handleConversationSelected(conversationId: string | null) {
     syncedConversationId.current = conversationId;
@@ -1522,31 +1574,15 @@ export function App() {
     });
   }, [pinnedReminder.data]);
   useEffect(() => {
-    const candidates = discoveryNotifications.data?.candidates;
-    if (!candidates) return;
-    const nextIds = new Set(candidates.map((candidate) => candidate.id));
-    const previousIds = knownDiscoveryIds.current;
-    knownDiscoveryIds.current = nextIds;
-    // The first load is the baseline, not a new discovery notification.
-    if (!previousIds) return;
-    const newCandidates = candidates.filter((candidate) => !previousIds.has(candidate.id));
-    if (!newCandidates.length) return;
-    const titles = newCandidates.slice(0, 2).map((candidate) => candidate.title);
-    const remainder = newCandidates.length - titles.length;
-    toast.info(`${newCandidates.length} new discover${newCandidates.length === 1 ? 'y' : 'ies'} ready to review.`, {
-      description: `${titles.join(' · ')}${remainder > 0 ? ` · +${remainder} more` : ''}`,
-      action: () => navigate({ name: 'discovery' }),
-      actionLabel: 'Review discoveries',
-    });
-  }, [discoveryNotifications.data?.candidates]);
-  useEffect(() => {
     if (route.name !== 'task' || resolvedTaskId === route.taskId) return;
     const taskId = route.taskId;
     let canceled = false;
     void queryClient.fetchQuery({ queryKey: ['work-item', taskId], queryFn: () => api.getWorkItem(taskId) })
       .then(({ item }) => {
         if (canceled) return;
-        setTaskStack(item.archivedAt ? 'archive' : item.stack === 'workbench' ? 'workbench' : 'active');
+        const stack = item.archivedAt ? 'archive' : isWorkbenchProject(item.projectName) ? 'workbench' : 'active';
+        setTaskStack(stack);
+        if (stack !== 'archive') writeLastOpenedItem(stack === 'workbench' ? 'workbench' : 'attention', item.id);
         setResolvedTaskId(taskId);
       })
       .catch(() => {
@@ -1556,29 +1592,7 @@ export function App() {
       });
     return () => { canceled = true; };
   }, [queryClient, resolvedTaskId, route]);
-  useEffect(() => {
-    const conversations = notificationConversations.data?.conversations;
-    if (!conversations) return;
-    const next = new Map(conversations.map((conversation) => [conversation.id, conversation.state]));
-    const previous = previousConversationStates.current;
-    previousConversationStates.current = next;
-    if (!previous) return;
-    for (const conversation of conversations) {
-      if (previous.get(conversation.id) !== 'working' || conversation.state === 'working') continue;
-      const conversationIsOpen = view === 'context' && agentConversationId === conversation.id;
-      const linkedTaskIsOpen = (view === 'active' || view === 'workbench' || view === 'archive') && selectedId === conversation.workItemId;
-      if (conversationIsOpen || linkedTaskIsOpen) continue;
-      const openNotificationConversation = () => openConversation(conversation.id);
-      if (conversation.state === 'needs_attention') {
-        toast.error('Agent needs your attention', { description: conversation.title, duration: 0, action: openNotificationConversation, actionLabel: 'Open conversation' });
-      } else if (conversation.state === 'waiting_approval') {
-        toast.info('Agent has follow-ups for review', { description: conversation.title, duration: 0, action: openNotificationConversation, actionLabel: 'Review suggestions' });
-      } else if (conversation.state === 'finished') {
-        toast.success('Agent finished', { description: conversation.title, duration: 8_000, action: openNotificationConversation, actionLabel: 'Open conversation' });
-      }
-    }
-  }, [agentConversationId, notificationConversations.data?.conversations, selectedId, view]);
-  const queueAgentActivity = useQuery({ queryKey: ['shared-message-activity'], queryFn: () => api.listSharedMessages(), refetchInterval: 1_000 });
+  const queueAgentActivity = useQuery({ queryKey: ['shared-message-activity'], queryFn: () => api.listSharedMessages(), refetchInterval: 5_000 });
   const queueAgentStatusSignature = (queueAgentActivity.data?.messages ?? []).map((message) => `${message.id}:${message.status}`).join('|');
   useEffect(() => {
     if (queueAgentStatusSignature) void queryClient.invalidateQueries({ queryKey: ['work-items'] });
@@ -1591,14 +1605,14 @@ export function App() {
   const resolveProposal = useMutation({
     mutationFn: ({ id, resolution }: { id: string; resolution: 'accepted' | 'rejected' }) => api.resolveQueueProposal(id, resolution),
     onSuccess: ({ proposal }, variables) => {
-      navigate({ name: 'stack', stack: proposal.stack === 'workbench' ? 'workbench' : 'active' });
+      navigate({ name: 'stack', stack: 'active' });
       toast.success(variables.resolution === 'accepted' ? 'Proposed stack accepted.' : 'Proposed stack rejected.');
       void queryClient.invalidateQueries({ queryKey: ['work-items'] });
     },
     onError: (error) => toastError('Could not update the proposal.', error),
   });
   const planQueue = useMutation({
-    mutationFn: (stack: 'attention' | 'workbench') => api.planQueue(stack),
+    mutationFn: () => api.planQueue('attention'),
     onSuccess: () => {
       toast.success('Stack reordered.');
       queryClient.invalidateQueries({ queryKey: ['work-items'] });
@@ -1618,30 +1632,15 @@ export function App() {
     onError: (error) => toastError('Could not update the selected tasks.', error),
   });
   const filtered = useMemo(() => items.data?.pages.flatMap((page) => page.items) ?? [], [items.data?.pages]);
-  const { renderedItems, renderedRows } = useMemo(() => {
-    const stackView = view === 'active' || view === 'workbench';
-    const progress = stackView ? filtered.filter((item) => item.status === 'in_progress') : [];
-    const pinned = stackView ? filtered.filter((item) => item.status === 'pinned') : [];
-    const attention = stackView ? filtered.filter((item) => item.status !== 'in_progress' && item.status !== 'pinned') : [];
-    const taskRows = (section: 'progress' | 'attention' | 'pinned' | 'archive', sectionItems: WorkItem[]) => sectionItems.map((item) => ({ type: 'item' as const, id: item.id, item, group: section }));
-    return {
-      renderedItems: stackView ? [...progress, ...attention] : filtered,
-      renderedRows: stackView ? [
-        { type: 'header' as const, id: 'in-progress-header', label: 'In progress', count: progress.length, group: 'progress' as const },
-        ...taskRows('progress', progress),
-        { type: 'header' as const, id: 'attention-header', label: 'Attention stack', count: attention.length, group: 'attention' as const },
-        ...taskRows('attention', attention),
-        ...(pinned.length ? [{ type: 'header' as const, id: 'pinned-header', label: 'Pinned for you', count: pinned.length, group: 'pinned' as const }, ...taskRows('pinned', pinned)] : []),
-      ] : taskRows('archive', filtered),
-    };
-  }, [filtered, view]);
+  const taskStackScope = view === 'workbench' ? 'workbench' : view === 'archive' ? 'archive' : 'attention';
+  const { items: renderedItems, rows: renderedRows } = useMemo(() => createTaskStackViewModel(filtered, taskStackScope), [filtered, taskStackScope]);
   useEffect(() => {
     if (route.name !== 'task' || !pendingTaskNavigation || pendingTaskNavigation !== route.taskId) return;
     // Wait until the stack behind the task is known: before that the queue can
     // still be listing another stack, where the task is legitimately missing.
     if (pendingTaskNavigation !== resolvedTaskId) return;
     const resolvedDetail = queryClient.getQueryData<WorkItemDetail>(['work-item', pendingTaskNavigation]);
-    const resolvedStack = resolvedDetail?.item.archivedAt ? 'archive' : resolvedDetail?.item.stack === 'workbench' ? 'workbench' : 'active';
+    const resolvedStack = resolvedDetail?.item.archivedAt ? 'archive' : isWorkbenchProject(resolvedDetail?.item.projectName) ? 'workbench' : 'active';
     // React can commit the detail lookup before the infinite query behind it has
     // switched stacks. Never judge membership against that stale list.
     if (resolvedDetail && queueView !== resolvedStack) return;
@@ -1719,6 +1718,7 @@ export function App() {
     // without waiting to be told which stack the task belongs to.
     setResolvedTaskId(taskId);
     setPendingTaskNavigation(taskId);
+    if (view === 'active' || view === 'workbench') writeLastOpenedItem(view === 'workbench' ? 'workbench' : 'attention', taskId);
     navigate({ name: 'task', taskId });
   }
 
@@ -1727,7 +1727,8 @@ export function App() {
     // that has not been loaded yet. The existing pending-navigation effect will
     // fetch forward until it can center the new card.
     animateTaskEnter(item.id);
-    setTaskStack(item.stack === 'workbench' ? 'workbench' : 'active');
+    setTaskStack(isWorkbenchProject(item.projectName) ? 'workbench' : 'active');
+    writeLastOpenedItem(isWorkbenchProject(item.projectName) ? 'workbench' : 'attention', item.id);
     setResolvedTaskId(item.id);
     setPendingTaskNavigation(item.id);
     navigate({ name: 'task', taskId: item.id });
@@ -1739,10 +1740,8 @@ export function App() {
     const current = filtered;
     const activeItem = current.find((item) => item.id === active.id);
     const overItem = current.find((item) => item.id === over.id);
-    if (!activeItem || !overItem || (activeItem.status === 'in_progress') !== (overItem.status === 'in_progress')) return;
-    const progress = current.filter((item) => item.status === 'in_progress');
-    const attention = current.filter((item) => item.status !== 'in_progress');
-    const group = activeItem.status === 'in_progress' ? progress : attention;
+    if (!activeItem || !overItem || activeItem.status !== overItem.status) return;
+    const group = current.filter((item) => item.status === activeItem.status);
     const oldIndex = group.findIndex((item) => item.id === active.id);
     const newIndex = group.findIndex((item) => item.id === over.id);
     const moved = arrayMove(group, oldIndex, newIndex);
@@ -1781,10 +1780,10 @@ export function App() {
           // keyboard focus, but release pointer focus once navigation starts.
           if (event.detail > 0) (event.target as HTMLElement).closest<HTMLButtonElement>('button')?.blur();
         }}>
-          <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={() => { navigate({ name: 'stack', stack: 'active' }); setMobileNavOpen(false); }}><Command size={16} /> Attention stack <span>{workItemCounts.data?.active ?? '…'}</span></button>
-          <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={() => { navigate({ name: 'stack', stack: 'workbench' }); setMobileNavOpen(false); }}><Wrench size={16} /> Workbench <span>{workItemCounts.data?.workbench ?? '…'}</span></button>
+          <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={() => { openPrimaryStack('active'); setMobileNavOpen(false); }}><Command size={16} /> Attention stack <span>{workItemCounts.data?.active ?? '…'}</span></button>
+          <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={() => { openPrimaryStack('workbench'); setMobileNavOpen(false); }}><Wrench size={16} /> Workbench <span>{workItemCounts.data?.workbench ?? '…'}</span></button>
           <DiscoveryNav active={view === 'discovery'} onClick={() => { navigate({ name: 'discovery' }); setMobileNavOpen(false); }} />
-          <button className={`nav-item ${view === 'context' ? 'active' : ''}`} onClick={() => { navigate({ name: 'conversations', conversationId: null }); setMobileNavOpen(false); }}><MessageCircle size={16} /> Conversations <span>{totalConversationCount.data?.count ?? '…'}</span></button>
+          <button className={`nav-item ${view === 'context' ? 'active' : ''}`} onClick={() => { openConversations(); setMobileNavOpen(false); }}><MessageCircle size={16} /> Conversations <span>{totalConversationCount.data?.count ?? '…'}</span></button>
           <div id="mobile-nav-more" className="mobile-nav-secondary" aria-label="More destinations">
             <button className={`nav-item ${view === 'archive' ? 'active' : ''}`} onClick={() => { navigate({ name: 'stack', stack: 'archive' }); setMobileNavOpen(false); }}><Archive size={16} /> Archive <span>{workItemCounts.data?.archive ?? '…'}</span></button>
             <ArtifactNav active={view === 'artifacts'} onClick={() => { navigate({ name: 'artifacts' }); setMobileNavOpen(false); }} />
@@ -1799,17 +1798,17 @@ export function App() {
 
       {view === 'context' ? <SharedWorkspace key={`conversation-${conversationNavigationVersion}`} initialConversationId={agentConversationId} onSelectConversation={handleConversationSelected} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} /> : view === 'artifacts' ? <ArtifactLibraryView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : view === 'insights' ? <InsightsView /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenStack={() => navigate({ name: 'stack', stack: 'active' })} /> : <><main className="queue-panel">
         <header className="queue-header">
-          <div><span className="eyebrow">{view === 'active' ? 'Focus' : view === 'workbench' ? 'Build' : 'History'}</span><h2>{view === 'active' ? 'Attention stack' : view === 'workbench' ? 'Workbench roadmap' : 'Archive'}</h2></div>
+          <div><span className="eyebrow">{view === 'active' ? 'Focus' : view === 'workbench' ? 'Focus' : 'History'}</span><h2>{view === 'active' ? 'Attention stack' : view === 'workbench' ? 'Workbench focus' : 'Archive'}</h2></div>
           <div className="header-actions">
             {(view === 'active' || view === 'workbench') && <>
-            <button className="button secondary compact" onClick={() => planQueue.mutate(view === 'workbench' ? 'workbench' : 'attention')} disabled={planQueue.isPending}>
+            <button className="button secondary compact" onClick={() => planQueue.mutate()} disabled={planQueue.isPending}>
               {planQueue.isPending ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} {planQueue.isPending ? 'Reordering…' : 'Reorder stack'}
             </button>
             <button className="button primary compact" onClick={() => setShowCreate(true)}><Plus size={15} /> New</button>
             </>}
           </div>
         </header>
-        {selectedIds.size > 0 && <div className="queue-bulkbar" role="toolbar" aria-label="Bulk task actions"><span>{selectedIds.size} selected</span><button onClick={() => bulkUpdate.mutate({ action: view === 'archive' ? 'restore' : 'archive', ids: [...selectedIds] })} disabled={bulkUpdate.isPending}>{view === 'archive' ? 'Restore' : 'Archive'}</button><button onClick={() => setSelectedIds(new Set())}>Clear</button>{(view === 'active' || view === 'workbench') && <small>Changing projects no longer moves tasks between Attention and Workbench.</small>}</div>}
+        {selectedIds.size > 0 && <div className="queue-bulkbar" role="toolbar" aria-label="Bulk task actions"><span>{selectedIds.size} selected</span><button onClick={() => bulkUpdate.mutate({ action: view === 'archive' ? 'restore' : 'archive', ids: [...selectedIds] })} disabled={bulkUpdate.isPending}>{view === 'archive' ? 'Restore' : 'Archive'}</button><button onClick={() => setSelectedIds(new Set())}>Clear</button>{view === 'workbench' && <small>Workbench is filtered to the Workbench project.</small>}</div>}
         {items.data?.pages[0]?.proposal && (
           <div className="proposal-banner">
             <div className="proposal-copy"><Sparkles size={15} /><span><strong>Review proposed order</strong><small>{items.data.pages[0].proposal.rationale}</small></span></div>
@@ -1826,13 +1825,13 @@ export function App() {
           </div>
         )}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <div ref={queueScrollRef} className="queue-list" role="list" aria-label={view === 'archive' ? 'Archived tasks' : view === 'workbench' ? 'Workbench roadmap' : 'Work stacks'} onScroll={(event) => {
+        <div ref={queueScrollRef} className="queue-list" role="list" aria-label={view === 'archive' ? 'Archived tasks' : view === 'workbench' ? 'Workbench focus' : 'Work stacks'} onScroll={(event) => {
           const element = event.currentTarget;
           if (element.scrollHeight - element.scrollTop - element.clientHeight < 500 && items.hasNextPage && !items.isFetchingNextPage) void items.fetchNextPage();
         }}>
-          {items.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading queue…</div>}
+          {items.isLoading && <ListRowSkeleton count={8} />}
           {items.isError && <div className="list-state error-message">Could not load work items. <button className="button secondary compact" onClick={() => items.refetch()}>Retry</button></div>}
-          {!items.isLoading && !items.isError && filtered.length === 0 && <div className="list-state">{view === 'active' ? 'No work items yet. Add one or connect Linear.' : view === 'workbench' ? 'No Workbench roadmap tasks yet.' : 'No archived tasks.'}</div>}
+          {!items.isLoading && !items.isError && filtered.length === 0 && <div className="list-state">{view === 'active' ? 'No work items yet. Add one or connect Linear.' : view === 'workbench' ? 'No Workbench-project tasks yet.' : 'No archived tasks.'}</div>}
           <SortableContext items={(view === 'active' || view === 'workbench') && !items.hasNextPage && selectedIds.size === 0 ? renderedItems.map((item) => item.id) : []} strategy={verticalListSortingStrategy}>
             <div className="queue-rows">
               {renderedRows.map((rendered, index) => rendered.type === 'header'
@@ -1847,7 +1846,7 @@ export function App() {
       </main>
 
       {selectedId ? <TaskDetail key={selectedId} id={selectedId} onClose={() => navigate({ name: 'stack', stack: taskStack })} onCreated={revealCreatedTask} onRemoving={animateTaskExit} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : <section className="detail-empty"><Sparkles /><h2>Choose your next move</h2><p>Select an item or add something new.</p></section>}</>}
-      {showCreate && <CreateTask onClose={() => setShowCreate(false)} onCreated={revealCreatedTask} defaultProjectName={view === 'workbench' ? 'Workbench' : ''} />}
+      {showCreate && <CreateTask onClose={() => setShowCreate(false)} onCreated={revealCreatedTask} defaultProjectName={view === 'workbench' ? WORKBENCH_PROJECT_NAME : ''} />}
       {showSources && <SourcesDialog onClose={() => setShowSources(false)} />}
     </div>
   );

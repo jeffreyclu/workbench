@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { Info, LineChart, LoaderCircle, Minus, TrendingDown, TrendingUp } from 'lucide-react';
+import { Info, LineChart, Minus, TrendingDown, TrendingUp } from 'lucide-react';
 import { useState } from 'react';
 import { api } from './api';
 import { formatCostUsd } from './formatters';
+import { UsageDial } from './usage-dial';
+import { InsightsSkeleton, UsageDialSkeleton } from './skeleton';
 import type { RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsCostByDay, RunInsightsTokenUsage } from '../shared/contracts';
 
 function InfoTooltip({ children }: { children: string }) {
@@ -156,6 +158,7 @@ function CursingInsight({ data }: { data: RunInsights['cursing'] }) {
 export function InsightsView() {
   const [days, setDays] = useState<7 | 30>(30);
   const insights = useQuery({ queryKey: ['insights', days], queryFn: () => api.getInsights(days), refetchInterval: 10_000 });
+  const usage = useQuery({ queryKey: ['usage', 'weekly'], queryFn: () => api.getWeeklyUsage(), refetchInterval: 300_000 });
   const data = insights.data;
 
   return (
@@ -172,11 +175,16 @@ export function InsightsView() {
         </div>
       </header>
 
-      {insights.isLoading && <div className="list-state"><LoaderCircle className="spin" /> Loading insights…</div>}
+      {insights.isLoading && <InsightsSkeleton />}
       {insights.isError && <div className="list-state error-message">Could not load insights. <button className="button secondary compact" onClick={() => insights.refetch()}>Retry</button></div>}
 
       {!insights.isLoading && !insights.isError && data && (
         <div className="insight-sections">
+          {usage.data ? (
+            <UsageDial report={usage.data} lastRefreshedAt={usage.dataUpdatedAt} />
+          ) : usage.isLoading ? (
+            <UsageDialSkeleton />
+          ) : null}
           {data.byAgent.length === 0 && data.byKind.length === 0 && data.tokenUsageByModel.length === 0 && data.cursing.messagesAnalyzed === 0 ? (
             <div className="discovery-empty">
               <LineChart size={26} />
