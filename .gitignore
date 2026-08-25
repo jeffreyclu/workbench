@@ -3,7 +3,7 @@ dist/
 .workbench-runtime/
 # Workbench's local database, attachments, logs, backups, and generated
 # summaries are runtime state. Nothing under this directory belongs in Git.
-data/
+/data/
 .env
 .DS_Store
 coverage/
