@@ -41,7 +41,7 @@ source checkout (/dev/workbench) ── agent edits ──> preview (localhost:5
 - **Live (`5180`):** a stable gateway serves an immutable, promoted snapshot. It keeps working while an agent edits the source checkout.
 - **State:** database, attachments, published artifact metadata, and logs live under `data/` by default and are not committed.
 
-Promotion builds the current checkout, snapshots the built client and server, then switches the gateway only after a health check.
+Promotion is branchless: all work lands on `main`. Before a release can build, Workbench requires the checkout to be on `main`, have no uncommitted changes, and match `origin/main`. The approval worker commits and pushes pending changes to `main` before it builds; the low-level release command refuses to bypass those checks. Promotion then snapshots the built client and server, and switches the gateway only after a health check.
 
 ## Requirements
 
@@ -68,13 +68,16 @@ npm run preview
 
 Open [http://localhost:5181](http://localhost:5181). Preview reads real tasks and conversations from live Workbench but blocks every mutation, so it is safe for review without replacing the control plane. Use `npm run preview:sandbox` only when a change needs an isolated writable preview API and database copy.
 
-When the change is ready, ask an agent to **approve the Workbench preview** or run:
+When the change is ready, commit and push `main`, then ask an agent to **approve the Workbench preview** or run:
 
 ```bash
+git switch main
+git status
+git push origin main
 npm run runtime:promote
 ```
 
-The same live URL (`5180`) switches after the new release passes its health check. `npm run dev` is for isolated API/client development; it is not the recommended daily control plane.
+`runtime:promote` rejects a feature branch, a dirty checkout, or local commits not yet pushed to `origin/main`. The same live URL (`5180`) switches after the new release passes its health check. `npm run dev` is for isolated API/client development; it is not the recommended daily control plane.
 
 ### Health check
 
@@ -204,7 +207,7 @@ Only artifact-feedback submission is then reachable without a Workbench token; a
 ## Commands
 
 ```bash
-npm run runtime:promote  # build and atomically promote a verified immutable release
+npm run runtime:promote  # requires clean, pushed main; builds and atomically promotes a verified immutable release
 npm run runtime:start    # serve the stable runtime on localhost:5180
 npm run preview          # read-only live-data preview UI on 5181
 npm run preview:sandbox  # isolated writable preview UI + API
