@@ -7,7 +7,7 @@ import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
-import { humanizeRunOutputBlocks } from '../client/run-output.js';
+import { humanizeRunOutputBlocks } from '../shared/run-output.js';
 
 const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
