@@ -369,3 +369,19 @@ silently multiply that effect's side-effect frequency for as long as the poll ru
 effects on discrete signals (message count, status) rather than continuously-changing ones, reserving
 the continuous dependency for effects that genuinely need per-tick reaction (e.g. auto-scroll).
 See `docs/activity-log-frequency-analysis.md` for the full analysis.
+
+### `.gitignore` directory patterns must be anchored to the repo root
+
+On 2026-08-25, the unanchored pattern `data/` in Workbench's root `.gitignore` (intended only for the
+top-level runtime-state directory `./data`) also matched `src/client/data/`, a real source directory.
+Git silently excluded 9 API client files there from every commit; a fresh clone of the repo could not
+build, and the gap went unnoticed because each file still existed on disk in every developer's working
+tree. It surfaced only when a promotion pipeline audit force-tracked one of the nine files as a special
+case and flagged the rest.
+
+The durable rule: any `.gitignore` entry meant to match one specific directory by name must be
+anchored with a leading `/` (e.g. `/data/`, not `data/`), unless the intent is genuinely to ignore
+every directory with that name anywhere in the tree. Before adding or reviewing a bare
+`<name>/`-style ignore rule, check whether that name recurs elsewhere in the tree (`find . -type d
+-name <name>`); if it does and the rule is only meant for one location, anchor it. This is a standing
+review point for any future `.gitignore` change, not a one-off fix.
