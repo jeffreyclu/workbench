@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { createSharedConversationSchema, createSharedMessageSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema } from '../../shared/contracts.js';
+import { createSessionFeedbackSchema, createSharedConversationSchema, createSharedMessageSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema } from '../../shared/contracts.js';
 import { runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, runSharedBackgroundJob } from '../shared-room.js';
@@ -30,6 +30,18 @@ export function createConversationRouter({ repository, database, capabilities }:
   router.get('/api/shared/conversations/:id/agent-events', (request, response) => {
     if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
     response.json({ events: repository.listAgentStreamEvents(request.params.id) });
+  });
+
+  router.get('/api/shared/conversations/:id/feedback', (request, response) => {
+    if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
+    response.json({ feedback: repository.getSessionFeedback(request.params.id) });
+  });
+
+  router.post('/api/shared/session-feedback', (request, response) => {
+    const input = createSessionFeedbackSchema.parse(request.body);
+    const feedback = repository.createSessionFeedback(input);
+    if (!feedback) return response.status(404).json({ error: 'Conversation or task not found.' });
+    response.status(201).json({ feedback });
   });
 
   router.get('/api/shared/conversations-unread-count', (_request, response) => {

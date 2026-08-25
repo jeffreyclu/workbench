@@ -60,10 +60,10 @@ describe('buildDecisionTree', () => {
     ]);
 
     expect(events).toEqual([
-      expect.objectContaining({ id: 'first-tool', action: 'Ran the test suite.', rationale: null }),
-      expect.objectContaining({ id: 'decision', action: 'Recorded the approach.', rationale: null }),
-      expect.objectContaining({ id: 'read', action: 'Read src/routes.ts.', rationale: 'The failure may be in the existing route.' }),
-      expect.objectContaining({ id: 'write', action: 'Updated src/routes.ts.', rationale: 'The failure may be in the existing route.' }),
+      expect.objectContaining({ id: 'first-tool', action: 'Ran the test suite.', rationale: null, decisionId: null }),
+      expect.objectContaining({ id: 'decision', action: 'Recorded the approach.', rationale: null, decisionId: null }),
+      expect.objectContaining({ id: 'read', action: 'Read src/routes.ts.', rationale: 'The failure may be in the existing route.', decisionId: 'decision' }),
+      expect.objectContaining({ id: 'write', action: 'Updated src/routes.ts.', rationale: 'The failure may be in the existing route.', decisionId: 'decision' }),
     ]);
   });
 

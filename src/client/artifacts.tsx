@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowUpRight, Ban, Check, Copy, FileText, History, LoaderCircle, MessageSquare, RefreshCw } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import { versionUrl } from './artifact-url';
 import { copyText } from './clipboard';
@@ -28,11 +28,19 @@ function formatDate(value: string): string {
 
 function CopyLink({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
+  const resetTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
+  }, []);
   return (
     <button className="button secondary compact" onClick={async () => {
       await copyText(url);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1_200);
+      if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
+      resetTimer.current = window.setTimeout(() => {
+        resetTimer.current = null;
+        setCopied(false);
+      }, 1_200);
     }}>
       {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? 'Copied' : 'Copy link'}
     </button>

@@ -32,10 +32,13 @@ describe('DecisionTreeVisualizer', () => {
 
     expect(screen.getByRole('list', { name: 'Agent decision tree' })).toBeInTheDocument();
     expect(screen.getByText('Requested Codex')).toBeInTheDocument();
+    expect(screen.getByText('Debug this')).toBeInTheDocument();
+    expect(screen.getByText('Brief')).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Codex agent stream' })).toBeInTheDocument();
-    expect(screen.getAllByText('Check the existing tests before changing behavior.')).toHaveLength(2);
+    expect(screen.getAllByText('Check the existing tests before changing behavior.')).toHaveLength(1);
     expect(screen.getByText('Ran the test suite.')).toBeInTheDocument();
-    expect(screen.getByText('Why')).toBeInTheDocument();
+    expect(screen.getByText('Decision · Why')).toBeInTheDocument();
+    expect(screen.getByText('Ran the test suite.').closest('.decision-tree-decision-branch')).toContainElement(screen.getByText('Check the existing tests before changing behavior.'));
   });
 
   it('updates the open debugger as live decisions and tool calls arrive', () => {
@@ -59,7 +62,7 @@ describe('DecisionTreeVisualizer', () => {
     ]} isLoadingEvents={false} onClose={onClose} />);
 
     expect(screen.getByText('Ran the test suite.')).toBeInTheDocument();
-    expect(screen.getAllByText('Confirm the new behavior before testing it.')).toHaveLength(2);
+    expect(screen.getAllByText('Confirm the new behavior before testing it.')).toHaveLength(1);
   });
 
   it('does not invent a missing decision summary for calls without one', () => {
@@ -69,8 +72,8 @@ describe('DecisionTreeVisualizer', () => {
     }]} isLoadingEvents={false} onClose={onClose} />);
 
     expect(screen.getByText('Ran the test suite.')).toBeInTheDocument();
-    expect(screen.queryByText(/No decision summary was recorded before this call/)).not.toBeInTheDocument();
-    expect(screen.queryByText('Why')).not.toBeInTheDocument();
+    expect(screen.getByText('No recorded decision')).toBeInTheDocument();
+    expect(screen.getByText('These calls were captured without a provider-authored Why.')).toBeInTheDocument();
   });
 
   it('keeps Claude events in their own agent stream', () => {
@@ -80,25 +83,24 @@ describe('DecisionTreeVisualizer', () => {
     ]} isLoadingEvents={false} onClose={vi.fn()} />);
 
     expect(screen.getByRole('region', { name: 'Claude agent stream' })).toBeInTheDocument();
-    expect(screen.getAllByText('Inspect the route before editing it.')).toHaveLength(2);
+    expect(screen.getAllByText('Inspect the route before editing it.')).toHaveLength(1);
     expect(screen.getByText('Read src/routes.ts.')).toBeInTheDocument();
   });
 
-  it('shows raw details on hover, focus, and click, then closes accessibly', () => {
+  it('shows raw details on hover and keyboard focus without an inspect button', () => {
     const onClose = vi.fn();
     render(<DecisionTreeVisualizer messages={messages} events={[
       { id: 'tool', messageId: 'stream', runId: null, kind: 'tool', detail: 'command_execution: npm test', createdAt: '2026-08-25T12:00:02.000Z' },
     ]} isLoadingEvents={false} onClose={onClose} />);
 
-    const inspect = screen.getByRole('button', { name: 'Inspect call' });
-    fireEvent.mouseEnter(inspect);
+    const toolCall = screen.getByText('Ran the test suite.').closest('article')!;
+    expect(screen.queryByRole('button', { name: /inspect/i })).not.toBeInTheDocument();
+    fireEvent.mouseEnter(toolCall);
     expect(screen.getByText('command_execution: npm test')).toBeInTheDocument();
-    fireEvent.mouseLeave(inspect);
+    fireEvent.mouseLeave(toolCall);
     expect(screen.queryByText('command_execution: npm test')).not.toBeInTheDocument();
-    fireEvent.focus(inspect);
+    fireEvent.focus(toolCall);
     expect(screen.getByText('command_execution: npm test')).toBeInTheDocument();
-    fireEvent.click(inspect);
-    expect(inspect).toHaveAttribute('aria-expanded', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Close decision tree' }));
     expect(onClose).toHaveBeenCalledOnce();
   });

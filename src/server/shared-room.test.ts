@@ -182,10 +182,19 @@ describe('isCodexDecisionPreamble', () => {
     expect(isCodexDecisionPreamble('Fixed the route.')).toBe(false);
   });
 
-  it('keeps decision preambles out of the completed answer without requiring the live feed to hide them', () => {
+  it('keeps decisions and interim stream messages out of the completed answer', () => {
+    expect(codexFinalReply([
+      'Decision: Inspect the failing route before editing.',
+      'I found the stale state and am updating the route.',
+      'Fixed the route and verified the focused test.',
+    ])).toBe('Fixed the route and verified the focused test.');
+  });
+
+  it('joins every item of a steered turn instead of dropping the pre-interjection reply', () => {
     expect(codexFinalReply([
       'Decision: Inspect the failing route before editing.',
       'Fixed the route and verified the focused test.',
-    ])).toBe('Fixed the route and verified the focused test.');
+      'Also renamed the helper per your interjection.',
+    ], true)).toBe('Fixed the route and verified the focused test.\n\nAlso renamed the helper per your interjection.');
   });
 });

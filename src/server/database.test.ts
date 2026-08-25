@@ -60,6 +60,7 @@ const EXPECTED_MIGRATIONS = [
   '047_shared_message_dispatch_group',
   '048_agent_stream_events',
   '049_shared_message_interjection_stream_offset',
+  '050_session_feedback_decision_tree_snapshot',
 ];
 
 describe('openDatabase', () => {
@@ -479,6 +480,22 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toContain('interjection_stream_offset');
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '049_shared_message_interjection_stream_offset'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds session-feedback snapshots when upgrading from migration 049', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE session_feedback;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '050_session_feedback_decision_tree_snapshot'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(session_feedback)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['conversation_id', 'work_item_id', 'rating', 'decision_tree_json', 'created_at']));
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_session_feedback_conversation'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_session_feedback_work_item'").get()).toBeTruthy();
     upgraded.close();
   });
 

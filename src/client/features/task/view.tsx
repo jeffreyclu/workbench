@@ -39,7 +39,7 @@ import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from '../../markdown-composer.js';
 import { MarkdownCode, MarkdownPre } from '../../markdown-code.js';
 import { isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAGE, SELF_ASSIGNED_OWNER_MESSAGE } from '../../../shared/contracts';
-import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SharedConversation, SharedMessage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
+import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SessionFeedbackRating, SharedConversation, SharedMessage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
 import { api } from '../../api';
 import { ArtifactLibraryView } from '../../artifacts';
 import { ConfirmationDialog } from '../../confirmation-dialog';
@@ -69,6 +69,7 @@ import { useRealtimeNotifications, type RealtimeNotification } from '../../realt
 import { useTaskDetail } from './hooks';
 import { useTaskAccountProfile, useTaskExecutionProfile } from './state';
 import { celebrate } from '../../celebrate';
+import { SessionFeedbackPrompt } from '../../session-feedback-prompt';
 import type { AgentAccountProfile } from '../../data/runtime-client';
 
 export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCreated, onRemoving }: { id: string; onClose: () => void; onOpenConversation: (conversationId: string) => void; onOpenTask: (taskId: string) => void; onCreated: (item: WorkItem) => void; onRemoving?: (id: string) => Promise<void> }) {
@@ -76,6 +77,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const detail = useTaskDetail(id);
   const [showFollowUp, setShowFollowUp] = useState(false);
   const [deleteTaskPromptOpen, setDeleteTaskPromptOpen] = useState(false);
+  const [feedbackTarget, setFeedbackTarget] = useState<{ conversationId?: string | null; workItemId: string } | null>(null);
   const [editingField, setEditingField] = useState<'title' | 'project' | 'description' | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
@@ -269,8 +271,11 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
     },
     onSuccess: async (_data, action) => {
       if (action === 'delete') setDeleteTaskPromptOpen(false);
-      if (action === 'complete') celebrate();
-      onClose();
+      if (action === 'complete') {
+        celebrate();
+        // Keep the detail mounted until the required verdict persists.
+        setFeedbackTarget({ conversationId: detail.data?.conversations.at(0)?.id ?? null, workItemId: id });
+      } else onClose();
       const undoable = action === 'archive' || action === 'complete';
       toast.success(lifecycleSuccessMessage[action], undoable ? { action: () => lifecycle.mutate('restore'), actionLabel: 'Undo', duration: 10_000 } : undefined);
       await Promise.all([
@@ -656,6 +661,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
 
       {executionPlanArchivePromptOpen && <FollowUpArchiveDialog count={selectedExecutionTaskIndexes.size} pending={resolveExecutionPlan.isPending} onClose={() => setExecutionPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolveExecutionPlan.mutate({ resolution: 'accepted', archiveParent })} />}
       {deleteTaskPromptOpen && <ConfirmationDialog title={`Delete “${item.title}”?`} description="This permanently deletes the task and cannot be undone." confirmLabel="Delete task" pending={lifecycle.isPending} onClose={() => setDeleteTaskPromptOpen(false)} onConfirm={() => lifecycle.mutate('delete')} />}
+      {feedbackTarget && <SessionFeedbackPrompt onSubmit={async (rating: SessionFeedbackRating) => { await api.createSessionFeedback({ ...feedbackTarget, rating }); setFeedbackTarget(null); onClose(); }} />}
 
       <details className="detail-section task-collapsible relationships-section">
         <summary><span>Linked items & history</span><small>{(detail.data.parentItem ? 1 : 0) + detail.data.children.length + linkedTasks.length + detail.data.conversations.length + detail.data.artifacts.length + references.length} linked</small></summary>

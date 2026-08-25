@@ -1504,6 +1504,29 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // Human outcome ratings must retain the exact agent-event evidence that
+    // was visible when the session ended; later stream/UI changes cannot
+    // rewrite a recorded verdict.
+    id: '050_session_feedback_decision_tree_snapshot',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS session_feedback (
+          id TEXT PRIMARY KEY,
+          conversation_id TEXT REFERENCES shared_conversations(id) ON DELETE SET NULL,
+          work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
+          rating TEXT NOT NULL CHECK (rating IN ('positive', 'neutral', 'negative')),
+          decision_tree_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          CHECK (conversation_id IS NOT NULL OR work_item_id IS NOT NULL)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_session_feedback_conversation
+          ON session_feedback(conversation_id) WHERE conversation_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_session_feedback_work_item
+          ON session_feedback(work_item_id) WHERE work_item_id IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

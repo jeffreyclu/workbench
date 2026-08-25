@@ -710,6 +710,24 @@ export interface AgentStreamEvent {
   createdAt: string;
 }
 
+export type SessionFeedbackRating = 'positive' | 'neutral' | 'negative';
+
+/** Immutable human verdict plus the causal evidence available when it was made. */
+export interface SessionFeedback {
+  id: string;
+  conversationId: string | null;
+  workItemId: string | null;
+  rating: SessionFeedbackRating;
+  decisionTree: { version: 1; capturedAt: string; conversationId: string | null; workItemId: string | null; events: AgentStreamEvent[] };
+  createdAt: string;
+}
+
+export const createSessionFeedbackSchema = z.object({
+  conversationId: z.string().uuid().nullable().optional(),
+  workItemId: z.string().uuid().nullable().optional(),
+  rating: z.enum(['positive', 'neutral', 'negative']),
+}).refine((input) => input.conversationId || input.workItemId, { message: 'A conversation or task is required.' });
+
 /** The exact RAG query and matches behind a reply's retrievedMemoryCount, fetched on demand when the memory badge is clicked. */
 export interface RetrievedMemoryDetail {
   query: string;

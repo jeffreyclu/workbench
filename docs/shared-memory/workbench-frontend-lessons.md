@@ -204,6 +204,17 @@ the agent bubble immediately, then replace it with live activity as soon as
 text arrives. This keeps the active stream visible without changing dispatch or
 interjection behavior.
 
+### Codex and Claude share one completion boundary
+
+*Confirmed 2026-08-25.* The live stream is an operational timeline, not the
+completed response. Codex app-server emits multiple visible agent-message
+items during one turn; persisting all of them made its settled bubble replay
+the stream while Claude retained only its terminal result. Keep the full feed
+while a reply is running, then persist only Codex's final non-`Decision:`
+message. The shared-room prompt also requires a fresh compact final handoff:
+outcome, relevant changes or decisions, verification, and any blocker—never a
+verbatim progress recap.
+
 ### The bounded conversation thread must not virtualize message rows
 
 *Confirmed 2026-08-25.* The conversation view intentionally renders only a

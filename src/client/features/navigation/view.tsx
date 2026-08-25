@@ -1,5 +1,6 @@
 import { Cloud, Command, MessageCircle, MoreHorizontal, Search, Wrench, X } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import type { MemorySearchResult } from '../../../shared/contracts';
 import { ArtifactNav } from '../../artifacts';
@@ -110,6 +111,8 @@ export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: Memo
 
 export function PromotionQueueStatus() {
   const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const status = useQuery({
     queryKey: ['promotion-queue-status'],
     queryFn: () => api.getPromotionQueueStatus(),
@@ -123,35 +126,48 @@ export function PromotionQueueStatus() {
   else if (data?.lastBuild?.status === 'failed') color = 'red';
   else if (data?.lastBuild?.status === 'succeeded') color = 'green';
 
+  function updateAnchor() {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (rect) setAnchor({ top: rect.bottom + 8, left: rect.left });
+  }
+  function show() {
+    updateAnchor();
+    setOpen(true);
+  }
+
   return <div
     className="promotion-status-wrap"
-    onMouseEnter={() => setOpen(true)}
+    onMouseEnter={show}
     onMouseLeave={() => setOpen(false)}
     onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}
   >
     <button
+      ref={buttonRef}
       type="button"
       className={`brand-mark brand-mark-${color}`}
       aria-expanded={open}
       aria-haspopup="dialog"
       aria-label="Promotion status"
-      onClick={() => setOpen((current) => !current)}
-      onFocus={() => setOpen(true)}
+      onClick={() => (open ? setOpen(false) : show())}
+      onFocus={show}
     >W</button>
-    {open && data && <div className="promotion-status-popover" role="dialog" aria-label="Promotion status">
-      <div className="promotion-status-popover-row">
-        <strong>Queue</strong>
-        <span>{data.queueLength > 0 ? `${data.queueLength} waiting${data.oldestQueuedAt ? ` since ${new Date(data.oldestQueuedAt).toLocaleTimeString()}` : ''}` : 'Empty'}</span>
-      </div>
-      <div className="promotion-status-popover-row">
-        <strong>Running</strong>
-        <span>{data.running ? `${data.running.progress} (started ${new Date(data.running.startedAt).toLocaleTimeString()})` : 'None'}</span>
-      </div>
-      <div className="promotion-status-popover-row">
-        <strong>Last build</strong>
-        <span>{data.lastBuild ? `${data.lastBuild.status} at ${new Date(data.lastBuild.at).toLocaleTimeString()} — ${data.lastBuild.summary}` : 'No builds yet'}</span>
-      </div>
-    </div>}
+    {open && data && anchor && createPortal(
+      <div className="promotion-status-popover" role="dialog" aria-label="Promotion status" style={{ top: anchor.top, left: anchor.left }}>
+        <div className="promotion-status-popover-row">
+          <strong>Queue</strong>
+          <span>{data.queueLength > 0 ? `${data.queueLength} waiting${data.oldestQueuedAt ? ` since ${new Date(data.oldestQueuedAt).toLocaleTimeString()}` : ''}` : 'Empty'}</span>
+        </div>
+        <div className="promotion-status-popover-row">
+          <strong>Running</strong>
+          <span>{data.running ? `${data.running.progress} (started ${new Date(data.running.startedAt).toLocaleTimeString()})` : 'None'}</span>
+        </div>
+        <div className="promotion-status-popover-row">
+          <strong>Last build</strong>
+          <span>{data.lastBuild ? `${data.lastBuild.status} at ${new Date(data.lastBuild.at).toLocaleTimeString()} — ${data.lastBuild.summary}` : 'No builds yet'}</span>
+        </div>
+      </div>,
+      document.body,
+    )}
   </div>;
 }
 

@@ -68,22 +68,25 @@ function stubApi(overrides: { artifacts?: unknown[] } = {}) {
 
 function renderLibrary(onOpenTask = vi.fn(), onOpenConversation = vi.fn()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(<QueryClientProvider client={client}><ArtifactLibraryView onOpenTask={onOpenTask} onOpenConversation={onOpenConversation} /></QueryClientProvider>);
-  return { onOpenTask, onOpenConversation };
+  const result = render(<QueryClientProvider client={client}><ArtifactLibraryView onOpenTask={onOpenTask} onOpenConversation={onOpenConversation} /></QueryClientProvider>);
+  return { onOpenTask, onOpenConversation, ...result };
 }
 
 describe('artifact library', () => {
   it('copies an artifact link with the fallback when the Clipboard API is unavailable', async () => {
     stubApi();
     const copy = vi.fn();
+    const clearTimeout = vi.spyOn(window, 'clearTimeout');
     vi.stubGlobal('navigator', { clipboard: undefined });
     Object.defineProperty(document, 'execCommand', { configurable: true, value: copy });
-    renderLibrary();
+    const { unmount } = renderLibrary();
 
     fireEvent.click(await screen.findByRole('button', { name: /copy link/i }));
 
     await waitFor(() => expect(copy).toHaveBeenCalledWith('copy'));
     expect(screen.getByRole('button', { name: /copied/i })).toBeTruthy();
+    unmount();
+    expect(clearTimeout).toHaveBeenCalled();
   });
 
   it('builds a version URL under the artifact identity', () => {

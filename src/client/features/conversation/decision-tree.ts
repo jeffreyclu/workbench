@@ -4,6 +4,7 @@ export type DecisionTreeNode = {
   id: string;
   label: string;
   detail: string;
+  meta: string | null;
   status: SharedMessage['status'] | 'completed';
   events: DecisionTreeEvent[];
   children: DecisionTreeNode[];
@@ -12,6 +13,7 @@ export type DecisionTreeNode = {
 export type DecisionTreeEvent = AgentStreamEvent & {
   action: string;
   rationale: string | null;
+  decisionId: string | null;
 };
 
 const isAgentMessage = (message: SharedMessage) => message.author === 'codex' || message.author === 'claude';
@@ -34,17 +36,19 @@ function readableCommand(command: string): string {
 
 export function formatDecisionTreeEvents(events: AgentStreamEvent[]): DecisionTreeEvent[] {
   let latestRationale: string | null = null;
+  let latestDecisionId: string | null = null;
   return events.map((event) => {
     if (event.kind === 'decision') {
       latestRationale = event.detail;
-      return { ...event, action: 'Recorded the approach.', rationale: null };
+      latestDecisionId = event.id;
+      return { ...event, action: 'Recorded the approach.', rationale: null, decisionId: null };
     }
     const action = event.kind === 'file_read' ? `Read ${event.detail}.`
       : event.kind === 'file_write' ? `Updated ${event.detail.replace(/^(?:update|create|delete):\s*/i, '')}.`
         : event.detail.startsWith('command_execution: ')
           ? readableCommand(event.detail.slice('command_execution: '.length))
           : `Used ${event.detail}.`;
-    return { ...event, action, rationale: latestRationale };
+    return { ...event, action, rationale: latestRationale, decisionId: latestDecisionId };
   });
 }
 
@@ -63,6 +67,7 @@ function streamNode(message: SharedMessage, events: AgentStreamEvent[]): Decisio
     id: message.id,
     label: message.author[0].toUpperCase() + message.author.slice(1),
     detail: details,
+    meta: null,
     status: message.status,
     events: formatDecisionTreeEvents(events.filter((event) => event.messageId === message.id)),
     children: [],
@@ -85,7 +90,8 @@ export function buildDecisionTree(messages: SharedMessage[], events: AgentStream
       const node: DecisionTreeNode = {
         id: message.id,
         label: requestLabel(message),
-        detail: message.queuePriority ? 'Interjected ahead of queued work' : 'Conversation turn',
+        detail: message.body.trim() || 'No written brief.',
+        meta: message.queuePriority ? 'Interjected ahead of queued work' : null,
         status: message.status,
         events: [],
         children: [],

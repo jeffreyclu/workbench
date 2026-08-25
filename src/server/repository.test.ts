@@ -89,6 +89,27 @@ describe('WorkItemRepository', () => {
     }));
   });
 
+  it('records one immutable session verdict with its decision-tree evidence', () => {
+    const task = repository.create({ title: 'Rate the outcome', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Decision trace', task.id);
+    const reply = repository.createSharedMessage('codex', 'I will inspect the completion path.', 'completed', conversation.id);
+    repository.addAgentStreamEvents(reply.id, null, [
+      { kind: 'decision', detail: 'Inspect the completion path before changing code.' },
+      { kind: 'tool', detail: 'rg completion path' },
+    ]);
+
+    const recorded = repository.createSessionFeedback({ conversationId: conversation.id, workItemId: task.id, rating: 'positive' });
+    const repeated = repository.createSessionFeedback({ conversationId: conversation.id, workItemId: task.id, rating: 'negative' });
+
+    expect(recorded).toMatchObject({ rating: 'positive', conversationId: conversation.id, workItemId: task.id });
+    expect(recorded?.decisionTree.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ messageId: reply.id, kind: 'decision', detail: 'Inspect the completion path before changing code.' }),
+      expect.objectContaining({ messageId: reply.id, kind: 'tool', detail: 'rg completion path' }),
+    ]));
+    expect(repeated).toEqual(recorded);
+    expect(repository.getSessionFeedback(conversation.id, task.id)).toEqual(recorded);
+  });
+
   it('attributes cursing to the model that most recently replied in the conversation', () => {
     const conversation = repository.createConversation('Model attribution');
     const claudeReply = repository.createSharedMessage('claude', 'Here is the first answer.', 'completed', conversation.id);

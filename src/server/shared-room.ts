@@ -63,12 +63,18 @@ export function isCodexDecisionPreamble(text: string): boolean {
   return /^\s*Decision:\s*/i.test(text);
 }
 
-/** The completed reply is authored answer text; the live feed also includes decisions. */
-export function codexFinalReply(itemTexts: Iterable<string>): string {
-  return Array.from(itemTexts)
-    .filter((text) => !isCodexDecisionPreamble(text))
-    .join('\n\n')
-    .trim();
+/**
+ * The live feed includes every visible Codex message, including interim status
+ * updates. Completion must retain only the final authored response, matching
+ * Claude's terminal-result boundary instead of replaying that live transcript.
+ * An interjected turn is the exception: `turn/steer` produces a genuinely
+ * separate item per exchange (the pre-interjection reply, then the reply to
+ * the steer), and both are real answer content the human already saw stream
+ * in — dropping the earlier one loses the answer, not just progress noise.
+ */
+export function codexFinalReply(itemTexts: Iterable<string>, steered = false): string {
+  const items = Array.from(itemTexts).filter((text) => !isCodexDecisionPreamble(text));
+  return (steered ? items.join('\n\n') : items.at(-1) ?? '').trim();
 }
 
 export function codexTurnStartParams(threadId: string, cwd: string, prompt: string): Record<string, unknown> {
@@ -89,6 +95,7 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
     const child = spawn('codex', ['app-server', '--stdio'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     let buffered = ''; let output = ''; let liveOutput = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
     const pendingSteers = new Map<number, (accepted: boolean) => void>();
+    let steerCount = 0;
     // A steered turn emits a separate `agentMessage` item per exchange (the
     // pre-interjection reply, then the reply to the steer). Deltas carry an
     // `itemId`; concatenating them flat without an item boundary runs the two
@@ -151,6 +158,7 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
           pendingSteers.delete(event.id);
           if (event.result?.turnId) {
             turnId = event.result.turnId;
+            steerCount += 1;
             resolveSteer(true);
           } else {
             resolveSteer(false);
@@ -164,7 +172,7 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
           if (itemId) {
             if (!itemText.has(itemId)) itemOrder.push(itemId);
             itemText.set(itemId, `${itemText.get(itemId) ?? ''}${event.params.delta}`);
-            output = codexFinalReply(itemOrder.map((id) => itemText.get(id) ?? ''));
+            output = codexFinalReply(itemOrder.map((id) => itemText.get(id) ?? ''), steerCount > 0);
           } else {
             const next = `${output}${event.params.delta}`;
             output = isCodexDecisionPreamble(next) ? '' : next;
@@ -343,7 +351,7 @@ ${formatRetrievedMemory(retrievedMemory ?? [])}
 Current conversation:
 ${compactConversationHistory(thread)}
 
-Answer Jeffrey concisely. State the decision, handoff, or blocker you are continuing and any conflict with observed state. Before each tool call, emit a separate, concise \`Decision: <why this tool is the next correct action>\` statement. It is recorded in the agent debugger, so make it concrete and human-readable; never claim hidden reasoning. Retrieved memory covers the latest message only; query more via curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=100'. Record durable facts in docs/shared-memory/*.md, never private memory. Workbench is non-interactive: use tools directly and report exact missing access. Finish foreground work now; never detach work or promise a later result.`;
+Answer Jeffrey concisely. State the decision, handoff, or blocker you are continuing and any conflict with observed state. The live stream is progress only; after work ends, give one fresh, compact final handoff that synthesizes the outcome, changed files or decisions, verification, and any remaining blocker. Do not replay the live progress log or narrate steps verbatim. Before each tool call, emit a separate, concise \`Decision: <why this tool is the next correct action>\` statement. It is recorded in the agent debugger, so make it concrete and human-readable; never claim hidden reasoning. Retrieved memory covers the latest message only; query more via curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=100'. Record durable facts in docs/shared-memory/*.md, never private memory. Workbench is non-interactive: use tools directly and report exact missing access. Finish foreground work now; never detach work or promise a later result.`;
 }
 
 /**

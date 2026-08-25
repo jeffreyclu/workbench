@@ -125,7 +125,7 @@ describe('classifyExecution', () => {
       { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'failing test.' } } },
       { type: 'assistant', message: { content: [{ type: 'text', text: 'Checking the failing test.' }] } },
       { type: 'result', result: 'Fixed it.' },
-    ].map((event) => `printf '%s\\n' '${JSON.stringify(event)}'`).join('\nsleep 0.3\n');
+    ].map((event) => `printf '%s\\n' '${JSON.stringify(event)}'`).join('\n/bin/sleep 0.3\n');
     const { directory } = fakeAgentDirectory('exit 1', streamed);
     const snapshots: string[] = [];
 

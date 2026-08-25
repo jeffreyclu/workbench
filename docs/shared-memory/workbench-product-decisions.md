@@ -181,6 +181,22 @@ agent stream → recorded decision → tool call, with connected branches and th
 recorded decision visibly attached to the call it motivated. Keep raw call
 detail inspectable through hover, keyboard focus, and click.
 
+*Correction from Jeffrey, 2026-08-25, superseding the click interaction above.*
+Every Request node must show the human-provided brief. Tool calls after a
+decision must be visibly nested beneath that decision at its indentation level.
+Raw details stay in the fixed details panel and are revealed by hover or
+keyboard focus; do not render an Inspect control or make a call clickable.
+
+### Session feedback retains decision-tree evidence
+
+*Decision from Jeffrey, 2026-08-25.* After a task is completed, and after a
+taskless conversation finishes or is archived, require a non-dismissible
+**How did we do?** verdict with positive, neutral, and negative choices. Store
+the selected outcome immutably with its associated conversation/task and the
+decision-tree event snapshot visible at that time. This is training evidence
+for identifying which agent decision trees work; do not make it a transient
+toast or allow it to be silently skipped.
+
 ### Restore the last-opened item in each primary surface
 
 *Decision from Jeffrey, 2026-08-23.*

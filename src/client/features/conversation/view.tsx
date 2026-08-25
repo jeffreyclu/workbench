@@ -38,7 +38,7 @@ import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from '../../markdown-composer.js';
 import { MarkdownCode, MarkdownPre } from '../../markdown-code.js';
 import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAGE, SELF_ASSIGNED_OWNER_MESSAGE } from '../../../shared/contracts';
-import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SharedConversation, SharedMessage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
+import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SessionFeedbackRating, SharedConversation, SharedMessage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
 import { api } from '../../api';
 import { ArtifactLibraryView } from '../../artifacts';
 import { ConfirmationDialog } from '../../confirmation-dialog';
@@ -69,6 +69,7 @@ import { useRealtimeNotifications, type RealtimeNotification } from '../../realt
 import { conversationData, conversationQueryKeys } from './data';
 import { DecisionTreeVisualizer } from './decision-tree-visualizer';
 import { celebrate } from '../../celebrate';
+import { SessionFeedbackPrompt } from '../../session-feedback-prompt';
 import { useDebouncedValue } from './hooks';
 
 const CONVERSATION_ROW_GAP = 6;
@@ -281,6 +282,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const [deleteConversationPromptOpen, setDeleteConversationPromptOpen] = useState(false);
   const [retrievedMemoryMessageId, setRetrievedMemoryMessageId] = useState<string | null>(null);
   const [decisionTreeOpen, setDecisionTreeOpen] = useState(false);
+  const [feedbackTarget, setFeedbackTarget] = useState<{ conversationId?: string | null; workItemId?: string | null } | null>(null);
   const [conversationSearch, setConversationSearch] = useState('');
   const [dismissedCompletionPromptPromotionId, setDismissedCompletionPromptPromotionId] = useState<string | null>(null);
   const debouncedConversationSearch = useDebouncedValue(conversationSearch.trim(), 300);
@@ -409,6 +411,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     retry: false,
   });
   const selectedConversation = listedConversation ?? conversationDetail.data?.conversation;
+  const conversationFeedback = useQuery({ queryKey: ['session-feedback', conversationId], queryFn: () => api.getConversationFeedback(conversationId!), enabled: Boolean(conversationId) });
   const selectedConversationMissing = Boolean(conversationId) && !listedConversation && conversationDetail.isError;
   useEffect(() => {
     // A conversation opened via search or a deep link may not belong to the
@@ -421,6 +424,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedConversation, conversationId]);
   const linkedWorkItemId = selectedConversation?.workItemId ?? null;
+  useEffect(() => {
+    if (!conversationId || !selectedConversation || selectedConversation.workItemId || selectedConversation.state !== 'finished' || conversationFeedback.data?.feedback || conversationFeedback.isLoading) return;
+    setFeedbackTarget((current) => current ?? { conversationId });
+  }, [conversationFeedback.data?.feedback, conversationFeedback.isLoading, conversationId, selectedConversation]);
   const linkedWorkItem = useQuery({ queryKey: ['work-item', linkedWorkItemId], queryFn: () => api.getWorkItem(linkedWorkItemId!), enabled: Boolean(linkedWorkItemId), refetchInterval: 1_000 });
   const linkableTasks = useQuery({ queryKey: ['conversation-linkable-tasks'], queryFn: () => api.listWorkItems('active', ''), staleTime: 30_000 });
   const retrievedMemoryDetail = useQuery({
@@ -655,6 +662,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const archiveConversation = useMutation({
     mutationFn: async (id: string) => { await animateConversationExit(id); return api.archiveSharedConversation(id); },
     onSuccess: async (_response, archivedConversationId) => {
+      if (!linkedWorkItemId) setFeedbackTarget({ conversationId: archivedConversationId });
       if (!linkedWorkItemId) celebrate();
       toast.success(linkedWorkItemId ? 'Conversation and related task archived.' : 'Conversation archived.');
       await queryClient.cancelQueries({ queryKey: ['shared-conversations'] });
@@ -684,6 +692,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const completeLinkedTask = useMutation({
     mutationFn: () => api.completeWorkItem(linkedWorkItemId!),
     onSuccess: async ({ item }) => {
+      setFeedbackTarget({ conversationId, workItemId: item.id });
       celebrate();
       queryClient.setQueryData<WorkItemDetail>(['work-item', item.id], (current) => current && ({ ...current, item }));
       const completedConversationId = conversationId;
@@ -1192,6 +1201,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       {deleteConversationPromptOpen && conversationId && <ConfirmationDialog title="Delete this conversation?" description="This permanently deletes the conversation and cannot be undone." confirmLabel="Delete conversation" pending={deleteConversation.isPending} onClose={() => setDeleteConversationPromptOpen(false)} onConfirm={() => deleteConversation.mutate(conversationId)} />}
       {retrievedMemoryMessageId && <RetrievedMemoryDialog detail={retrievedMemoryDetail.data?.detail} loading={retrievedMemoryDetail.isLoading} onClose={() => setRetrievedMemoryMessageId(null)} />}
       {decisionTreeOpen && <DecisionTreeVisualizer messages={allConversationMessages} events={agentStreamEvents.data?.events ?? []} isLoadingEvents={agentStreamEvents.isLoading} onClose={() => setDecisionTreeOpen(false)} />}
+      {feedbackTarget && <SessionFeedbackPrompt onSubmit={async (rating: SessionFeedbackRating) => { await api.createSessionFeedback({ ...feedbackTarget, rating }); setFeedbackTarget(null); await queryClient.invalidateQueries({ queryKey: ['session-feedback'] }); }} />}
     </main>
   );
 }

@@ -123,7 +123,8 @@ describe('agent debugger layout', () => {
 
     expect(layoutRule).toContain('grid-template-columns: minmax(0, 1fr) 260px');
     expect(streamsRule).toContain('border-left: 1px solid');
-    expect(styles).toContain('.decision-tree-event-card');
+    expect(styles).toContain('.decision-tree-inspectable-card');
+    expect(styles).toContain('.decision-tree-tool-calls');
     expect(phoneRules).toContain('grid-template-columns: 1fr');
     expect(phoneRules).toContain('position: static');
   });
