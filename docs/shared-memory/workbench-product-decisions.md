@@ -289,6 +289,15 @@ vitest suite:
 
 Verified: typecheck clean; 57/57 tests pass (7 shared-room, 50 agent-runner).
 
-Next candidate identified but not yet executed: the `connectionContext` block
-(`contextForPrompt` from `connection-broker.ts`) hasn't been audited for
-static-text bloat the way the other three prompt sections have.
+- `contextForPrompt`'s per-turn static access-policy preamble in
+  `src/server/connection-broker.ts` (prepended to every Slack/Atlassian/
+  GitHub/Linear block returned to the agent) trimmed from 353 → 116 chars —
+  same two behavioral constraints kept (use fetched content directly; don't
+  restart an auth flow), padding removed. Verified: `tsc --noEmit` clean;
+  full `vitest run` 837/837 passing.
+
+All four identified static per-turn preambles (shared-room reply prompt,
+agent-runner buildPrompt, formatRetrievedMemory, connection-broker
+contextForPrompt) are now trimmed. No further known candidates in this
+class; next work on this thread would need a fresh audit pass rather than
+resuming a queued list.

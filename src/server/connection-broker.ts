@@ -92,7 +92,7 @@ export async function contextForPrompt(repository: WorkItemRepository, message: 
       blocks.push(matches.length ? format(label, matches) : `Workbench found no ${label} matches for ${query ? `“${query}”` : 'this request'}.`);
     } catch (error) { blocks.push(`Workbench ${label} connection failed: ${recoverAuthentication(repository, provider, error).message}.`); }
   }
-  return blocks.length ? `External-service access policy: Workbench fetched the following data through its connector broker. This supplied content is the agent's source access for the request; use it directly and do not claim the source is unavailable merely because no native MCP tool is visible. Do not start another authentication flow or ask Jeffrey to open a dialog.\n\n${blocks.join('\n\n')}` : '';
+  return blocks.length ? `Workbench-fetched source context (use directly; don't claim unavailable or start a new auth flow):\n\n${blocks.join('\n\n')}` : '';
 }
 
 export async function resolveBrokerUrl(repository: WorkItemRepository, value: string): Promise<ResolvedSourceDraft> {
