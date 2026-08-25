@@ -397,13 +397,12 @@ export interface ArtifactFeedbackConfig {
 }
 
 /**
- * Feedback is opt-in. It needs a publicly reachable Workbench (`WORKBENCH_PUBLIC_URL`)
- * because the shared page is static and hosted elsewhere, so the comment box has to
- * call back across origins. With no public URL configured, published pages carry no
- * form and the comment endpoint stays behind the normal auth gate.
+ * Shared artifacts accept comments when Workbench has a public origin. Use the explicit
+ * feedback origin when present; otherwise `APP_API_ORIGIN` is the already-configured
+ * public Workbench URL. Without either, shared pages remain read-only.
  */
 export function artifactFeedbackConfig(env: NodeJS.ProcessEnv = process.env): ArtifactFeedbackConfig | null {
-  const publicUrl = env.WORKBENCH_PUBLIC_URL?.trim().replace(/\/$/, '');
+  const publicUrl = (env.WORKBENCH_PUBLIC_URL ?? env.APP_API_ORIGIN)?.trim().replace(/\/$/, '');
   const baseUrl = env.ARTIFACT_PUBLIC_BASE_URL?.trim().replace(/\/$/, '');
   if (!publicUrl || !baseUrl) return null;
   try {

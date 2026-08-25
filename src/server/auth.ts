@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { artifactFeedbackConfig } from './artifact-library.js';
 
 export const authCookieName = 'workbench_token';
 const openPaths = new Set(['/api/health']);
@@ -252,7 +253,7 @@ function isSecure(request: GateRequest, trustedProxies: string[]): boolean {
  */
 export function isOpenRequest(pathname: string, method = 'GET', env: NodeJS.ProcessEnv = process.env): boolean {
   if (openPaths.has(pathname)) return true;
-  const feedbackConfigured = Boolean(env.WORKBENCH_PUBLIC_URL?.trim() && env.ARTIFACT_PUBLIC_BASE_URL?.trim());
+  const feedbackConfigured = Boolean(artifactFeedbackConfig(env));
   const upper = method.toUpperCase();
   return feedbackConfigured && (upper === 'POST' || upper === 'OPTIONS') && artifactCommentPath.test(pathname);
 }

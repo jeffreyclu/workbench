@@ -707,6 +707,7 @@ nav { display: grid; gap: 3px; }
 .shared-message.shared-jeffrey { align-self: flex-end; background: #202318; border-color: #434c29; }
 .reply-group-columns .shared-message { width: 100%; max-width: 100%; }
 .shared-message header { display: flex; align-items: center; gap: 8px; }
+.shared-message header .header-badge-row { display: contents; }
 .shared-message header strong { color: #c8c7bf; font: 9px 'DM Mono'; text-transform: capitalize; }
 .shared-message header time { color: #575650; font: 8px 'DM Mono'; }
 .shared-message header button { display: grid; place-items: center; margin-left: auto; padding: 3px; color: #55554f; background: transparent; border: 0; }
@@ -932,12 +933,16 @@ nav { display: grid; gap: 3px; }
   .agent-console .composer-tool { justify-content: center; width: 34px; padding: 7px; font-size: 0; }
   .agent-console .attach-button { grid-area: attach; }.agent-console .model-target { grid-area: model; }.agent-console .account-target { grid-area: account; }.agent-console .dispatch-target { grid-area: dispatch; }.agent-console .composer-send { grid-area: send; }
   .agent-console .model-target, .agent-console .agent-target { width: 100%; min-width: 0; height: 34px; padding: 7px 4px; font-size: 9px; }
+  .shared-message header { flex-wrap: wrap; }
   .shared-message header strong,
   .shared-message header time,
   .shared-message header .recipient-badge,
-  .shared-message header .memory-badge,
-  .shared-message header button { flex: 0 0 auto; }
+  .shared-message header .cancel-response { flex: 0 0 auto; }
+  .shared-message header .header-badge-row {
+    display: flex; align-items: center; gap: 6px; flex: 1 1 100%; min-width: 0; margin-top: 4px;
+  }
   .shared-message header .model-badge { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .shared-message header .memory-badge { flex: 0 0 auto; }
   .queued-message-action { width: 44px; height: 44px; }
   .reply-group-columns { flex-direction: column; }
 }

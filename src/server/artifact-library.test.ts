@@ -171,14 +171,19 @@ describe('artifact library', () => {
 });
 
 describe('artifact feedback configuration', () => {
-  it('stays disabled unless both the public Workbench and artifact host are configured', () => {
+  it('stays disabled unless both the public Workbench origin and artifact host are configured', () => {
     expect(artifactFeedbackConfig({})).toBeNull();
     expect(artifactFeedbackConfig({ WORKBENCH_PUBLIC_URL: 'https://jeffrey.ngrok-free.app' })).toBeNull();
     expect(artifactFeedbackConfig({ ARTIFACT_PUBLIC_BASE_URL: 'https://artifacts.example.com' })).toBeNull();
     expect(artifactFeedbackConfig({ WORKBENCH_PUBLIC_URL: 'not a url', ARTIFACT_PUBLIC_BASE_URL: 'https://artifacts.example.com' })).toBeNull();
   });
 
-  it('reduces both settings to the origins CORS and CSP need', () => {
+  it('uses the configured application origin for public-page feedback', () => {
+    expect(artifactFeedbackConfig({ APP_API_ORIGIN: 'https://workbench.example.com/', ARTIFACT_PUBLIC_BASE_URL: 'https://artifacts.example.com/' }))
+      .toEqual({ endpointOrigin: 'https://workbench.example.com', pageOrigin: 'https://artifacts.example.com' });
+  });
+
+  it('lets an explicit feedback origin override the application origin', () => {
     expect(artifactFeedbackConfig({ WORKBENCH_PUBLIC_URL: 'https://jeffrey.ngrok-free.app/', ARTIFACT_PUBLIC_BASE_URL: 'https://artifacts.example.com/' }))
       .toEqual({ endpointOrigin: 'https://jeffrey.ngrok-free.app', pageOrigin: 'https://artifacts.example.com' });
   });

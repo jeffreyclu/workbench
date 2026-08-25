@@ -1,5 +1,13 @@
 ## Workbench product decisions
 
+### Artifact comments live on the shared page
+
+*Decision from Jeffrey, 2026-08-25.* Comments belong on the public artifact page
+where a coworker reads the artifact, not in the authenticated Workbench library.
+The library tracks and resolves received comments, but must not duplicate the
+composer or present an internal Comment action. When `APP_API_ORIGIN` is public,
+published pages use it as the feedback endpoint unless explicitly overridden.
+
 ### Browser chrome signals actionable conversation work
 
 *Decision implemented 2026-08-25.*

@@ -221,7 +221,7 @@ describe('trusted proxy forwarding', () => {
 });
 
 describe('artifact feedback exemption', () => {
-  const configured = { WORKBENCH_PUBLIC_URL: 'https://jeffrey.ngrok-free.app', ARTIFACT_PUBLIC_BASE_URL: 'https://artifacts.example.com' } as NodeJS.ProcessEnv;
+  const configured = { APP_API_ORIGIN: 'https://workbench.example.com', ARTIFACT_PUBLIC_BASE_URL: 'https://artifacts.example.com' } as NodeJS.ProcessEnv;
 
   it('lets a coworker post feedback without a token once feedback is configured', () => {
     expect(isOpenRequest('/api/artifacts/abc123/comments', 'POST', configured)).toBe(true);

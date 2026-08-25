@@ -1,12 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowUpRight, Ban, Check, Copy, FileText, History, LoaderCircle, MessageSquare, RefreshCw } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { useState } from 'react';
 import { api } from './api';
 import { versionUrl } from './artifact-url';
 import { copyText } from './clipboard';
 import { ConfirmationDialog } from './confirmation-dialog';
 import { toast, toastError } from './toast-store';
-import { MarkdownComposer } from './markdown-composer.js';
 import { ArtifactCardSkeleton, ArtifactDetailSkeleton } from './skeleton';
 import { Tabs } from './tabs';
 import type { ArtifactComment, ArtifactEvent, ArtifactSummary, ArtifactVersion } from '../shared/contracts';
@@ -81,7 +80,6 @@ function EventList({ events }: { events: ArtifactEvent[] }) {
 
 function CommentThread({ artifactId, comments }: { artifactId: string; comments: ArtifactComment[] }) {
   const queryClient = useQueryClient();
-  const [body, setBody] = useState('');
   const invalidate = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ['artifact', artifactId] }),
     queryClient.invalidateQueries({ queryKey: ['artifacts'] }),
@@ -91,17 +89,6 @@ function CommentThread({ artifactId, comments }: { artifactId: string; comments:
     onSuccess: invalidate,
     onError: (error) => toastError('Could not update that comment.', error),
   });
-  const add = useMutation({
-    mutationFn: () => api.addArtifactComment(artifactId, { author: 'Jeffrey', body: body.trim() }),
-    onSuccess: async () => { setBody(''); await invalidate(); },
-    onError: (error) => toastError('Could not add that note.', error),
-  });
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (body.trim()) add.mutate();
-  }
-
   return (
     <div className="artifact-comments">
       <span className="relationship-group-label">Feedback</span>
@@ -119,11 +106,6 @@ function CommentThread({ artifactId, comments }: { artifactId: string; comments:
           </button>
         </div>
       ))}
-      <form className="artifact-comment-form" onSubmit={submit}>
-        <MarkdownComposer conversationId={`artifact-comment-${artifactId}`} value={body} onChange={setBody} placeholder="Add your own note about this artifact…" ariaLabel="Add a note about this artifact" />
-        <button className="button secondary compact" disabled={!body.trim() || add.isPending}>{add.isPending ? <LoaderCircle className="spin" size={13} /> : <MessageSquare size={13} />} Add note</button>
-      </form>
-      {add.error && <p className="error-message">{add.error.message}</p>}
     </div>
   );
 }
@@ -169,7 +151,6 @@ function ArtifactCard({ artifact, onOpenTask, onOpenConversation }: {
     onSuccess: async () => { setRevokePromptOpen(false); toast.success('Artifact revoked.'); await invalidate(); },
     onError: (error) => toastError('Could not revoke this artifact.', error),
   });
-
   return (
     <article className={`artifact-card ${artifact.revokedAt ? 'revoked' : ''}`}>
       <header>

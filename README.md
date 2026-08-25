@@ -185,7 +185,7 @@ CLOUDFLARE_API_TOKEN=...
 
 Republishing a changed file creates a new version. A stable artifact URL always serves the current version; versioned URLs preserve prior snapshots. Unchanged files are skipped by content hash. Revoke takes all versions offline while retaining their history.
 
-To enable optional coworker feedback on a published artifact, configure the public Workbench URL:
+Published artifacts show the feedback composer on the public page when Workbench has a public URL. `APP_API_ORIGIN` is used by default; set `WORKBENCH_PUBLIC_URL` only to override it:
 
 ```dotenv
 WORKBENCH_PUBLIC_URL=https://your-name.ngrok-free.app

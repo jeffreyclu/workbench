@@ -94,6 +94,16 @@ function SyncEditorEditable({ disabled }: { disabled: boolean }) {
   return null;
 }
 
+function FocusEditor({ autoFocus }: { autoFocus: boolean }) {
+  const [editor] = useLexicalComposerContext();
+  useEffect(() => {
+    if (!autoFocus) return;
+    const timeout = window.setTimeout(() => editor.getRootElement()?.focus());
+    return () => window.clearTimeout(timeout);
+  }, [autoFocus, editor]);
+  return null;
+}
+
 /** Lexical owns code-block DOM nodes, so add a non-editable control after each reconciliation. */
 function CopyCodeBlocksPlugin() {
   const [editor] = useLexicalComposerContext();
@@ -142,6 +152,7 @@ function MarkdownEditor({ value, onChange, onSubmit, onBlur, disabled, placehold
     <OnChangePlugin onChange={(editorState: EditorState) => editorState.read(() => onChange($convertToMarkdownString(TRANSFORMERS)))} />
     <SyncMarkdownValue value={value} />
     <SyncEditorEditable disabled={Boolean(disabled)} />
+    <FocusEditor autoFocus={autoFocus} />
     <CopyCodeBlocksPlugin />
     {!disabled && onSubmit && <SubmitOnEnter onSubmit={onSubmit} />}
     <MarkdownToolbar />

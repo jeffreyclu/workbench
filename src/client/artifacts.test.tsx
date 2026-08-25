@@ -126,6 +126,17 @@ describe('artifact library', () => {
     expect(screen.getByText('The rollout section needs dates.')).toBeTruthy();
   });
 
+  it('keeps comments on the shared page instead of duplicating the composer in Workbench', async () => {
+    stubApi();
+    renderLibrary();
+
+    await screen.findByRole('link', { name: 'Open' });
+    expect(screen.queryByRole('button', { name: 'Comment' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /history & feedback/i }));
+    expect(await screen.findByText('The rollout section needs dates.')).toBeTruthy();
+    expect(screen.queryByLabelText('Add a note about this artifact')).toBeNull();
+  });
+
   it('reports a failure when resolving feedback', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
