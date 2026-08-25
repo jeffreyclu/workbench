@@ -73,10 +73,15 @@ describe('artifact library API', () => {
 
   it('accepts coworker feedback and lets it be resolved', async () => {
     const posted = await fetch(`${baseUrl}/api/artifacts/abc123/comments`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ author: 'Ashley', body: 'Needs dates.' }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ author: 'Ashley', body: 'Needs dates.', anchor: 'table:nth-of-type(1) tr:nth-of-type(2)' }),
     });
     expect(posted.status).toBe(201);
-    const { comment } = await posted.json() as { comment: { id: string } };
+    const { comment } = await posted.json() as { comment: { id: string; anchor: string } };
+    expect(comment.anchor).toBe('table:nth-of-type(1) tr:nth-of-type(2)');
+
+    const listed = await fetch(`${baseUrl}/api/artifacts/abc123/comments`);
+    expect(listed.status).toBe(200);
+    expect((await listed.json() as { comments: Array<{ anchor: string }> }).comments).toEqual([expect.objectContaining({ anchor: 'table:nth-of-type(1) tr:nth-of-type(2)' })]);
 
     const resolved = await fetch(`${baseUrl}/api/artifacts/abc123/comments/${comment.id}`, {
       method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ resolved: true }),

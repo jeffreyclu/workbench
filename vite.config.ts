@@ -65,6 +65,20 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: 'dist/client',
+      rollupOptions: {
+        output: {
+          // Keep vendor code in stable cacheable chunks. This also keeps the
+          // entry bundle below Vite's warning threshold as the app grows.
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return;
+            if (id.includes('/node_modules/react/') || id.includes('/node_modules/react-dom/') || id.includes('/node_modules/scheduler/')) return 'react';
+            if (id.includes('/node_modules/@tanstack/')) return 'query';
+            if (id.includes('/node_modules/@lexical/') || id.includes('/node_modules/lexical/')) return 'editor';
+            if (id.includes('/node_modules/@dnd-kit/')) return 'drag-drop';
+            if (id.includes('/node_modules/@huggingface/transformers/') || id.includes('/node_modules/onnxruntime-')) return 'ml';
+          },
+        },
+      },
     },
   };
 });

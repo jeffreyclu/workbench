@@ -189,6 +189,16 @@ status. The “Show earlier messages” page limit remains the performance bound
 do not reintroduce virtualized thread rows unless there is a measured need and
 the implementation has no height-cache transition.
 
+### Post-promotion task completion follows the promotion record, not its prose
+
+*Confirmed 2026-08-25.* A promotion can combine later queued approvals into an
+already successful release. Those rows use different human-facing copy, so the
+“Complete the linked task?” prompt must derive success from the persisted
+completed `dispatchTarget: 'promotion'` record, not an exact success sentence.
+Keep the old success-sentence fallback only for legacy records that predate the
+promotion dispatch target. A failed task-completion request must leave the
+prompt visible with an inline retry path.
+
 ## Stale responsive overrides survive UI convention changes — check media queries when a "fixed" style regresses
 
 ### Restoring a control must not turn it into a large text CTA

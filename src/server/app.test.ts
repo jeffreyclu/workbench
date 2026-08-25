@@ -129,6 +129,30 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     expect(response.status).toBe(409);
   });
 
+  it('retrying one of two independent agent threads on the same task does not block the other', async () => {
+    fakeAgentDirectory(`trap 'exit 143' TERM\nwhile true; do /bin/sleep 0.1; done`, 'exit 1');
+    const item = repository.create({ title: 'Double thread task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const codexRun = repository.createRun(item.id, 'analysis', 'codex', 'codex', '');
+    const claudeRun = repository.createRun(item.id, 'analysis', 'claude', 'claude', '');
+    repository.updateRun(codexRun.id, { status: 'canceled', completedAt: new Date().toISOString() });
+    repository.updateRun(claudeRun.id, { status: 'canceled', completedAt: new Date().toISOString() });
+
+    const codexRetry = await fetch(`${baseUrl}/api/agent-runs/${codexRun.id}/retry`, { method: 'POST' });
+    expect(codexRetry.status).toBe(202);
+
+    // Codex's retry is now active for the item, but Claude's sibling thread
+    // failed/canceled independently and must remain retryable on its own.
+    const claudeRetry = await fetch(`${baseUrl}/api/agent-runs/${claudeRun.id}/retry`, { method: 'POST' });
+    expect(claudeRetry.status).toBe(202);
+
+    const { run: retriedCodexRun } = await codexRetry.json() as { run: { id: string } };
+    const { run: retriedClaudeRun } = await claudeRetry.json() as { run: { id: string } };
+    expect(cancelAgentRun(repository, retriedCodexRun.id)).toBeTruthy();
+    expect(cancelAgentRun(repository, retriedClaudeRun.id)).toBeTruthy();
+    await vi.waitFor(() => expect(isAgentRunActive(retriedCodexRun.id)).toBe(false));
+    await vi.waitFor(() => expect(isAgentRunActive(retriedClaudeRun.id)).toBe(false));
+  });
+
   describe('open-prerequisite dispatch gate', () => {
     const seedBlockedTask = () => {
       const blocker = repository.create({ title: 'Schema lands first', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });

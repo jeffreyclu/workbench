@@ -403,6 +403,7 @@ export class WorkItemRepository {
       estimatedCostUsd: row.estimated_cost_usd === null ? null : Number(row.estimated_cost_usd),
       fallbackFrom: row.fallback_from as SharedMessage['fallbackFrom'] ?? null, fallbackReason: row.fallback_reason ? String(row.fallback_reason) : null,
       dispatchTarget: row.dispatch_target as SharedMessage['dispatchTarget'] ?? 'none',
+      dispatchGroupId: row.dispatch_group_id ? String(row.dispatch_group_id) : null,
       attempt: Number(row.attempt ?? 0), maxAttempts: Number(row.max_attempts ?? 3),
       nextAttemptAt: row.next_attempt_at ? String(row.next_attempt_at) : null,
       queuePriority: Number(row.queue_priority ?? 0),
@@ -579,17 +580,17 @@ export class WorkItemRepository {
     return rows.map((row) => row.conversation_id).filter((id): id is string => id !== null);
   }
 
-  createSharedMessage(author: SharedMessage['author'], body: string, status: SharedMessage['status'] = 'completed', conversationId?: string, attachments: SharedAttachment[] = [], dispatchTarget = 'none', executionProfile: AgentRun['executionProfile'] = null, accountProfile: string | null = null): SharedMessage {
+  createSharedMessage(author: SharedMessage['author'], body: string, status: SharedMessage['status'] = 'completed', conversationId?: string, attachments: SharedAttachment[] = [], dispatchTarget = 'none', executionProfile: AgentRun['executionProfile'] = null, accountProfile: string | null = null, dispatchGroupId: string | null = null): SharedMessage {
     const conversation = conversationId ? this.listConversations('all').find((item) => item.id === conversationId) : this.ensureDefaultConversation();
     if (!conversation) throw new Error('Conversation not found.');
     const message: SharedMessage = {
       id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), completedAt: ['completed', 'failed', 'canceled'].includes(status) ? new Date().toISOString() : null, attachments, model: null, accountProfile, executionProfile, inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: dispatchTarget as SharedMessage['dispatchTarget'],
-      attempt: 0, maxAttempts: 3, nextAttemptAt: null, queuePriority: 0, retrievedMemoryCount: null,
+      attempt: 0, maxAttempts: 3, nextAttemptAt: null, queuePriority: 0, retrievedMemoryCount: null, dispatchGroupId,
     };
     this.database.prepare(`
-      INSERT INTO shared_messages (id, conversation_id, author, body, pinned, status, error, attachments_json, dispatch_target, created_at, completed_at, execution_profile, account_profile)
-      VALUES (?, ?, ?, ?, 0, ?, '', ?, ?, ?, ?, ?, ?)
-    `).run(message.id, message.conversationId, author, body, status, JSON.stringify(attachments), dispatchTarget, message.createdAt, message.completedAt, executionProfile, accountProfile);
+      INSERT INTO shared_messages (id, conversation_id, author, body, pinned, status, error, attachments_json, dispatch_target, created_at, completed_at, execution_profile, account_profile, dispatch_group_id)
+      VALUES (?, ?, ?, ?, 0, ?, '', ?, ?, ?, ?, ?, ?, ?)
+    `).run(message.id, message.conversationId, author, body, status, JSON.stringify(attachments), dispatchTarget, message.createdAt, message.completedAt, executionProfile, accountProfile, dispatchGroupId);
     this.database.prepare('UPDATE shared_conversations SET updated_at = ?, title = CASE WHEN title = ? AND ? = ? THEN substr(?, 1, 80) ELSE title END WHERE id = ?')
       .run(message.createdAt, 'New conversation', author, 'jeffrey', body, message.conversationId);
     return message;

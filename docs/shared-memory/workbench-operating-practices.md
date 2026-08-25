@@ -369,3 +369,28 @@ untouched by design — they aren't in `hasLiveWork()`'s filter and already get 
 `dispatchNextSharedTurn`'s `finally`-block calls. Tests in `repository.test.ts` cover: an aged
 codex/claude queued row gets canceled and `hasLiveWork()` flips false; a fresh one is left alone; a
 `jeffrey` row is never touched regardless of age.
+
+### Runtime release publication must be staged, validated, and cross-process serialized
+
+Jeffrey's decision (2026-08-25): promotion flakiness is unacceptable; a promotion queue must prevent
+and resolve competing release handoffs. The incident showed a successful Vite build followed by
+`Runtime promotion did not produce a usable client snapshot.` The release script had switched
+`.workbench-runtime/current` before validating the copied release, and the filesystem pointer had no
+lock outside the SQLite-backed worker queue. `scripts/promote-runtime.ts` now takes an exclusive
+filesystem lock (dead-PID locks are reclaimed; a live holder has a 60-second wait), creates a unique
+staging release, validates the server entry, manifest, HTML, and every HTML-referenced client asset,
+then atomically renames the staging directory and swaps the symlink. Any copy or validation failure
+leaves the known-good release untouched. The client build also uses explicit Rollup vendor chunks so
+the app entry stays under Vite's 500 KB warning threshold.
+
+### "Preview promotion failed" is usually a plain `tsc` error, not the promotion queue
+
+Most "Preview promotion failed" reports since the queue hardening above have shown a normal
+TypeScript compile error (`tsc -b` failing before Vite even runs), not a promotion-queue race. The
+recurring shape: a field gets added to `SharedMessage` in `src/shared/contracts.ts`, and hand-built
+test fixtures across `src/server/shared-room.test.ts`, `src/client/App.test.tsx`,
+`src/client/features/conversation/view.test.ts`, etc. fall out of sync with the type (missing a new
+required field, or accidentally duplicating one during a merge). The fix is always to add/remove the
+field in the literal object, not to touch the promotion queue or release script. When a promotion
+failure message includes a `tsc` line/column error, diagnose it as a type-fixture drift first — run
+`npx tsc -b` locally to see the full list before assuming the queue itself is flaky.

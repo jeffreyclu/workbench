@@ -100,7 +100,12 @@ export class WorkbenchAdminService {
     const prior = this.repository.getRun(runId);
     if (!prior) return { status: 404, body: { error: 'Agent run not found.' } } as ActionFailure;
     if (prior.status !== 'failed' && prior.status !== 'canceled') return { status: 409, body: { error: 'Only failed or canceled runs can be retried.' } } as ActionFailure;
-    if (this.repository.activeRunsForItem(prior.workItemId).length) return { status: 409, body: { error: 'This task already has an active agent run.' } } as ActionFailure;
+    // Scoped to this run's own agent: a task can legitimately have two active
+    // threads (Codex + Claude) at once, and retrying one failed/canceled
+    // thread must not be blocked by its sibling's unrelated active run.
+    if (this.repository.activeRunsForItem(prior.workItemId).some((run) => run.agent === prior.agent)) {
+      return { status: 409, body: { error: 'This task already has an active agent run.' } } as ActionFailure;
+    }
     const item = this.repository.get(prior.workItemId);
     if (!item) return { status: 404, body: { error: 'Work item not found.' } } as ActionFailure;
     const refused = selfAssignedFailure(item, options.force) ?? openPrerequisiteFailure(this.repository, item.id, options.force);

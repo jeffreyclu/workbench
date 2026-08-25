@@ -56,6 +56,8 @@ const EXPECTED_MIGRATIONS = [
   '043_shared_conversation_draft_body',
   '044_shared_conversation_composer_preferences',
   '045_shared_message_queue_priority',
+  '046_artifact_comment_anchors',
+  '047_shared_message_dispatch_group',
 ];
 
 describe('openDatabase', () => {
@@ -146,6 +148,21 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toEqual(expect.arrayContaining(['preferred_execution_profile', 'preferred_account_profile', 'preferred_dispatch_target']));
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '044_shared_conversation_composer_preferences'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds artifact-comment anchors when upgrading from migration 045', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP INDEX idx_artifact_comments_anchor; ALTER TABLE artifact_comments DROP COLUMN anchor;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '046_artifact_comment_anchors'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(artifact_comments)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toContain('anchor');
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_artifact_comments_anchor'").get()).toBeTruthy();
     upgraded.close();
   });
 

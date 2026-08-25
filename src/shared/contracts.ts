@@ -684,6 +684,8 @@ export interface SharedMessage {
   fallbackFrom: 'codex' | 'claude' | null;
   fallbackReason: string | null;
   dispatchTarget: 'auto' | 'both' | 'codex' | 'claude' | 'none';
+  /** The human turn that dispatched this reply; both-agent replies share it. */
+  dispatchGroupId: string | null;
   attempt: number;
   maxAttempts: number;
   nextAttemptAt: string | null;
@@ -737,6 +739,8 @@ export interface ArtifactComment {
   version: number | null;
   author: string;
   body: string;
+  /** Stable, page-local selector for the row the coworker commented on. */
+  anchor: string | null;
   resolvedAt: string | null;
   createdAt: string;
 }
@@ -771,6 +775,7 @@ export const createArtifactCommentSchema = z.object({
   author: z.string().trim().min(1).max(80).default('Coworker'),
   body: z.string().trim().min(1).max(5_000),
   version: z.coerce.number().int().positive().optional(),
+  anchor: z.string().trim().min(1).max(500).optional(),
 });
 
 export const updateArtifactSchema = z.object({

@@ -276,6 +276,7 @@ const baseSchemaStatements = [
       version INTEGER,
       author TEXT NOT NULL DEFAULT 'Coworker',
       body TEXT NOT NULL,
+      anchor TEXT,
       resolved_at TEXT,
       created_at TEXT NOT NULL
     );
@@ -1446,6 +1447,30 @@ const schemaMigrations: readonly Migration[] = [
         database.exec('ALTER TABLE shared_messages ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0;');
       }
       database.exec('CREATE INDEX IF NOT EXISTS idx_shared_messages_queue_priority ON shared_messages(conversation_id, status, queue_priority DESC, created_at ASC);');
+    },
+  },
+  {
+    // Comments need a page-local anchor so the shared artifact can reopen the
+    // exact row a coworker was discussing without storing mutable page HTML.
+    id: '046_artifact_comment_anchors',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(artifact_comments)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'anchor')) {
+        database.exec('ALTER TABLE artifact_comments ADD COLUMN anchor TEXT;');
+      }
+      database.exec('CREATE INDEX IF NOT EXISTS idx_artifact_comments_anchor ON artifact_comments(artifact_id, anchor, created_at DESC);');
+    },
+  },
+  {
+    // A dual-agent dispatch is one user action. Persist its identity instead
+    // of inferring it from adjacent transcript rows.
+    id: '047_shared_message_dispatch_group',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'dispatch_group_id')) {
+        database.exec('ALTER TABLE shared_messages ADD COLUMN dispatch_group_id TEXT;');
+      }
+      database.exec('CREATE INDEX IF NOT EXISTS idx_shared_messages_dispatch_group ON shared_messages(conversation_id, dispatch_group_id);');
     },
   },
 ];

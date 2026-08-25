@@ -24,6 +24,7 @@ function message(index: number, body: string): SharedMessage {
     estimatedCostUsd: null,
     fallbackFrom: null,
     fallbackReason: null,
+    dispatchGroupId: null,
     attempt: 0,
     maxAttempts: 3,
     nextAttemptAt: null,

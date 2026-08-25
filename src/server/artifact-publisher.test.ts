@@ -57,7 +57,7 @@ describe('artifact snapshots', () => {
     expect(page).toContain('<a href="../">View the latest version</a>');
   });
 
-  it('adds a feedback box only when feedback is configured, and opens exactly one origin', () => {
+  it('adds row-anchored comments only when feedback is configured, and opens exactly one origin', () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-'));
     const path = join(directory, 'report.md');
     writeFileSync(path, '# Rollout');
@@ -66,18 +66,20 @@ describe('artifact snapshots', () => {
       feedback: { artifactId: 'abc123', endpointOrigin: 'https://jeffrey.ngrok-free.app' },
     });
 
-    expect(page).toContain('Send feedback');
+    expect(page).toContain('Comment on this row');
+    expect(page).toContain('id="wb-comment-rail"');
+    expect(page).toContain('anchor:anchorFor(selected)');
     expect(page).toContain('https://jeffrey.ngrok-free.app/api/artifacts/abc123/comments');
     expect(page).toContain("connect-src https://jeffrey.ngrok-free.app");
     expect(page).toContain("script-src 'unsafe-inline'");
     expect(page).not.toContain("connect-src 'none'");
 
     const withoutFeedback = renderArtifactPage(path, 'Rollout', { version: 2 });
-    expect(withoutFeedback).not.toContain('Send feedback');
+    expect(withoutFeedback).not.toContain('id="wb-comment-rail"');
     expect(withoutFeedback).not.toContain('<script');
   });
 
-  it('adds feedback to an existing public snapshot without changing the artifact content', () => {
+  it('upgrades an existing public snapshot to row-anchored comments without changing the artifact content', () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-'));
     const path = join(directory, 'report.md');
     writeFileSync(path, '# Rollout');
@@ -86,10 +88,20 @@ describe('artifact snapshots', () => {
 
     expect(refreshed).toContain('<h1>Rollout</h1>');
     expect(refreshed).toContain('<strong>Version 2</strong>');
-    expect(refreshed).toContain('Send feedback');
+    expect(refreshed).toContain('id="wb-comment-rail"');
+    expect(refreshed).toContain('Comment on this row');
     expect(refreshed).toContain('https://workbench.example.com/api/artifacts/abc123/comments');
     expect(refreshed).toContain("connect-src https://workbench.example.com");
     expect(addFeedbackToPublishedPage(refreshed, { artifactId: 'abc123', endpointOrigin: 'https://workbench.example.com' })).toBe(refreshed);
+  });
+
+  it('replaces the old page-level composer when upgrading an existing snapshot', () => {
+    const legacy = '<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; connect-src \'none\';"></head><body><main><table><tr><td>One</td></tr></table></main><footer class="wb-artifact-meta"><form id="wb-feedback"><textarea></textarea></form><script>legacy()</script></footer></body></html>';
+    const refreshed = addFeedbackToPublishedPage(legacy, { artifactId: 'abc123', endpointOrigin: 'https://workbench.example.com' });
+
+    expect(refreshed).not.toContain('id="wb-feedback"');
+    expect(refreshed).toContain('id="wb-comment-rail"');
+    expect(refreshed).toContain("connect-src https://workbench.example.com");
   });
 
   it('rebuilds current and historical URLs from immutable snapshots in a fresh directory', () => {

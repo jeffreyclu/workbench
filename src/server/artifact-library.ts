@@ -95,6 +95,7 @@ function mapComment(row: Row): ArtifactComment {
     version: row.version === null ? null : Number(row.version),
     author: text(row.author),
     body: text(row.body),
+    anchor: optional(row.anchor),
     resolvedAt: optional(row.resolved_at),
     createdAt: text(row.created_at),
   };
@@ -357,7 +358,7 @@ export class ArtifactLibrary {
     return this.get(id);
   }
 
-  addComment(id: string, input: { author: string; body: string; version?: number }): ArtifactComment | null {
+  addComment(id: string, input: { author: string; body: string; version?: number; anchor?: string }): ArtifactComment | null {
     const artifact = this.get(id);
     if (!artifact) return null;
     const comment: ArtifactComment = {
@@ -366,11 +367,12 @@ export class ArtifactLibrary {
       version: input.version ?? artifact.version,
       author: input.author,
       body: input.body,
+      anchor: input.anchor ?? null,
       resolvedAt: null,
       createdAt: new Date().toISOString(),
     };
-    this.database.prepare('INSERT INTO artifact_comments (id, artifact_id, version, author, body, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(comment.id, comment.artifactId, comment.version, comment.author, comment.body, comment.createdAt);
+    this.database.prepare('INSERT INTO artifact_comments (id, artifact_id, version, author, body, anchor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(comment.id, comment.artifactId, comment.version, comment.author, comment.body, comment.anchor, comment.createdAt);
     this.addEvent(id, 'commented', comment.version, `${input.author} left feedback.`);
     return comment;
   }

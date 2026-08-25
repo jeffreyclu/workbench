@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classifyExecution, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
@@ -7,7 +9,68 @@ import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js
 
 const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
+/**
+ * A live provider session owns this callback for the life of its reply.  An
+ * interjection is input to that session, never a second reply/run.
+ */
+type ActiveReplySteering = (body: string, onAccepted: () => void) => boolean;
+const activeReplySteering = new Map<string, ActiveReplySteering>();
 export const isSharedReplyActive = (id: string) => activeReplies.has(id);
+
+/** Associates a running reply with its provider's live input channel. */
+export function registerActiveReplySteering(messageId: string, steer: ActiveReplySteering): void {
+  activeReplySteering.set(messageId, steer);
+}
+
+/** Codex's app-server is the provider protocol that supports turn/steer. */
+function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void): Promise<string> {
+  return new Promise((resolveOutput, reject) => {
+    const child = spawn('codex', ['app-server', '--stdio'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+    let buffered = ''; let output = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
+    const pendingSteers = new Map<number, () => void>();
+    const request = (method: string, params: Record<string, unknown>) => {
+      const id = ++sequence;
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+      return id;
+    };
+    const fail = (error: Error) => { if (!settled) { settled = true; reject(error); } };
+    const stop = () => { try { process.kill(child.pid ? -child.pid : child.pid!, 'SIGTERM'); } catch { child.kill('SIGTERM'); } };
+    const steer: ActiveReplySteering = (body, onAccepted) => {
+      if (!threadId || !turnId || settled) return false;
+      const id = request('turn/steer', { threadId, expectedTurnId: turnId, clientUserMessageId: randomUUID(), input: [{ type: 'text', text: body, text_elements: [] }] });
+      pendingSteers.set(id, onAccepted);
+      return true;
+    };
+    signal.addEventListener('abort', stop, { once: true });
+    child.on('error', fail);
+    child.stderr.on('data', (chunk: Buffer) => { if (!settled && chunk.toString().trim()) { /* diagnostics arrive on close */ } });
+    child.stdout.on('data', (chunk: Buffer) => {
+      buffered += chunk.toString(); const lines = buffered.split('\n'); buffered = lines.pop() ?? '';
+      for (const line of lines.filter(Boolean)) {
+        let event: any; try { event = JSON.parse(line); } catch { continue; }
+        if (event.id === 1 && event.result) request('thread/start', { cwd, ephemeral: true, model: null, approvalPolicy: 'never' });
+        else if (event.result?.thread?.id && !threadId) { threadId = event.result.thread.id; request('turn/start', { threadId, cwd, effort: 'medium', input: [{ type: 'text', text: prompt, text_elements: [] }] }); }
+        else if (event.result?.turn?.id && !turnId) { turnId = event.result.turn.id; onReady(steer); }
+        if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
+          const accepted = pendingSteers.get(event.id)!;
+          pendingSteers.delete(event.id);
+          if (event.result?.turnId) {
+            turnId = event.result.turnId;
+            accepted();
+          }
+          // A rejected steer leaves the human message queued. The active turn
+          // keeps streaming and no second reply is started.
+          continue;
+        }
+        if (event.method === 'item/agentMessage/delta' && typeof event.params?.delta === 'string') { output += event.params.delta; onProgress(output); }
+        if (event.method === 'turn/completed') { settled = true; resolveOutput(output.trim()); child.stdin.end(); }
+        if (event.error) fail(new Error(String(event.error.message ?? 'Codex app-server request failed.')));
+      }
+    });
+    child.on('close', (code) => { if (!settled) fail(signal.aborted ? new Error('Agent run canceled.') : new Error(`Codex app-server exited with code ${code}.`)); });
+    request('initialize', { clientInfo: { name: 'workbench', title: 'Workbench', version: '0.1.0' }, capabilities: { experimentalApi: true, requestAttestation: false } });
+  });
+}
 
 type SharedReplyRetrieval = {
   query: string;
@@ -179,11 +242,10 @@ export function linearContextForPrompt(repository: WorkItemRepository, message: 
   ].filter(Boolean).join('\n')).join('\n')}`;
 }
 
-export function dispatchNextSharedTurn(repository: WorkItemRepository, conversationId: string, options: { allowBusyAgents?: boolean } = {}): SharedMessage[] {
-  // Normal conversation turns remain one-at-a-time per agent. Interject is
-  // explicitly different: it starts a new live turn immediately, while the
-  // existing response keeps streaming to its own message.
-  const busyAgents = options.allowBusyAgents ? new Set<AgentRun['agent']>() : new Set(
+export function dispatchNextSharedTurn(repository: WorkItemRepository, conversationId: string): SharedMessage[] {
+  // Conversation turns are one-at-a-time per agent. Interject writes to the
+  // active provider turn and never enters this dispatcher.
+  const busyAgents = new Set(
     repository.listAllSharedMessages(conversationId)
       .filter((message) => message.status === 'running' && (message.author === 'codex' || message.author === 'claude'))
       .map((message) => message.author as AgentRun['agent']),
@@ -224,7 +286,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
       return [];
     }),
   };
-  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'running', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile, accountProfile));
+  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'running', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile, accountProfile, queued.message.id));
   for (const reply of replies) {
     const agent = reply.author as AgentRun['agent'];
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'
@@ -342,7 +404,12 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     repository.updateSharedMessage(messageId, { model: modelFor(agent, profile), executionProfile: profile });
     if (runId) repository.updateRun(runId, { model: modelFor(agent, profile), executionProfile: profile });
     repository.setConversationExecutionProfile(target.conversationId, profile);
-    let result = await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
+    let result = agent === 'codex'
+      ? await runSteerableCodex(guardedPrompt, cwd, controller.signal, (partial) => {
+        repository.updateSharedMessage(messageId, { body: partial });
+        if (runId) repository.updateRun(runId, { output: partial });
+      }, (steer) => registerActiveReplySteering(messageId, steer)).then((output) => ({ output, agent: 'codex' as const, usage: { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null }, fallbackFrom: null, fallbackReason: null }))
+      : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       repository.updateSharedMessage(messageId, { body: partial });
       if (runId) repository.updateRun(runId, { output: partial });
     }, controller.signal, (fallback, reason) => {
@@ -394,6 +461,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
   } finally {
     clearInterval(leaseHeartbeat);
     activeReplies.delete(messageId);
+    activeReplySteering.delete(messageId);
     replyRunIds.delete(messageId);
     const synthesized = await synthesizeSharedTurn(repository, target.conversationId, target.createdAt);
     const dispatched = dispatchNextSharedTurn(repository, target.conversationId);
@@ -431,10 +499,20 @@ export function cancelSharedReply(repository: WorkItemRepository, messageId: str
 export function interjectQueuedSharedMessage(repository: WorkItemRepository, messageId: string): SharedMessage[] | null {
   const message = repository.getSharedMessageById(messageId);
   if (!message || message.status !== 'queued') return null;
-  // Interject is a non-destructive steering action: start this exact turn now
-  // without interrupting an active reply. Explicit Cancel owns termination.
-  repository.promoteQueuedSharedMessage(messageId);
-  return dispatchNextSharedTurn(repository, message.conversationId, { allowBusyAgents: true });
+  const targets = message.dispatchTarget === 'both' ? ['codex', 'claude'] : [message.dispatchTarget];
+  const running = repository.listAllSharedMessages(message.conversationId)
+    .filter((candidate) => candidate.status === 'running' && targets.includes(candidate.author));
+  // Do not silently degrade into a second process. A provider that has not
+  // exposed its live session yet remains queued and the UI can retry once the
+  // active reply reaches the steering-ready point.
+  const steered = running.filter((reply) => activeReplySteering.get(reply.id)?.(message.body, () => {
+    // Acknowledgment is the delivery boundary. Before this, keep the queued
+    // message retryable; after it, there is still only the original reply.
+    repository.updateSharedMessage(messageId, { status: 'completed' });
+    publishRealtimeEvent('shared');
+  }));
+  if (!steered.length) return [];
+  return steered;
 }
 
 function synthesisSource(repository: WorkItemRepository, conversationId: string, replyCreatedAt: string): { prompt: string; codex: SharedMessage; claude: SharedMessage } | null {

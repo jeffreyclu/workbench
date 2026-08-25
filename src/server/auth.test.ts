@@ -228,8 +228,8 @@ describe('artifact feedback exemption', () => {
     expect(isOpenRequest('/api/artifacts/abc123/comments', 'OPTIONS', configured)).toBe(true);
   });
 
-  it('never exposes reading that feedback, or any other route', () => {
-    expect(isOpenRequest('/api/artifacts/abc123/comments', 'GET', configured)).toBe(false);
+  it('lets a shared page read and post only its own feedback route', () => {
+    expect(isOpenRequest('/api/artifacts/abc123/comments', 'GET', configured)).toBe(true);
     expect(isOpenRequest('/api/artifacts', 'POST', configured)).toBe(false);
     expect(isOpenRequest('/api/work-items', 'POST', configured)).toBe(false);
     expect(isOpenRequest('/api/artifacts/abc123/../../work-items/comments', 'POST', configured)).toBe(false);

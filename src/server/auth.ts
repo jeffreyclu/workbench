@@ -247,15 +247,15 @@ function isSecure(request: GateRequest, trustedProxies: string[]): boolean {
 
 /**
  * Coworkers who open a shared artifact hold no Workbench token, so writing
- * feedback back is the single route that answers without one — and only when
- * feedback is configured. Reads of that feedback stay gated: the exemption
- * covers POST and its CORS preflight, never GET.
+ * feedback back or viewing the thread without one — and only when feedback is
+ * configured. The narrow exemption covers one artifact's comments, never the
+ * artifact library or any other Workbench data.
  */
 export function isOpenRequest(pathname: string, method = 'GET', env: NodeJS.ProcessEnv = process.env): boolean {
   if (openPaths.has(pathname)) return true;
   const feedbackConfigured = Boolean(artifactFeedbackConfig(env));
   const upper = method.toUpperCase();
-  return feedbackConfigured && (upper === 'POST' || upper === 'OPTIONS') && artifactCommentPath.test(pathname);
+  return feedbackConfigured && (upper === 'GET' || upper === 'POST' || upper === 'OPTIONS') && artifactCommentPath.test(pathname);
 }
 
 /**

@@ -172,7 +172,7 @@ export function createArtifactRouter({ repository, artifacts, artifactService, a
     if (!feedback) return false;
     response.setHeader('Access-Control-Allow-Origin', feedback.pageOrigin);
     response.setHeader('Access-Control-Allow-Headers', 'content-type');
-    response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     response.setHeader('Vary', 'Origin');
     return true;
   }
@@ -194,6 +194,7 @@ export function createArtifactRouter({ repository, artifacts, artifactService, a
   });
 
   router.get('/api/artifacts/:id/comments', (request, response) => {
+    applyFeedbackCors(response);
     if (!artifacts.get(request.params.id)) return response.status(404).json({ error: 'Published artifact not found.' });
     response.json({ comments: artifacts.listComments(request.params.id) });
   });
