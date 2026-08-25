@@ -218,6 +218,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const conversationScrollRef = useRef<HTMLDivElement>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
   const isNearThreadBottomRef = useRef(true);
+  const lastThreadScrollTopRef = useRef(0);
+  const [consoleHeaderHidden, setConsoleHeaderHidden] = useState(false);
   const THREAD_PAGE_SIZE = 5;
   const [threadVisibleCount, setThreadVisibleCount] = useState(THREAD_PAGE_SIZE);
   const [hasNewActivityBelow, setHasNewActivityBelow] = useState(false);
@@ -743,6 +745,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     isNearThreadBottomRef.current = true;
     setThreadVisibleCount(THREAD_PAGE_SIZE);
     setHasNewActivityBelow(false);
+    setConsoleHeaderHidden(false);
+    lastThreadScrollTopRef.current = 0;
   }, [conversationId]);
   useEffect(() => {
     const container = threadScrollRef.current;
@@ -756,6 +760,26 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     updateNearBottom();
     container.addEventListener('scroll', updateNearBottom, { passive: true });
     return () => container.removeEventListener('scroll', updateNearBottom);
+  }, [conversationId]);
+  useEffect(() => {
+    // Reading the thread on a small screen costs more vertical space to the
+    // header than desktop can spare, so slide it away on downward scroll and
+    // bring it back the moment the reader scrolls up — mirroring how mobile
+    // browser chrome behaves rather than gating the header behind a menu.
+    const container = threadScrollRef.current;
+    if (!container) return;
+    lastThreadScrollTopRef.current = container.scrollTop;
+    const revealThreshold = 8;
+    const updateHeaderVisibility = () => {
+      const { scrollTop } = container;
+      const delta = scrollTop - lastThreadScrollTopRef.current;
+      if (scrollTop <= revealThreshold) setConsoleHeaderHidden(false);
+      else if (delta > revealThreshold) setConsoleHeaderHidden(true);
+      else if (delta < -revealThreshold) setConsoleHeaderHidden(false);
+      lastThreadScrollTopRef.current = scrollTop;
+    };
+    container.addEventListener('scroll', updateHeaderVisibility, { passive: true });
+    return () => container.removeEventListener('scroll', updateHeaderVisibility);
   }, [conversationId]);
   const jumpToLatest = () => {
     isNearThreadBottomRef.current = true;
@@ -876,7 +900,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
         )}
       </aside>
       <section className="agent-console" aria-label="Shared agent workspace">
-        <header className="agent-console-header"><button type="button" className="mobile-detail-close icon-button" aria-label="Close conversation" onClick={() => setRailOpen(true)}><X size={16} /></button><div className="agent-console-title">{selectedConversation ? <ConversationOriginBadge workItemId={selectedConversation.workItemId} /> : <span className="eyebrow">Shared context</span>}<h2>{selectedConversation?.title
+        <header className={`agent-console-header${consoleHeaderHidden ? ' is-header-hidden' : ''}`}><button type="button" className="mobile-detail-close icon-button" aria-label="Close conversation" onClick={() => setRailOpen(true)}><X size={16} /></button><div className="agent-console-title">{selectedConversation ? <ConversationOriginBadge workItemId={selectedConversation.workItemId} /> : <span className="eyebrow">Shared context</span>}<h2>{selectedConversation?.title
               ?? (pendingSelectedConversation?.id === conversationId ? pendingSelectedConversation.title
                   : conversationDetail.isLoading ? <span className="conversation-title-skeleton"><Skeleton width="240px" height="19px" /></span>
                   : selectedConversationMissing ? 'Conversation not found'
@@ -927,7 +951,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                 >
                   <Search size={11} /> {typeof message.retrievedMemoryCount === 'number' ? message.retrievedMemoryCount : '—'}
                 </button>
-                {message.status === 'running' && <button type="button" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel response" title="Cancel response"><X size={12} /></button>}
+                {message.status === 'running' && <button type="button" className="cancel-response" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel response" title="Cancel response"><X size={12} /></button>}
               </header>
               {message.status === 'running' && <p className="thinking"><LoaderCircle className="spin" size={13} /> Live · {message.body ? 'receiving activity' : 'starting agent'}</p>}
               {message.status === 'queued' && (

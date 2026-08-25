@@ -80,7 +80,11 @@ export function compactSharedBrief(sharedContext: string, budget = 700): string 
   return `${sharedContext.slice(0, head)}\n\n[… ${omitted.toLocaleString()} characters compacted; use retrieved memory for older detail …]\n\n${sharedContext.slice(-tail)}`;
 }
 
-const SHARED_REPLY_RETRIEVAL_LIMIT = 40;
+/**
+ * Keep every room turn grounded without turning retrieval into the dominant
+ * prompt payload. The full index remains available through /api/activity-memory.
+ */
+const SHARED_REPLY_RETRIEVAL_LIMIT = 8;
 
 function formatRetrievedMemory(matches: Array<{ source: string; title: string; body: string; createdAt: string }>): string {
   if (!matches.length) return 'Retrieved memory: no indexed match. Query /api/activity-memory with focused terms if needed.';

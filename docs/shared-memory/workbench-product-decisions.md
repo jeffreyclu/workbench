@@ -312,7 +312,7 @@ vitest suite:
 - `formatRetrievedMemory`'s header/no-match copy in `src/server/shared-room.ts`
   trimmed (158 → 136 chars for the match-found header; 102 → 92 chars for the
   no-match line) — same meaning, fewer static tokens resent every turn. Match
-  count (top 3) and per-match body truncation (200 chars) left unchanged;
+  count (top 8) and per-match body truncation (200 chars) left unchanged;
   cutting those further risks losing the actual retrieved content, which is
   the opposite of what this optimization is for.
 

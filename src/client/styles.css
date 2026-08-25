@@ -684,13 +684,14 @@ nav { display: grid; gap: 3px; }
 .thread-live-flow .thread-virtual-row { position: relative; top: auto; left: auto; transform: none; }
 .thread-virtual-row .shared-message.shared-jeffrey { margin-left: auto; }
 .shared-thread > .completion-prompt, .shared-thread > .preview-approval, .shared-thread > .chat-plan, .shared-thread > .finding-progress, .shared-thread > .list-state { margin-top: 10px; }
-.shared-message { --response-section-surface: #0d0d0c; --response-section-border: #292925; --response-section-hover-border: #3a3a35; align-self: flex-start; width: min(94%, 640px); min-width: 0; max-width: 100%; overflow: hidden; padding: 11px 13px; background: #11110f; border: 1px solid #2b2b27; border-radius: 9px; }
+.shared-message { --response-section-surface: #0d0d0c; --response-section-border: #292925; --response-section-hover-border: #3a3a35; position: relative; align-self: flex-start; width: min(94%, 640px); min-width: 0; max-width: 100%; overflow: hidden; padding: 11px 13px; background: #11110f; border: 1px solid #2b2b27; border-radius: 9px; }
 .shared-message.shared-jeffrey { align-self: flex-end; background: #202318; border-color: #434c29; }
 .shared-message header { display: flex; align-items: center; gap: 8px; }
 .shared-message header strong { color: #c8c7bf; font: 9px 'DM Mono'; text-transform: capitalize; }
 .shared-message header time { color: #575650; font: 8px 'DM Mono'; }
 .shared-message header button { display: grid; place-items: center; margin-left: auto; padding: 3px; color: #55554f; background: transparent; border: 0; }
 .shared-message header button:hover { color: var(--acid); }
+.shared-message .cancel-response { position: absolute; top: 8px; right: 8px; z-index: 1; margin: 0; }
 .shared-message p { margin: 8px 0 0; color: #c7c6bf; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .message-markdown { margin-top: 8px; min-width: 0; max-width: 100%; color: #c7c6bf; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; word-break: break-word; }.message-markdown > :first-child { margin-top: 0; }.message-markdown > :last-child { margin-bottom: 0; }.message-markdown p { white-space: normal; }.message-markdown ul, .message-markdown ol { padding-left: 22px; }.message-markdown li { margin: 3px 0; }.message-markdown code { padding: 1px 4px; color: #d9ed9b; background: #24251f; border-radius: 3px; font: 10px 'DM Mono'; }.message-markdown pre { position: relative; max-width: 100%; padding: 9px; overflow-x: auto; background: #0c0c0b; border: 1px solid #30302c; border-radius: 6px; }.message-markdown pre code { padding: 0; background: none; }
 .live-run-output { min-width: 0; max-width: 100%; }
@@ -873,13 +874,24 @@ nav { display: grid; gap: 3px; }
   .agent-console .shared-thread .jump-to-latest-button {
     position: sticky; bottom: 12px; left: 50%; z-index: 5; margin: 12px 0;
   }
-  .agent-console-header { position: relative; flex-wrap: wrap; align-items: flex-start; min-height: 70px; justify-content: flex-start; padding: 12px 14px; }
+  .agent-console-header {
+    position: relative; flex-wrap: wrap; align-items: flex-start; min-height: 70px; justify-content: flex-start; padding: 12px 14px;
+    max-height: 220px; overflow: hidden;
+    transition: max-height var(--motion-standard) var(--motion-ease), padding var(--motion-standard) var(--motion-ease), opacity var(--motion-fast) ease, border-color var(--motion-fast) ease;
+  }
+  .agent-console-header.is-header-hidden { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; border-bottom-color: transparent; pointer-events: none; }
   .agent-console-header .mobile-detail-close { position: absolute; top: 12px; right: 14px; }
   .agent-console-title { flex: 1 1 100%; min-width: 0; max-width: calc(100% - 44px); }
   .agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .conversation-window-actions { flex: 1 1 100%; flex-wrap: wrap; margin: 10px 0 0; }
-  .conversation-window-actions .icon-button { width: 44px; height: 44px; }
-  .conversation-window-actions .conversation-task-picker { min-height: 44px; }
+  /* A compact, always-visible dock: one non-wrapping row that scrolls
+     horizontally instead of stacking into extra vertical rows. Every action
+     stays a direct tap (44px targets, no overflow menu) while costing a
+     single row of height rather than however many a wrapped row would need. */
+  .conversation-window-actions { flex: 1 1 100%; flex-wrap: nowrap; margin: 8px 0 0; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .conversation-window-actions::-webkit-scrollbar { display: none; }
+  .conversation-window-actions .icon-button { flex: 0 0 auto; width: 44px; height: 44px; }
+  .conversation-window-actions .conversation-task-picker { flex: 0 0 auto; min-height: 44px; }
+  .conversation-window-actions .conversation-delete-control { flex: 0 0 auto; }
   .agent-presence { display: none; }
   .composer-hint { display: none; }
   .agent-console .shared-composer textarea { min-height: 72px; max-height: 180px; padding: 12px 13px 8px; resize: none; }
@@ -907,6 +919,7 @@ nav { display: grid; gap: 3px; }
   .shared-message .thinking::before,
   .agent-response-section,
   .agent-console .shared-composer,
+  .agent-console-header,
   .shared-thread { animation: none; transition: none; scroll-behavior: auto; }
 }
 

@@ -5,6 +5,10 @@
 *Jeffrey pasted a memory export from a different Claude chat (claude.ai, not Workbench) on 2026-08-24/25 asking for it to be consolidated into shared memory. These facts are self-reported by that other session's memory store, not independently verified in Workbench — treat as background, not as ground truth to argue from.*
 
 - Senior software engineer at Writer AI; background as a frontend engineer and technical founder with production systems shipped (project name: Pluto).
+- Preferred name: Jeffrey. Based in South Orange / Essex County, New Jersey.
+- Self-described as atheist/anti-religion, culturally liberal, fiscally conservative, and a technophile.
+- Married, with a young daughter, and supports a retired dependent mother. Do not retain or expose identifying, employment, or income details about family members.
+- Time-bound employment snapshot: joined Writer in August 2026 after accepting its offer and declining Level. Reported offer/current compensation: $230,000 base salary and 4,000 ISOs at a $22.65 strike price, vesting over four years.
 - Deep experience in agent reliability, observability tooling, and building interfaces that make complex/opaque agent systems legible to users.
 - Communication preference: practical and efficiency-oriented, strong preference for directness.
 - Teaching preference: ELI5-style explanations grounded in real-world examples; pushes back on imprecise or jargon-heavy explanations.
@@ -13,6 +17,28 @@
 - Side project (Pluto-related): an "agent execution map" — a nodes-and-paths visualization making agent behavior legible to builders, built and validated using production traces from his workflow builder. Finding from that work: bounded agents cluster into a few dominant path shapes; failure-rate-above-baseline per node was judged the most actionable signal.
 - Side project: "entitlement recovery" — helping people claim money they're legally owed but haven't collected, scoped initially to himself and his personal network; the scoring model weights total dollar value of one-time entitlements over frequency.
 - Completed a work trial at Level, a fintech company using AI to help auto lenders reclaim money from undervalued total-loss insurance claims.
+
+### Claude Code export provenance (2026-08-25)
+
+The pasted Claude Code export was a **repo-derived, source-limited inventory**, not evidence of
+additional personal Claude memory. That session reported it could inspect only the committed
+Workbench repository and its current session context; it had no prior-session transcript, generic
+Claude memory store, local Workbench database, running Workbench instance, private backup repo, or
+Writer systems. Treat claims attributed solely to that export as repository-derived and potentially
+stale until checked against current code or an authenticated live source. Its broad operational and
+product claims were already represented by the applicable shared-memory topic files, so do not copy
+the large export verbatim or treat it as an independent authority.
+
+### Screenshot-sourced personal-memory additions (2026-08-25)
+
+*Jeffrey explicitly asked to retain the contents of four attached personal-memory summary screenshots. The details below are self-reported by that summary and are not independently verified. Time-bound financial, household, purchase, and ownership details are context for future assistance, not facts to disclose or repeat unnecessarily.*
+
+- Engineering background includes React, TypeScript, Next.js, component architecture, testing, GraphQL, accessibility, and large-scale web applications. He prefers thoughtful engineering trade-off discussions to generic interview advice; recurring interests include collaborative Kanban boards, spreadsheet engines, real-time apps, offline behavior, and performance at scale.
+- Prefers data-driven financial decision-making and regularly evaluates tax strategy, retirement accounts, mortgages, securities-backed lending, real estate, recession planning, and long-term asset allocation. Requested a web-based daily recession tracker covering economic indicators and strategies for potential downturns.
+- Time-bound financial snapshot: household income was reported as roughly $600k–$700k annually; $230k base salary; spouse's income expected to remain about level with the prior year; and approximately $40k in quarterly installment payments continuing. Do not surface these values unless directly necessary for a user-requested financial calculation.
+- Owns a New Jersey home and is actively interested in reliable appliances, home networking, HVAC performance, backyard landscaping with a natural “enchanted forest” feel, interior design, rugs, and practical home improvements. A time-bound purchase record says a problematic Viking French-door refrigerator was replaced with a Bosch 800 Series, including delivery, haul-away, installation, and a three-year Geek Squad protection plan.
+- Family context: married with a young daughter (the screenshot said three years old) and a retired mother financially dependent on him. He is exploring nearby independent housing for his mother, including a South Orange condo using a Family Opportunity Mortgage. Keep family details private and use only when relevant to a direct request.
+- Current interests: Rivian ownership and waiting for an R2 Launch Edition; multi-gig FiOS home networking; travel-photography cameras; fragrance shopping; cycling accessories for a Gazelle e-bike; and personal style. For product comparisons, provide detailed side-by-side evaluations that include long-term ownership, rather than a simple recommendation.
 
 ### Never ask clarifying questions just act
 

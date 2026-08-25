@@ -39,6 +39,14 @@ describe('shared message layout', () => {
 });
 
 describe('conversation view controls', () => {
+  it('pins the running-response cancel X to the bubble top-right', () => {
+    const rule = styles.match(/\.shared-message \.cancel-response\s*\{[^}]*\}/)?.[0] ?? '';
+
+    expect(rule).toContain('position: absolute');
+    expect(rule).toContain('top: 8px');
+    expect(rule).toContain('right: 8px');
+  });
+
   it('uses one desktop width and gutter for task and conversation stacks', () => {
     expect(styles).toContain('--stack-column-width: clamp(320px, 28vw, 380px)');
     expect(styles).toContain('grid-template-columns: 56px var(--stack-column-width) minmax(0, 1fr)');
@@ -75,6 +83,14 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.agent-console-header .mobile-detail-close { position: absolute; top: 12px; right: 14px; }');
     expect(phoneRules).toContain('.agent-console-title { flex: 1 1 100%; min-width: 0; max-width: calc(100% - 44px); }');
     expect(phoneRules).toContain('.agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }');
+  });
+
+  it('keeps mobile task-linked conversation controls in one scrollable dock instead of an overflow menu', () => {
+    const rule = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.conversation-window-actions \{[^}]*\}/)?.[0].match(/\.conversation-window-actions \{[^}]*\}/)?.[0] ?? '';
+
+    expect(rule).toContain('flex-wrap: nowrap');
+    expect(rule).toContain('overflow-x: auto');
+    expect(styles).toContain('.conversation-window-actions .icon-button { flex: 0 0 auto; width: 44px; height: 44px; }');
   });
 });
 

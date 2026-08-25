@@ -178,11 +178,33 @@ apply the 44px mobile text-button treatment just to make it more obvious. The
 functional regression and the visual convention are separate: restore the
 action path, then preserve the established dense header footprint.
 
+The running-response cancel X belongs in the bubble's top-right corner. It is
+an absolute compact icon control, not a trailing header item or a separate row.
+
 ### Conversation titles truncate to one line on phones
 
 *Decision from Jeffrey, 2026-08-25.* In the mobile conversation header, keep the
 title to one visual line, ellipsizing overflow. Reserve room for the pinned close
 control so title text never renders underneath it.
+
+### Frequently used mobile conversation controls remain directly visible
+
+*Decision from Jeffrey, 2026-08-25.* Do not move task-linked conversation
+controls into an overflow menu to reclaim mobile reading space. Jeffrey uses
+those controls frequently. Prefer a compact, always-visible icon control dock
+that reduces vertical chrome without hiding actions behind a second tap.
+
+Implemented: `.conversation-window-actions` at `max-width: 820px` switched from
+`flex-wrap: wrap` (which cost a full extra row per overflowing button) to
+`flex-wrap: nowrap` with `overflow-x: auto` — a single-row dock that scrolls
+horizontally instead of stacking. Every icon button keeps its 44px touch
+target and stays a direct, one-tap control; nothing moved behind a menu. The
+scrollbar is hidden (`scrollbar-width: none` / `::-webkit-scrollbar { display:
+none }`) so it reads as a normal control row, not an obviously scrollable
+list. Covered by the `styles.test.ts` test "keeps mobile task-linked
+conversation controls in one scrollable dock instead of an overflow menu" —
+do not re-propose an overflow/"•••" menu for this row, Jeffrey already
+rejected that approach.
 
 2026-08-23: after task-status badges were moved from top-right/inline to `position: absolute; bottom:
 13px; right: 12px` on `.agent-outcome` (styles.css), two old responsive breakpoints (`max-width:

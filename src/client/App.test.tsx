@@ -411,6 +411,7 @@ describe('shared room', () => {
 
     const cancel = await screen.findByRole('button', { name: 'Cancel response' });
     expect(cancel).toHaveTextContent('');
+    expect(cancel).toHaveClass('cancel-response');
     fireEvent.click(cancel);
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === `/api/shared/messages/${replyId}/cancel` && init?.method === 'POST')).toBe(true));
