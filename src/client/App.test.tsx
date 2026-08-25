@@ -290,6 +290,32 @@ describe('shared room', () => {
     expect(await screen.findByRole('button', { name: 'Approve preview' })).toBeTruthy();
   });
 
+  it('keeps the thread in document flow as soon as preview approval queues promotion', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000099';
+    let approvalQueued = false;
+    const agentReply = { id: 'agent-approval-source', conversationId, author: 'codex', body: 'Completed the change.', pinned: false, status: 'completed', error: '', createdAt: '2026-01-01T00:00:00Z', attachments: [], model: null, executionProfile: 'auto', dispatchTarget: 'none' };
+    const approval = { id: 'approval-message', conversationId, author: 'jeffrey', body: 'Approve the Workbench preview.', pinned: false, status: 'completed', error: '', createdAt: '2026-01-01T00:01:00Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'none' };
+    const promotion = { id: 'promotion-queued', conversationId, author: 'system', body: 'Promotion queued. It will build once active agent work reaches a durable terminal state.', pinned: false, status: 'queued', error: '', createdAt: '2026-01-01T00:01:01Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'promotion' };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/runtime/preview-status') return new Response(JSON.stringify({ pending: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/shared/messages' && init?.method === 'POST') {
+        approvalQueued = true;
+        return new Response(JSON.stringify({ message: approval, replies: [promotion] }), { status: 201, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Manual release', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages: approvalQueued ? [agentReply, approval, promotion] : [agentReply] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve preview' }));
+    await screen.findByText('Promotion queued. It will build once active agent work reaches a durable terminal state.');
+    expect(document.querySelector('.thread-virtualizer')).toHaveClass('thread-live-flow');
+  });
+
   it('keeps task extraction on completed synthesis findings', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000096';

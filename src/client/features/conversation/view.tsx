@@ -398,11 +398,13 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   // server-polled message body. Virtual row transforms can therefore be a
   // frame behind a growing live card on mobile. Keep the bounded, paged live
   // thread in normal document flow until streaming finishes: later messages
-  // then follow the growing card by construction rather than relying on a
-  // height-cache invalidation race.
-  const hasRunningMessage = conversationMessages.some((message) => message.status === 'running');
+  // then follow a newly queued or growing card by construction rather than
+  // relying on a height-cache invalidation race. Preview approval creates a
+  // queued promotion message before the runner marks it running, so queued is
+  // part of this same live-layout state.
+  const hasLiveMessage = conversationMessages.some((message) => message.status === 'running' || message.status === 'queued');
   const threadRows = threadVirtualizer.getVirtualItems();
-  const displayedThreadRows = hasRunningMessage
+  const displayedThreadRows = hasLiveMessage
     ? conversationMessages.map((_, index) => ({ index, start: 0 }))
     : threadRows.length
     ? threadRows
@@ -414,15 +416,15 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   // those measurements are exactly what the virtualized layout needs when the
   // running -> completed transition switches modes.
   const threadLayoutSignature = conversationMessages.map((message) => `${message.id}:${message.status}:${message.body}`).join('\u0000');
-  // useLayoutEffect (not useEffect): the running -> completed transition
+  // useLayoutEffect (not useEffect): the live -> completed transition
   // switches this list from live document flow to absolute-positioned
   // transforms in the very next render. Clearing the stale cache must
   // happen before that frame paints, or the transforms briefly use heights
   // from before live-flow started and rows visibly overlap.
   useLayoutEffect(() => {
-    if (hasRunningMessage) return;
+    if (hasLiveMessage) return;
     threadVirtualizer.measure();
-  }, [hasRunningMessage, threadLayoutSignature, threadVirtualizer]);
+  }, [hasLiveMessage, threadLayoutSignature, threadVirtualizer]);
   useEffect(() => {
     if (!conversationId || dispatchInitializedConversationId.current === conversationId || !messages.data) return;
     setDispatchTo(dispatchTargetForConversation(messages.data.messages));
@@ -896,11 +898,11 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               Show earlier messages ({allConversationMessages.length - threadVisibleCount} more)
             </button>
           )}
-          <div className={`thread-virtualizer${hasRunningMessage ? ' thread-live-flow' : ''}`} style={hasRunningMessage ? undefined : { height: threadVirtualizer.getTotalSize() }}>
+          <div className={`thread-virtualizer${hasLiveMessage ? ' thread-live-flow' : ''}`} style={hasLiveMessage ? undefined : { height: threadVirtualizer.getTotalSize() }}>
           {displayedThreadRows.map((row) => {
             const message = conversationMessages[row.index];
             if (!message) return null;
-            return <div key={message.id} ref={threadVirtualizer.measureElement} data-index={row.index} className="thread-virtual-row" style={hasRunningMessage ? undefined : { transform: `translateY(${row.start}px)` }}>
+            return <div key={message.id} ref={threadVirtualizer.measureElement} data-index={row.index} className="thread-virtual-row" style={hasLiveMessage ? undefined : { transform: `translateY(${row.start}px)` }}>
             <article className={`shared-message shared-${message.author}`}>
               <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                 {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}

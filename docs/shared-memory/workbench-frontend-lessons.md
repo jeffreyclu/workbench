@@ -156,6 +156,17 @@ update it together with a card's minimum height, in every offset path. Cover
 this with a browser geometry check over long titles, because jsdom does not
 perform the layout that exposes this failure.
 
+### A queued thread message is live layout, too
+
+*Confirmed 2026-08-25.* The conversation thread switches from virtualized,
+absolute-positioned rows to normal document flow while live content can change
+height. That state must include `queued` messages as well as `running` ones.
+Preview approval inserts a completed Jeffrey approval followed by a queued
+promotion system message before the runner marks it running; treating only
+`running` as live left those new rows on stale virtualizer offsets and caused
+bubble overlap on desktop. Any status that can be inserted or mutate its
+rendered content before a stable terminal measurement must use live flow.
+
 ## Stale responsive overrides survive UI convention changes — check media queries when a "fixed" style regresses
 
 2026-08-23: after task-status badges were moved from top-right/inline to `position: absolute; bottom:
