@@ -130,3 +130,24 @@ Task dispatches now persist the selected profile name on the individual `agent_r
 to the spawned provider CLI. The Workbench task execution panel keeps the chosen profile per task in
 browser storage, so Jeffrey can type `personal` (or another configured name) for that dispatch without
 changing the Workbench process environment. The stored profile name is audit metadata only.
+
+As of 2026-08-24, account setup is a first-class Workbench control: managed named profiles live under
+`~/.workbench/agent-accounts/<provider>/<profile>`, and the task execution panel opens the installed
+provider CLI login in Terminal. Codex runs `codex login`; Claude runs `claude auth login --claudeai`.
+Their normal browser windows handle Google sign-in, so Workbench never sees, stores, or copies a token.
+
+As of 2026-08-24, the named `personal` profile is the default only for Workbench and Pluto tasks,
+identified by their canonical project names or workspaces (`workbench` and `Pluto-Alpha`). All other
+tasks default to the provider CLI's `default` credentials. The service resolves an omitted profile from
+the task itself; an explicit named profile always wins, and historical runs retain their recorded profile
+for auditability. Do not turn this project-scoped rule into a global profile default.
+
+The shared room must not silently pin an existing conversation to that task default. Its composer exposes
+the same account-profile selector as task execution; every dispatched turn records the selected profile,
+and that explicit choice wins over the project/unlinked fallback. Reopening a conversation restores the
+most recent recorded profile so Jeffrey can see and change the next turn's account before sending it.
+
+*Correction from Jeffrey, 2026-08-24.* A genuinely new shared conversation always starts on the provider
+CLI's `default` profile — never the named `personal` profile, including in the Workbench project. This is
+separate from task dispatch's project-scoped fallback and from an existing conversation restoring its last
+recorded profile.

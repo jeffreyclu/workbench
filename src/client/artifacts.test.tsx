@@ -5,7 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ArtifactLibraryView } from './artifacts';
 import { versionUrl } from './artifact-url';
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, 'execCommand');
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  if (execCommandDescriptor) Object.defineProperty(document, 'execCommand', execCommandDescriptor);
+  else Reflect.deleteProperty(document, 'execCommand');
+});
 
 const artifact = {
   id: 'abc123',
@@ -63,6 +70,19 @@ function renderLibrary(onOpenTask = vi.fn(), onOpenConversation = vi.fn()) {
 }
 
 describe('artifact library', () => {
+  it('copies an artifact link with the fallback when the Clipboard API is unavailable', async () => {
+    stubApi();
+    const copy = vi.fn();
+    vi.stubGlobal('navigator', { clipboard: undefined });
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: copy });
+    renderLibrary();
+
+    fireEvent.click(await screen.findByRole('button', { name: /copy link/i }));
+
+    await waitFor(() => expect(copy).toHaveBeenCalledWith('copy'));
+    expect(screen.getByRole('button', { name: /copied/i })).toBeTruthy();
+  });
+
   it('builds a version URL under the artifact identity', () => {
     expect(versionUrl('https://artifacts.example.com/abc123/', 2)).toBe('https://artifacts.example.com/abc123/v2/');
     expect(versionUrl('https://artifacts.example.com/abc123', 1)).toBe('https://artifacts.example.com/abc123/v1/');

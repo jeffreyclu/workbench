@@ -12,6 +12,7 @@ interface ExpressLayer {
 
 const baselineInventory = [
   'GET /api/health',
+  'GET /api/agent-accounts',
   'GET /api/runtime/preview-status',
   'GET /api/discovery',
   'GET /api/insights',
@@ -19,6 +20,7 @@ const baselineInventory = [
   'GET /api/process-mining/report.html',
   'GET /api/audit-log',
   'POST /api/discovery/scan',
+  'POST /api/agent-accounts/login',
   'POST /api/discovery/:id/restore',
   'POST /api/discovery/:id/:action',
   'PATCH /api/discovery/:id',
@@ -45,6 +47,7 @@ const baselineInventory = [
   'DELETE /api/shared/conversations/:id',
   'POST /api/shared/conversations/:id/archive',
   'POST /api/shared/conversations/:id/restore',
+  'POST /api/shared/conversations/:id/undelete',
   'PATCH /api/shared/conversations/:id/preferences',
   'PATCH /api/shared/conversations/:id/brief',
   'PATCH /api/shared/conversations/:id/task',
@@ -143,7 +146,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(111);
+    expect(baselineInventory).toHaveLength(114);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

@@ -218,12 +218,43 @@ ready. For Pluto, retain the existing local Preview-MCP development surface unti
 preview is explicitly wired and verified. Recorded from Jeffrey's decision and repository inspection
 on 2026-08-24.
 
-For immediate local validation, Jeffrey wants a share command as well as a deployed preview. Both
-Pluto-Alpha and `fe.web-app` now expose `npm run share` / `pnpm share`; the command validates the
-already-running local server and keeps its ngrok tunnel in the foreground. It must target a distinct
-reserved ngrok domain when another app is already sharing the account's default domain—never use
-ngrok endpoint pooling, because it would route requests nondeterministically between apps. Recorded
-from Jeffrey's decision and local ngrok validation on 2026-08-24.
+For immediate local validation, Jeffrey wants a share command as well as a deployed preview. When a
+non-Workbench task finishes and he needs phone validation, start the *correct project's* normal local
+development environment, then expose that already-running local URL from **Workbench only**. The
+entry point is `npm run share -- http://127.0.0.1:<port>` in `~/dev/workbench`; do not add, retain, or
+document a `share` command in Writer, Pluto, or any other project. Do not route the app through
+Workbench's gateway or mistake Workbench Preview for it. Return the actual tunnel URL and the narrow
+smoke test as the handoff. The project keeps its normal port; the Workbench-owned tunnel targets it.
+
+`https://broiling-recoil-grouped.ngrok-free.dev` is reserved **only** for Workbench on port `5180`.
+Never repoint it to Writer, Pluto, or any other local project. The separate
+`https://blahblahblah.ngrok.app/` hostname is the shared phone-preview domain for Writer or Pluto;
+point it at the one project Jeffrey asks to preview without touching the Workbench tunnel. Correction
+from Jeffrey, 2026-08-24.
+
+The Writer/Pluto preview hostname is an ngrok Cloud Endpoint. Do not mistake its HTTP 200 setup page
+for a working preview. Its traffic policy forwards to `https://default.internal`, so attach the local
+project with `ngrok http http://localhost:<port> --url=https://default.internal --pooling-enabled`;
+attaching an agent to `https://blahblahblah.ngrok.app` bypasses that policy and leaves the default page
+in place. Then verify the public response is the target app's content (for Writer, `WRITER`), while
+also checking the Workbench hostname still serves `5180`. Observed and corrected on 2026-08-24.
+
+Before saying a phone-preview tunnel works, curl the exact public ngrok hostname during the live share
+session and report its observed HTTP status. A local listener or ngrok's local API is not proof that the
+public endpoint is online; `ERR_NGROK_3200` is the concrete failure to catch. Recorded from Jeffrey's
+2026-08-24 correction.
+
+The default-response page can also mean no ngrok agent is attached at all, not just a misdirected one.
+Confirmed 2026-08-24: `ps aux | grep ngrok` showed only the single Workbench agent (`ngrok http 5180
+--url=broiling-recoil-grouped...`) running — no second process targeting `default.internal` — and
+`lsof` against the Writer/Pluto dev port showed nothing listening, so the dev server itself was also down. A prior
+agent had reported this tunnel as working without ever curling the public hostname (see the entry above).
+Also: `~/Library/LaunchAgents/ai.writer.workbench.preview.plist` is misleadingly named — it runs
+`npm run preview` inside the **Workbench** repo, not a Writer project, and was not loaded. There is no
+launchd supervisor yet for a Writer/Pluto dev server + its `default.internal` ngrok agent, unlike
+Workbench's `com.jeffrey.workbench.ngrok.plist` pattern; one would need to be created, pointed at
+whichever app/port Jeffrey wants live (confirm with him — do not guess between `fe.web-app`'s ports 3000
+vs the regular development port vs a `writer-monorepo/frontend` Next.js dev server), for this to survive past a single CLI turn.
 
 ### Keep Writer and Pluto ports untouched when resolving a local port collision
 

@@ -9,10 +9,16 @@ export type AutonomousDispatchResult =
 
 /** Selects the first dispatchable item from the durable attention-stack order. */
 function nextEligibleItem(repository: WorkItemRepository): WorkItem | null {
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
   return repository.list().find((item) => (
     item.status === 'backlog' || item.status === 'ready'
-  ) && item.assignees.every((assignee) => assignee !== 'jeffrey')
-    && repository.listOpenDependencies(item.id).length === 0
+  ) && !item.archivedAt
+    && !item.machineProposed
+    && !(item.machineProposalWindowStart && new Date(item.createdAt).getTime() >= sevenDaysAgo)
+    && !item.assignees.includes('jeffrey')
+    // A dependency link is an explicit instruction to wait, even after its
+    // prerequisite has completed. Jeffrey clears it when the task is ready.
+    && (item.blockedBy?.length ?? 0) === 0
     && repository.activeRunsForItem(item.id).length === 0) ?? null;
 }
 
@@ -20,12 +26,19 @@ export function dispatchAutonomousWork(
   repository: WorkItemRepository,
   overrideDecision?: AutonomousGovernorDecision,
 ): AutonomousDispatchResult {
+  const queued = repository.list().find((item) => (
+    item.status === 'backlog' || item.status === 'ready'
+  ) && !item.archivedAt && !item.assignees.includes('jeffrey')
+    && (item.blockedBy?.length ?? 0) === 0 && repository.activeRunsForItem(item.id).length === 0) ?? null;
+  if (queued?.machineProposalWindowStart && overrideDecision?.approved && repository.isMachineProposalCreatedInWindow(queued, overrideDecision.windowStart)) {
+    return { dispatched: false, reason: 'Machine-proposed work cannot execute in the autonomous weekly window that created it.' };
+  }
   const item = nextEligibleItem(repository);
   if (!item) return { dispatched: false, reason: 'No eligible backlog task is queued.' };
 
   // The governor decides (and atomically holds the budget) against this
   // specific candidate, so the hold and the claim never race apart.
-  const decision = overrideDecision ?? evaluateAutonomousDispatch(repository, { origin: 'autonomous', model: 'sonnet', workItemId: item.id });
+  const decision = overrideDecision ?? evaluateAutonomousDispatch(repository, { origin: 'autonomous', provider: 'claude', model: 'sonnet', workItemId: item.id });
   if (!decision.approved) return { dispatched: false, reason: decision.reason };
 
   // The governor has reserved only a Claude Sonnet run. Do not reuse a manual
@@ -36,6 +49,9 @@ export function dispatchAutonomousWork(
   const reply = repository.createSharedMessage(decision.agent, '', 'running', conversation.id);
   const run = repository.createRun(item.id, classification.kind, decision.agent, decision.agent, classification.instructions, conversation.id, reply.id, 'autonomous');
   repository.updateRun(run.id, { model: decision.model, executionProfile: decision.executionProfile });
+  if (!overrideDecision && !repository.attachBudgetReservationToRun(decision.reservationId, run.id)) {
+    throw new Error(`Governor reservation ${decision.reservationId} could not be attached to autonomous run ${run.id}.`);
+  }
   repository.updateSharedMessage(reply.id, { model: decision.model, executionProfile: decision.executionProfile });
   repository.addActivity(item.id, 'system', 'autonomous_execution_started', `Autonomous dispatch approved by governor. Agent: ${decision.agent}; model: ${decision.model}; reserved ${Math.ceil(decision.reservedSet)} SET (reservation ${decision.reservationId}).`);
   repository.addAuditEntry('api_mutation', 'autonomous-dispatcher', `Governor-approved autonomous execution started for ${item.title}.`, item.id);

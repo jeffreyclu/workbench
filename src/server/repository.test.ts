@@ -22,13 +22,20 @@ describe('WorkItemRepository', () => {
     setEmbedder(null);
   });
 
+  it('uses the normal CLI account for repository-created runs unless a profile is explicitly selected', () => {
+    const item = repository.create({ title: 'Account default', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    expect(repository.createRun(item.id, 'analysis', 'codex', 'codex', '').accountProfile).toBe('default');
+    expect(repository.createRun(item.id, 'analysis', 'claude', 'claude', '', null, null, 'manual', 'work').accountProfile).toBe('work');
+  });
+
   it('keeps fresh input, cache writes, cache reads, and output distinct in terminal-run insights', () => {
     const item = repository.create({ title: 'Measure usage', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const codexRun = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Implement it.');
     const claudeRun = repository.createRun(item.id, 'review', 'claude', 'claude', 'Review it.');
     const unreportedRun = repository.createRun(item.id, 'research', 'codex', 'codex', 'Research it.');
     const completedAt = new Date().toISOString();
-    repository.updateRun(codexRun.id, { status: 'completed', completedAt, model: 'gpt-5.6-terra', inputTokens: 1_200, outputTokens: 300 });
+    repository.updateRun(codexRun.id, { status: 'completed', completedAt, model: 'gpt-5.6-terra', inputTokens: 1_200, cacheReadInputTokens: 0, outputTokens: 300 });
     repository.updateRun(claudeRun.id, { status: 'failed', completedAt, model: 'claude-sonnet', inputTokens: 400, cacheCreationInputTokens: 50, cacheReadInputTokens: 5_000, outputTokens: 100 });
     repository.updateRun(unreportedRun.id, { status: 'completed', completedAt, model: 'gpt-5.6-terra' });
 
@@ -41,7 +48,18 @@ describe('WorkItemRepository', () => {
         { provider: 'claude', model: 'claude-sonnet', inputTokens: 400, cacheCreationInputTokens: 50, cacheReadInputTokens: 5_000, outputTokens: 100 },
         { provider: 'codex', model: 'gpt-5.6-terra', inputTokens: 1_200, outputTokens: 300 },
       ],
+      incompleteTokenTelemetryRuns: 0,
     });
+  });
+
+  it('omits legacy token rows without a cache split instead of inventing fresh input', () => {
+    const item = repository.create({ title: 'Legacy telemetry', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const legacy = repository.createRun(item.id, 'analysis', 'codex', 'codex', 'Legacy run.');
+    repository.updateRun(legacy.id, { status: 'completed', completedAt: new Date().toISOString(), model: 'gpt-5.6-terra', inputTokens: 99_000, outputTokens: 900 });
+
+    const insights = repository.getRunInsights();
+    expect(insights).toMatchObject({ inputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 0, incompleteTokenTelemetryRuns: 1 });
+    expect(insights.tokenUsageByModel).toEqual([]);
   });
 
   it('persists all provider token classes on shared-room replies', () => {
@@ -168,11 +186,28 @@ describe('WorkItemRepository', () => {
     // No history before this window, so there is nothing to trend against.
     expect(insights.previousProviderCostUsd).toBeNull();
     expect(insights.previousEstimatedCostUsd).toBeNull();
-    expect(insights.byAgent.find((agent) => agent.agent === 'claude')?.providerCostUsd).toBe(2);
-    expect(insights.byAgent.find((agent) => agent.agent === 'codex')?.estimatedCostUsd).toBe(0.5);
-    expect(insights.tokenUsageByModel.find((row) => row.model === 'opus')).toMatchObject({ costUsd: 0, runs: 1, rateSource: 'default' });
-    expect(insights.tokenUsageByModel.find((row) => row.model === 'not-a-real-model')).toMatchObject({ costUsd: 0, rateSource: null });
+    expect(insights.byAgent.find((agent) => agent.agent === 'claude')).toMatchObject({ providerCostUsd: 2, providerPricedRuns: 1, estimatedCostUsd: 0, estimatedPricedRuns: 0 });
+    expect(insights.byAgent.find((agent) => agent.agent === 'codex')).toMatchObject({ providerCostUsd: 0, providerPricedRuns: 0, estimatedCostUsd: 0.5, estimatedPricedRuns: 1 });
+    expect(insights.tokenUsageByModel).toEqual([]);
+    expect(insights.incompleteTokenTelemetryRuns).toBe(3);
     expect(insights.costByDay.reduce((total, day) => total + day.costUsd, 0)).toBe(0.5);
+  });
+
+  it('does not emit empty agent buckets as insight data', () => {
+    expect(repository.getRunInsights().byAgent).toEqual([]);
+  });
+
+  it('compares cost windows using both terminal runs and unlinked shared-room replies', () => {
+    const previousCompletedAt = new Date(Date.now() - 35 * 24 * 60 * 60 * 1_000).toISOString();
+    const conversation = repository.createConversation('Historical shared reply');
+    const reply = repository.createSharedMessage('claude', 'Historical billed reply.', 'running', conversation.id);
+    repository.updateSharedMessage(reply.id, {
+      status: 'completed', completedAt: previousCompletedAt, estimatedCostUsd: 3.25, costSource: 'provider',
+    });
+
+    const insights = repository.getRunInsights(30);
+    expect(insights.previousProviderCostUsd).toBe(3.25);
+    expect(insights.previousEstimatedCostUsd).toBeNull();
   });
 
   it('uses terminal completion time and counts canceled runs as unsuccessful attempts', () => {
@@ -1143,6 +1178,25 @@ describe('WorkItemRepository', () => {
     expect(repository.listPage('workbench-archive', 50, null, filter).items.map((item) => item.id)).toEqual([workbench.id]);
   });
 
+  it('spans active and archived tasks when searching, without crossing the Workbench project scope', () => {
+    const activeAttention = repository.create({ title: 'Rename button copy', description: '', priority: 2, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
+    const archivedAttention = repository.create({ title: 'Rename input label', description: '', priority: 2, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
+    repository.archive(archivedAttention.id, false);
+    const activeWorkbench = repository.create({ title: 'Rename queue toggle', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const archivedWorkbench = repository.create({ title: 'Rename filter chip', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    repository.archive(archivedWorkbench.id, true);
+    const search = { query: 'rename', projectNames: [], statuses: [], assignees: [], sources: [], labels: [], dueStates: [] };
+
+    expect(repository.listPage('active', 50, null, search).items.map((item) => item.id).sort())
+      .toEqual([activeAttention.id, archivedAttention.id].sort());
+    expect(repository.listPage('archive', 50, null, search).items.map((item) => item.id).sort())
+      .toEqual([activeAttention.id, archivedAttention.id].sort());
+    expect(repository.listPage('workbench', 50, null, search).items.map((item) => item.id).sort())
+      .toEqual([activeWorkbench.id, archivedWorkbench.id].sort());
+    expect(repository.listPage('workbench-archive', 50, null, search).items.map((item) => item.id).sort())
+      .toEqual([activeWorkbench.id, archivedWorkbench.id].sort());
+  });
+
   it('deduplicates discoveries and only creates a task after approval', () => {
     const run = repository.startDiscoveryRun();
     expect(repository.upsertDiscoveryCandidate({ fingerprint: 'same', provider: 'slack', title: 'Review proposal', description: 'Jeffrey was mentioned.', sourceUrl: 'https://writer.slack.com/a', occurredAt: null, runId: run.id })).toBe(true);
@@ -1578,8 +1632,9 @@ describe('WorkItemRepository', () => {
     it('rolls back the whole budget reservation on a constraint failure, leaving the held total untouched', () => {
       const item = repository.create({ title: 'Budgeted task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
       const windowStart = new Date(Date.now() - 60_000).toISOString();
-      const first = repository.tryReserveAutonomousBudget({ provider: 'claude', model: 'claude-sonnet', workItemId: item.id, requiredTokenCount: 100, spentTokenCount: 0, budgetTokenLimit: 1_000, windowStart });
-      expect(first).not.toBeNull();
+      const windowEnd = new Date(Date.now() + 60_000).toISOString();
+      const first = repository.tryReserveAutonomousBudget({ provider: 'claude', model: 'claude-sonnet', workItemId: item.id, requiredTokenCount: 100, budgetTokenLimit: 1_000, windowStart, windowEnd });
+      expect(first.approved).toBe(true);
       expect(repository.heldBudgetReservationSet('claude', windowStart)).toBe(100);
 
       // A malformed provider violates the budget_reservations CHECK constraint,
@@ -1589,7 +1644,7 @@ describe('WorkItemRepository', () => {
       // rather than leaving a partial insert behind.
       expect(() => repository.tryReserveAutonomousBudget({
         provider: 'not-a-real-provider' as 'claude',
-        model: 'claude-sonnet', workItemId: item.id, requiredTokenCount: 50, spentTokenCount: 0, budgetTokenLimit: 1_000, windowStart,
+        model: 'claude-sonnet', workItemId: item.id, requiredTokenCount: 50, budgetTokenLimit: 1_000, windowStart, windowEnd,
       })).toThrow();
       expect(repository.heldBudgetReservationSet('claude', windowStart)).toBe(100);
       expect(repository.heldBudgetReservationSet('codex', windowStart)).toBe(0);
@@ -1598,14 +1653,15 @@ describe('WorkItemRepository', () => {
     it('tryReserveAutonomousBudget is atomic: a second reservation that would exceed the ceiling is rejected without a partial write', () => {
       const item = repository.create({ title: 'Budgeted task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
       const windowStart = new Date(Date.now() - 60_000).toISOString();
-      const first = repository.tryReserveAutonomousBudget({ provider: 'codex', model: 'gpt-5.6-terra', workItemId: item.id, requiredTokenCount: 700, spentTokenCount: 0, budgetTokenLimit: 1_000, windowStart });
-      expect(first).not.toBeNull();
+      const windowEnd = new Date(Date.now() + 60_000).toISOString();
+      const first = repository.tryReserveAutonomousBudget({ provider: 'codex', model: 'gpt-5.6-terra', workItemId: item.id, requiredTokenCount: 700, budgetTokenLimit: 1_000, windowStart, windowEnd });
+      expect(first.approved).toBe(true);
 
       // The second request alone fits under the ceiling, but combined with the
       // first held reservation it does not — the read-then-insert must see the
       // first reservation's held amount, not a stale pre-transaction snapshot.
-      const second = repository.tryReserveAutonomousBudget({ provider: 'codex', model: 'gpt-5.6-terra', workItemId: item.id, requiredTokenCount: 400, spentTokenCount: 0, budgetTokenLimit: 1_000, windowStart });
-      expect(second).toBeNull();
+      const second = repository.tryReserveAutonomousBudget({ provider: 'codex', model: 'gpt-5.6-terra', workItemId: item.id, requiredTokenCount: 400, budgetTokenLimit: 1_000, windowStart, windowEnd });
+      expect(second.approved).toBe(false);
       expect(repository.heldBudgetReservationSet('codex', windowStart)).toBe(700);
     });
   });

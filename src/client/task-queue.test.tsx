@@ -64,7 +64,7 @@ describe('task status badges', () => {
 
   it.each([
     [{ status: 'in_progress', agentOutcome: null }, 'In progress', 'agent-outcome-in_progress'],
-    [{ agentOutcome: 'finished' }, 'Finished', 'agent-outcome-finished'],
+    [{ agentOutcome: 'finished' }, 'Awaiting', 'agent-outcome-finished'],
     [{ agentOutcome: 'needs_attention' }, 'Needs attention', 'agent-outcome-needs_attention'],
     [{ agentOutcome: 'follow_ups' }, 'Follow-ups recommended', 'agent-outcome-follow_ups'],
     [{ agentOutcome: 'promoting' }, 'Approved · promoting preview', 'agent-outcome-promoting'],
@@ -86,9 +86,34 @@ describe('task status badges', () => {
       agentOutcome: 'finished',
     });
 
-    expect(container.querySelector('.agent-outcome-finished')?.textContent).toContain('Finished');
+    expect(container.querySelector('.agent-outcome-finished')?.textContent).toContain('Awaiting');
     expect(container.querySelector('.archive-date')?.getAttribute('dateTime')).toBe('2026-01-02T12:00:00Z');
     expect(container.textContent).not.toMatch(/Completed/);
     expect(container.querySelector('.archive-meta')).toBeNull();
+  });
+});
+
+describe('QueueItemUnblockButton', () => {
+  it('collects an unblock reason in the styled dialog and submits it', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ item }), { headers: { 'Content-Type': 'application/json' } }));
+    const prompt = vi.spyOn(window, 'prompt');
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const blockedItem: WorkItem = { ...item, blockedBy: [{ id: 'dependency-id', title: 'A prerequisite', status: 'blocked', archivedAt: null, completedAt: null, isOpen: true }] };
+
+    render(<QueryClientProvider client={client}><SortableQueueItem item={blockedItem} index={0} selected={false} focused={false} draggable={false} onSelect={vi.fn()} onOpenTask={vi.fn()} onFocus={vi.fn()} onKeyDown={vi.fn()} /></QueryClientProvider>);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unblock Conversation task' }));
+
+    expect(screen.getByRole('dialog', { name: 'Unblock “Conversation task”?' })).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Unblock task' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(prompt).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Unblock reason'), { target: { value: 'The prerequisite is complete.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Unblock task' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/work-items/${item.id}/unblock`, expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ reason: 'The prerequisite is complete.' }),
+    })));
   });
 });

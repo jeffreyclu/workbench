@@ -7,7 +7,7 @@ export function createQueueRouter({ repository }: RouteContext) {
   const router = Router();
   router.put('/api/queue/order', (request, response) => {
     const input = reorderQueueSchema.parse(request.body);
-    response.json({ items: repository.move(input.itemId, input) });
+    response.json({ items: repository.move(input.itemId, input, input.stack) });
   });
   router.post('/api/queue/proposals', (request, response) => {
     const input = createQueueProposalSchema.parse(request.body);

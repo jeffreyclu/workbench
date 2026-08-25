@@ -1,5 +1,28 @@
 ## Workbench product decisions
 
+### Awaiting status and new-conversation account default
+
+*Decision from Jeffrey, 2026-08-24.*
+
+The card label for an agent outcome internally named `finished` is **Awaiting**:
+the agent side has completed its turn and the next action belongs to Jeffrey.
+Keep the internal state/value unchanged for compatibility.
+
+Genuinely new, unlinked conversations default to the provider `default` account
+profile, never `personal`. Existing conversations continue restoring the last
+selected profile from their own message history.
+
+### Celebrate task completion and taskless conversation archiving
+
+*Decision from Jeffrey, 2026-08-24.*
+
+Play a brief confetti/fireworks burst (`celebrate()` in `src/client/celebrate.tsx`) when
+a task is marked complete (task detail's Complete action, and completing a task linked
+from a conversation), and when a conversation with no linked task is archived.
+Archiving a conversation that *is* linked to a task does not celebrate — that action
+also archives the task, which isn't a completion. The animation is DOM/CSS-based (no
+new dependency), respects `prefers-reduced-motion`, and self-removes after ~1.6s.
+
 ### Memory search is default context, not an optional tool
 
 *Decision from Jeffrey, 2026-08-23.*
@@ -147,6 +170,11 @@ The task stack and conversation rail use the same responsive desktop column (`cl
 while the other uses a hard-coded rail width; their card, search, and filter widths should stay
 visually identical. Correction from Jeffrey, 2026-08-24.
 
+Task-stack header actions and task-detail lifecycle actions are icon-only. Preserve their semantics
+with accessible names and hover titles; retain the green primary treatment for create/complete and
+the red destructive treatment for delete. Keep 44px targets at phone width. Decision from Jeffrey,
+2026-08-24.
+
 ### Workbench is a mobile target
 
 *Jeffrey uses Workbench from his phone every day, so mobile layout and a stable shareable URL are first-class requirements rather than nice-to-haves.*
@@ -183,3 +211,19 @@ closes on every switch forces him to reopen it before he can pick a
 conversation. The rule generalizes: switching a filter or a tab *within* a
 drawer is browsing and must leave it open; selecting the item the drawer exists
 to select is a commit and may close it.
+
+### Agent identity and account routing must be observable
+
+*Correction from Jeffrey, 2026-08-24.*
+
+Do not claim multi-account routing works unless Jeffrey can verify it in the
+surface that dispatched the turn. Every task and shared-room reply must expose
+the requested provider, the provider that actually executed (including a
+fallback), the selected account-profile name, and the resolved model. The
+profile name is safe metadata; credentials remain server-side. A provider badge
+alone is not proof of which paid account was used.
+
+The task execution controls stay compact: keep model selection, account-profile
+selection, profile editing, and Execute in one row whenever the panel has room.
+At narrow widths, wrap the controls into compact rows; do not turn each control
+into a separate full-width row. Decision from Jeffrey, 2026-08-24.

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type UsageCalibration, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type UsageCalibration, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType } from '../shared/contracts.js';
 import type { FeedbackWeight, QueueContext, QueuePlan } from './queue-intelligence.js';
 import { listProjects, resolveProjectName } from './project-registry.js';
 import type { WorkbenchDatabase } from './database.js';
@@ -10,7 +10,7 @@ import { describeLifecycleChange, summarizeWorkItemChanges } from './activity-lo
 import { collectMemoryDocuments, indexPendingMemory, searchMemory } from './memory-index.js';
 import { buildFtsMatchQuery } from './fts-query.js';
 import { UnitOfWork } from './unit-of-work.js';
-import { TelemetryRepository } from './repositories/telemetry-repository.js';
+import { TelemetryRepository, type AutonomyGovernorDecisionRecord, type AutonomyPolicy } from './repositories/telemetry-repository.js';
 import { SourceConnectionRepository } from './repositories/source-connection-repository.js';
 import { DiscoveryRepository } from './repositories/discovery-repository.js';
 import { ConversationRepository } from './repositories/conversation-repository.js';
@@ -332,6 +332,11 @@ export class WorkItemRepository {
     return this.conversations.delete(id);
   }
 
+  /** Reverses `deleteConversation` within the same recoverability window; returns the restored conversation or null if it was never deleted. */
+  undeleteConversation(id: string): SharedConversation | null {
+    return this.conversations.undelete(id) ? this.getConversation(id) : null;
+  }
+
   listSourceConnections(): SourceConnection[] {
     return this.sourceConnections.listSourceConnections();
   }
@@ -363,6 +368,7 @@ export class WorkItemRepository {
       pinned: row.pinned === 1, status: row.status as SharedMessage['status'], error: String(row.error),
       createdAt: String(row.created_at), completedAt: row.completed_at ? String(row.completed_at) : null, attachments: JSON.parse(String(row.attachments_json ?? '[]')) as SharedAttachment[],
       model: row.model ? String(row.model) : null,
+      accountProfile: row.account_profile ? String(row.account_profile) : null,
       executionProfile: row.execution_profile as SharedMessage['executionProfile'] ?? null,
       inputTokens: row.input_tokens === null ? null : Number(row.input_tokens),
       cacheCreationInputTokens: row.cache_creation_input_tokens === null ? null : Number(row.cache_creation_input_tokens),
@@ -543,17 +549,17 @@ export class WorkItemRepository {
     return rows.map((row) => row.conversation_id).filter((id): id is string => id !== null);
   }
 
-  createSharedMessage(author: SharedMessage['author'], body: string, status: SharedMessage['status'] = 'completed', conversationId?: string, attachments: SharedAttachment[] = [], dispatchTarget = 'none', executionProfile: AgentRun['executionProfile'] = null): SharedMessage {
+  createSharedMessage(author: SharedMessage['author'], body: string, status: SharedMessage['status'] = 'completed', conversationId?: string, attachments: SharedAttachment[] = [], dispatchTarget = 'none', executionProfile: AgentRun['executionProfile'] = null, accountProfile: string | null = null): SharedMessage {
     const conversation = conversationId ? this.listConversations('all').find((item) => item.id === conversationId) : this.ensureDefaultConversation();
     if (!conversation) throw new Error('Conversation not found.');
     const message: SharedMessage = {
-      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), completedAt: ['completed', 'failed', 'canceled'].includes(status) ? new Date().toISOString() : null, attachments, model: null, executionProfile, inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: dispatchTarget as SharedMessage['dispatchTarget'],
+      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), completedAt: ['completed', 'failed', 'canceled'].includes(status) ? new Date().toISOString() : null, attachments, model: null, accountProfile, executionProfile, inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: dispatchTarget as SharedMessage['dispatchTarget'],
       attempt: 0, maxAttempts: 3, nextAttemptAt: null,
     };
     this.database.prepare(`
-      INSERT INTO shared_messages (id, conversation_id, author, body, pinned, status, error, attachments_json, dispatch_target, created_at, completed_at, execution_profile)
-      VALUES (?, ?, ?, ?, 0, ?, '', ?, ?, ?, ?, ?)
-    `).run(message.id, message.conversationId, author, body, status, JSON.stringify(attachments), dispatchTarget, message.createdAt, message.completedAt, executionProfile);
+      INSERT INTO shared_messages (id, conversation_id, author, body, pinned, status, error, attachments_json, dispatch_target, created_at, completed_at, execution_profile, account_profile)
+      VALUES (?, ?, ?, ?, 0, ?, '', ?, ?, ?, ?, ?, ?)
+    `).run(message.id, message.conversationId, author, body, status, JSON.stringify(attachments), dispatchTarget, message.createdAt, message.completedAt, executionProfile, accountProfile);
     this.database.prepare('UPDATE shared_conversations SET updated_at = ?, title = CASE WHEN title = ? AND ? = ? THEN substr(?, 1, 80) ELSE title END WHERE id = ?')
       .run(message.createdAt, 'New conversation', author, 'jeffrey', body, message.conversationId);
     return message;
@@ -587,13 +593,13 @@ export class WorkItemRepository {
     return this.getSharedMessageById(id);
   }
 
-  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; estimatedCostUsd?: number | null; costSource?: SharedMessage['costSource']; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null }): SharedMessage | null {
+  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; accountProfile?: string | null; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; estimatedCostUsd?: number | null; costSource?: SharedMessage['costSource']; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null }): SharedMessage | null {
     // A retry reuses the same message row. Never let the error from the prior
     // attempt survive a successful or user-canceled terminal transition.
     const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
     const entries = Object.entries({
       pinned: changes.pinned === undefined ? undefined : Number(changes.pinned),
-      body: changes.body, status: changes.status, error, author: changes.author, model: changes.model, execution_profile: changes.executionProfile,
+      body: changes.body, status: changes.status, error, author: changes.author, model: changes.model, account_profile: changes.accountProfile, execution_profile: changes.executionProfile,
       input_tokens: changes.inputTokens, cache_creation_input_tokens: changes.cacheCreationInputTokens, cache_read_input_tokens: changes.cacheReadInputTokens, output_tokens: changes.outputTokens, estimated_cost_usd: changes.estimatedCostUsd, cost_source: changes.costSource, fallback_from: changes.fallbackFrom, fallback_reason: changes.fallbackReason,
       completed_at: changes.completedAt ?? (changes.status && ['completed', 'failed', 'canceled'].includes(changes.status) ? new Date().toISOString() : undefined),
     }).filter((entry): entry is [string, string | number] => entry[1] !== undefined);
@@ -928,8 +934,8 @@ export class WorkItemRepository {
     return this.queuePlanning.undoLastQueueChange(stack);
   }
 
-  move(itemId: string, neighbor: { beforeId?: string; afterId?: string }): WorkItem[] {
-    const ids = this.list().map((item) => item.id);
+  move(itemId: string, neighbor: { beforeId?: string; afterId?: string }, stack: 'attention' | 'workbench' = 'attention'): WorkItem[] {
+    const ids = (stack === 'workbench' ? this.listWorkbench() : this.list()).map((item) => item.id);
     const from = ids.indexOf(itemId);
     const neighborId = neighbor.beforeId ?? neighbor.afterId;
     const target = neighborId ? ids.indexOf(neighborId) : -1;
@@ -937,7 +943,7 @@ export class WorkItemRepository {
     ids.splice(from, 1);
     const updatedTarget = ids.indexOf(neighborId!);
     ids.splice(updatedTarget + (neighbor.afterId ? 1 : 0), 0, itemId);
-    return this.reorder(ids, 'attention', { actor: 'jeffrey', reason: `Manually moved “${this.get(itemId)?.title ?? itemId}”.` });
+    return this.reorder(ids, stack, { actor: 'jeffrey', reason: `Manually moved “${this.get(itemId)?.title ?? itemId}”.` });
   }
 
   moveForAttention(id: string, destination: 'top' | 'bottom', reason: string): WorkItem[] {
@@ -1083,6 +1089,58 @@ export class WorkItemRepository {
       this.reorder([id, ...stackItems.map((item) => item.id).filter((itemId) => itemId !== id)], 'attention');
       return this.get(id)!;
     });
+  }
+
+  /**
+   * Creates a discovery proposal without moving the queue or making it ready.
+   * The proposal remains machine-marked until Jeffrey explicitly promotes it.
+   */
+  createMachineProposal(input: {
+    title: string;
+    description: string;
+    suggestedPriority: number;
+    suggestedQueuePosition: number;
+    rationale: string;
+    runId: string;
+    windowStart: string;
+    sourceUrl: string | null;
+    now?: string;
+  }): WorkItem {
+    const id = randomUUID();
+    const createdAt = input.now ?? new Date().toISOString();
+    return this.transaction(() => {
+      this.workItems.insertMachineProposal({
+        id, title: input.title, description: input.description, status: 'backlog', priority: input.suggestedPriority,
+        position: this.workItems.nextQueuePosition(), projectName: null, projectKey: null, stack: 'attention',
+        workspacePath: null, dueDate: null, sourceUrl: input.sourceUrl, parentWorkItemId: null, createdAt,
+        runId: input.runId, windowStart: input.windowStart, suggestedPriority: input.suggestedPriority,
+        suggestedQueuePosition: input.suggestedQueuePosition, rationale: input.rationale,
+      });
+      this.addActivity(id, 'system', 'machine_proposed', `Discovery proposal awaiting Jeffrey's review. ${input.rationale}`);
+      this.recordLifecycleEvent({ workItemId: id, transition: 'created', fromStatus: null, toStatus: 'backlog', isInitial: true, actor: 'system', source: 'autonomous_discovery', occurredAt: createdAt });
+      return this.get(id)!;
+    });
+  }
+
+  /** Open-title dedupe for discovery. It is intentionally conservative: exact
+   * wording and high token overlap are rejected; merely sharing generic verbs is not. */
+  findOpenWorkItemNearTitle(title: string): WorkItem | null {
+    const tokens = (value: string) => new Set(value.toLowerCase().replace(/[^a-z0-9]+/g, ' ')
+      .split(/\s+/).map((word) => word.replace(/(?:es|s)$/, '')).filter((word) => word.length >= 3 && !new Set(['the', 'and', 'for', 'with', 'from', 'that', 'this', 'task', 'work']).has(word)));
+    const target = tokens(title);
+    if (!target.size) return null;
+    for (const item of this.list()) {
+      if (item.archivedAt || item.status === 'done' || item.status === 'canceled') continue;
+      const candidate = tokens(item.title);
+      const shared = [...target].filter((token) => candidate.has(token)).length;
+      const score = shared / new Set([...target, ...candidate]).size;
+      if (score >= 0.6 || [...target].every((token) => candidate.has(token)) || [...candidate].every((token) => target.has(token))) return item;
+    }
+    return null;
+  }
+
+  isMachineProposalCreatedInWindow(item: WorkItem, windowStart: string): boolean {
+    return item.machineProposalWindowStart === windowStart;
   }
 
   createFollowUp(parentId: string, title: string, description: string): WorkItem | null {
@@ -1234,6 +1292,8 @@ export class WorkItemRepository {
       ['strategy', resolved.strategy],
       ['assignees_json', resolved.assignees ? JSON.stringify(resolved.assignees) : undefined],
       ['queue_position', resolved.queuePosition],
+      // Moving a machine proposal to ready is Jeffrey's explicit promotion.
+      ['machine_proposed', resolved.status === 'ready' && before.machineProposed ? 0 : undefined],
     ]);
     const entries = [...columns].filter(
       (entry): entry is [string, string | number | null] => entry[1] !== undefined,
@@ -1279,6 +1339,9 @@ export class WorkItemRepository {
             reason: context.reason,
             occurredAt: now,
           });
+          if (resolved.status === 'ready' && before.machineProposed) {
+            this.addActivity(id, context.actor ?? 'jeffrey', 'machine_proposal_promoted', 'Jeffrey promoted this machine proposal to ready.');
+          }
         }
       }
       if (managesTransaction) this.database.exec('COMMIT');
@@ -1376,7 +1439,7 @@ export class WorkItemRepository {
     return this.runs.getByMessage(messageId);
   }
 
-  createRun(workItemId: string, kind: AgentRun['kind'], requestedTarget: AgentRun['requestedTarget'], agent: AgentRun['agent'], instructions: string, conversationId: string | null = null, messageId: string | null = null, origin: AgentRun['origin'] = 'manual', accountProfile = 'default'): AgentRun {
+  createRun(workItemId: string, kind: AgentRun['kind'], requestedTarget: AgentRun['requestedTarget'], agent: AgentRun['agent'], instructions: string, conversationId: string | null = null, messageId: string | null = null, origin: AgentRun['origin'] = 'manual', accountProfile = DEFAULT_ACCOUNT_PROFILE): AgentRun {
     return this.runs.create(workItemId, kind, requestedTarget, agent, instructions, conversationId, messageId, origin, accountProfile);
   }
 
@@ -1605,15 +1668,27 @@ export class WorkItemRepository {
    * callers must suppress every downstream side effect when it returns false.
    */
   finishRun(id: string, ownerId: string, patch: RunPatch): boolean {
-    return this.runs.finish(id, ownerId, patch);
+    return this.transaction(() => {
+      const finished = this.runs.finish(id, ownerId, patch);
+      if (finished && patch.status && ['completed', 'failed', 'canceled'].includes(patch.status)) this.telemetry.reconcileAutonomousBudget(id);
+      return finished;
+    });
   }
 
   finishRunCancellation(id: string, ownerId: string): boolean {
-    return this.runs.finishCancellation(id, ownerId);
+    return this.transaction(() => {
+      const finished = this.runs.finishCancellation(id, ownerId);
+      if (finished) this.telemetry.reconcileAutonomousBudget(id);
+      return finished;
+    });
   }
 
   finishQueuedRunCancellation(id: string): boolean {
-    return this.runs.finishQueuedCancellation(id);
+    return this.transaction(() => {
+      const finished = this.runs.finishQueuedCancellation(id);
+      if (finished) this.telemetry.reconcileAutonomousBudget(id);
+      return finished;
+    });
   }
 
   renewSharedMessageLease(id: string, ownerId: string, leaseMs: number): boolean {
@@ -1700,21 +1775,49 @@ export class WorkItemRepository {
     return this.telemetry.averageSetEstimate(agent, model);
   }
 
+  getAutonomyPolicy(): AutonomyPolicy {
+    return this.telemetry.getAutonomyPolicy();
+  }
+
+  setAutonomyPolicy(input: { globalEnabled: boolean; targetFraction: number; alarmFraction: number }, now?: string): AutonomyPolicy {
+    return this.telemetry.setAutonomyPolicy(input, now);
+  }
+
+  setAutonomyProviderPolicy(provider: AgentRun['agent'], input: { enabled: boolean; weeklyCeilingSet: number }, now?: string): AutonomyPolicy {
+    return this.telemetry.setAutonomyProviderPolicy(provider, input, now);
+  }
+
+  recordAutonomyGovernorDecision(input: Omit<AutonomyGovernorDecisionRecord, 'id' | 'createdAt'> & { createdAt?: string }): AutonomyGovernorDecisionRecord {
+    return this.telemetry.recordAutonomyGovernorDecision(input);
+  }
+
+  listAutonomyGovernorDecisions(limit = 100): AutonomyGovernorDecisionRecord[] {
+    return this.telemetry.listAutonomyGovernorDecisions(limit);
+  }
+
   heldBudgetReservationSet(provider: 'claude' | 'codex', sinceIso: string): number {
     return this.telemetry.heldBudgetReservationSet(provider, sinceIso);
   }
 
   /**
    * Atomically verifies the remaining autonomous budget and creates its hold.
-   * The caller supplies already-measured committed usage; concurrent callers
-   * are serialized by this transaction and see each other's held amounts.
+   * Committed usage and held reservations are both read inside this transaction,
+   * so concurrent callers cannot reuse a stale allowance calculation.
    */
   tryReserveAutonomousBudget(input: {
     provider: 'claude' | 'codex'; model: string; workItemId: string;
-    requiredTokenCount: number; spentTokenCount: number; budgetTokenLimit: number;
-    windowStart: string; now?: string;
-  }): { reservationId: string } | null {
+    requiredTokenCount: number; budgetTokenLimit: number;
+    windowStart: string; windowEnd: string; now?: string;
+  }): { approved: true; reservationId: string; spentSet: number; heldSet: number } | { approved: false; spentSet: number; heldSet: number } {
     return this.telemetry.tryReserveAutonomousBudget(input);
+  }
+
+  attachBudgetReservationToRun(reservationId: string, agentRunId: string): boolean {
+    return this.telemetry.attachBudgetReservationToRun(reservationId, agentRunId);
+  }
+
+  reconcileAutonomousBudget(agentRunId: string, now?: string): { actualSet: number; alarmTriggered: boolean } | null {
+    return this.telemetry.reconcileAutonomousBudget(agentRunId, now);
   }
 
   createBudgetReservation(input: { provider: 'claude' | 'codex'; model: string; workItemId: string; agentRunId?: string; reservedSet: number }): void {
@@ -1728,7 +1831,7 @@ export class WorkItemRepository {
 
   // --- Usage calibration -----------------------------------------------------
 
-  createUsageCalibration(input: { provider: UsageCalibration['provider']; observedAt: string; observedPercentage: number; workbenchSet: number; interactiveSet: number; computedCeilingSet: number }): UsageCalibration {
+  createUsageCalibration(input: { provider: UsageCalibration['provider']; observedAt: string; observedPercentage: number; resetsAt: string | null; workbenchSet: number; interactiveSet: number; computedCeilingSet: number }): UsageCalibration {
     return this.telemetry.createUsageCalibration(input);
   }
 

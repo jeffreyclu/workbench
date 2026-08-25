@@ -6,5 +6,5 @@ import { WorkItemRepository } from '../src/server/repository.js';
 const database = openDatabase();
 const repository = new WorkItemRepository(database);
 const lastRun = repository.getDiscoveryInbox().lastRun?.completedAt ?? null;
-if (process.argv.includes('--force') || shouldRunDiscoveryCatchUp(lastRun)) await runDiscovery(repository);
+if (process.argv.includes('--force') || shouldRunDiscoveryCatchUp(lastRun)) await runDiscovery(repository, { autonomousModel: 'sonnet' });
 database.close();

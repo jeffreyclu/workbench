@@ -9,7 +9,7 @@ const toneIcons = { success: Check, error: AlertTriangle, info: Info };
 const ToastRow = memo(function ToastRow({ item }: { item: Toast }) {
   const Icon = toneIcons[item.tone];
   return (
-    <li className={`toast toast-${item.tone} ${item.action ? 'toast-actionable' : ''}`}>
+    <li className={`toast toast-${item.tone} ${item.action ? 'toast-actionable' : ''} ${item.exiting ? 'toast-exiting' : ''}`}>
       <button type="button" className="toast-content" disabled={!item.action} onClick={() => { if (!item.action) return; dismissToast(item.id); item.action(); }} aria-label={item.action ? `${item.actionLabel ?? 'Open'}: ${item.message}` : undefined}>
         <Icon className="toast-icon" size={15} aria-hidden="true" />
         <div className="toast-copy">

@@ -20,6 +20,8 @@ export interface Toast {
   duration: number;
   action?: () => void;
   actionLabel?: string;
+  /** True while the exit animation plays; the row stays in the DOM until it clears. */
+  exiting?: boolean;
 }
 
 export interface ToastOptions {
@@ -34,6 +36,8 @@ export interface ToastOptions {
 /** A burst of failures must never bury the UI, so the oldest toasts fall off the stack. */
 const MAX_VISIBLE = 4;
 const DEFAULT_DURATION: Record<ToastTone, number> = { success: 4_000, info: 5_000, error: 8_000 };
+/** Matches the `toast-out` CSS keyframe duration in styles.css. */
+const EXIT_DURATION = 180;
 
 interface Timer { handle: number; remaining: number; startedAt: number }
 
@@ -42,6 +46,13 @@ let sequence = 0;
 let paused = false;
 const listeners = new Set<() => void>();
 const timers = new Map<string, Timer>();
+const exitTimers = new Map<string, number>();
+
+function clearExitTimer(id: string): void {
+  const handle = exitTimers.get(id);
+  if (handle !== undefined) window.clearTimeout(handle);
+  exitTimers.delete(id);
+}
 
 function emit(): void {
   for (const listener of [...listeners]) listener();
@@ -85,7 +96,8 @@ function push(tone: ToastTone, message: string, options: ToastOptions = {}): str
   const existing = toasts.find((item) => item.tone === tone && item.message === message && item.description === options.description);
   if (existing) {
     // Keep its place in the stack; a repeat should restart the countdown, not reshuffle the list.
-    toasts = toasts.map((item) => item.id === existing.id ? { ...item, count: item.count + 1, duration, action: options.action ?? item.action, actionLabel: options.actionLabel ?? item.actionLabel } : item);
+    clearExitTimer(existing.id);
+    toasts = toasts.map((item) => item.id === existing.id ? { ...item, count: item.count + 1, duration, action: options.action ?? item.action, actionLabel: options.actionLabel ?? item.actionLabel, exiting: false } : item);
     startTimer(existing.id, duration);
     emit();
     return existing.id;
@@ -101,14 +113,22 @@ function push(tone: ToastTone, message: string, options: ToastOptions = {}): str
 
 export function dismissToast(id: string): void {
   clearTimer(id);
-  const next = toasts.filter((item) => item.id !== id);
-  if (next.length === toasts.length) return;
-  toasts = next;
+  const target = toasts.find((item) => item.id === id);
+  if (!target || target.exiting) return;
+  toasts = toasts.map((item) => item.id === id ? { ...item, exiting: true } : item);
   emit();
+  exitTimers.set(id, window.setTimeout(() => {
+    exitTimers.delete(id);
+    const next = toasts.filter((item) => item.id !== id);
+    if (next.length === toasts.length) return;
+    toasts = next;
+    emit();
+  }, EXIT_DURATION));
 }
 
 function clearToasts(): void {
   for (const id of [...timers.keys()]) clearTimer(id);
+  for (const id of [...exitTimers.keys()]) clearExitTimer(id);
   if (toasts.length === 0) return;
   toasts = [];
   emit();

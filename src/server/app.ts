@@ -26,6 +26,7 @@ import { createSourceConnectionRouter } from './routes/source-connection-router.
 import { createExecutionRouter } from './routes/execution-router.js';
 import { createLinearRouter } from './routes/linear-router.js';
 import { createMcpRouter } from './routes/mcp-router.js';
+import { createAgentAccountRouter } from './routes/agent-account-router.js';
 
 export { oauthCallbackBase, parseFollowUpPlan, rejectPreviewMutation } from './app-exports.js';
 
@@ -68,6 +69,7 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
   app.use(createQueueRouter(context));
   app.use(createSourceConnectionRouter(context));
   app.use(createMcpRouter(context));
+  app.use(createAgentAccountRouter());
   app.use(createExecutionRouter(context));
   app.use(createLinearRouter(context));
 

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { createAgentRunSchema } from '../../shared/contracts.js';
+import { createAgentRunSchema, accountProfileSchema } from '../../shared/contracts.js';
 import type { RouteContext } from '../route-context.js';
 
 export function createExecutionRouter({ admin }: RouteContext) {
@@ -16,7 +16,7 @@ export function createExecutionRouter({ admin }: RouteContext) {
     admin.sendAction(response, await admin.retryRun(request.params.id, { force: false }));
   });
   router.post('/api/work-items/:id/execute', async (request, response) => {
-    const { executionProfile, accountProfile } = z.object({ executionProfile: z.enum(['economy', 'standard', 'deep']).nullable().default(null), accountProfile: z.string().trim().min(1).max(64).default('default') }).parse(request.body ?? {});
+    const { executionProfile, accountProfile } = z.object({ executionProfile: z.enum(['economy', 'standard', 'deep']).nullable().default(null), accountProfile: accountProfileSchema.optional() }).parse(request.body ?? {});
     admin.sendAction(response, await admin.startWorkItemExecution(request.params.id, { executionProfile, accountProfile, force: false }));
   });
   router.post('/api/execution-plans/:id/:resolution', (request, response) => {

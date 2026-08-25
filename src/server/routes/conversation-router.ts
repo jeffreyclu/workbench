@@ -49,6 +49,13 @@ export function createConversationRouter({ repository, database, capabilities }:
     response.status(204).end();
   });
 
+  router.post('/api/shared/conversations/:id/undelete', (request, response) => {
+    const conversation = repository.undeleteConversation(request.params.id);
+    if (!conversation) return response.status(404).json({ error: 'Conversation not found or not deleted.' });
+    repository.addAuditEntry('api_mutation', 'workbench', `Restored deleted conversation ${request.params.id}`);
+    response.json({ conversation });
+  });
+
   router.post('/api/shared/conversations/:id/archive', (request, response) => {
     const conversation = repository.setConversationArchived(request.params.id, true);
     if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
@@ -164,7 +171,7 @@ export function createConversationRouter({ repository, database, capabilities }:
     }
     const agents = input.dispatchTo === 'both' ? ['codex', 'claude'] as const
       : input.dispatchTo === 'none' ? [] : [input.dispatchTo];
-    const message = repository.createSharedMessage('jeffrey', input.body, agents.length ? 'queued' : 'completed', input.conversationId, attachments, input.dispatchTo, input.executionProfile);
+    const message = repository.createSharedMessage('jeffrey', input.body, agents.length ? 'queued' : 'completed', input.conversationId, attachments, input.dispatchTo, input.executionProfile, input.accountProfile ?? null);
     const replies = agents.length ? dispatchNextSharedTurn(repository, input.conversationId) : [];
     response.status(202).json({ message, replies });
   });

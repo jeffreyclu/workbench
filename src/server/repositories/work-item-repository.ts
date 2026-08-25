@@ -28,6 +28,12 @@ export interface WorkItemRow {
   is_queued: number;
   source_identifier: string | null;
   source_url: string | null;
+  machine_proposed: number;
+  machine_proposal_run_id: string | null;
+  machine_proposal_window_start: string | null;
+  suggested_priority: number | null;
+  suggested_queue_position: number | null;
+  proposal_rationale: string | null;
   project_name: string | null;
   stack: WorkItem['stack'];
   workspace_path: string | null;
@@ -77,6 +83,12 @@ export function mapWorkItemRow(row: WorkItemRow): WorkItem {
     sourceIdentifier: row.source_identifier,
     sourceUrl: row.source_url,
     sourceTags: [...sourceTags],
+    machineProposed: row.machine_proposed === 1,
+    machineProposalRunId: row.machine_proposal_run_id,
+    machineProposalWindowStart: row.machine_proposal_window_start,
+    suggestedPriority: row.suggested_priority,
+    suggestedQueuePosition: row.suggested_queue_position,
+    proposalRationale: row.proposal_rationale,
     projectName: row.project_name,
     stack: row.stack,
     workspacePath: row.workspace_path,
@@ -116,6 +128,14 @@ export interface ManualWorkItemInsert extends WorkItemInsertBase {
   dueDate: string | null;
   sourceUrl: string | null;
   parentWorkItemId: string | null;
+}
+
+export interface MachineProposalWorkItemInsert extends ManualWorkItemInsert {
+  runId: string;
+  windowStart: string;
+  suggestedPriority: number;
+  suggestedQueuePosition: number;
+  rationale: string;
 }
 
 export interface ProviderWorkItemInsert extends WorkItemInsertBase {
@@ -235,7 +255,7 @@ export class WorkItemRepository {
     const normalizedFilter = { ...filter, projectNames: [...new Set(filter.projectNames)].sort(), statuses: [...new Set(filter.statuses)].sort(), assignees: [...new Set(filter.assignees)].sort(), sources: [...new Set(filter.sources)].sort(), labels: [...new Set(filter.labels)].sort(), dueStates: [...new Set(filter.dueStates)].sort() };
     const fingerprint = JSON.stringify(normalizedFilter);
     const needle = normalizedFilter.query ? `%${normalizedFilter.query}%` : null;
-    type WorkItemCursor = { position?: number; archivedAt?: string; id: string; view: string; fingerprint: string };
+    type WorkItemCursor = { position?: number; archivedAt?: string; archivedGroup?: number; updatedAt?: string; id: string; view: string; fingerprint: string };
     let cursorValues: WorkItemCursor | null = null;
     if (cursor) {
       try { cursorValues = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as WorkItemCursor; } catch { throw new Error('Invalid work-item cursor.'); }
@@ -247,11 +267,17 @@ export class WorkItemRepository {
     const workbench = `${active} AND ${workbenchProjectPredicate}`;
     const attention = `${active} AND ${nonWorkbenchProjectPredicate}`;
     const archived = 'archived_at IS NOT NULL AND deleted_at IS NULL';
+    const projectScope = view === 'workbench' || view === 'workbench-archive' ? workbenchProjectPredicate : nonWorkbenchProjectPredicate;
+    // A free-text search spans both the active and archived halves of the
+    // current project scope (Workbench vs. attention) — the tab still names
+    // which scope, but no longer confines the results to just that half.
+    const isSearchQuery = needle !== null;
     // Archive is a filter within its parent stack: attention excludes
     // Workbench-project work, while Workbench archive includes only that work.
-    const where = view === 'active' ? attention : view === 'workbench' ? workbench
-      : view === 'workbench-archive' ? `${archived} AND ${workbenchProjectPredicate}`
-        : `${archived} AND ${nonWorkbenchProjectPredicate}`;
+    const where = isSearchQuery ? `${projectScope} AND deleted_at IS NULL`
+      : view === 'active' ? attention : view === 'workbench' ? workbench
+        : view === 'workbench-archive' ? `${archived} AND ${workbenchProjectPredicate}`
+          : `${archived} AND ${nonWorkbenchProjectPredicate}`;
     const clauses: string[] = []; const args: string[] = [];
     const addIn = (column: string, values: string[]) => { if (values.length) { clauses.push(`${column} IN (${values.map(() => '?').join(', ')})`); args.push(...values); } };
     addIn('project_name', normalizedFilter.projectNames); addIn('status', normalizedFilter.statuses); addIn('source', normalizedFilter.sources);
@@ -266,13 +292,21 @@ export class WorkItemRepository {
       clauses.push(`(${due.join(' OR ')})`);
     }
     const filters = clauses.length ? ` AND ${clauses.join(' AND ')}` : '';
-    const isArchive = view === 'archive' || view === 'workbench-archive';
-    const cursorClause = !isArchive ? `(? IS NULL OR queue_position > ? OR (queue_position = ? AND id > ?))` : `(? IS NULL OR archived_at < ? OR (archived_at = ? AND id < ?))`;
-    const cursorArgs = !isArchive ? [cursorValues?.id ?? null, cursorValues?.position ?? null, cursorValues?.position ?? null, cursorValues?.id ?? null] : [cursorValues?.id ?? null, cursorValues?.archivedAt ?? null, cursorValues?.archivedAt ?? null, cursorValues?.id ?? null];
-    const order = !isArchive ? 'queue_position ASC, id ASC' : 'archived_at DESC, id DESC';
+    const isArchive = !isSearchQuery && (view === 'archive' || view === 'workbench-archive');
+    const archivedGroup = `(CASE WHEN archived_at IS NULL THEN 0 ELSE 1 END)`;
+    const cursorClause = isSearchQuery
+      ? `(? IS NULL OR ${archivedGroup} > ? OR (${archivedGroup} = ? AND (updated_at < ? OR (updated_at = ? AND id < ?))))`
+      : !isArchive ? `(? IS NULL OR queue_position > ? OR (queue_position = ? AND id > ?))` : `(? IS NULL OR archived_at < ? OR (archived_at = ? AND id < ?))`;
+    const cursorArgs = isSearchQuery
+      ? [cursorValues?.id ?? null, cursorValues?.archivedGroup ?? null, cursorValues?.archivedGroup ?? null, cursorValues?.updatedAt ?? null, cursorValues?.updatedAt ?? null, cursorValues?.id ?? null]
+      : !isArchive ? [cursorValues?.id ?? null, cursorValues?.position ?? null, cursorValues?.position ?? null, cursorValues?.id ?? null] : [cursorValues?.id ?? null, cursorValues?.archivedAt ?? null, cursorValues?.archivedAt ?? null, cursorValues?.id ?? null];
+    const order = isSearchQuery ? `${archivedGroup} ASC, updated_at DESC, id DESC` : !isArchive ? 'queue_position ASC, id ASC' : 'archived_at DESC, id DESC';
     const rows = this.database.prepare(`SELECT * FROM work_items WHERE ${where} AND ${search}${filters} AND ${cursorClause} ORDER BY ${order} LIMIT ?`).all(...searchArgs, ...args, ...cursorArgs, safeLimit + 1) as unknown as WorkItemRow[];
     const pageRows = rows.slice(0, safeLimit); const last = pageRows.at(-1);
-    const nextCursor = rows.length > safeLimit && last ? Buffer.from(JSON.stringify(!isArchive ? { position: last.queue_position, id: last.id, view, fingerprint } : { archivedAt: last.archived_at, id: last.id, view, fingerprint })).toString('base64url') : null;
+    const nextCursor = rows.length > safeLimit && last
+      ? Buffer.from(JSON.stringify(isSearchQuery ? { archivedGroup: last.archived_at ? 1 : 0, updatedAt: last.updated_at, id: last.id, view, fingerprint }
+        : !isArchive ? { position: last.queue_position, id: last.id, view, fingerprint } : { archivedAt: last.archived_at, id: last.id, view, fingerprint })).toString('base64url')
+      : null;
     const totalCount = Number((this.database.prepare(`SELECT COUNT(*) AS count FROM work_items WHERE ${where} AND ${search}${filters}`).get(...searchArgs, ...args) as { count: number }).count);
     return { items: pageRows.map(mapWorkItemRow), nextCursor, totalCount };
   }
@@ -294,6 +328,23 @@ export class WorkItemRepository {
         input.projectName, input.projectKey, input.stack, input.workspacePath, input.dueDate, input.sourceUrl, input.parentWorkItemId,
         input.createdAt, input.createdAt, input.createdAt,
       );
+  }
+
+  insertMachineProposal(input: MachineProposalWorkItemInsert): void {
+    this.database.prepare(`
+      INSERT INTO work_items (
+        id, title, description, status, priority, queue_position, source, is_queued,
+        project_name, project_key, stack, workspace_path, due_date, source_url, parent_work_item_id,
+        machine_proposed, machine_proposal_run_id, machine_proposal_window_start,
+        suggested_priority, suggested_queue_position, proposal_rationale,
+        created_at, updated_at, last_touched_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 1, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.id, input.title, input.description, input.status, input.priority, input.position,
+      input.projectName, input.projectKey, input.stack, input.workspacePath, input.dueDate, input.sourceUrl, input.parentWorkItemId,
+      input.runId, input.windowStart, input.suggestedPriority, input.suggestedQueuePosition, input.rationale,
+      input.createdAt, input.createdAt, input.createdAt,
+    );
   }
 
   insertProviderItem(input: ProviderWorkItemInsert): void {

@@ -8,9 +8,9 @@ import { isDatabaseCompatible, newestCompatibleRelease } from '../src/server/run
 const root = resolve(new URL('..', import.meta.url).pathname);
 const currentLink = join(root, '.workbench-runtime/current');
 const releasesRoot = join(root, '.workbench-runtime/releases');
-const publicPort = Number(process.env.PORT?.trim() || 5173);
+const publicPort = Number(process.env.PORT?.trim() || 5180);
 // Keep blue/green backends away from the low 4xxx range used by local product
-// apps. These ports are loopback-only implementation details behind 5173.
+// apps. These ports are loopback-only implementation details behind 5180.
 const runtimePorts = [45173, 45174] as const;
 const tsx = join(root, 'node_modules/.bin/tsx');
 const databasePath = process.env.DATABASE_PATH?.trim() || join(root, 'data/workbench.db');

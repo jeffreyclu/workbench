@@ -49,17 +49,17 @@ describe('message building', () => {
   });
 
   it('renders a completed run with agent, short task id, and app link', () => {
-    const text = buildRunNotificationText(item, run, 'completed', 'All checks passed.', 'http://localhost:5173');
+    const text = buildRunNotificationText(item, run, 'completed', 'All checks passed.', 'http://localhost:5180');
     expect(text).toContain(':white_check_mark:');
     expect(text).toContain('*execute complete*');
     expect(text).toContain('Connect Slack to Workbench');
     expect(text).toContain('claude · task `4f2a1b3c`');
-    expect(text).toContain('<http://localhost:5173|open Workbench>');
+    expect(text).toContain('<http://localhost:5180|open Workbench>');
     expect(text).toContain('All checks passed.');
   });
 
   it('renders a failed run as attention-needed', () => {
-    const text = buildRunNotificationText(item, run, 'failed', 'boom', 'http://localhost:5173');
+    const text = buildRunNotificationText(item, run, 'failed', 'boom', 'http://localhost:5180');
     expect(text).toContain(':rotating_light:');
     expect(text).toContain('needs attention');
   });

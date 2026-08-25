@@ -105,7 +105,7 @@ export function buildRunNotificationText(
   run: Pick<AgentRun, 'agent' | 'kind'>,
   outcome: AgentRunOutcome,
   detail: string,
-  appOrigin = process.env.APP_ORIGIN ?? 'http://localhost:5173',
+  appOrigin = process.env.APP_ORIGIN ?? 'http://localhost:5180',
   markup: SlackMarkup = 'mrkdwn',
 ): string {
   const plain = markup === 'plain';
@@ -223,7 +223,7 @@ export function notifyAgentRunFinished(
   const config = resolveSlackConfig(env);
   if (!config) return;
   const markup: SlackMarkup = config.mode === 'workflow' ? 'plain' : 'mrkdwn';
-  const appOrigin = env.APP_ORIGIN ?? 'http://localhost:5173';
+  const appOrigin = env.APP_ORIGIN ?? 'http://localhost:5180';
   void sendSlackMessage(buildRunNotificationText(item, run, outcome, detail, appOrigin, markup), options)
     .then((result) => {
       if (!result.ok) console.warn(`[slack] notification not delivered for task ${item.id}: ${result.error}`);

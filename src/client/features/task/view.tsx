@@ -27,6 +27,7 @@ import {
   RefreshCw,
   Search,
   Send,
+  Settings,
   Trash2,
   Sparkles,
   User,
@@ -44,6 +45,7 @@ import { ArtifactLibraryView } from '../../artifacts';
 import { ConfirmationDialog } from '../../confirmation-dialog';
 import { InsightsView } from '../../insights';
 import { navigate, parseRoute, routePath, useRoute, type StackName } from '../../router';
+import { useDebouncedValue } from '../conversation/hooks';
 import { ListRowSkeleton } from '../../skeleton';
 import { Toaster } from '../../toast';
 import { toast, toastError } from '../../toast-store';
@@ -66,6 +68,8 @@ import { createTaskStackViewModel } from '../../stack-view-model';
 import { useRealtimeNotifications, type RealtimeNotification } from '../../realtime';
 import { useTaskDetail } from './hooks';
 import { useTaskAccountProfile, useTaskExecutionProfile } from './state';
+import { celebrate } from '../../celebrate';
+import type { AgentAccountProfile } from '../../data/runtime-client';
 
 export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCreated, onRemoving }: { id: string; onClose: () => void; onOpenConversation: (conversationId: string) => void; onOpenTask: (taskId: string) => void; onCreated: (item: WorkItem) => void; onRemoving?: (id: string) => Promise<void> }) {
   const queryClient = useQueryClient();
@@ -86,13 +90,15 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const [showAddArtifactLink, setShowAddArtifactLink] = useState(false);
   const [artifactLinkQuery, setArtifactLinkQuery] = useState('');
   const [dependencyQuery, setDependencyQuery] = useState('');
-  const normalizedDependencyQuery = dependencyQuery.trim();
-  const normalizedTaskLinkQuery = taskLinkQuery.trim();
+  const normalizedDependencyQuery = useDebouncedValue(dependencyQuery.trim(), 300);
+  const normalizedTaskLinkQuery = useDebouncedValue(taskLinkQuery.trim(), 300);
   const normalizedArtifactLinkQuery = artifactLinkQuery.trim();
   const [selectedExecutionTaskIndexes, setSelectedExecutionTaskIndexes] = useState<Set<number>>(new Set());
   const [executionPlanArchivePromptOpen, setExecutionPlanArchivePromptOpen] = useState(false);
   const { executionProfile, setExecutionProfile } = useTaskExecutionProfile(id);
-  const { accountProfile, setAccountProfile } = useTaskAccountProfile(id);
+  const { accountProfile, setAccountProfile } = useTaskAccountProfile(id, detail.data?.item);
+  const [newAccountProfile, setNewAccountProfile] = useState('');
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
   const ACTIVITY_PAGE_SIZE = 20;
   const [activityVisibleCount, setActivityVisibleCount] = useState(ACTIVITY_PAGE_SIZE);
   const RUNS_PAGE_SIZE = 5;
@@ -172,6 +178,15 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
     },
     onSettled: () => void queryClient.invalidateQueries({ queryKey: ['work-items'] }),
   });
+  const agentAccounts = useQuery({ queryKey: ['agent-accounts'], queryFn: api.listAgentAccounts, refetchInterval: 5_000 });
+  const startAccountLogin = useMutation({
+    mutationFn: ({ provider, name }: { provider: 'codex' | 'claude'; name: string }) => api.startAgentAccountLogin(provider, name),
+    onSuccess: ({ accounts }) => {
+      queryClient.setQueryData(['agent-accounts'], { accounts });
+      toast.success('Login opened in Terminal. Complete the provider browser flow; Workbench will refresh the status automatically.');
+    },
+    onError: (error) => toastError('Could not open the provider login.', error),
+  });
   const unlinkConversation = useMutation({
     mutationFn: (conversationId: string) => api.setSharedConversationTask(conversationId, null),
     onSuccess: async () => {
@@ -238,6 +253,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
     },
     onSuccess: async (_data, action) => {
       if (action === 'delete') setDeleteTaskPromptOpen(false);
+      if (action === 'complete') celebrate();
       onClose();
       toast.success(lifecycleSuccessMessage[action]);
       await Promise.all([
@@ -391,13 +407,13 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         </div>)}
       </section>}
       <div className="task-lifecycle-actions">
-        <button type="button" className="button secondary compact" onClick={() => setShowFollowUp((value) => !value)}><Plus size={14} /> Follow-up</button>
+        <button type="button" className="icon-button" onClick={() => setShowFollowUp((value) => !value)} aria-label="Create follow-up task" title="Create follow-up task"><Plus size={14} /></button>
         <button type="button" className={`icon-button${item.status === 'pinned' ? ' icon-button-active' : ''}`} onClick={() => togglePin.mutate()} disabled={togglePin.isPending} aria-pressed={item.status === 'pinned'} aria-label={item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'} title={item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'}><Pin size={14} fill={item.status === 'pinned' ? 'currentColor' : 'none'} /></button>
-        {item.archivedAt ? <><span className={`archive-state ${item.completionStatus}`}>{item.completionStatus === 'completed' ? 'Completed & archived' : 'Archived incomplete'}</span><button type="button" className="button secondary compact" onClick={() => lifecycle.mutate('restore')} disabled={lifecycle.isPending}><Archive size={14} /> Restore</button></> : <>
-          <button type="button" className="button secondary compact" onClick={() => lifecycle.mutate('archive')} disabled={lifecycle.isPending}><Archive size={14} /> Archive</button>
-          <button type="button" className="button primary compact" onClick={() => lifecycle.mutate('complete')} disabled={lifecycle.isPending}><Check size={14} /> Complete</button>
+        {item.archivedAt ? <><span className={`archive-state ${item.completionStatus}`}>{item.completionStatus === 'completed' ? 'Completed & archived' : 'Archived incomplete'}</span><button type="button" className="icon-button" onClick={() => lifecycle.mutate('restore')} disabled={lifecycle.isPending} aria-label="Restore task" title="Restore task"><Archive size={14} /></button></> : <>
+          <button type="button" className="icon-button" onClick={() => lifecycle.mutate('archive')} disabled={lifecycle.isPending} aria-label="Archive task" title="Archive task"><Archive size={14} /></button>
+          <button type="button" className="icon-button primary" onClick={() => lifecycle.mutate('complete')} disabled={lifecycle.isPending} aria-label="Complete task" title="Complete task"><Check size={14} /></button>
         </>}
-        <button type="button" className="button danger compact" onClick={() => setDeleteTaskPromptOpen(true)}><Trash2 size={14} /> Delete</button>
+        <button type="button" className="icon-button danger" onClick={() => setDeleteTaskPromptOpen(true)} aria-label="Delete task" title="Delete task"><Trash2 size={14} /></button>
       </div>
       {showFollowUp && <form className="follow-up-form" onSubmit={(event) => { event.preventDefault(); if (followUpTitle.trim()) createFollowUp.mutate(); }}>
         <span className="section-label">New follow-up task</span>
@@ -510,13 +526,46 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         {openDependencies.length > 0 && <div className="task-execution-locked blocked"><AlertTriangle size={13} /><span><strong>Blocked by {openDependencies.length} prerequisite{openDependencies.length === 1 ? '' : 's'}</strong><small>{openDependencies.map((dependency) => dependency.title).join(', ')}</small></span></div>}
         <p className="execution-copy">Workbench will classify the task, choose the right agent, and either execute it directly or return an approval-ready decomposition for complex work.</p>
         {execute.error && <p className="error-message">{execute.error.message}</p>}
-        <label>Model <ModelProfileSelect value={executionProfile} onChange={setExecutionProfile} /></label>
-        <label>Account profile <input value={accountProfile} onChange={(event) => setAccountProfile(event.target.value)} aria-label="Account profile" placeholder="default" /></label>
-        <button className="button primary execute-button" onClick={() => execute.mutate()} disabled={hasBeenExecuted || selfAssigned || openDependencies.length > 0 || execute.isPending}
-          title={hasBeenExecuted ? 'This task has already been executed.' : selfAssigned ? SELF_ASSIGNED_EXECUTION_MESSAGE : openDependencies.length > 0 ? 'Complete this task\u2019s prerequisites before dispatching an agent.' : undefined}>
-          {execute.isPending ? <LoaderCircle className="spin" size={16} /> : selfAssigned ? <User size={16} /> : openDependencies.length > 0 ? <AlertTriangle size={16} /> : <Sparkles size={16} />}
-          {hasBeenExecuted ? 'Already executed' : selfAssigned ? 'Assigned to you' : openDependencies.length > 0 ? 'Blocked by prerequisites' : 'Execute'}
-        </button>
+        <div className="execution-controls">
+          <ModelProfileSelect className="execution-control" value={executionProfile} onChange={setExecutionProfile} />
+          <select className="execution-control" value={accountProfile} onChange={(event) => setAccountProfile(event.target.value)} aria-label="Account profile">
+            {(agentAccounts.data?.accounts ?? [{ name: 'default' } as AgentAccountProfile]).map((account) => <option key={account.name} value={account.name}>{account.name === 'default' ? 'Default profile' : account.name}</option>)}
+          </select>
+          <button className="button secondary compact edit-profile-button" type="button" onClick={() => setProfileEditorOpen((open) => !open)} aria-label={profileEditorOpen ? 'Close profile editor' : 'Edit profile'} title={profileEditorOpen ? 'Close profile editor' : 'Edit profile'} aria-expanded={profileEditorOpen} aria-controls="agent-profile-editor"><Settings size={15} /></button>
+          <button className="icon-button primary execute-button" onClick={() => execute.mutate()} disabled={hasBeenExecuted || selfAssigned || openDependencies.length > 0 || execute.isPending}
+            aria-label={hasBeenExecuted ? 'Already executed' : selfAssigned ? 'Assigned to you' : openDependencies.length > 0 ? 'Blocked by prerequisites' : execute.isPending ? 'Executing task' : 'Execute task'}
+            title={hasBeenExecuted ? 'This task has already been executed.' : selfAssigned ? SELF_ASSIGNED_EXECUTION_MESSAGE : openDependencies.length > 0 ? 'Complete this task\u2019s prerequisites before dispatching an agent.' : execute.isPending ? 'Executing task' : 'Execute task'}>
+            {execute.isPending ? <LoaderCircle className="spin" size={16} /> : selfAssigned ? <User size={16} /> : openDependencies.length > 0 ? <AlertTriangle size={16} /> : <Sparkles size={16} />}
+          </button>
+        </div>
+        {profileEditorOpen && <div id="agent-profile-editor" className="agent-account-manager agent-profile-editor">
+          {(agentAccounts.data?.accounts ?? []).map((account) => <div className="agent-account-profile" key={account.name}>
+            <div className="agent-account-profile-heading"><strong>{account.name === 'default' ? 'Default account' : account.name}</strong>{account.name === accountProfile && <small>Selected</small>}</div>
+            {(['codex', 'claude'] as const).map((provider) => {
+              const status = account.providers[provider];
+              const connected = status.configured && status.loggedIn;
+              const label = connected ? status.email ?? (provider === 'codex' ? 'ChatGPT account' : 'Connected') : status.configured ? 'Sign in required' : 'Not configured';
+              return <div className={`agent-account-status ${connected ? 'connected' : ''}`} key={provider}>
+                <span className="account-provider-mark" aria-hidden="true">{provider === 'codex' ? 'C' : 'A'}</span>
+                <span><b>{provider === 'codex' ? 'Codex' : 'Claude'}</b><small>{label}</small></span>
+                <span className={`account-state ${connected ? 'connected' : ''}`}>{connected ? 'Connected' : 'Needs login'}</span>
+                <button className="button secondary compact" disabled={startAccountLogin.isPending}
+                  onClick={() => startAccountLogin.mutate({ provider, name: account.name })}
+                  aria-label={connected ? `Switch ${provider} account` : `Sign in to ${provider}`}
+                  title={connected ? `Connected${status.email ? ` as ${status.email}` : ''}. Sign in again to switch.` : `Sign in to ${provider}`}>
+                  <ArrowUpRight size={13} />
+                </button>
+              </div>;
+            })}
+          </div>)}
+          <details className="agent-account-add">
+            <summary>Add a separate account</summary>
+            <div><input value={newAccountProfile} onChange={(event) => setNewAccountProfile(event.target.value)} placeholder="Profile name, e.g. personal" aria-label="New account profile" />
+              <button className="button secondary compact" aria-label="Add account with Codex" title="Add account with Codex" disabled={!newAccountProfile.trim() || startAccountLogin.isPending} onClick={() => startAccountLogin.mutate({ provider: 'codex', name: newAccountProfile.trim() })}><span aria-hidden="true">C</span></button>
+              <button className="button secondary compact" aria-label="Add account with Claude" title="Add account with Claude" disabled={!newAccountProfile.trim() || startAccountLogin.isPending} onClick={() => startAccountLogin.mutate({ provider: 'claude', name: newAccountProfile.trim() })}><span aria-hidden="true">A</span></button></div>
+          </details>
+        </div>
+        }
       </div>
       </details>
 
@@ -529,14 +578,15 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
               <header>
                 <span className={`run-status run-${run.status}`}>{run.status === 'running' && <LoaderCircle className="spin" size={11} />}{run.status === 'queued' && run.attempt > 0 ? `Retrying (attempt ${run.attempt + 1} of ${run.maxAttempts})…` : run.status}</span>
                 <strong>{run.agent} · {run.kind}</strong>
+                <span className={`run-origin run-origin-${run.origin}`}>{run.origin === 'autonomous' ? 'Autonomous' : 'Manual'}</span>
                 <time>{new Date(run.createdAt).toLocaleString()}</time>
-                {(run.status === 'queued' || run.status === 'running') && <button className="cancel-run" onClick={() => cancelRun.mutate(run.id)}><X size={11} /> Cancel</button>}
+                {(run.status === 'queued' || run.status === 'running') && <button className="cancel-run" onClick={() => cancelRun.mutate(run.id)}><X size={11} /> {run.origin === 'autonomous' ? 'Stop' : 'Cancel'}</button>}
                 {runIndex === 0 && (run.status === 'failed' || run.status === 'canceled') && <button className="retry-run" onClick={() => retryRun.mutate(run.id)} disabled={retryRun.isPending}><RefreshCw size={11} /> Retry / continue</button>}
               </header>
               {run.instructions && <p className="run-prompt">{run.instructions}</p>}
               {run.status === 'running' && !run.conversationId && <div className="live-output-label"><span /> Live activity & reasoning summaries</div>}
               {run.output && run.status !== 'completed' && !run.conversationId && <LiveRunOutput output={run.output} />}
-              {run.model && <span className="model-badge" title={formatRunTelemetry(run)}>{run.model} · {formatRunBadge(run)}</span>}
+              {run.model && <span className="model-badge" title={formatRunTelemetry(run)}>Requested {run.requestedAgent[0].toUpperCase() + run.requestedAgent.slice(1)} · Actual {run.agent[0].toUpperCase() + run.agent.slice(1)}{run.fallbackFrom ? ' (fallback)' : ''} · {run.accountProfile} · {run.model} · {formatRunBadge(run)}</span>}
               {run.status === 'completed' && run.output && <div className="run-summary"><span className="section-label">Agent summary</span><AgentMessageBody body={run.output} running={false} workItemId={item.id} /></div>}
               {run.error && <p className="error-message">{run.error}</p>}
               {run.conversationId && <button className="open-run-chat" onClick={() => onOpenConversation(run.conversationId!)}><MessageCircle size={13} /> Open execution chat</button>}

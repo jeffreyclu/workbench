@@ -29,6 +29,9 @@ export function useUnblockWorkItem(itemId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (reason: string) => api.unblockWorkItem(itemId, reason),
+    onError: (error) => {
+      toastError('Could not unblock the task.', error);
+    },
     onSuccess: async () => Promise.all([
       queryClient.invalidateQueries({ queryKey: queueQueryKeys.workItems }),
       queryClient.invalidateQueries({ queryKey: queueQueryKeys.workItem(itemId) }),

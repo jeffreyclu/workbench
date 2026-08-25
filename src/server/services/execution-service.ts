@@ -324,47 +324,70 @@ export class ExecutionService {
 
     const estimatedCostByDay: Record<string, number> = {};
     const providerCostByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
+    const providerPricedRunsByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
     const estimatedCostByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
-    const tokenUsageByModel = new Map<string, { provider: 'codex' | 'claude'; model: string | null; inputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number; outputTokens: number; costUsd: number; runs: number }>();
+    const estimatedPricedRunsByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
+    const tokenUsageByModel = new Map<string, { provider: 'codex' | 'claude'; model: string | null; inputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number; outputTokens: number; costUsd: number; estimatedPricedRuns: number; runs: number }>();
     let providerCostUsd = 0;
     let estimatedCostUsd = 0;
     let providerPricedRuns = 0;
     let estimatedPricedRuns = 0;
     let unverifiedCostRuns = 0;
     let unpricedRuns = 0;
+    let incompleteTokenTelemetryRuns = 0;
     for (const run of usageRows) {
       const day = run.completed_at.slice(0, 10);
       if (run.estimated_cost_usd !== null && run.cost_source === 'provider') {
         providerCostUsd += run.estimated_cost_usd;
         providerCostByAgent[run.agent] += run.estimated_cost_usd;
         providerPricedRuns += 1;
+        providerPricedRunsByAgent[run.agent] += 1;
       } else if (run.estimated_cost_usd !== null && run.cost_source === 'estimated') {
         estimatedCostUsd += run.estimated_cost_usd;
         estimatedCostByDay[day] = (estimatedCostByDay[day] ?? 0) + run.estimated_cost_usd;
         estimatedCostByAgent[run.agent] += run.estimated_cost_usd;
         estimatedPricedRuns += 1;
+        estimatedPricedRunsByAgent[run.agent] += 1;
       } else if (run.estimated_cost_usd !== null) unverifiedCostRuns += 1;
       // A run that reported tokens but carries no cost has no rate for its
       // model. Surfacing that count keeps the total honest rather than silently low.
       else if (run.input_tokens !== null || run.cache_creation_input_tokens !== null || run.cache_read_input_tokens !== null || run.output_tokens !== null) unpricedRuns += 1;
-      if (run.input_tokens !== null || run.cache_creation_input_tokens !== null || run.cache_read_input_tokens !== null || run.output_tokens !== null) {
+      const hasAnyTokenTelemetry = run.input_tokens !== null || run.cache_creation_input_tokens !== null || run.cache_read_input_tokens !== null || run.output_tokens !== null;
+      // Before cache telemetry landed, input_tokens represented an unknown mix
+      // of fresh and cached input. Displaying it as fresh input manufactured a
+      // breakdown we do not have. A reported cache field (including an explicit
+      // zero) proves the provider supplied the split for this invocation.
+      const hasCompleteTokenTelemetry = run.cache_creation_input_tokens !== null || run.cache_read_input_tokens !== null;
+      if (hasAnyTokenTelemetry && !hasCompleteTokenTelemetry) incompleteTokenTelemetryRuns += 1;
+      if (hasCompleteTokenTelemetry) {
         const key = `${run.agent}:${run.model ?? ''}`;
-        const bucket = tokenUsageByModel.get(key) ?? { provider: run.agent, model: run.model, inputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 0, costUsd: 0, runs: 0 };
+        const bucket = tokenUsageByModel.get(key) ?? { provider: run.agent, model: run.model, inputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 0, costUsd: 0, estimatedPricedRuns: 0, runs: 0 };
         bucket.inputTokens += run.input_tokens ?? 0;
         bucket.cacheCreationInputTokens += run.cache_creation_input_tokens ?? 0;
         bucket.cacheReadInputTokens += run.cache_read_input_tokens ?? 0;
         bucket.outputTokens += run.output_tokens ?? 0;
-        bucket.costUsd += run.cost_source === 'estimated' ? run.estimated_cost_usd ?? 0 : 0;
+        if (run.cost_source === 'estimated' && run.estimated_cost_usd !== null) {
+          bucket.costUsd += run.estimated_cost_usd;
+          bucket.estimatedPricedRuns += 1;
+        }
         bucket.runs += 1;
         tokenUsageByModel.set(key, bucket);
       }
     }
     // Trend compares this window against the equally long window before it.
     const previousWindowStart = new Date(Date.now() - days * 2 * 24 * 60 * 60 * 1000).toISOString();
+    // Keep the comparison cohort identical to the current-window cost totals:
+    // terminal runs plus unlinked shared-room replies. Linked replies are the
+    // same invocation as their run row and therefore remain excluded.
     const previousCosts = this.database.prepare(`
       SELECT estimated_cost_usd, cost_source FROM agent_runs
       WHERE status IN ('completed', 'failed', 'canceled') AND completed_at >= ? AND completed_at < ?
-    `).all(previousWindowStart, since) as Array<{ estimated_cost_usd: number | null; cost_source: 'provider' | 'estimated' | null }>;
+      UNION ALL
+      SELECT message.estimated_cost_usd, message.cost_source FROM shared_messages message
+      WHERE message.author IN ('codex', 'claude') AND message.status IN ('completed', 'failed', 'canceled')
+        AND message.completed_at >= ? AND message.completed_at < ?
+        AND NOT EXISTS (SELECT 1 FROM agent_runs run WHERE run.message_id = message.id)
+    `).all(previousWindowStart, since, previousWindowStart, since) as Array<{ estimated_cost_usd: number | null; cost_source: 'provider' | 'estimated' | null }>;
     const previousProviderCosts = previousCosts.filter((run) => run.cost_source === 'provider' && run.estimated_cost_usd !== null);
     const previousEstimatedCosts = previousCosts.filter((run) => run.cost_source === 'estimated' && run.estimated_cost_usd !== null);
     const previousProviderCostUsd = previousProviderCosts.length ? previousProviderCosts.reduce((total, run) => total + (run.estimated_cost_usd ?? 0), 0) : null;
@@ -432,6 +455,7 @@ export class ExecutionService {
       estimatedPricedRuns,
       unverifiedCostRuns,
       unpricedRuns,
+      incompleteTokenTelemetryRuns,
       tokenUsageByModel: [...tokenUsageByModel.values()].map((bucket) => ({
         ...bucket,
         costUsd: Number(bucket.costUsd.toFixed(6)),
@@ -469,8 +493,10 @@ export class ExecutionService {
         medianDurationMs: median(bucket.durations),
         p90DurationMs: percentile(bucket.durations, 0.9),
         providerCostUsd: Number(providerCostByAgent[agent as 'codex' | 'claude'].toFixed(6)),
+        providerPricedRuns: providerPricedRunsByAgent[agent as 'codex' | 'claude'],
         estimatedCostUsd: Number(estimatedCostByAgent[agent as 'codex' | 'claude'].toFixed(6)),
-      })),
+        estimatedPricedRuns: estimatedPricedRunsByAgent[agent as 'codex' | 'claude'],
+      })).filter((agent) => agent.total > 0 || agent.providerPricedRuns > 0 || agent.estimatedPricedRuns > 0),
       byKind: Object.entries(byKind)
         .filter(([, bucket]) => bucket.completed + bucket.failed + bucket.canceled > 0)
         .map(([kind, bucket]) => ({

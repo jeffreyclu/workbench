@@ -30,6 +30,13 @@ function formatPercent(value: number | null): string {
   return `${percentage > 0 && percentage < 10 ? percentage.toFixed(1) : Math.round(percentage)}%`;
 }
 
+/** Lifecycle events can occur more than once per terminal run, so this is a frequency, not a percentage. */
+function formatEventsPerHundredRuns(value: number | null): string {
+  if (value === null) return '—';
+  const perHundred = value * 100;
+  return `${perHundred > 0 && perHundred < 10 ? perHundred.toFixed(1) : Math.round(perHundred)} per 100`;
+}
+
 function formatDuration(ms: number | null): string {
   if (ms === null) return '—';
   if (ms >= 86_400_000) return `${(ms / 86_400_000).toFixed(1)}d`;
@@ -40,6 +47,10 @@ function formatDuration(ms: number | null): string {
 
 function formatTokenCount(tokens: number): string {
   return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(tokens);
+}
+
+function formatMeasuredCost(value: number, measuredRuns: number): string {
+  return measuredRuns > 0 ? formatCostUsd(value) : '—';
 }
 
 function CostTrend({ current, previous }: { current: number; previous: number | null }) {
@@ -55,7 +66,7 @@ function CostTrend({ current, previous }: { current: number; previous: number | 
 
 function CostByDayChart({ rows }: { rows: RunInsightsCostByDay[] }) {
   const peak = Math.max(...rows.map((row) => row.costUsd), 0);
-  return <div className="insight-cost-chart" role="img" aria-label={`Estimated cost by day: ${rows.map((row) => `${row.day} ${formatCostUsd(row.costUsd)}`).join(', ')}`}>
+  return <div className="insight-cost-chart" role="img" aria-label={`List-price estimate by day: ${rows.map((row) => `${row.day} ${formatCostUsd(row.costUsd)}`).join(', ')}`}>
     {rows.map((row) => <div className="insight-cost-bar" key={row.day} title={`${row.day} · ${formatCostUsd(row.costUsd)}`}>
       <div className="insight-cost-bar-fill" style={{ height: peak === 0 ? '2px' : `${Math.max(2, Math.round((row.costUsd / peak) * 100))}%` }} />
       <span className="insight-cost-bar-label">{row.day.slice(5)}</span>
@@ -85,12 +96,12 @@ function AgentInsightCard({ agent }: { agent: RunInsightsByAgent }) {
       </header>
       <RateBar label="Success" value={agent.successRate} count={`${agent.completed}/${agent.total}`} />
       <dl className="insight-agent-stats">
-        <div><dt>Retry rate</dt><dd>{formatPercent(agent.retryRate)}</dd></div>
-        <div><dt>Agent handoffs</dt><dd>{formatPercent(agent.fallbackRate)}</dd></div>
+        <div><dt>Retry events</dt><dd>{formatEventsPerHundredRuns(agent.retryRate)}</dd></div>
+        <div><dt>Agent handoffs</dt><dd>{formatEventsPerHundredRuns(agent.fallbackRate)}</dd></div>
         <div><dt>Median duration</dt><dd>{formatDuration(agent.medianDurationMs)}</dd></div>
         <div><dt>P90 duration</dt><dd>{formatDuration(agent.p90DurationMs)}</dd></div>
-        <div><dt>Provider billed</dt><dd>{formatCostUsd(agent.providerCostUsd ?? 0)}</dd></div>
-        <div><dt>List-price estimate</dt><dd>{formatCostUsd(agent.estimatedCostUsd ?? 0)}</dd></div>
+        <div><dt>Provider billed</dt><dd>{formatMeasuredCost(agent.providerCostUsd ?? 0, agent.providerPricedRuns ?? 0)}</dd></div>
+        <div><dt>List-price estimate</dt><dd>{formatMeasuredCost(agent.estimatedCostUsd ?? 0, agent.estimatedPricedRuns ?? 0)}</dd></div>
       </dl>
     </article>
   );
@@ -104,9 +115,10 @@ function AgentFitRows({ rows }: { rows: RunInsightsAgentFit[] }) {
   const kinds = [...new Set(rows.map((row) => row.kind))];
   return <div className="insight-fit-list">{kinds.map((kind) => {
     const agents = rows.filter((row) => row.kind === kind).sort((left, right) => (right.successRate ?? -1) - (left.successRate ?? -1));
+    const hasWinner = agents.length > 1 && agents[0].successRate !== agents[1].successRate;
     return <div className="insight-fit-row" key={kind}>
       <strong>{kindLabels[kind] ?? kind}</strong>
-      <div>{agents.map((agent, index) => <span className={index === 0 && agents.length > 1 ? 'recommended' : ''} key={agent.agent}>
+      <div>{agents.map((agent, index) => <span className={index === 0 && hasWinner ? 'recommended' : ''} key={agent.agent}>
         <b>{agent.agent}</b><em>{formatPercent(agent.successRate)} success</em><small>{formatDuration(agent.medianDurationMs)} median · {agent.completed + agent.failed + agent.canceled} runs</small>
       </span>)}</div>
     </div>;
@@ -123,7 +135,7 @@ function TokenUsageRows({ rows }: { rows: RunInsightsTokenUsage[] }) {
         <div><dt>Cache read</dt><dd>{formatTokenCount(row.cacheReadInputTokens)}</dd></div>
         <div><dt>Output</dt><dd>{formatTokenCount(row.outputTokens)}</dd></div>
         <div><dt>Total traffic</dt><dd>{formatTokenCount(row.inputTokens + row.cacheCreationInputTokens + row.cacheReadInputTokens + row.outputTokens)}</dd></div>
-        <div><dt>Cost</dt><dd>{(row.rateSource ?? null) === null ? <span title="No rate is configured for this model.">—</span> : formatCostUsd(row.costUsd)}</dd></div>
+        <div><dt>List-price estimate</dt><dd>{row.estimatedPricedRuns > 0 ? formatCostUsd(row.costUsd) : <span title="No token-derived list-price estimate was recorded for this model.">—</span>}</dd></div>
       </dl>
     </div>)}
   </div>;
@@ -204,7 +216,7 @@ export function InsightsView() {
             <UsageDialSkeleton />
           ) : null}
           {lifecycleReport.data && <LifecycleReportInsight status={lifecycleReport.data} />}
-          {data.byAgent.length === 0 && data.byKind.length === 0 && data.tokenUsageByModel.length === 0 && data.cursing.messagesAnalyzed === 0 ? (
+          {data.byAgent.length === 0 && data.byKind.length === 0 && data.agentFit.length === 0 && data.tokenUsageByModel.length === 0 && data.cursing.messagesAnalyzed === 0 && (data.providerPricedRuns ?? 0) === 0 && (data.estimatedPricedRuns ?? 0) === 0 && (data.unverifiedCostRuns ?? 0) === 0 && (data.unpricedRuns ?? 0) === 0 && (data.incompleteTokenTelemetryRuns ?? 0) === 0 ? (
             <div className="discovery-empty">
               <LineChart size={26} />
               <h3>Nothing to show yet</h3>
@@ -252,31 +264,34 @@ export function InsightsView() {
                   <div className="insight-cost-summary">
                     <div className="insight-cost-total">
                       <span className="eyebrow">Provider billed</span>
-                      <strong>{formatCostUsd(data.providerCostUsd ?? 0)}</strong>
+                      <strong>{formatMeasuredCost(data.providerCostUsd ?? 0, data.providerPricedRuns ?? 0)}</strong>
                       <CostTrend current={data.providerCostUsd ?? 0} previous={data.previousProviderCostUsd ?? null} />
                     </div>
                     <div className="insight-cost-total">
                       <span className="eyebrow">List-price estimate</span>
-                      <strong>{formatCostUsd(data.estimatedCostUsd ?? 0)}</strong>
+                      <strong>{formatMeasuredCost(data.estimatedCostUsd ?? 0, data.estimatedPricedRuns ?? 0)}</strong>
                       <CostTrend current={data.estimatedCostUsd ?? 0} previous={data.previousEstimatedCostUsd ?? null} />
                     </div>
                     <div className="insight-cost-split">
-                      {data.byAgent.filter((agent) => agent.total > 0).map((agent) => <div key={agent.agent}>
+                      {data.byAgent.filter((agent) => agent.total > 0 || agent.providerPricedRuns > 0 || agent.estimatedPricedRuns > 0).map((agent) => <div key={agent.agent}>
                         <span>{agent.agent}</span>
-                        <strong>{formatCostUsd(agent.providerCostUsd ?? 0)} billed</strong>
-                        <small>{formatCostUsd(agent.estimatedCostUsd ?? 0)} estimate</small>
+                        <strong>{formatMeasuredCost(agent.providerCostUsd ?? 0, agent.providerPricedRuns ?? 0)} billed</strong>
+                        <small>{formatMeasuredCost(agent.estimatedCostUsd ?? 0, agent.estimatedPricedRuns ?? 0)} estimate</small>
                       </div>)}
                     </div>
                   </div>
                   {(data.costByDay ?? []).length > 0 && <CostByDayChart rows={data.costByDay} />}
-                  {(data.unverifiedCostRuns ?? 0) > 0 && <p className="insight-empty-note">{data.unverifiedCostRuns} historical run{data.unverifiedCostRuns === 1 ? '' : 's'} had a stored cost without provenance and are excluded from these totals.</p>}
+                  {(data.unverifiedCostRuns ?? 0) > 0 && <p className="insight-empty-note">{data.unverifiedCostRuns} run{data.unverifiedCostRuns === 1 ? '' : 's'} had a stored cost without provenance and are excluded from these totals.</p>}
                   {(data.unpricedRuns ?? 0) > 0 && <p className="insight-empty-note">{data.unpricedRuns} run{data.unpricedRuns === 1 ? '' : 's'} reported tokens but had no rate for their model, so the total is understated.</p>}
                 </>}
               </div>
 
               <div className="insight-section">
-                <h3>Token usage <InfoTooltip>Reported fresh input, cache writes, cache reads, and output from terminal agent runs in this window. Cache traffic is shown separately because it is billed differently and can dwarf fresh prompt input. Rows group usage by provider and model.</InfoTooltip></h3>
-                {data.tokenUsageByModel.length === 0 ? <p className="insight-empty-note">No token usage was reported by agent runs in this window.</p> : <>
+                <h3>Token usage <InfoTooltip>Only runs with a provider-reported cache split are included. Fresh input, cache writes, cache reads, and output are separate because cache traffic is billed differently and can dwarf fresh prompt input. Rows group usage by provider and model.</InfoTooltip></h3>
+                {data.tokenUsageByModel.length === 0 ? <>
+                  <p className="insight-empty-note">No token usage with a complete provider cache split was reported in this window.</p>
+                  {(data.incompleteTokenTelemetryRuns ?? 0) > 0 && <p className="insight-empty-note">{data.incompleteTokenTelemetryRuns} run{data.incompleteTokenTelemetryRuns === 1 ? '' : 's'} lacked a cache split and are excluded rather than guessed.</p>}
+                </> : <>
                   <div className="insight-token-summary">
                     <div><span>Total traffic</span><strong>{formatTokenCount(data.inputTokens + data.cacheCreationInputTokens + data.cacheReadInputTokens + data.outputTokens)}</strong></div>
                     <div><span>Fresh input</span><strong>{formatTokenCount(data.inputTokens)}</strong></div>
@@ -285,14 +300,15 @@ export function InsightsView() {
                     <div><span>Output</span><strong>{formatTokenCount(data.outputTokens)}</strong></div>
                   </div>
                   <TokenUsageRows rows={data.tokenUsageByModel} />
+                  {(data.incompleteTokenTelemetryRuns ?? 0) > 0 && <p className="insight-empty-note">{data.incompleteTokenTelemetryRuns} run{data.incompleteTokenTelemetryRuns === 1 ? '' : 's'} lacked a cache split and are excluded from token totals rather than guessed.</p>}
                 </>}
               </div>
 
               <div className="insight-section insight-reliability">
                 <h3>System reliability <InfoTooltip>Computed across every agent run in this window, regardless of agent or task type.</InfoTooltip></h3>
                 <div className="insight-reliability-grid">
-                  <div><span>Retry rate <InfoTooltip>Share of all terminal agent attempts with a recorded retry. It includes canceled and failed attempts; the count is the number of retry events in this window.</InfoTooltip></span><strong>{formatPercent(data.retryRate)}</strong><small>{data.retryCount} retry attempt{data.retryCount === 1 ? '' : 's'} recorded in this window.</small></div>
-                  <div><span>Agent handoffs <InfoTooltip>Times an agent was switched to its counterpart after the first provider became unavailable. Counts come from the lifecycle event ledger, not only fallback_from fields.</InfoTooltip></span><strong>{formatPercent(data.fallbackRate)}</strong><small>{data.handoffCount} handoff{data.handoffCount === 1 ? '' : 's'} recorded in this window.</small></div>
+                  <div><span>Retry events <InfoTooltip>Retry events per 100 terminal agent runs. It includes canceled and failed runs; the event count comes from the lifecycle ledger, including chat-era history.</InfoTooltip></span><strong>{formatEventsPerHundredRuns(data.retryRate)}</strong><small>{data.retryCount} retry event{data.retryCount === 1 ? '' : 's'} recorded in this window.</small></div>
+                  <div><span>Agent handoffs <InfoTooltip>Handoffs per 100 terminal agent runs. Events record when an agent switched to its counterpart after the first provider became unavailable, including chat-era history.</InfoTooltip></span><strong>{formatEventsPerHundredRuns(data.fallbackRate)}</strong><small>{data.handoffCount} handoff{data.handoffCount === 1 ? '' : 's'} recorded in this window.</small></div>
                 </div>
               </div>
 

@@ -7,7 +7,7 @@ watchdog_plist="$HOME/Library/LaunchAgents/$watchdog_label.plist"
 repo="/Users/jeffrey.lu/dev/workbench"
 domain=$(sed -n 's/^NGROK_DOMAIN=//p' "$repo/.env" | head -1)
 runtime_port=$(sed -n 's/^WORKBENCH_RUNTIME_PORT=//p' "$repo/.env" | head -1)
-runtime_port=${runtime_port:-5173}
+runtime_port=${runtime_port:-5180}
 if [[ -z "$domain" ]]; then
   echo "NGROK_DOMAIN is required in $repo/.env" >&2
   exit 1

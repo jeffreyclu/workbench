@@ -15,6 +15,12 @@ const baseSchemaStatements = [
       is_queued INTEGER NOT NULL DEFAULT 1,
       source_identifier TEXT,
       source_url TEXT,
+      machine_proposed INTEGER NOT NULL DEFAULT 0 CHECK (machine_proposed IN (0, 1)),
+      machine_proposal_run_id TEXT,
+      machine_proposal_window_start TEXT,
+      suggested_priority INTEGER,
+      suggested_queue_position INTEGER,
+      proposal_rationale TEXT,
       project_name TEXT,
       stack TEXT NOT NULL DEFAULT 'attention' CHECK (stack IN ('attention', 'workbench')),
       workspace_path TEXT,
@@ -74,6 +80,7 @@ const baseSchemaStatements = [
       conversation_id TEXT,
       message_id TEXT
       ,model TEXT
+      ,account_profile TEXT
       ,execution_profile TEXT
       ,input_tokens INTEGER
       ,output_tokens INTEGER
@@ -1256,6 +1263,99 @@ const schemaMigrations: readonly Migration[] = [
       if (!columns.some((column) => column.name === 'cache_read_input_tokens')) {
         database.exec('ALTER TABLE shared_messages ADD COLUMN cache_read_input_tokens INTEGER;');
       }
+    },
+  },
+  {
+    // Unlinked shared-room replies have no agent_runs row. Persist their
+    // selected profile on the visible reply itself so dispatch provenance is
+    // both durable and inspectable without exposing any credential material.
+    id: '035_shared_message_account_profile',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'account_profile')) {
+        database.exec('ALTER TABLE shared_messages ADD COLUMN account_profile TEXT;');
+      }
+    },
+  },
+  {
+    // /usage reports a reset date alongside its observed percentage; storing
+    // it lets the calibration history show when each reading's window closed
+    // without recomputing it from the observed timestamp.
+    id: '036_usage_calibration_resets_at',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(usage_calibrations)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'resets_at')) {
+        database.exec('ALTER TABLE usage_calibrations ADD COLUMN resets_at TEXT;');
+      }
+    },
+  },
+  {
+    // Phase 3a keeps the autonomous budget policy in SQLite so plan and quota
+    // changes never require a code release. The global row starts disabled;
+    // runtime approval must explicitly enable it after the gate is promoted.
+    // Provider rows are intentionally not seeded because an invented weekly
+    // ceiling would turn a missing configuration into permission to spend.
+    id: '037_autonomy_governor_policy',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS autonomy_policy (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          global_enabled INTEGER NOT NULL DEFAULT 0 CHECK (global_enabled IN (0, 1)),
+          target_fraction REAL NOT NULL CHECK (target_fraction > 0 AND target_fraction < 1),
+          alarm_fraction REAL NOT NULL CHECK (alarm_fraction > 0 AND alarm_fraction < 1),
+          updated_at TEXT NOT NULL,
+          CHECK (target_fraction < alarm_fraction)
+        );
+        INSERT OR IGNORE INTO autonomy_policy (id, global_enabled, target_fraction, alarm_fraction, updated_at)
+        VALUES (1, 0, 0.16, 0.20, CURRENT_TIMESTAMP);
+
+        CREATE TABLE IF NOT EXISTS autonomy_provider_policy (
+          provider TEXT PRIMARY KEY CHECK (provider IN ('claude', 'codex')),
+          enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+          weekly_ceiling_set REAL NOT NULL CHECK (weekly_ceiling_set > 0),
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS autonomy_governor_decisions (
+          id TEXT PRIMARY KEY,
+          provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+          model TEXT NOT NULL,
+          work_item_id TEXT,
+          outcome TEXT NOT NULL CHECK (outcome IN ('allowed', 'refused')),
+          reason_code TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          estimated_set REAL,
+          reservation_id TEXT,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_autonomy_decisions_created
+          ON autonomy_governor_decisions(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_autonomy_decisions_provider_outcome
+          ON autonomy_governor_decisions(provider, outcome, created_at DESC);
+      `);
+
+      const columns = database.prepare('PRAGMA table_info(budget_reservations)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'window_start')) database.exec('ALTER TABLE budget_reservations ADD COLUMN window_start TEXT;');
+      if (!columns.some((column) => column.name === 'window_end')) database.exec('ALTER TABLE budget_reservations ADD COLUMN window_end TEXT;');
+      if (!columns.some((column) => column.name === 'actual_set')) database.exec('ALTER TABLE budget_reservations ADD COLUMN actual_set REAL;');
+      if (!columns.some((column) => column.name === 'reconciled_at')) database.exec('ALTER TABLE budget_reservations ADD COLUMN reconciled_at TEXT;');
+      if (!columns.some((column) => column.name === 'alarm_triggered')) database.exec('ALTER TABLE budget_reservations ADD COLUMN alarm_triggered INTEGER NOT NULL DEFAULT 0 CHECK (alarm_triggered IN (0, 1));');
+      database.exec('CREATE INDEX IF NOT EXISTS idx_budget_reservations_window ON budget_reservations(provider, window_start, status);');
+    },
+  },
+  {
+    // Phase 4 proposals remain normal work items, but their machine origin and
+    // human-review requirement must survive queue reads and dispatcher restarts.
+    id: '038_machine_discovery_proposals',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'machine_proposed')) database.exec('ALTER TABLE work_items ADD COLUMN machine_proposed INTEGER NOT NULL DEFAULT 0 CHECK (machine_proposed IN (0, 1));');
+      if (!columns.some((column) => column.name === 'machine_proposal_run_id')) database.exec('ALTER TABLE work_items ADD COLUMN machine_proposal_run_id TEXT;');
+      if (!columns.some((column) => column.name === 'machine_proposal_window_start')) database.exec('ALTER TABLE work_items ADD COLUMN machine_proposal_window_start TEXT;');
+      if (!columns.some((column) => column.name === 'suggested_priority')) database.exec('ALTER TABLE work_items ADD COLUMN suggested_priority INTEGER;');
+      if (!columns.some((column) => column.name === 'suggested_queue_position')) database.exec('ALTER TABLE work_items ADD COLUMN suggested_queue_position INTEGER;');
+      if (!columns.some((column) => column.name === 'proposal_rationale')) database.exec('ALTER TABLE work_items ADD COLUMN proposal_rationale TEXT;');
+      database.exec('CREATE INDEX IF NOT EXISTS idx_work_items_machine_proposal_window ON work_items(machine_proposed, machine_proposal_window_start);');
     },
   },
 ];

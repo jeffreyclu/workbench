@@ -5,6 +5,125 @@ import { expect, test } from '@playwright/test';
 const MIN_TOUCH_TARGET_PX = 44;
 
 test.describe('phone-viewport touch targets', () => {
+  test('keeps task drag handles available when the stack has another page', async ({ page, request }, testInfo) => {
+    const suffix = `${testInfo.project.name}-${Date.now().toString(36)}`;
+    const created = await Promise.all(Array.from({ length: 51 }, (_, index) => request.post('/api/work-items', {
+      data: {
+        title: `Paginated drag task ${index + 1} ${suffix}`,
+        description: '',
+        status: 'ready',
+        projectName: null,
+        dueDate: null,
+      },
+    })));
+    for (const response of created) expect(response.ok()).toBe(true);
+
+    await page.goto('/');
+    await page.getByRole('textbox', { name: 'Search tasks' }).fill(suffix);
+    const firstTask = page.getByRole('listitem').filter({ hasText: suffix }).first();
+    await expect(firstTask).toBeVisible();
+
+    // A second page may exist, but the loaded task still has a valid server-side
+    // neighbor and must be sortable instead of degrading to a static rank.
+    const handle = firstTask.getByRole('button', { name: /^Reorder Paginated drag task/ });
+    await expect(handle).toBeVisible();
+    const firstTaskId = await firstTask.getAttribute('data-work-item-id');
+
+    const thirdTask = page.getByRole('listitem').filter({ hasText: suffix }).nth(2);
+    await expect(thirdTask).toBeVisible();
+    const handleBox = await handle.boundingBox();
+    const targetBox = await thirdTask.boundingBox();
+    expect(handleBox).not.toBeNull();
+    expect(targetBox).not.toBeNull();
+
+    const savedOrder = page.waitForRequest((outgoing) => outgoing.method() === 'PUT'
+      && new URL(outgoing.url()).pathname === '/api/queue/order'
+      && outgoing.postDataJSON().itemId === firstTaskId);
+    await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2 + 12);
+    await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 8 });
+    await page.mouse.up();
+
+    expect((await savedOrder).postDataJSON()).toEqual(expect.objectContaining({ itemId: firstTaskId }));
+  });
+
+  test('persists a pointer drag in the Workbench stack', async ({ page, request }, testInfo) => {
+    const suffix = `${testInfo.project.name}-${Date.now().toString(36)}`;
+    const created = await Promise.all([
+      { position: 'first', status: 'ready' },
+      { position: 'second', status: 'backlog' },
+      { position: 'third', status: 'backlog' },
+    ].map(({ position, status }) => request.post('/api/work-items', {
+      data: {
+        title: `Workbench drag ${position} ${suffix}`,
+        description: '',
+        status,
+        projectName: 'Workbench',
+        dueDate: null,
+      },
+    })));
+    for (const response of created) expect(response.ok()).toBe(true);
+
+    await page.goto('/workbench');
+    await page.getByRole('textbox', { name: 'Search tasks' }).fill(suffix);
+    const tasks = page.getByRole('listitem').filter({ hasText: suffix });
+    const firstTask = tasks.first();
+    const targetTask = tasks.last();
+    const handle = firstTask.getByRole('button', { name: /^Reorder / });
+    await expect(handle).toBeVisible();
+    await expect(targetTask).toBeVisible();
+    const firstTaskId = await firstTask.getAttribute('data-work-item-id');
+    const targetTaskId = await targetTask.getAttribute('data-work-item-id');
+    const handleBox = await handle.boundingBox();
+    const targetBox = await targetTask.boundingBox();
+    expect(handleBox).not.toBeNull();
+    expect(targetBox).not.toBeNull();
+
+    let releaseResponse = () => {};
+    let markRequestPersisted = () => {};
+    const responseGate = new Promise<void>((resolve) => { releaseResponse = resolve; });
+    const requestPersisted = new Promise<void>((resolve) => { markRequestPersisted = resolve; });
+    await page.route('**/api/queue/order', async (route) => {
+      if (route.request().method() !== 'PUT' || route.request().postDataJSON().itemId !== firstTaskId) {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      markRequestPersisted();
+      await responseGate;
+      await route.fulfill({ response });
+    });
+    const savedOrder = page.waitForResponse((incoming) => incoming.request().method() === 'PUT'
+      && new URL(incoming.url()).pathname === '/api/queue/order'
+      && incoming.request().postDataJSON().itemId === firstTaskId);
+    await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2 + 12);
+    await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height - 4, { steps: 8 });
+    try {
+      await page.mouse.up();
+      await requestPersisted;
+      const optimisticIds = await tasks.evaluateAll((cards) => cards.map((card) => card.getAttribute('data-work-item-id')));
+      expect(optimisticIds.indexOf(firstTaskId)).toBeGreaterThan(optimisticIds.indexOf(targetTaskId));
+      expect(await firstTask.evaluate((card) => card.getAnimations().filter((animation) => animation instanceof CSSTransition).length)).toBe(0);
+    } finally {
+      releaseResponse();
+    }
+    const saved = await savedOrder;
+    expect(saved.ok()).toBe(true);
+    expect(saved.request().postDataJSON()).toEqual(expect.objectContaining({ itemId: firstTaskId, stack: 'workbench' }));
+    // A manual drop lands in its persisted slot. The separate FLIP motion is
+    // reserved for automatic, server-driven reorders.
+    expect(await firstTask.evaluate((card) => getComputedStyle(card).transitionProperty)).not.toContain('transform');
+    const returnedItems = (await saved.json()) as { items: Array<{ id: string }> };
+    const savedIds = returnedItems.items.map((item) => item.id);
+    // The visible Attention section can contain ready and backlog work. Verify
+    // the persisted order across that status boundary, not merely that a
+    // request was made.
+    expect(savedIds.indexOf(firstTaskId!)).toBeGreaterThan(savedIds.indexOf(targetTaskId!));
+  });
+
   test('the bottom navigation tabs are each at least 44x44', async ({ page }) => {
     await page.goto('/');
     const nav = page.locator('#primary-nav nav');

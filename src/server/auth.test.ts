@@ -37,7 +37,7 @@ describe('workbench auth gate', () => {
   });
 
   it('gates a remote IPv4 socket even with a spoofed loopback Host header', () => {
-    const result = call('/', { host: 'localhost:5173' }, { remoteAddress: '203.0.113.7' });
+    const result = call('/', { host: 'localhost:5180' }, { remoteAddress: '203.0.113.7' });
     expect(result.status).toBe(401);
   });
 

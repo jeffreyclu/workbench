@@ -83,12 +83,34 @@ When a task involves file output and multiple agents are active, one must comple
 
 Workbench must not claim Writer or Pluto development ports. Jeffrey's explicit allocation is:
 
-- Writer/Pluto keep their normal ports, including `5173`.
+- Writer/Pluto keep their normal development ports.
 - Workbench's stable gateway and ngrok target use `5180`.
 - Workbench's review preview uses `5181`.
 
 When changing this allocation, update the preview command, the supervisor-managed process, and
 user-facing runtime references together. Do not redirect Writer or Pluto as a workaround.
+
+The stable gateway port is `5180` everywhere Workbench emits or consumes a runtime URL: promotion
+health checks, supervisor defaults, share defaults, app-origin defaults, MCP configuration, agent
+prompts, docs, and tests. Do not reintroduce the separate local development service's port into
+Workbench configuration.
+
+### Phone preview through the separate project ngrok hostname
+
+`https://broiling-recoil-grouped.ngrok-free.dev` is Workbench-only and stays on `5180`.
+`https://blahblahblah.ngrok.app/` is the separate Writer/Pluto phone-preview hostname. Workbench's
+`npm run share -- <local-url>` command controls that preview hostname and forwards it to exactly one
+already-running requested project. Do not put a share command in either project or repoint Workbench's
+hostname.
+
+Vite dev servers reject the public ngrok `Host` header by default. The Workbench share command must
+rewrite that request header to the local target host; otherwise the tunnel is connected but every
+phone request returns Vite's 403 "host is not allowed" page. Verify the public URL returns HTTP 200
+before handing off a phone preview.
+
+Some local Vite instances bind only the IPv6 loopback address. The Workbench-only share command must
+fall back from an explicit `127.0.0.1` target to `localhost` when that target is otherwise healthy;
+do not report that a project is down merely because IPv4 is unavailable. Verified 2026-08-24.
 
 ### Always close dev servers **(always)**
 
@@ -204,3 +226,24 @@ The selected profile must not weaken shared-context injection, subprocess secret
 hard per-run token/cost budget. Do not implement this by copying tokens into Workbench settings or
 by relying on an undocumented Claude CLI environment variable; the one-time account login and the
 credential-directory mechanism must be verified against the installed Claude CLI first.
+
+### Verify "already implemented" claims against files, not just memory
+
+A prior-session summary said a feature (the /usage calibration UI) was "implemented and verified."
+Reading the actual file showed only the server half existed — the client input form and history view
+were never written. The summary was half-true, and treating it as settled would have shipped a task
+half-done.
+
+Retrieved memory (compacted summaries, shared-memory notes, prior-session claims) records what was
+believed true at write time, not a live snapshot. Before continuing work that memory says is already
+done, `Read` the file(s) it names and confirm the claimed code is actually there. Only after that
+confirms it, trust the memory for the *reasoning* behind the earlier decisions.
+
+### Isolate pre-existing failures with a stash round-trip before reporting verification results
+
+On a branch with substantial unrelated in-flight work, `npm run typecheck`/`npm test` can fail for
+reasons that have nothing to do with the change just made. Before writing "not clean" (or worse,
+silently attributing someone else's failure to your own diff), `git stash` everything, re-run the
+check, then `git stash pop`. If the same failures appear with the change fully removed, they predate
+it and are out of scope — say so explicitly rather than blurring "my change is clean" with "the
+branch is clean."

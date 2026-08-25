@@ -3,6 +3,7 @@ import { ArrowUpRight, Ban, Check, Copy, FileText, History, LoaderCircle, Messag
 import { useState, type FormEvent } from 'react';
 import { api } from './api';
 import { versionUrl } from './artifact-url';
+import { copyText } from './clipboard';
 import { ConfirmationDialog } from './confirmation-dialog';
 import { toast, toastError } from './toast-store';
 import { MarkdownComposer } from './markdown-composer.js';
@@ -29,7 +30,7 @@ function CopyLink({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button className="button secondary compact" onClick={async () => {
-      await navigator.clipboard.writeText(url);
+      await copyText(url);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1_200);
     }}>

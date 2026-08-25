@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { buildSharedReplyPrompt, classificationForLinkedItem, compactConversationHistory, compactSharedBrief, hasUntrackedContinuationClaim, resolveSharedReplyWorkingDirectory } from './shared-room.js';
+import { accountProfileForSharedReply, buildSharedReplyPrompt, classificationForLinkedItem, compactConversationHistory, compactSharedBrief, hasUntrackedContinuationClaim, resolveSharedReplyWorkingDirectory } from './shared-room.js';
 
 function message(index: number, body: string): SharedMessage {
   return {
@@ -43,9 +43,9 @@ describe('compactConversationHistory', () => {
 
   it('keeps the newest turns, compacts older turns, and respects its prompt budget', () => {
     const messages = Array.from({ length: 14 }, (_, index) => message(index, `turn-${index} ${'x'.repeat(2_000)}`));
-    const history = compactConversationHistory(messages, 8_000);
+    const history = compactConversationHistory(messages, 3_000);
 
-    expect(history.length).toBeLessThanOrEqual(8_000);
+    expect(history.length).toBeLessThanOrEqual(3_000);
     expect(history).toContain('Earlier conversation');
     expect(history).toContain('turn-13');
     expect(history).not.toContain(`turn-0 ${'x'.repeat(500)}`);
@@ -55,7 +55,7 @@ describe('compactConversationHistory', () => {
     const brief = `start ${'x'.repeat(2_800)} end`;
     const compacted = compactSharedBrief(brief);
 
-    expect(compacted.length).toBeLessThanOrEqual(1_900);
+    expect(compacted.length).toBeLessThanOrEqual(800);
     expect(compacted).toContain('characters compacted; use retrieved memory');
     expect(compacted).toContain('start');
     expect(compacted).toContain('end');
@@ -85,6 +85,19 @@ describe('compactConversationHistory', () => {
     const task = repository.create({ title: 'Fix connector query regression', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: workspace, dueDate: null });
 
     expect(resolveSharedReplyWorkingDirectory(task)).toBe(workspace);
+    database.close();
+  });
+
+  it('uses an explicit room profile, then falls back to the task-scoped default', () => {
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const externalTask = repository.create({ title: 'Fix connector query regression', description: '', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: '/Users/jeffrey.lu/dev/writer-monorepo', dueDate: null });
+    const workbenchTask = repository.create({ title: 'Fix room routing', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+
+    expect(accountProfileForSharedReply(null, 'default')).toBe('default');
+    expect(accountProfileForSharedReply(null)).toBe('default');
+    expect(accountProfileForSharedReply(externalTask)).toBe('default');
+    expect(accountProfileForSharedReply(workbenchTask)).toBe('personal');
     database.close();
   });
 });

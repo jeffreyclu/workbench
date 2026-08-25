@@ -21,9 +21,9 @@ export function ConversationOriginBadge({ workItemId }: Pick<SharedConversation,
 }
 export function ModelProfileSelect({ value, onChange, className = '' }: { value: AgentRun['executionProfile']; onChange: (value: AgentRun['executionProfile']) => void; className?: string }) {
   return <select className={className} value={value ?? 'auto'} onChange={(event) => onChange(event.target.value === 'auto' ? null : event.target.value as NonNullable<AgentRun['executionProfile']>)} aria-label="Model choice">
-    <option value="auto">Auto model</option>
-    <option value="economy">Fast · Haiku / Luna</option>
-    <option value="standard">Balanced · Sonnet / Terra</option>
-    <option value="deep">Powerful · Opus / Sol</option>
+    <option value="auto">Auto</option>
+    <option value="economy">Fast</option>
+    <option value="standard">Balanced</option>
+    <option value="deep">Deep</option>
   </select>;
 }

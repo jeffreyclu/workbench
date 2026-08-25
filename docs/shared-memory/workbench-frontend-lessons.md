@@ -20,7 +20,7 @@ button wasn't `disabled` after a second click — both true whether or not the c
 re-ran. It never asserted the click produced an effect (a refetch, a state change). Writing an
 independent test that clicked Archive → Active → Archive and counted `fetch` calls to the
 `view=archive` endpoint proved the handler does fire correctly every time (count rose 2 → 4) — so
-the toggle logic itself was not the bug. Separately, `/api/health` on the live gateway (port 5173)
+the toggle logic itself was not the bug. Separately, `/api/health` on the live gateway (port 5180)
 was missing the `buildId` field present in the working-tree server source, showing the currently
 promoted release predates the self-reload-toast feature, so a stale open tab would not self-heal
 this time and a real hard refresh was still required. The lesson: when a subagent's "verified" claim
@@ -58,10 +58,24 @@ center does not prove the whole touch target remains clickable through an animat
 
 *Decision from Jeffrey, 2026-08-23.* The task controls in a linked conversation header and the composer attachment control must not render text labels. Keep unlink, complete, and attach as compact, distinct icon buttons with accessible names and hover titles; regression tests must prevent visible button text from returning.
 
+### Phone composer controls must have an intentional complete layout
+
+*Correction from Jeffrey, 2026-08-24.* A responsive control strip cannot assume its desktop child count. The shared-room composer has attachment, model, account, recipient, and send controls. At phone widths, give all five explicit grid areas; do not allow a fifth control to spill into an implicit offscreen grid column. Keep model, account, and recipient visible and separately selectable. Use short visible option labels and a single compact row when it fits. The visible per-message telemetry badge is only `agent · account profile · cost`; model, token counts, requested-vs-actual routing, and other provenance remain in its hover title rather than consuming layout space.
+
+
+### Execution account status is a compact status surface, not a login-button strip
+
+*Decision from Jeffrey, 2026-08-24.* The Agent execution panel must show each provider as a readable connection row: provider, signed-in identity/state, and a compact `Switch` or `Sign in` action. Do not render the raw `Provider · signed in/login` button strip or leave profile creation permanently expanded. Provider status must use the CLI's actual output streams: Codex 0.149 reports `Logged in using ChatGPT` on stderr with a successful exit, so stdout-only probing falsely labels a live Codex session as logged out.
+
+*Follow-up decision from Jeffrey, 2026-08-24.* Keep the profile selector and a compact selected-profile summary visible in Agent execution, but keep the full account/provider list closed until the user presses **Edit profile**. That control is the single place to switch or sign in to providers and add a named profile.
+
+*Follow-up decision from Jeffrey, 2026-08-24.* Agent-execution action buttons are icon-only: profile editing, execution, provider sign-in/switching, and profile creation. Use descriptive `aria-label` and hover `title` text instead of visible button labels.
+
+*Follow-up decision from Jeffrey, 2026-08-24.* Green/primary icon actions are not hero CTAs. Send, execute, complete, and equivalent primary actions use the same square footprint as adjacent icon controls (34px on desktop; the established 44px mobile touch-target override where applicable). Implement them as `.icon-button.primary`, not as generic text-button variants with local size overrides.
 
 ### Runtime promotion never reloads an already-open browser tab
 
-`promote_runtime` rebuilds and swaps the backend process behind `:5173`, but nothing in the app
+`promote_runtime` rebuilds and swaps the backend process behind `:5180`, but nothing in the app
 pushes a reload to a tab that was already open before the swap — the tab keeps running whatever JS
 bundle it loaded at page-load time, indefinitely, until a hard refresh. Confirmed 2026-08-23: after a
 verified promotion (server API correct, live bundle byte-matching the fixed source, 56/56 tests
@@ -120,6 +134,15 @@ offset reduce. The general lesson: any manually-virtualized (absolute-position +
 list in this codebase needs its gap baked into the row-height math itself, not into CSS margin/padding
 — CSS spacing on an absolutely positioned, intrinsically-sized row does nothing to push the next row
 down, only a bigger reserved offset does.
+
+The shared-card pass on 2026-08-24 raised conversation cards from the old 58px
+layout to an 88px minimum, but left the conversation virtualizer and its
+no-virtualizer fallback at 58px. Before `ResizeObserver` could correct that
+stale estimate, the next group header was placed directly over the preceding
+card. A virtualizer's initial card estimate is part of its layout contract:
+update it together with a card's minimum height, in every offset path. Cover
+this with a browser geometry check over long titles, because jsdom does not
+perform the layout that exposes this failure.
 
 ## Stale responsive overrides survive UI convention changes — check media queries when a "fixed" style regresses
 
@@ -189,7 +212,7 @@ Two rules follow, both now enforced in the code:
 Method lesson, which generalizes past this bug: when Jeffrey says a UI fix is still broken after tests
 pass, drive the real app in a real browser at his viewport before touching the code. `playwright` and
 both `chromium` and `webkit` browsers are already installed in this repo; a throwaway script against a
-`vite` dev server pointed at the live API (`WORKBENCH_API_TARGET=http://127.0.0.1:5173`) reproduces
+`vite` dev server pointed at the live API (`WORKBENCH_API_TARGET=http://127.0.0.1:5180`) reproduces
 against real data in under a minute. Reproduce the *multi-step* sequence — repeat each toggle three
 times — because state that only corrupts after both branches have been visited is invisible to a
 one-transition test. Run that server as a child process of a single foreground script that kills it in
@@ -237,3 +260,170 @@ Playwright harness in `scripts/e2e-api.ts` therefore mounts a test-only `POST /a
 route ahead of the real app, in the script and never in shipped server code. When asserting overflow,
 exempt descendants that sit inside their own horizontal scroll container — a code block scrolling
 within the bubble is the intended treatment, and flagging it hides the real offenders.
+
+### System task reordering is distinct from drag-and-drop
+
+*Correction from Jeffrey, 2026-08-24.* When asking for task-reordering animation, Jeffrey means a
+server/system-driven update to the ranked stack — not motion applied to the dnd-kit interaction.
+Manual drag-and-drop must not transition `transform` after the pointer is released: the task should
+immediately occupy its persisted slot. Animate only the rendered list's changed server order; keep
+that FLIP motion out of the manual-drop confirmation path. Normal non-position visual transitions
+(for example, hover colors) may remain.
+
+The reported post-drop defect was a flash, not lingering transform motion. A
+non-optimistic reorder lets dnd-kit remove its temporary transforms while the
+old query order is still rendered, so the card flashes back to its origin and
+then jumps to the server-confirmed slot. Apply the same move to the exact
+TanStack Query page synchronously inside `onDragEnd`, roll it back on request
+failure, and suppress ordinary card-style transitions through dnd-kit's
+teardown frame. Browser coverage must hold the PUT response and assert the card
+is already in its final DOM position; checking resting `transition-property`
+alone cannot catch the stale frame.
+
+### Pagination must not disable reorder handles
+
+*Correction from Jeffrey, 2026-08-24.* The attention stack is paginated in 50-task pages. A user may
+still move a task relative to another task in the loaded page: the queue move API accepts an adjacent
+task ID and applies the canonical order server-side. Do not use `hasNextPage` as a reason to remove
+sortable IDs or turn drag handles into ranks. It makes drag-and-drop disappear precisely on a normal,
+large stack. During an in-flight next-page fetch, temporarily disabling a drop is acceptable because
+the loaded boundary is changing; pagination itself is not.
+
+### Workbench drag-and-drop must name and preserve its filtered queue slice
+
+*Confirmed 2026-08-24.* The Workbench task route renders a filtered slice of
+the single canonical queue. Enabling dnd-kit there without sending a
+`stack: 'workbench'` move target routes its neighboring IDs to the Attention
+move operation and rejects the drop. Sending the stack alone is not enough:
+the queue service must replace only Workbench IDs at their existing positions
+in the canonical sequence, preserving Attention IDs between them. Increment
+the Workbench version and the canonical Attention version so a pending global
+proposal cannot later overwrite the move. Cover this with a real pointer drag
+in a mixed queue plus a server assertion for the resulting full order.
+
+### Rendered stack sections, not raw statuses, are the DnD boundaries
+
+*Confirmed 2026-08-24.* The Workbench route's visible Attention section contains
+multiple lifecycle statuses, including `ready`, `backlog`, `blocked`, and
+`done`. Giving that section one `SortableContext` while keeping a same-status
+guard in the drop handler makes a normal ready-to-backlog drag activate and
+then silently reset without sending a request. Use the view model's rendered
+groups (`progress`, `attention`, `pinned`) for both sortable contexts and drop
+calculation. Different rendered sections remain invalid destinations; different
+raw statuses inside the same section remain reorderable. Pointer coverage must
+include a mixed-status Workbench Attention section and assert the resulting
+server order for the exact task ID; identical-status fixtures miss this bug.
+
+### Conversation delete was already a soft-delete with no way back in the UI
+
+*Confirmed 2026-08-24.* `shared_conversations.deleted_at` already exists and
+`DELETE /api/shared/conversations/:id` already sets it — deletion was never
+actually destructive at the data layer, but nothing surfaced a way to reverse
+it, so it *felt* destructive (native `confirm()`, then gone). Added a matching
+`undelete` primitive at every layer (repository → facade → route → client) and
+wired it into the existing but previously-unused `action`/`actionLabel` toast
+option as an "Undo" button on the delete-success toast, rather than building a
+separate trash view. Toasts are in-memory and clear on reload, which happens to
+satisfy an "undo within a reasonable window or until reload" acceptance bar for
+free. If a future task wants a persistent/longer-lived undo (survives reload,
+long delay), a real trash view reading `deleted_at IS NOT NULL` rows is the
+next step — the soft-delete data already supports it, only the UI is missing.
+
+### Workbench motion: shared tokens exist, and virtualized rows must not carry unconditional enter animations
+
+*Confirmed 2026-08-24.* Motion timing already lives as tokens in
+`src/client/styles.css` (`--motion-fast/standard/emphasized/ease`) plus a global
+`prefers-reduced-motion` override that forces `animation-duration`/
+`transition-duration` to `.01ms !important`. Two rules follow. First, new CSS
+motion uses the tokens instead of new literals — several hand-rolled durations
+(560ms card enter/exit, 260ms FLIP, 180ms toast-in, `.15s` hovers) predate them
+and should converge. Second, the `!important` reduced-motion override does *not*
+reach `Element.animate()`, so every JS animation must check
+`matchMedia('(prefers-reduced-motion: reduce)')` itself, the way
+`use-task-stack-reorder-animation.ts` does.
+
+The virtualization trap: `.conversation-tabs .virtual-row > button` carries
+`animation: conversation-card-enter` unconditionally, so TanStack Virtual
+re-firing a row's mount while scrolling replays the "new item" animation for
+rows that are not new. Insertion animations must be gated on an explicit
+`is-entering` class driven by state (the task stack's `enteringTaskIds` pattern
+in `features/navigation/app.tsx`), never on mount of a virtualized row. Exit
+animations in a virtualized list additionally need the row held in the row model
+until the animation finishes, or `measureElement` fights the collapse.
+
+### Rotating a text-glyph caret wobbles; rotating a border-drawn box does not
+
+*Confirmed 2026-08-24.* `.task-collapsible > summary::before` used `content: '›'`
+rotated via `transform: rotate()` for the open/close chevron. A glyph's bounding
+box is not visually symmetric around its own center, so rotating it wobbles
+instead of pivoting cleanly. Fixed by replacing the glyph with an empty box
+(`content: ''`) sized 6×6px with `border-right`/`border-bottom` drawing an "L",
+rotated -45deg closed / 45deg open — a border-drawn box is symmetric, so the
+same `transform: rotate()` transition now pivots cleanly. Any future rotating-
+icon-via-text-glyph should use this border-box (or an SVG/icon component)
+pattern instead.
+
+### A `streaming` class on a CSS grid container breaks a trailing `::after` caret
+
+*Confirmed 2026-08-24.* `agent-message.tsx`'s structured (multi-section)
+response path put the `streaming` class — and therefore the blinking
+`::after` cursor — on `.agent-response`, which is a CSS grid container. A
+pseudo-element on a grid container becomes its own grid item/row rather than
+flowing inline after the last line of text, so the cursor rendered on its own
+line instead of following the last section's content. Fix: apply `streaming`
+to the last section's inner `.agent-markdown` div (a normal block element)
+instead of the outer grid wrapper. General rule: a trailing inline `::after`
+cursor must live on the innermost flow container, never on an ancestor with
+`display: grid` (or `flex`, which has the same issue).
+
+### Typewriter streaming must reveal complete tokens, not arbitrary character slices
+
+*Confirmed 2026-08-24.* The typewriter renderer sliced the incoming response at
+an arbitrary character position. That visibly clipped words and exposed partial
+Markdown delimiters (for example, `**Awa`) while a response was running.
+Advance the internal timing counter at any pace, but render only through the
+last completed whitespace-delimited token; render the entire body immediately
+when the run finishes. This preserves the typewriter motion without broken
+prose or transient malformed Markdown.
+
+### The 2026-08-24 typewriter fix above was not the whole story: `agent-runner.ts` was also overwriting, not accumulating, the final message body
+
+*Confirmed 2026-08-24.* After the typewriter word-boundary fix, Jeffrey still saw
+cut-off streamed messages. Root cause was server-side, in
+`src/server/agent-runner.ts`'s `readableAgentEvent`/subprocess-event loop: every
+terminal `event.final` (Codex's `agent_message` items, Claude's `result` event)
+did `finalOutput = event.final`, a plain overwrite. Codex can emit more than one
+`agent_message` item in a single run (an interim note, then the real answer);
+each later item silently discarded everything captured in earlier ones, and the
+persisted message body (`finalOutput.trim() || progress.trim() || stdout.trim()`)
+then showed only the last chunk instead of the full response — even though the
+live `progress` accumulator had the complete text the whole time. Fixed by
+accumulating `finalOutput` the same way `progress` already does (append with a
+`\n\n` separator, skip exact-duplicate repeats). General rule: when a streamed
+value has both a "final" event type and a "delta/progress" event type, and the
+final type can fire more than once per run, treat it as an appender, not a
+setter — grep for `= event.final` (or similar single-assignment patterns) as a
+smell whenever a "why did streaming cut off" bug resurfaces after a client-side
+rendering fix already shipped.
+
+### Dialogs had no entrance animation; toasts had entrance but no exit animation
+
+*Confirmed 2026-08-24.* `.dialog-backdrop`/`.dialog` rendered instantly with no
+transition — added `dialog-backdrop-in`/`dialog-in` keyframes (fade, plus a
+slight translate/scale on the dialog itself) using the existing
+`--motion-standard`/`--motion-ease` tokens, gated by the standard
+`prefers-reduced-motion: reduce` override. This covers every dialog variant for
+free since they all compose `.dialog`/`.dialog-backdrop`.
+
+Toasts (`toast-store.ts`) removed themselves from the array — and therefore the
+DOM — the instant `dismissToast` ran, leaving no window for a CSS exit
+transition to play, unlike the task queue's `animateTaskExit`/`exitingTaskIds`
+delayed-removal pattern in `features/navigation/app.tsx`. Applied the same
+pattern to toasts: `dismissToast` now marks the toast `exiting: true` and emits
+immediately (so `.toast-exiting` can start its `toast-out` animation), then
+removes it from the array after a separate `EXIT_DURATION` (180ms, matched to
+the CSS keyframe) timer — tracked in its own `exitTimers` map, independent of
+the countdown timer, and cleared/reset if the same toast is re-pushed mid-exit.
+Every test that asserts a toast is gone after a dismiss now needs an extra
+`vi.advanceTimersByTime(200)` past the moment dismissal is triggered, or the
+assertion runs mid-exit-animation and sees a stale "still present" DOM node.

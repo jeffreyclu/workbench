@@ -148,10 +148,18 @@ Start the stable runtime, then create an outbound tunnel:
 
 ```bash
 npm run runtime:start
-npm run share
+npm run share:workbench
 ```
 
-`share` prints the link. The first visit on a device needs the `?token=` URL once; it sets a long-lived cookie so the bare URL works afterwards. The token grants full access to the queue and can trigger agent work, so treat it like a password.
+`share:workbench` prints the link. The first visit on a device needs the `?token=` URL once; it sets a long-lived cookie so the bare URL works afterwards. The token grants full access to the queue and can trigger agent work, so treat it like a password.
+
+To phone-test another local project, keep that project running normally, then run this command from Workbench:
+
+```bash
+npm run share -- http://127.0.0.1:5180
+```
+
+It temporarily assigns Workbench's one reserved ngrok hostname to that local app and restores the Workbench tunnel when it stops. Do not add a share command to the project itself.
 
 For a stable ngrok hostname, add the domain to `.env`:
 
@@ -201,7 +209,8 @@ npm run runtime:start    # serve the stable runtime on localhost:5180
 npm run preview          # read-only live-data preview UI on 5181
 npm run preview:sandbox  # isolated writable preview UI + API
 npm run dev              # isolated API + Vite development
-npm run share            # expose the stable runtime through a configured tunnel
+npm run share -- <url>   # expose an already-running local app through the shared ngrok hostname
+npm run share:workbench  # expose Workbench's stable runtime through its configured tunnel
 npm run discovery:scan   # run discovery now
 npm run discovery:install # install the nightly discovery schedule
 npm run typecheck

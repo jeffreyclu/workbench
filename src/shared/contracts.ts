@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { projectKey } from './project-name.js';
 
 export const workItemStatusSchema = z.enum([
   'backlog',
@@ -96,6 +97,13 @@ export const workItemSchema = z.object({
   sourceIdentifier: z.string().nullable(),
   sourceUrl: z.string().nullable(),
   sourceTags: z.array(z.string()),
+  /** Discovery created this item; Jeffrey must promote it before execution. */
+  machineProposed: z.boolean().optional(),
+  machineProposalRunId: z.string().nullable().optional(),
+  machineProposalWindowStart: z.string().nullable().optional(),
+  suggestedPriority: z.number().int().min(0).max(4).nullable().optional(),
+  suggestedQueuePosition: z.number().int().positive().nullable().optional(),
+  proposalRationale: z.string().nullable().optional(),
   projectName: z.string().nullable(),
   stack: workItemStackSchema,
   workspacePath: z.string().nullable(),
@@ -125,6 +133,20 @@ export type WorkItem = z.infer<typeof workItemSchema>;
 export type WorkItemStatus = z.infer<typeof workItemStatusSchema>;
 export type Assignee = z.infer<typeof assigneeSchema>;
 export type AgentAssignee = Exclude<Assignee, 'jeffrey'>;
+
+export const DEFAULT_ACCOUNT_PROFILE = 'default';
+export const PERSONAL_ACCOUNT_PROFILE = 'personal';
+
+/**
+ * Workbench and Pluto are Jeffrey's personal projects. Every other project
+ * keeps the normal provider CLI account unless a profile is selected.
+ */
+export function defaultAccountProfileForTask(task: Pick<WorkItem, 'projectName' | 'workspacePath'>): string {
+  const project = projectKey(task.projectName);
+  if (project === 'workbench' || project === 'pluto' || project === 'plutoalpha') return PERSONAL_ACCOUNT_PROFILE;
+  const workspace = task.workspacePath?.replace(/\\/g, '/').toLowerCase() ?? '';
+  return /\/(?:workbench|pluto-alpha)(?:\/|$)/.test(workspace) ? PERSONAL_ACCOUNT_PROFILE : DEFAULT_ACCOUNT_PROFILE;
+}
 
 export const providerSyncFieldSchema = z.enum(['title', 'description', 'status', 'projectName', 'labels', 'dueDate']);
 export type ProviderSyncField = z.infer<typeof providerSyncFieldSchema>;
@@ -481,14 +503,14 @@ export interface ExecutionPlan {
 export const agentTargetSchema = z.enum(['auto', 'codex', 'claude', 'both']);
 export const runStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'canceled']);
 export const executionProfileOverrideSchema = z.enum(['economy', 'standard', 'deep']).nullable().default(null);
-export const accountProfileSchema = z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9][a-zA-Z0-9 _-]*$/, 'Account profile must use letters, numbers, spaces, hyphens, or underscores.').default('default');
+export const accountProfileSchema = z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9][a-zA-Z0-9 _-]*$/, 'Account profile must use letters, numbers, spaces, hyphens, or underscores.');
 
 export const createAgentRunSchema = z.object({
   kind: runKindSchema,
   target: agentTargetSchema,
   instructions: z.string().trim().max(20_000).default(''),
   executionProfile: executionProfileOverrideSchema,
-  accountProfile: accountProfileSchema,
+  accountProfile: accountProfileSchema.optional(),
 });
 
 export interface AgentRun {
@@ -616,6 +638,9 @@ export const reorderQueueSchema = z.object({
   itemId: z.string(),
   beforeId: z.string().optional(),
   afterId: z.string().optional(),
+  // The Workbench project is a separately rendered slice of the canonical
+  // queue, so a move must name the slice whose neighboring IDs it uses.
+  stack: z.enum(['attention', 'workbench']).default('attention'),
 }).refine((input) => Boolean(input.beforeId) !== Boolean(input.afterId), {
   message: 'Provide exactly one neighboring item.',
 });
@@ -635,6 +660,9 @@ export interface SharedMessage {
   completedAt: string | null;
   attachments: SharedAttachment[];
   model: string | null;
+  /** Credential profile selected for this provider invocation; never credentials.
+   * Optional while an older promoted runtime can still return the pre-proof contract. */
+  accountProfile?: string | null;
   executionProfile: 'routing' | 'economy' | 'standard' | 'deep' | null;
   /** Fresh, non-cached input tokens. */
   inputTokens: number | null;
@@ -744,6 +772,10 @@ export const createSharedMessageSchema = z.object({
   body: z.string().trim().max(50_000).default(''),
   dispatchTo: z.enum(['auto', 'both', 'codex', 'claude', 'none']).default('auto'),
   executionProfile: executionProfileOverrideSchema,
+  // A room turn can be unlinked from a task, so it needs the same explicit
+  // account choice as task execution instead of inheriting a hidden server
+  // default for the lifetime of the conversation.
+  accountProfile: accountProfileSchema.optional(),
   attachments: z.array(z.object({
     name: z.string().trim().min(1).max(255),
     mimeType: z.string().max(200).default('application/octet-stream'),
@@ -793,8 +825,10 @@ export interface LifecycleAnalysisSummary {
 }
 
 export interface RunInsights {
+  /** Retry lifecycle events per terminal agent run. This may exceed 1 when a run is retried repeatedly. */
   retryRate: number | null;
   retryCount: number;
+  /** Agent-handoff lifecycle events per terminal agent run. */
   fallbackRate: number | null;
   handoffCount: number;
   costByDay: RunInsightsCostByDay[];
@@ -810,6 +844,9 @@ export interface RunInsights {
   unverifiedCostRuns: number;
   /** Runs that reported tokens but had no rate for their model. */
   unpricedRuns: number;
+  /** Runs recorded before cache telemetry was available. Their input cannot be
+   * truthfully split into fresh and cached traffic, so token totals omit them. */
+  incompleteTokenTelemetryRuns: number;
   /** Fresh, non-cached input tokens. */
   inputTokens: number;
   /** Tokens used to create or refresh a provider prompt cache. */
@@ -862,6 +899,8 @@ export interface RunInsightsTokenUsage {
   cacheCreationInputTokens: number;
   cacheReadInputTokens: number;
   outputTokens: number;
+  /** Runs in this model bucket with a token-derived list-price estimate. */
+  estimatedPricedRuns: number;
   costUsd: number;
   runs: number;
   /** 'env' when a deployment rate override priced this model, 'default' when the built-in list price did. */
@@ -874,12 +913,18 @@ export interface RunInsightsByAgent {
   completed: number;
   failed: number;
   successRate: number | null;
+  /** Retry lifecycle events per terminal run for this agent. */
   retryRate: number | null;
+  /** Agent-handoff lifecycle events per terminal run for this agent. */
   fallbackRate: number | null;
   medianDurationMs: number | null;
   p90DurationMs: number | null;
   providerCostUsd: number;
+  /** Runs with provider-reported billing for this agent. */
+  providerPricedRuns: number;
   estimatedCostUsd: number;
+  /** Runs with a token-derived list-price estimate for this agent. */
+  estimatedPricedRuns: number;
 }
 
 export interface RunInsightsByKind {
@@ -971,6 +1016,8 @@ export interface UsageCalibration {
   provider: 'claude' | 'codex';
   observedAt: string;
   observedPercentage: number;
+  /** Reset date `/usage` reported for this reading, if given. */
+  resetsAt: string | null;
   /** Workbench-dispatched SET measured for the ISO week containing `observedAt`. */
   workbenchSet: number;
   /** Interactive (non-Workbench) SET measured for the same week. */
@@ -980,10 +1027,20 @@ export interface UsageCalibration {
   createdAt: string;
 }
 
+/**
+ * A calibration as returned in `GET /api/usage/calibration` history: flagged
+ * when its solved ceiling drifts sharply from the next-older reading, so a
+ * bad `/usage` transcription shows up instead of silently blending in.
+ */
+export interface UsageCalibrationHistoryEntry extends UsageCalibration {
+  flagged: boolean;
+}
+
 export const submitUsageCalibrationSchema = z.object({
   provider: z.enum(['claude', 'codex']).default('claude'),
   observedAt: z.string().datetime(),
   observedPercentage: z.number().gt(0).lte(100),
+  resetsAt: z.string().datetime().nullish().transform((value) => value ?? null),
 });
 
 // --- Audit log ---------------------------------------------------------------

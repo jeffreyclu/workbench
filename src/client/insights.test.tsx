@@ -65,8 +65,8 @@ describe('InsightsView', () => {
       estimatedCostUsd: 2.5, previousEstimatedCostUsd: 2, estimatedPricedRuns: 1, unverifiedCostRuns: 3, unpricedRuns: 2,
       costByDay: [{ day: '2026-08-20', costUsd: 4.5 }, { day: '2026-08-21', costUsd: 8 }],
       byAgent: [
-        { agent: 'codex', total: 1, completed: 1, failed: 0, canceled: 0, successRate: 1, retryRate: 0, fallbackRate: 0, medianDurationMs: 1_000, p90DurationMs: 1_000, providerCostUsd: 0, estimatedCostUsd: 2.5 },
-        { agent: 'claude', total: 2, completed: 2, failed: 0, canceled: 0, successRate: 1, retryRate: 0, fallbackRate: 0, medianDurationMs: 1_000, p90DurationMs: 1_000, providerCostUsd: 10, estimatedCostUsd: 0 },
+        { agent: 'codex', total: 1, completed: 1, failed: 0, canceled: 0, successRate: 1, retryRate: 0, fallbackRate: 0, medianDurationMs: 1_000, p90DurationMs: 1_000, providerCostUsd: 0, providerPricedRuns: 0, estimatedCostUsd: 2.5, estimatedPricedRuns: 1 },
+        { agent: 'claude', total: 2, completed: 2, failed: 0, canceled: 0, successRate: 1, retryRate: 0, fallbackRate: 0, medianDurationMs: 1_000, p90DurationMs: 1_000, providerCostUsd: 10, providerPricedRuns: 2, estimatedCostUsd: 0, estimatedPricedRuns: 0 },
       ],
       cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
     });
@@ -78,9 +78,82 @@ describe('InsightsView', () => {
     expect(screen.getAllByText('List-price estimate')).toHaveLength(3);
     expect(screen.getAllByText('$10.00')).toHaveLength(2);
     expect(screen.getByText(/25% higher than the previous window \(\$8\.00\)/)).toBeTruthy();
-    expect(screen.getByText(/historical runs had a stored cost without provenance/)).toBeTruthy();
+    expect(screen.getByText(/3 runs had a stored cost without provenance/)).toBeTruthy();
     expect(screen.getByText(/2 runs reported tokens but had no rate/)).toBeTruthy();
-    expect(screen.getByRole('img', { name: /estimated cost by day/i })).toBeTruthy();
+    expect(screen.getByRole('img', { name: /list-price estimate by day/i })).toBeTruthy();
+  });
+
+  it('keeps cost-only shared-room activity visible and attributed in the cost split', async () => {
+    stubInsightsFetch({
+      retryRate: null, fallbackRate: null, costByDay: [], byKind: [], completedRuns: 0, completedTasks: 0,
+      medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
+      providerCostUsd: 4.25, previousProviderCostUsd: null, providerPricedRuns: 1,
+      estimatedCostUsd: 0, previousEstimatedCostUsd: null, estimatedPricedRuns: 0, unverifiedCostRuns: 0, unpricedRuns: 0,
+      byAgent: [{ agent: 'claude', total: 0, completed: 0, failed: 0, canceled: 0, successRate: null, retryRate: null, fallbackRate: null, medianDurationMs: null, p90DurationMs: null, providerCostUsd: 4.25, providerPricedRuns: 1, estimatedCostUsd: 0, estimatedPricedRuns: 0 }],
+      cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
+
+    expect(await screen.findByRole('heading', { name: /cost/i })).toBeTruthy();
+    expect(screen.getAllByText('claude')).toHaveLength(2);
+    expect(screen.getAllByText('$4.25')).toHaveLength(2);
+  });
+
+  it('shows an em dash instead of a zero cost when that cost source was not measured', async () => {
+    stubInsightsFetch({
+      retryRate: null, fallbackRate: null, costByDay: [], byKind: [], completedRuns: 1, completedTasks: 0,
+      medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 1_000, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 100,
+      providerCostUsd: 0, previousProviderCostUsd: null, providerPricedRuns: 0,
+      estimatedCostUsd: 2.5, previousEstimatedCostUsd: null, estimatedPricedRuns: 1, unverifiedCostRuns: 0, unpricedRuns: 0,
+      tokenUsageByModel: [{ provider: 'codex', model: 'gpt-5.6-terra', inputTokens: 1_000, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 100, costUsd: 0, estimatedPricedRuns: 0, rateSource: 'default', runs: 1 }],
+      byAgent: [{ agent: 'codex', total: 1, completed: 1, failed: 0, canceled: 0, successRate: 1, retryRate: 0, fallbackRate: 0, medianDurationMs: 1_000, p90DurationMs: 1_000, providerCostUsd: 0, providerPricedRuns: 0, estimatedCostUsd: 2.5, estimatedPricedRuns: 1 }],
+      cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
+
+    expect(await screen.findByRole('heading', { name: /cost/i })).toBeTruthy();
+    expect(screen.queryByText('$0.00')).toBeNull();
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+  });
+
+  it('does not recommend an agent when task-type success rates are tied', async () => {
+    stubInsightsFetch({
+      retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 2, completedTasks: 0,
+      medianTaskCycleMs: null, followUpsCreated: 0, inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
+      agentFit: [
+        { kind: 'execute', agent: 'claude', completed: 1, failed: 0, canceled: 0, successRate: 1, medianDurationMs: 1_000 },
+        { kind: 'execute', agent: 'codex', completed: 1, failed: 0, canceled: 0, successRate: 1, medianDurationMs: 1_000 },
+      ],
+      cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    const { container } = render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
+
+    await screen.findByRole('heading', { name: /best agent by task type/i });
+    expect(container.querySelector('.insight-fit-row .recommended')).toBeNull();
+  });
+
+  it('reports retry and handoff lifecycle events as a per-run frequency, including values above 100 per 100 runs', async () => {
+    stubInsightsFetch({
+      retryRate: 2.5, retryCount: 5, fallbackRate: 1.5, handoffCount: 3, costByDay: [], byKind: [], completedRuns: 2, completedTasks: 0,
+      medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [], byAgent: [
+        { agent: 'codex', total: 2, completed: 2, failed: 0, canceled: 0, successRate: 1, retryRate: 2.5, fallbackRate: 1.5, medianDurationMs: 1_000, p90DurationMs: 1_000, providerCostUsd: 0, estimatedCostUsd: 0 },
+      ],
+      cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
+
+    expect(await screen.findAllByText('Retry events')).toHaveLength(2);
+    expect(screen.getAllByText('250 per 100')).toHaveLength(2);
+    expect(screen.getAllByText('150 per 100')).toHaveLength(2);
+    expect(screen.getByText('5 retry events recorded in this window.')).toBeTruthy();
   });
 
   it('censors curse terms in the Insights breakdown', async () => {

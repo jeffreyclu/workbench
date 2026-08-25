@@ -40,6 +40,11 @@ describe('primary navigation', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
+    for (const name of ['Reorder stack', 'New task']) {
+      const control = screen.getByRole('button', { name });
+      expect(control.textContent).toBe('');
+      expect(control).toHaveAttribute('title', name);
+    }
     const search = screen.getByRole('textbox', { name: 'Search tasks' });
     expect(search).toHaveAttribute('placeholder', 'Search everything…');
     fireEvent.change(search, { target: { value: 'card consistency' } });
@@ -181,6 +186,35 @@ describe('shared room', () => {
     expect(screen.queryByText(/This conversation could not be found/)).toBeNull();
   });
 
+  it('offers an Undo action on the delete toast that restores the conversation', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000098';
+    const conversation = { id: conversationId, title: 'Disposable conversation', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    let deleted = false;
+    let undeleted = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/shared/conversations/${conversationId}` && init?.method === 'DELETE') { deleted = true; return new Response(null, { status: 204 }); }
+      if (url === `/api/shared/conversations/${conversationId}/undelete` && init?.method === 'POST') { deleted = false; undeleted = true; return new Response(JSON.stringify({ conversation }), { status: 200, headers: { 'Content-Type': 'application/json' } }); }
+      const body = url.includes('/api/shared/conversations') ? { conversations: deleted ? [] : [conversation], nextCursor: null } : { messages: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><Toaster /><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete conversation' }));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Delete this conversation?' })).getByRole('button', { name: 'Delete conversation' }));
+    await waitFor(() => expect(deleted).toBe(true));
+
+    const undoButton = await screen.findByRole('button', { name: 'Undo: Conversation deleted.' });
+    fireEvent.click(undoButton);
+
+    await waitFor(() => expect(undeleted).toBe(true));
+    expect(fetchMock.mock.calls.some(([input, init]) => String(input) === `/api/shared/conversations/${conversationId}/undelete` && init?.method === 'POST')).toBe(true);
+    expect(await screen.findByText('Conversation restored.')).toBeTruthy();
+  });
+
   it('renders its empty state without requiring scrollIntoView', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn(() => Promise.resolve()) });
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -226,6 +260,23 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     expect(await screen.findByRole('button', { name: 'Approve preview' })).toBeTruthy();
+  });
+
+  it('shows only the agent, account profile, and cost on an agent reply', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000005';
+    const reply = { id: 'agent-proof', conversationId, author: 'claude', body: 'Completed.', pinned: false, status: 'completed', error: '', createdAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:00:02Z', attachments: [], model: 'sonnet', accountProfile: 'personal', executionProfile: 'standard', inputTokens: 1, outputTokens: 1, estimatedCostUsd: 0.05, fallbackFrom: 'codex', fallbackReason: 'quota', dispatchTarget: 'none' };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Identity proof', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages: [reply] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    expect(await screen.findByText('Claude · personal · $0.050')).toBeTruthy();
+    expect(screen.queryByText(/1 in · 1 out/i)).toBeNull();
   });
 
   it('keeps the approved-awaiting-promotion badge on the conversation card while promotion runs', async () => {
@@ -323,6 +374,7 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace /></QueryClientProvider>);
 
     expect((await screen.findAllByText('Finished conversation')).length).toBeGreaterThan(0);
+    expect(screen.getByText('Awaiting')).toBeTruthy();
   });
 
   it('opens the requested task conversation and still allows switching tabs', async () => {
@@ -1011,8 +1063,8 @@ describe('shared room', () => {
       const url = String(input);
       if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Continue with Claude', workItemId: null, preferredExecutionProfile: null, createdAt: timestamp, updatedAt: timestamp }], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [
-        { id: 'request-1', conversationId, author: 'jeffrey', body: 'Please investigate.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: null, executionProfile: 'deep', inputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'claude' },
-        { id: 'reply-1', conversationId, author: 'claude', body: 'I found the regression.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: 'opus', executionProfile: 'deep', inputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'none' },
+        { id: 'request-1', conversationId, author: 'jeffrey', body: 'Please investigate.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: null, accountProfile: 'default', executionProfile: 'deep', inputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'claude' },
+        { id: 'reply-1', conversationId, author: 'claude', body: 'I found the regression.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: 'opus', accountProfile: 'default', executionProfile: 'deep', inputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'none' },
       ] }), { headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
     }));
@@ -1021,6 +1073,7 @@ describe('shared room', () => {
 
     await screen.findByLabelText('Who should respond');
     await waitFor(() => expect((screen.getByLabelText('Who should respond') as HTMLSelectElement).value).toBe('claude'));
+    expect((screen.getByLabelText('Account profile') as HTMLSelectElement).value).toBe('default');
     expect((screen.getByLabelText('Model choice') as HTMLSelectElement).value).toBe('deep');
   });
 
@@ -1037,6 +1090,7 @@ describe('shared room', () => {
 
     await screen.findByRole('heading', { name: 'New conversation' });
     await waitFor(() => expect((screen.getByLabelText('Who should respond') as HTMLSelectElement).value).toBe('both'));
+    expect((screen.getByLabelText('Account profile') as HTMLSelectElement).value).toBe('default');
     expect((screen.getByLabelText('Model choice') as HTMLSelectElement).value).toBe('auto');
   });
 
@@ -1047,10 +1101,10 @@ describe('shared room', () => {
     const searchMock = vi.fn();
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith('/api/memory/search')) {
+      if (url.startsWith('/api/shared/search')) {
         searchMock(url);
         return new Response(JSON.stringify({
-          results: [{ source: 'message', sourceId: 'message-1', title: 'Matched conversation', snippet: 'found the needle here', createdAt: '2026-01-01T00:00:00Z', conversationId: matchedId, workItemId: null, actor: null, score: 1 }],
+          results: [{ type: 'message', conversationId: matchedId, conversationTitle: 'Matched conversation', messageId: 'message-1', snippet: 'found the needle here', rank: 1 }],
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [
@@ -1116,13 +1170,27 @@ describe('task execution', () => {
       { ...baseRun, id: '00000000-0000-4000-8000-000000000011', requestedAgent: 'codex' as const, agent: 'codex' as const },
       { ...baseRun, id: '00000000-0000-4000-8000-000000000012', requestedAgent: 'claude' as const, agent: 'claude' as const },
     ];
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs, executionPlan: null, classification: null, conversations: [], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } })));
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input) === '/api/agent-accounts'
+        ? { accounts: [{ name: 'default', providers: { codex: { configured: true, loggedIn: true, email: null }, claude: { configured: true, loggedIn: true, email: 'jeffrey@example.com' } } }] }
+        : { item, parentItem: null, children: [], activity: [], runs, executionPlan: null, classification: null, conversations: [], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] },
+    ), { headers: { 'Content-Type': 'application/json' } })));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><TaskDetail id={taskId} onClose={vi.fn()} onOpenConversation={vi.fn()} onOpenTask={vi.fn()} onCreated={vi.fn()} /></QueryClientProvider>);
 
     await screen.findByText('Agent runs');
     expect(document.querySelector('.run-card[data-agent="codex"]')).toBeTruthy();
     expect(document.querySelector('.run-card[data-agent="claude"]')).toBeTruthy();
+
+    const editProfile = await screen.findByRole('button', { name: 'Edit profile' });
+    expect(editProfile).toHaveTextContent('');
+    const execute = document.querySelector<HTMLButtonElement>('.execute-button');
+    expect(execute).toBeTruthy();
+    expect(execute).toHaveTextContent('');
+    expect(screen.queryByText('ChatGPT account')).toBeNull();
+    fireEvent.click(editProfile);
+    expect(await screen.findByText('ChatGPT account')).toBeTruthy();
+    expect(editProfile.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('replaces an active run with the canceled response immediately', async () => {
@@ -1248,7 +1316,7 @@ describe('task prerequisites', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Matching blocker/ }));
     expect((search as HTMLInputElement).value).toBe('');
-    expect(screen.queryByText('Matching blocker')).toBeNull();
+    await waitFor(() => expect(screen.queryByText('Matching blocker')).toBeNull());
   });
 });
 
@@ -1336,7 +1404,7 @@ describe('task creation from search', () => {
   }
 
   async function searchForTask() {
-    fireEvent.click(await screen.findByRole('button', { name: 'New' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'New task' }));
     fireEvent.click(screen.getByRole('button', { name: /From search/i }));
     fireEvent.change(screen.getByPlaceholderText('Search Linear, Slack, Atlassian, and GitHub…'), { target: { value: 'search-created' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
@@ -1453,7 +1521,7 @@ describe('stack navigation', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'New' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'New task' }));
     fireEvent.click(screen.getByRole('button', { name: /Manual task/i }));
     fireEvent.change(screen.getByPlaceholderText('What needs to happen?'), { target: { value: item.title } });
     fireEvent.change(screen.getByLabelText('Task type'), { target: { value: 'bugfix' } });
@@ -1476,7 +1544,7 @@ describe('stack navigation', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'New' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'New task' }));
 
     expect(screen.getByRole('button', { name: /Manual task/i }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByRole('button', { name: /From search/i }).getAttribute('aria-pressed')).toBe('false');
@@ -1631,9 +1699,10 @@ describe('self-assigned ownership', () => {
   it('locks agent owners and execution while Jeffrey owns the task', async () => {
     const fetchMock = renderDetail(['jeffrey']);
 
-    const codex = await screen.findByRole('button', { name: /codex/i });
+    const owners = (await screen.findByText('Owners')).parentElement!.querySelector('.assignee-picker') as HTMLElement;
+    const codex = within(owners).getByRole('button', { name: /codex/i });
     expect(codex.hasAttribute('disabled')).toBe(true);
-    expect(screen.getByRole('button', { name: /claude/i }).hasAttribute('disabled')).toBe(true);
+    expect(within(owners).getByRole('button', { name: /claude/i }).hasAttribute('disabled')).toBe(true);
 
     fireEvent.click(codex);
     expect(patches(fetchMock)).toEqual([]);
@@ -1662,22 +1731,32 @@ describe('self-assigned ownership', () => {
   it('leaves execution available when only agents own the task', async () => {
     renderDetail(['codex']);
 
-    const execute = await screen.findByRole('button', { name: /^execute$/i });
+    const execute = await screen.findByRole('button', { name: 'Execute task' });
     expect(execute.hasAttribute('disabled')).toBe(false);
-    expect(screen.getByRole('button', { name: /claude/i }).hasAttribute('disabled')).toBe(false);
+    expect(within(document.querySelector('.assignee-picker')!).getByRole('button', { name: /claude/i }).hasAttribute('disabled')).toBe(false);
   });
 
   it('uses the app dialog before permanently deleting a task', async () => {
     const fetchMock = renderDetail([]);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete task' }));
     expect(await screen.findByRole('dialog', { name: `Delete “${baseItem.title}”?` })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete task' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete task' }));
+    fireEvent.click(await within(screen.getByRole('dialog', { name: `Delete “${baseItem.title}”?` })).findByRole('button', { name: 'Delete task' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === `/api/work-items/${taskId}` && init?.method === 'DELETE')).toBe(true));
+  });
+
+  it('keeps task lifecycle controls icon-only with accessible names', async () => {
+    renderDetail([]);
+
+    for (const name of ['Create follow-up task', 'Put a pin in it', 'Archive task', 'Complete task', 'Delete task']) {
+      const control = await screen.findByRole('button', { name });
+      expect(control.textContent).toBe('');
+      expect(control.getAttribute('title')).toBe(name);
+    }
   });
 });
 

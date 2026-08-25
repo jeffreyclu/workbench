@@ -1,4 +1,4 @@
-import type { AgentRun, SharedMessage, WorkItem } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { buildPrompt, claudeScopeRecoveryPrompt, classifyExecution, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
@@ -41,7 +41,12 @@ export function resolveSharedReplyWorkingDirectory(linkedItem: WorkItem | null):
   return linkedItem ? resolveWorkingDirectory(linkedItem) : process.cwd();
 }
 
-export function compactConversationHistory(messages: SharedMessage[], budget = 8_000): string {
+/** An explicit room choice wins; otherwise retain the project-scoped default. */
+export function accountProfileForSharedReply(linkedItem: WorkItem | null, requestedProfile?: string | null): string {
+  return requestedProfile?.trim() || (linkedItem ? defaultAccountProfileForTask(linkedItem) : DEFAULT_ACCOUNT_PROFILE);
+}
+
+export function compactConversationHistory(messages: SharedMessage[], budget = 3_000): string {
   const reserveForOlder = messages.length > 4 ? Math.min(900, Math.floor(budget * 0.15)) : 0;
   let remaining = Math.max(0, budget - reserveForOlder);
   const recent: string[] = [];
@@ -50,7 +55,7 @@ export function compactConversationHistory(messages: SharedMessage[], budget = 8
     const message = messages[index];
     const attachmentText = message.attachments.length ? `\nAttached files:\n${message.attachments.map((file) => `- ${file.name}: ${file.path}`).join('\n')}` : '';
     const prefix = `${message.author}: `;
-    const bodyBudget = Math.min(1_500, Math.max(0, remaining - prefix.length - attachmentText.length - 2));
+    const bodyBudget = Math.min(700, Math.max(0, remaining - prefix.length - attachmentText.length - 2));
     if (bodyBudget < 80) break;
     recent.push(`${prefix}${message.body.slice(0, bodyBudget)}${attachmentText}`);
     remaining -= recent[recent.length - 1].length + 2;
@@ -67,7 +72,7 @@ export function compactConversationHistory(messages: SharedMessage[], budget = 8
 }
 
 /** Keep current handoff state cheap; the full historical record arrives through retrieval. */
-export function compactSharedBrief(sharedContext: string, budget = 1_800): string {
+export function compactSharedBrief(sharedContext: string, budget = 700): string {
   if (sharedContext.length <= budget) return sharedContext;
   const head = Math.floor(budget * 0.65);
   const tail = Math.floor(budget * 0.25);
@@ -77,7 +82,8 @@ export function compactSharedBrief(sharedContext: string, budget = 1_800): strin
 
 function formatRetrievedMemory(matches: Array<{ source: string; title: string; body: string; createdAt: string }>): string {
   if (!matches.length) return 'Retrieved memory: no indexed match for the latest message. This does not mean nothing relevant exists — query /api/activity-memory directly with different terms before concluding history is silent on this.';
-  return `Retrieved memory (top ${matches.length} hybrid FTS+embedding matches for the latest message, pulled automatically from the same index that backs /api/activity-memory — durable docs, past messages, activities, and agent-run output together): do not re-derive facts these already settle.\n${matches.map((match) => `- [${match.source}, ${match.createdAt}] ${match.title}: ${match.body.slice(0, 400).replace(/\s+/g, ' ')}`).join('\n')}`;
+  const focused = matches.slice(0, 3);
+  return `Retrieved memory (top ${focused.length} hybrid FTS+embedding matches for the latest message, pulled automatically from the same index that backs /api/activity-memory — durable docs, past messages, activities, and agent-run output together): do not re-derive facts these already settle.\n${focused.map((match) => `- [${match.source}, ${match.createdAt}] ${match.title}: ${match.body.slice(0, 200).replace(/\s+/g, ' ')}`).join('\n')}`;
 }
 
 export function buildSharedReplyPrompt(
@@ -100,7 +106,7 @@ ${formatRetrievedMemory(retrievedMemory ?? [])}
 Current conversation:
 ${compactConversationHistory(thread)}
 
-Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. Start by naming the relevant decision, handoff, or blocker from the structured shared brief that you are continuing; if it conflicts with observed state, say so before acting. The retrieved-memory block above is auto-pulled from the full durable Workbench history (docs, messages, activities, run output) for the latest message only — if you need a different angle, query it yourself: curl -sG http://localhost:5173/api/activity-memory --data-urlencode 'q=<focused terms>' --data 'limit=40'. Append anything durable you learn (a standing preference or correction) to the right docs/shared-memory/*.md topic file in the same turn instead of writing a private per-agent memory; consult docs/shared-memory.md's index only if the retrieved block didn't surface the topic you need to update. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential. Never launch detached/background work (including &, nohup, tmux, screen, or a subagent you will report on later): Workbench cannot track it after this CLI turn exits. Keep every command and delegated action foreground until its observed result is available, then report it in this response. If that is not possible, state that the work is blocked or incomplete.`;
+Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. Start by naming the relevant decision, handoff, or blocker from the structured shared brief that you are continuing; if it conflicts with observed state, say so before acting. The retrieved-memory block above is auto-pulled from the full durable Workbench history (docs, messages, activities, run output) for the latest message only — if you need a different angle, query it yourself: curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<focused terms>' --data 'limit=40'. Append anything durable you learn (a standing preference or correction) to the right docs/shared-memory/*.md topic file in the same turn instead of writing a private per-agent memory; consult docs/shared-memory.md's index only if the retrieved block didn't surface the topic you need to update. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential. Never launch detached/background work (including &, nohup, tmux, screen, or a subagent you will report on later): Workbench cannot track it after this CLI turn exits. Keep every command and delegated action foreground until its observed result is available, then report it in this response. If that is not possible, state that the work is blocked or incomplete.`;
 }
 
 export function linearContextForPrompt(repository: WorkItemRepository, message: string): string {
@@ -144,11 +150,12 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     const attachmentText = queued.message.attachments.length ? ` · ${queued.message.attachments.length} attachment${queued.message.attachments.length === 1 ? '' : 's'}` : '';
     repository.addActivity(linkedItem.id, 'jeffrey', 'chat_started', `To ${agents.join(' and ')}${attachmentText}: ${queued.message.body.trim() || '(attachment-only message)'}`);
   }
-  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'running', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile));
+  const accountProfile = accountProfileForSharedReply(linkedItem, queued.message.accountProfile);
+  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'running', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile, accountProfile));
   for (const reply of replies) {
     const agent = reply.author as AgentRun['agent'];
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'
-      ? repository.createRun(linkedItem.id, taskKind, queued.dispatchTarget, agent, queued.message.body, conversationId, reply.id)
+      ? repository.createRun(linkedItem.id, taskKind, queued.dispatchTarget, agent, queued.message.body, conversationId, reply.id, 'manual', accountProfile)
       : null;
     void replyInSharedRoom(repository, agent, reply.id, run?.id);
   }
@@ -266,7 +273,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
       repository.updateSharedMessage(messageId, telemetry);
       if (runId) repository.updateRun(runId, telemetry);
-    }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis');
+    }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE);
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the turn to Codex.';
       if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'agent_fallback', reason);
@@ -278,7 +285,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
         const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
         repository.updateSharedMessage(messageId, telemetry);
         if (runId) repository.updateRun(runId, telemetry);
-      }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis');
+      }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE);
       result = { ...recovered, fallbackFrom: 'claude', fallbackReason: reason };
       repository.updateSharedMessage(messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
       if (runId) repository.updateRun(runId, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });

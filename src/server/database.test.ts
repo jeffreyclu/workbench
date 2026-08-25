@@ -45,6 +45,10 @@ const EXPECTED_MIGRATIONS = [
   '032_work_item_lifecycle_events',
   '033_agent_run_account_profile',
   '034_shared_message_token_breakdown',
+  '035_shared_message_account_profile',
+  '036_usage_calibration_resets_at',
+  '037_autonomy_governor_policy',
+  '038_machine_discovery_proposals',
 ];
 
 describe('openDatabase', () => {
@@ -178,6 +182,77 @@ describe('openDatabase', () => {
     const upgraded = openDatabase(path);
     expect(upgraded.prepare("SELECT stack FROM work_items WHERE id = 'legacy-workbench'").get()).toEqual({ stack: 'attention' });
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '025_workbench_is_attention_focus'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds the calibration reset-date column when upgrading from migration 035', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE usage_calibrations DROP COLUMN resets_at;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '036_usage_calibration_resets_at'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(usage_calibrations)').all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toContain('resets_at');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '036_usage_calibration_resets_at'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds stored governor policy and reconciliation fields when upgrading from migration 036', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec(`
+      DROP TABLE autonomy_governor_decisions;
+      DROP TABLE autonomy_provider_policy;
+      DROP TABLE autonomy_policy;
+      DROP INDEX idx_budget_reservations_window;
+      ALTER TABLE budget_reservations DROP COLUMN alarm_triggered;
+      ALTER TABLE budget_reservations DROP COLUMN reconciled_at;
+      ALTER TABLE budget_reservations DROP COLUMN actual_set;
+      ALTER TABLE budget_reservations DROP COLUMN window_end;
+      ALTER TABLE budget_reservations DROP COLUMN window_start;
+    `);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '037_autonomy_governor_policy'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '037_autonomy_governor_policy'").get()).toBeTruthy();
+    expect(upgraded.prepare('SELECT global_enabled, target_fraction, alarm_fraction FROM autonomy_policy WHERE id = 1').get())
+      .toEqual({ global_enabled: 0, target_fraction: 0.16, alarm_fraction: 0.2 });
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'autonomy_provider_policy'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'autonomy_governor_decisions'").get()).toBeTruthy();
+    const reservationColumns = (upgraded.prepare('PRAGMA table_info(budget_reservations)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(reservationColumns).toEqual(expect.arrayContaining(['window_start', 'window_end', 'actual_set', 'reconciled_at', 'alarm_triggered']));
+    upgraded.close();
+  });
+
+  it('adds machine-proposal metadata when upgrading from migration 037', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec(`
+      DROP INDEX idx_work_items_machine_proposal_window;
+      ALTER TABLE work_items DROP COLUMN proposal_rationale;
+      ALTER TABLE work_items DROP COLUMN suggested_queue_position;
+      ALTER TABLE work_items DROP COLUMN suggested_priority;
+      ALTER TABLE work_items DROP COLUMN machine_proposal_window_start;
+      ALTER TABLE work_items DROP COLUMN machine_proposal_run_id;
+      ALTER TABLE work_items DROP COLUMN machine_proposed;
+    `);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '038_machine_discovery_proposals'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining([
+      'machine_proposed', 'machine_proposal_run_id', 'machine_proposal_window_start',
+      'suggested_priority', 'suggested_queue_position', 'proposal_rationale',
+    ]));
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '038_machine_discovery_proposals'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_work_items_machine_proposal_window'").get()).toBeTruthy();
     upgraded.close();
   });
 
@@ -419,6 +494,31 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toEqual(expect.arrayContaining(['cache_creation_input_tokens', 'cache_read_input_tokens']));
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '034_shared_message_token_breakdown'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds account_profile to shared replies upgraded from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec(`
+      CREATE TABLE shared_messages_pre_account AS SELECT
+        id, conversation_id, author, body, pinned, status, error, attachments_json,
+        dispatch_target, created_at, completed_at, execution_profile, model,
+        input_tokens, output_tokens, estimated_cost_usd, cost_source, fallback_from,
+        fallback_reason, attempt, max_attempts, next_attempt_at, owner_id, lease_expires_at,
+        cache_creation_input_tokens, cache_read_input_tokens
+      FROM shared_messages;
+      DROP TABLE shared_messages;
+      ALTER TABLE shared_messages_pre_account RENAME TO shared_messages;
+    `);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '035_shared_message_account_profile'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toContain('account_profile');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '035_shared_message_account_profile'").get()).toBeTruthy();
     upgraded.close();
   });
 

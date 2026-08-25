@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render } from '@testing-library/react';
+import { act, render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { invalidateRealtimeTopics, realtimeUrl, useRealtimeNotifications } from './realtime';
@@ -30,7 +30,7 @@ afterEach(() => {
 describe('realtime invalidation', () => {
   it('uses a secure socket for secure pages', () => {
     expect(realtimeUrl({ protocol: 'https:', host: 'workbench.example' })).toBe('wss://workbench.example/api/realtime');
-    expect(realtimeUrl({ protocol: 'http:', host: 'localhost:5173' })).toBe('ws://localhost:5173/api/realtime');
+    expect(realtimeUrl({ protocol: 'http:', host: 'localhost:5180' })).toBe('ws://localhost:5180/api/realtime');
   });
 
   it('maps topic invalidations to the existing query cache', () => {
@@ -59,6 +59,25 @@ describe('realtime invalidation', () => {
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['discovery'] });
     socket.emit('message', JSON.stringify({ type: 'notification', tone: 'success', message: 'Agent finished', action: { label: 'Open conversation', route: '/conversations/123' } }));
     expect(notify).toHaveBeenCalledWith({ type: 'notification', tone: 'success', message: 'Agent finished', action: { label: 'Open conversation', route: '/conversations/123' } });
+    rendered.unmount();
+  });
+
+  it('exposes reconnecting state while the socket is down so the UI can warn about stale cached data', () => {
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    const client = new QueryClient();
+    const states: string[] = [];
+    const noop = () => {};
+    function RealtimeClient() { states.push(useRealtimeNotifications(noop)); return null; }
+
+    const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
+    expect(states.at(-1)).toBe('connecting');
+
+    const socket = MockWebSocket.instances[0];
+    act(() => { socket.emit('open'); });
+    expect(states.at(-1)).toBe('connected');
+
+    act(() => { socket.emit('close'); });
+    expect(states.at(-1)).toBe('reconnecting');
     rendered.unmount();
   });
 });

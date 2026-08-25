@@ -22,7 +22,7 @@ describe('agentSubprocessEnv', () => {
       DATABASE_PATH: './data/workbench.db',
       WORKBENCH_CODEX_MODEL: 'gpt-5.6-terra',
       WORKBENCH_CODEX_INPUT_TOKEN_USD_PER_MILLION: '2',
-      APP_ORIGIN: 'http://localhost:5173',
+      APP_ORIGIN: 'http://localhost:5180',
     };
     const filtered = agentSubprocessEnv(source);
     expect(filtered).toEqual({ PATH: '/usr/bin', HOME: '/Users/jeffrey' });

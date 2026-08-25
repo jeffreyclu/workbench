@@ -37,7 +37,7 @@ describe('runDiscovery proposal cycle', () => {
     vi.restoreAllMocks();
   });
 
-  it('caps new proposals at NEW_CANDIDATES_PER_RUN, keeping the highest-priority signals, and never creates a backlog work item', async () => {
+  it('caps machine proposals at NEW_CANDIDATES_PER_RUN, keeping the highest-priority signals in a reviewable backlog state', async () => {
     const { scanConnectedSources } = await import('./source-scanner.js');
     const now = Date.now();
     const at = (offsetMinutes: number) => new Date(now - offsetMinutes * 60_000).toISOString();
@@ -61,8 +61,14 @@ describe('runDiscovery proposal cycle', () => {
       'Review PR: connector auth',
     ]);
     expect(inbox.candidates.every((candidate) => candidate.status === 'pending')).toBe(true);
-    // Discovery never creates backlog work items and never executes what it just proposed.
-    expect(repository.list()).toHaveLength(0);
+    const proposals = repository.list();
+    expect(proposals).toHaveLength(NEW_CANDIDATES_PER_RUN);
+    expect(proposals.map((item) => item.title)).toEqual([
+      'Review PR: mcp gateway',
+      'Fix connector permissions',
+      'Review PR: connector auth',
+    ]);
+    expect(proposals.every((item) => item.machineProposed && item.status === 'backlog' && item.suggestedPriority !== null && item.suggestedQueuePosition !== null && item.proposalRationale)).toBe(true);
   });
 
   it('does not count a refreshed existing candidate against the new-proposal cap', async () => {
@@ -86,5 +92,19 @@ describe('runDiscovery proposal cycle', () => {
 
     // The already-pending candidate refreshes; three new ones are added, at the cap.
     expect(repository.getDiscoveryInbox('pending').candidates).toHaveLength(4);
+  });
+
+  it('rejects a near-duplicate title before creating a machine proposal', async () => {
+    const { scanConnectedSources } = await import('./source-scanner.js');
+    repository.create({ title: 'Fix connector permission checks', description: 'Existing open task.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    vi.mocked(scanConnectedSources).mockResolvedValue({
+      signals: [{ provider: 'linear', title: 'Fix connector permissions', summary: 'Connectors team', url: 'https://linear.app/writer/issue/CON-1', occurredAt: new Date().toISOString() }],
+      errors: [],
+    });
+
+    await runDiscovery(repository);
+
+    expect(repository.getDiscoveryInbox('pending').candidates).toHaveLength(1);
+    expect(repository.list().map((item) => item.title)).toEqual(['Fix connector permission checks']);
   });
 });

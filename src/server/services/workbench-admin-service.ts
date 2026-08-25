@@ -2,6 +2,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import {
   createAgentRunSchema,
+  defaultAccountProfileForTask,
   isSelfAssigned,
   SELF_ASSIGNED_EXECUTION_MESSAGE,
   type sourceProviderSchema,
@@ -63,9 +64,10 @@ export class WorkbenchAdminService {
     this.repository.createSharedMessage('system', `Requested ${input.kind}: ${input.instructions || item.description}`, 'completed', conversation.id);
     const resolvedAgents = resolveAgents(input.kind, input.target);
     const agents = input.target === 'auto' ? [this.repository.selectBalancedAgent(resolvedAgents[0])] : resolvedAgents;
+    const accountProfile = input.accountProfile ?? defaultAccountProfileForTask(item);
     const runs = agents.map((agent) => {
       const reply = this.repository.createSharedMessage(agent, '', 'running', conversation.id);
-      const run = this.repository.createRun(item.id, input.kind, input.target, agent, input.instructions, conversation.id, reply.id, 'manual', input.accountProfile);
+      const run = this.repository.createRun(item.id, input.kind, input.target, agent, input.instructions, conversation.id, reply.id, 'manual', accountProfile);
       if (!input.executionProfile) return run;
       this.repository.updateRun(run.id, { executionProfile: input.executionProfile });
       this.repository.updateSharedMessage(reply.id, { executionProfile: input.executionProfile });
@@ -133,9 +135,10 @@ export class WorkbenchAdminService {
     let conversation = this.repository.getOrCreateWorkConversation(item.id, item.title);
     conversation = this.repository.setConversationExecutionProfile(conversation.id, executionProfile) ?? conversation;
     this.repository.createSharedMessage('system', `Execute: ${item.title}`, 'completed', conversation.id);
+    const accountProfile = options.accountProfile ?? defaultAccountProfileForTask(item);
     const runs = agents.map((agent) => {
       const reply = this.repository.createSharedMessage(agent, '', 'running', conversation.id);
-      const run = this.repository.createRun(item.id, classification.kind, explicitlyAssigned.length ? agent : 'auto', agent, classification.instructions, conversation.id, reply.id, 'manual', options.accountProfile ?? 'default');
+      const run = this.repository.createRun(item.id, classification.kind, explicitlyAssigned.length ? agent : 'auto', agent, classification.instructions, conversation.id, reply.id, 'manual', accountProfile);
       if (!executionProfile) return run;
       this.repository.updateRun(run.id, { executionProfile });
       this.repository.updateSharedMessage(reply.id, { executionProfile });
@@ -232,8 +235,8 @@ export class WorkbenchAdminService {
     if (!this.capabilities.executeAgents) return { status: 409, body: { error: 'This runtime does not execute agents.' } } as ActionFailure;
     const result = dispatchAutonomousWork(this.repository);
     if (!result.dispatched) return { status: 409, body: result };
-    const sourceContext = await this.sourceContextFor(result.item);
-    void executeAgentRun(this.repository, result.run, OWNER_ID, LEASE_MS, sourceContext);
+    // Leave the run queued. The scheduler is the sole process dispatcher, so
+    // autonomous and recovered work follow the same durable lease path.
     return result;
   }
 

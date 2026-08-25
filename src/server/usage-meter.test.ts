@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { AUTONOMOUS_TARGET_FRACTION, CALIBRATION_MAX_AGE_DAYS, CLAUDE_PESSIMISTIC_CEILING_SET, computeWeeklyUsageReport, computeWorkbenchUsage, currentUsageCalibration, recordUsageCalibration, scanClaudeInteractiveUsage, sonnetEquivalentTokens, startOfIsoWeekUtc } from './usage-meter.js';
+import { AUTONOMOUS_TARGET_FRACTION, CALIBRATION_MAX_AGE_DAYS, CLAUDE_PESSIMISTIC_CEILING_SET, computeWeeklyUsageReport, computeWorkbenchUsage, currentUsageCalibration, isCalibrationDrift, recordUsageCalibration, scanClaudeInteractiveUsage, sonnetEquivalentTokens, startOfIsoWeekUtc } from './usage-meter.js';
 
 describe('sonnetEquivalentTokens', () => {
   it('applies every token-class weight and each Claude model multiplier', () => {
@@ -179,6 +179,33 @@ describe('recordUsageCalibration / currentUsageCalibration', () => {
     const now = new Date('2026-08-20T00:00:00.000Z');
     const found = currentUsageCalibration(repository, 'claude', now);
     expect(found?.id).toBe(latest.id);
+  });
+});
+
+describe('isCalibrationDrift', () => {
+  function seed() {
+    const database = openDatabase(':memory:');
+    return new WorkItemRepository(database);
+  }
+
+  it('is false for the oldest reading in a history, which has no prior reading to drift from', () => {
+    const repository = seed();
+    const only = recordUsageCalibration(repository, 'claude', '2026-08-17T00:00:00.000Z', 50);
+    expect(isCalibrationDrift(only, null)).toBe(false);
+  });
+
+  it('is false when consecutive readings solve to a similar ceiling', () => {
+    const repository = seed();
+    const older = recordUsageCalibration(repository, 'claude', '2026-08-17T00:00:00.000Z', 50);
+    const newer = recordUsageCalibration(repository, 'claude', '2026-08-19T00:00:00.000Z', 48);
+    expect(isCalibrationDrift(newer, older)).toBe(false);
+  });
+
+  it('flags a reading whose solved ceiling differs wildly from the prior one', () => {
+    const repository = seed();
+    const older = recordUsageCalibration(repository, 'claude', '2026-08-17T00:00:00.000Z', 50);
+    const newer = recordUsageCalibration(repository, 'claude', '2026-08-19T00:00:00.000Z', 5);
+    expect(isCalibrationDrift(newer, older)).toBe(true);
   });
 });
 

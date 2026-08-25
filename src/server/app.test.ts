@@ -618,6 +618,22 @@ describe('queue explainability and undo routes', () => {
     expect(empty.status).toBe(404);
   });
 
+  it('moves tasks within the Workbench stack instead of looking them up in Attention', async () => {
+    const attention = create('Attention stays in place');
+    const first = repository.create({ title: 'Workbench first', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const second = repository.create({ title: 'Workbench second', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    repository.reorder([first.id, attention.id, second.id]);
+
+    const moved = await fetch(`${baseUrl}/api/queue/order`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ itemId: second.id, beforeId: first.id, stack: 'workbench' }),
+    });
+
+    expect(moved.status).toBe(200);
+    expect(repository.listWorkbench().map((entry) => entry.id)).toEqual([second.id, first.id]);
+    expect(repository.list().map((entry) => entry.id)).toEqual([second.id, attention.id, first.id]);
+  });
+
   it('undoes an accepted proposal that reject can no longer reverse', async () => {
     const fresh = create('Fresh');
     const stale = create('Stale');
@@ -715,6 +731,27 @@ describe('destructive operations soft-delete instead of hard-deleting', () => {
     expect(row.deleted_at).not.toBeNull();
     const audit = repository.listAuditLog(10, null, 'destructive_action');
     expect(audit.entries).toEqual(expect.arrayContaining([expect.objectContaining({ detail: expect.stringContaining(conversation.id) })]));
+  });
+
+  it('lets undeleting a soft-deleted conversation restore it to the active listing', async () => {
+    const conversation = repository.createConversation('To be undeleted');
+    await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}`, { method: 'DELETE' });
+
+    const response = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/undelete`, { method: 'POST' });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { conversation: { id: string } };
+    expect(body.conversation.id).toBe(conversation.id);
+
+    expect(repository.listConversations('active').some((entry) => entry.id === conversation.id)).toBe(true);
+    const row = database.prepare('SELECT deleted_at FROM shared_conversations WHERE id = ?').get(conversation.id) as { deleted_at: string | null };
+    expect(row.deleted_at).toBeNull();
+  });
+
+  it('404s undeleting a conversation that was never deleted', async () => {
+    const conversation = repository.createConversation('Never deleted');
+
+    const response = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/undelete`, { method: 'POST' });
+    expect(response.status).toBe(404);
   });
 
   it('removes a source connection from listings while keeping the row and logging the action', async () => {

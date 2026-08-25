@@ -22,7 +22,7 @@ describe('Vite auth gate', () => {
     let nexted = false;
     middleware?.({
       url: '/',
-      headers: { host: 'localhost:5173', 'x-forwarded-for': '203.0.113.8' },
+      headers: { host: 'localhost:5180', 'x-forwarded-for': '203.0.113.8' },
       socket: { remoteAddress: '127.0.0.1' },
     }, response, () => { nexted = true; });
 

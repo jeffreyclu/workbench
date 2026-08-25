@@ -43,10 +43,10 @@ describe('toast stack', () => {
   it('auto-dismisses each toast on its own timer, giving errors longer than successes', () => {
     act(() => { toast.success('Task archived.'); toast.error('Message not sent.'); });
 
-    act(() => { vi.advanceTimersByTime(4_000); });
+    act(() => { vi.advanceTimersByTime(4_000 + 200); });
     expect(visibleMessages()).toEqual(['Message not sent.']);
 
-    act(() => { vi.advanceTimersByTime(4_000); });
+    act(() => { vi.advanceTimersByTime(4_000 + 200); });
     expect(visibleMessages()).toEqual([]);
   });
 
@@ -58,7 +58,7 @@ describe('toast stack', () => {
     act(() => { vi.advanceTimersByTime(3_000); });
     expect(visibleMessages()).toEqual(['Task archived.×2']);
 
-    act(() => { vi.advanceTimersByTime(1_000); });
+    act(() => { vi.advanceTimersByTime(1_000 + 200); });
     expect(visibleMessages()).toEqual([]);
   });
 
@@ -75,7 +75,7 @@ describe('toast stack', () => {
     act(() => { vi.advanceTimersByTime(1_999); });
     expect(visibleMessages()).toEqual(['Task archived.']);
 
-    act(() => { vi.advanceTimersByTime(2); });
+    act(() => { vi.advanceTimersByTime(2 + 200); });
     expect(visibleMessages()).toEqual([]);
   });
 
@@ -83,6 +83,7 @@ describe('toast stack', () => {
     act(() => { toast.info('Run queued.'); toast.error('Message not sent.'); });
 
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss notification: Run queued.' }));
+    act(() => { vi.advanceTimersByTime(200); });
 
     expect(visibleMessages()).toEqual(['Message not sent.']);
   });
@@ -92,6 +93,7 @@ describe('toast stack', () => {
     act(() => { toast.info('Agent has follow-ups for review', { action, actionLabel: 'Review suggestions', duration: 0 }); });
 
     fireEvent.click(screen.getByRole('button', { name: 'Review suggestions: Agent has follow-ups for review' }));
+    act(() => { vi.advanceTimersByTime(200); });
 
     expect(action).toHaveBeenCalledOnce();
     expect(visibleMessages()).toEqual([]);
@@ -105,6 +107,19 @@ describe('toast stack', () => {
     expect(visibleMessages()).toEqual(['Preview build failed.']);
 
     act(() => { toast.dismiss(id); });
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(visibleMessages()).toEqual([]);
+  });
+
+  it('marks a toast as exiting before it clears, so the CSS exit animation can play', () => {
+    let id = '';
+    act(() => { id = toast.error('Preview build failed.', { duration: 0 }); });
+
+    act(() => { toast.dismiss(id); });
+    expect(document.querySelector('.toast-exiting')).toBeTruthy();
+
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(document.querySelector('.toast-exiting')).toBeFalsy();
     expect(visibleMessages()).toEqual([]);
   });
 

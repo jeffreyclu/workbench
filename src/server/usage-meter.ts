@@ -217,7 +217,28 @@ export function computeWeeklyUsageReport(repository: WorkItemRepository, now = n
  * no averaging with prior calibrations; the newest observation simply
  * supersedes older ones by recency when the ceiling is read back.
  */
-export function recordUsageCalibration(repository: WorkItemRepository, provider: UsageCalibration['provider'], observedAt: string, observedPercentage: number): UsageCalibration {
+/**
+ * A reading whose solved ceiling differs from the immediately preceding
+ * reading by more than this fraction is flagged as drift rather than
+ * silently blended in (docs/autonomy-strategy.md item 3: "a wildly
+ * inconsistent reading should be flagged, not silently averaged in").
+ * Calibrations never average together regardless — this only controls the
+ * UI warning.
+ */
+export const CALIBRATION_DRIFT_THRESHOLD = 0.25;
+
+/**
+ * Whether `current`'s solved ceiling drifted from `previous`'s by more than
+ * `CALIBRATION_DRIFT_THRESHOLD`. `previous` is null for the oldest reading
+ * in a history, which never counts as drift.
+ */
+export function isCalibrationDrift(current: UsageCalibration, previous: UsageCalibration | null): boolean {
+  if (!previous || previous.computedCeilingSet === 0) return false;
+  const relativeChange = Math.abs(current.computedCeilingSet - previous.computedCeilingSet) / previous.computedCeilingSet;
+  return relativeChange > CALIBRATION_DRIFT_THRESHOLD;
+}
+
+export function recordUsageCalibration(repository: WorkItemRepository, provider: UsageCalibration['provider'], observedAt: string, observedPercentage: number, resetsAt: string | null = null): UsageCalibration {
   const observedDate = new Date(observedAt);
   const weekStart = startOfIsoWeekUtc(observedDate);
   const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
@@ -225,5 +246,5 @@ export function recordUsageCalibration(repository: WorkItemRepository, provider:
   const workbenchSet = workbench[provider].manual.setTokens + workbench[provider].autonomous.setTokens;
   const interactiveSet = provider === 'claude' ? scanClaudeInteractiveUsage(weekStart, weekEnd).setTokens : 0;
   const computedCeilingSet = (workbenchSet + interactiveSet) / (observedPercentage / 100);
-  return repository.createUsageCalibration({ provider, observedAt, observedPercentage, workbenchSet, interactiveSet, computedCeilingSet });
+  return repository.createUsageCalibration({ provider, observedAt, observedPercentage, resetsAt, workbenchSet, interactiveSet, computedCeilingSet });
 }

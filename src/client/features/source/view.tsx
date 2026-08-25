@@ -14,6 +14,7 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
   const disconnect = useMutation({
     mutationFn: () => sourceData.disconnect(sourceDisconnectProvider(provider)),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: sourceQueryKeys.connections }),
+    onError: (error) => console.error('Failed to disconnect source', error),
   });
   const mcpConnect = useMutation({
     mutationFn: async () => {
@@ -68,10 +69,11 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
   });
   return <div className={`connection-card ${connected ? 'connected' : ''} ${disabled ? 'unavailable' : ''}`}>
     <div className="connection-summary"><span><strong>{connection.name}</strong><small>{connection.detail}</small></span>
-      {canAuthorize && connected && provider !== 'slack' ? <button className="button secondary compact" onClick={() => disconnect.mutate()}>Disconnect</button> : canAuthorize ? <button className="button secondary compact" onClick={() => setOpen((value) => !value)}>{open ? 'Cancel' : provider === 'slack' ? 'Manage connection' : reconnecting ? 'Reconnect MCP' : 'Connect MCP'}</button> : <span className="mcp-required">{disabled ? 'Awaiting IT approval' : connected ? 'Connected' : 'Not connected'}</span>}
+      {canAuthorize && connected && provider !== 'slack' ? <button className="button secondary compact" onClick={() => disconnect.mutate()} disabled={disconnect.isPending}>{disconnect.isPending ? <LoaderCircle className="spin" size={14} /> : null} Disconnect</button> : canAuthorize ? <button className="button secondary compact" onClick={() => setOpen((value) => !value)}>{open ? 'Cancel' : provider === 'slack' ? 'Manage connection' : reconnecting ? 'Reconnect MCP' : 'Connect MCP'}</button> : <span className="mcp-required">{disabled ? 'Awaiting IT approval' : connected ? 'Connected' : 'Not connected'}</span>}
     </div>
     <div className="connection-meta">{connection.host === 'workbench' ? 'Workbench' : 'Managed connector'}<span>·</span>{connection.capabilities.map((capability) => capability.replace('_', ' ')).join(' · ') || 'Unavailable'}</div>
     {connection.lastError && <p className="error-message">{connection.lastError}</p>}
+    {disconnect.error && <p className="error-message">Could not disconnect: {disconnect.error.message}</p>}
     {provider === 'figma' && connected && <div className="connection-form figma-scope-form">
       <label htmlFor="figma-scope">Discovery scope <span>One Figma file, page, or node URL per line.</span></label>
       <textarea id="figma-scope" value={figmaRoots} onChange={(event) => setFigmaRoots(event.target.value)} placeholder="https://www.figma.com/design/..." rows={3} />

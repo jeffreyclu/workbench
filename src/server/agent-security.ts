@@ -9,6 +9,8 @@
  * default instead of requiring someone to remember to add them here.
  */
 import { existsSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 const RUNTIME_ENV_KEYS = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM', 'NODE_ENV'];
 
@@ -35,14 +37,25 @@ export function agentSubprocessEnv(source: NodeJS.ProcessEnv = process.env): Nod
 
 export type AgentAccount = 'default' | (string & {});
 
+export function accountProfileKey(account: string): string {
+  return account.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+}
+
+/** Managed profile roots are deliberately separate from each CLI's default home.
+ * An explicit env directory remains available for existing installs. */
+export function managedAccountDirectory(agent: 'codex' | 'claude', account: string, source: NodeJS.ProcessEnv = process.env): string | null {
+  const normalized = accountProfileKey(account);
+  if (!normalized || normalized === 'DEFAULT') return null;
+  const configured = source[`WORKBENCH_${agent.toUpperCase()}_ACCOUNT_${normalized}_DIR`]?.trim();
+  return configured || join(source.WORKBENCH_AGENT_ACCOUNT_ROOT?.trim() || join(homedir(), '.workbench', 'agent-accounts'), agent, normalized.toLowerCase());
+}
+
 /** Select an isolated provider credential directory without putting credentials in prompts. */
 export function agentAccountEnv(agent: 'codex' | 'claude', account: AgentAccount = 'default', source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env = agentSubprocessEnv(source);
-  const normalized = account.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_');
-  if (!normalized || normalized === 'DEFAULT') return env;
-  const configured = source[`WORKBENCH_${agent.toUpperCase()}_ACCOUNT_${normalized}_DIR`]?.trim();
-  if (!configured) throw new Error(`No credential directory configured for ${agent} account profile "${account}".`);
-  if (!existsSync(configured) || !statSync(configured).isDirectory()) throw new Error(`Credential directory for ${agent} account profile "${account}" does not exist: ${configured}`);
+  const configured = managedAccountDirectory(agent, account, source);
+  if (!configured) return env;
+  if (!existsSync(configured) || !statSync(configured).isDirectory()) throw new Error(`No credential directory configured for ${agent} account profile "${account}".`);
   env[agent === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'] = configured;
   return env;
 }

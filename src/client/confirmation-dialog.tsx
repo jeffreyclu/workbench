@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 type ConfirmationDialogProps = {
   title: string;
@@ -8,9 +8,12 @@ type ConfirmationDialogProps = {
   onConfirm: () => void;
   onClose: () => void;
   pending?: boolean;
+  confirmDisabled?: boolean;
+  confirmVariant?: 'danger' | 'primary';
+  children?: ReactNode;
 };
 
-export function ConfirmationDialog({ title, description, confirmLabel, onConfirm, onClose, pending = false }: ConfirmationDialogProps) {
+export function ConfirmationDialog({ title, description, confirmLabel, onConfirm, onClose, pending = false, confirmDisabled = false, confirmVariant = 'danger', children }: ConfirmationDialogProps) {
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !pending) onClose();
@@ -27,9 +30,10 @@ export function ConfirmationDialog({ title, description, confirmLabel, onConfirm
           <button type="button" className="icon-button" onClick={onClose} disabled={pending} aria-label="Close"><X size={17} /></button>
         </div>
         <p className="dialog-description">{description}</p>
+        {children}
         <div className="dialog-actions">
-          <button type="button" className="button secondary" onClick={onClose} disabled={pending} autoFocus>Cancel</button>
-          <button type="button" className="button danger" onClick={onConfirm} disabled={pending}>{pending ? 'Deleting…' : confirmLabel}</button>
+          <button type="button" className="button secondary" onClick={onClose} disabled={pending} autoFocus={!children}>Cancel</button>
+          <button type="button" className={`button ${confirmVariant}`} onClick={onConfirm} disabled={pending || confirmDisabled}>{pending ? `${confirmLabel}…` : confirmLabel}</button>
         </div>
       </section>
     </div>

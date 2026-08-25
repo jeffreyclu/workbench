@@ -34,18 +34,23 @@ export class QueuePlanningService {
   ) {}
 
   reorder(orderedItemIds: string[], stack?: 'attention' | 'workbench', change?: { actor: QueueOrderChange['actor']; reason: string }): WorkItem[] {
-    // There is only one order. The Workbench route is a filtered rendering of
-    // it, so it must never write an independent queue order.
-    void stack;
-    const inferredStack = 'attention';
-    const stackItems = this.collaborators.list();
+    const targetStack = stack ?? 'attention';
+    const stackItems = targetStack === 'workbench' ? this.collaborators.listWorkbench() : this.collaborators.list();
     const currentIds = stackItems.map((item) => item.id);
     if (currentIds.length !== orderedItemIds.length || !currentIds.every((id) => orderedItemIds.includes(id))) {
       throw new Error('Queue order must contain every active queued item exactly once.');
     }
     const apply = () => {
       const now = new Date().toISOString();
-      this.workItems.setQueuePositions(orderedItemIds, now);
+      // There is one persisted order. Workbench is a filtered slice of it, so
+      // reseat its IDs at their existing canonical slots instead of treating a
+      // three-item Workbench drag as a replacement for every active task.
+      let workbenchIndex = 0;
+      const workbenchIds = new Set(orderedItemIds);
+      const persistedIds = targetStack === 'workbench'
+        ? this.collaborators.list().map((item) => item.id).map((id) => workbenchIds.has(id) ? orderedItemIds[workbenchIndex++]! : id)
+        : orderedItemIds;
+      this.workItems.setQueuePositions(persistedIds, now);
       // Movements are journalled so any of them can be undone, not just the ones
       // that arrived as a proposal. Reorders that merely re-seat a task the caller
       // just added or restored pass no `change` and are deliberately not journalled:
@@ -53,12 +58,15 @@ export class QueuePlanningService {
       // drop or resurrect work. No-ops are skipped so undo always lands on a change
       // Jeffrey would actually notice.
       if (change && currentIds.some((id, index) => id !== orderedItemIds[index])) {
-        this.queue.insertOrderHistory({ stack: inferredStack, actor: change.actor, reason: change.reason, previousOrder: currentIds, newOrder: orderedItemIds, createdAt: now });
+        this.queue.insertOrderHistory({ stack: targetStack, actor: change.actor, reason: change.reason, previousOrder: currentIds, newOrder: orderedItemIds, createdAt: now });
       }
-      this.queue.incrementVersion(inferredStack);
+      this.queue.incrementVersion(targetStack);
+      // A Workbench change also changes the canonical sequence used by an
+      // attention proposal, so invalidate that proposal's optimistic version.
+      if (targetStack === 'workbench') this.queue.incrementVersion('attention');
     };
     this.unitOfWork.transaction(apply);
-    return this.collaborators.list();
+    return targetStack === 'workbench' ? this.collaborators.listWorkbench() : this.collaborators.list();
   }
 
   listQueueHistory(stack: 'attention' | 'workbench' = 'attention', limit = 20): QueueOrderChange[] {

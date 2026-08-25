@@ -35,6 +35,7 @@ export function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (i
       <button disabled={!selected.size || bulkResolve.isPending} onClick={() => bulkResolve.mutate('snooze')}>Tomorrow</button>
       <button disabled={!selected.size || bulkResolve.isPending} onClick={() => bulkResolve.mutate('dismiss')}>Dismiss</button>
       <button className="accept" disabled={!selected.size || bulkResolve.isPending} onClick={() => bulkResolve.mutate('convert')}>Add / update</button>
+      {bulkResolve.error && <p className="error-message" role="alert">Could not complete bulk review: {bulkResolve.error.message}</p>}
     </div>}
     <div className="discovery-list">
       {inbox.isLoading && <ListRowSkeleton count={5} />}

@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { generateToken } from '../src/server/auth.js';
 
-const target = process.argv[2] ?? 'http://localhost:5173';
+const target = process.argv[2] ?? 'http://localhost:5180';
 const port = new URL(target).port || '80';
 const envPath = new URL('../.env', import.meta.url).pathname;
 

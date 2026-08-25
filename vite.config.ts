@@ -42,7 +42,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), authGatePlugin(token, env), previewReadOnlyPlugin(previewReadOnly)],
     server: {
-      port: 5173,
+      port: 5180,
       // LAN/Tailscale access (npm run dev:lan) arrives with a non-localhost Host
       // header. IP literals are permitted by Vite already; the tailnet domain is
       // not, so allow it explicitly.

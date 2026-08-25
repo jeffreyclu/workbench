@@ -1,8 +1,9 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { AlertTriangle, Bot, Check, Clock, GripVertical, LoaderCircle, Sparkles, Unlock, User } from 'lucide-react';
-import type { CSSProperties, KeyboardEvent } from 'react';
+import { useState, type CSSProperties, type KeyboardEvent } from 'react';
 import type { AgentRun, Assignee, WorkItem } from '../../../shared/contracts';
+import { ConfirmationDialog } from '../../confirmation-dialog';
 import { ProjectColorDot, projectTheme } from '../../project-color';
 import { useTaskClassification, useUnblockWorkItem } from '../../features/queue/hooks';
 
@@ -26,13 +27,38 @@ export function TaskClassificationSelect({ itemId, kind, compact = false }: { it
 
 function QueueItemUnblockButton({ item }: { item: WorkItem }) {
   const unblock = useUnblockWorkItem(item.id);
-  return <button type="button" className="queue-item-cta queue-item-cta-unblock" disabled={unblock.isPending} onClick={(event) => {
-    event.stopPropagation();
-    const reason = window.prompt(`Why is “${item.title}” ready to unblock?`);
-    if (reason && reason.trim()) unblock.mutate(reason.trim());
-  }} aria-label={`Unblock ${item.title}`}>
-    {unblock.isPending ? <LoaderCircle className="spin" size={12} /> : <Unlock size={12} />} Unblock
-  </button>;
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const trimmedReason = reason.trim();
+  const confirm = () => {
+    if (!trimmedReason) return;
+    unblock.mutate(trimmedReason, { onSuccess: () => setDialogOpen(false) });
+  };
+  const close = () => {
+    if (unblock.isPending) return;
+    setDialogOpen(false);
+    setReason('');
+  };
+
+  return <>
+    <button type="button" className="queue-item-cta queue-item-cta-unblock" disabled={unblock.isPending} onClick={(event) => {
+      event.stopPropagation();
+      setDialogOpen(true);
+    }} aria-label={`Unblock ${item.title}`}>
+      {unblock.isPending ? <LoaderCircle className="spin" size={12} /> : <Unlock size={12} />} Unblock
+    </button>
+    {dialogOpen && <ConfirmationDialog title={`Unblock “${item.title}”?`} description="Record why this task is ready to continue." confirmLabel="Unblock task" confirmVariant="primary" pending={unblock.isPending} confirmDisabled={!trimmedReason} onClose={close} onConfirm={confirm}>
+      <label htmlFor={`unblock-reason-${item.id}`}>
+        Unblock reason
+        <textarea id={`unblock-reason-${item.id}`} value={reason} onChange={(event) => setReason(event.target.value)} onKeyDown={(event) => {
+          if (event.key === 'Enter' && !event.shiftKey && trimmedReason) {
+            event.preventDefault();
+            confirm();
+          }
+        }} autoFocus rows={3} />
+      </label>
+    </ConfirmationDialog>}
+  </>;
 }
 
 export function SortableQueueItem({ item, index, selected, focused, draggable, onSelect, onOpenTask, onFocus, onKeyDown }: {
@@ -43,16 +69,23 @@ export function SortableQueueItem({ item, index, selected, focused, draggable, o
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id,
     disabled: !draggable,
-    // Keep neighboring cards moving as a single, readable list rather than
-    // snapping into their new rank after the drop.
-    transition: { duration: 220, easing: 'cubic-bezier(.22, 1, .36, 1)' },
+    // A manual drop commits a new rank; it should land there immediately.
+    // System-driven rank changes use the separate FLIP hook instead.
+    transition: null,
   });
   const hasFollowUps = (item.lineage?.followUpCount ?? 0) > 0;
   const isFollowUp = Boolean(item.parentWorkItemId && item.lineage?.parentTitle);
   const color = item.projectName ? projectTheme(item.projectName) : null;
   // Sortable's full transform includes scale values when neighboring slots
   // have different dimensions. A queue card should move, never morph.
-  const style = { transform: CSS.Translate.toString(transform), transition, ...(color ? { '--task-accent': color.accent, '--task-tint': color.tint, '--task-border': color.border } : {}) } as CSSProperties;
+  const style = {
+    transform: CSS.Translate.toString(transform),
+    // dnd-kit can briefly return a transform transition while it reconciles a
+    // completed sort even when the configured transition is null. Suppress
+    // that teardown value; ordinary card hover transitions resume at rest.
+    transition: transform || transition || isDragging ? 'none' : undefined,
+    ...(color ? { '--task-accent': color.accent, '--task-tint': color.tint, '--task-border': color.border } : {}),
+  } as CSSProperties;
   const isHumanOnly = !item.agentOutcome && item.assignees.length === 1 && item.assignees[0] === 'jeffrey';
   const openDependencies = (item.blockedBy ?? []).filter((dependency) => dependency.isOpen);
   const visibleOutcome = item.agentOutcome ?? (item.status === 'in_progress' ? 'in_progress' : null);
@@ -73,6 +106,6 @@ export function SortableQueueItem({ item, index, selected, focused, draggable, o
       {item.archivedAt && <time className="archive-date" dateTime={item.archivedAt}>Archived {new Date(item.archivedAt).toLocaleDateString()}</time>}
       {item.assignees.length > 0 && <span className="assignees">{item.assignees.map((assignee) => <AssigneeIcon key={assignee} assignee={assignee} />)}</span>}
     </span>
-    {visibleOutcome && <span className={`agent-outcome agent-outcome-${visibleOutcome}`}>{visibleOutcome === 'needs_attention' ? <AlertTriangle size={11} /> : visibleOutcome === 'follow_ups' ? <Sparkles size={11} /> : visibleOutcome === 'waiting_promotion' ? <Clock size={11} /> : visibleOutcome === 'promoting' || visibleOutcome === 'in_progress' ? <LoaderCircle className="spin" size={11} /> : <Check size={11} />}{visibleOutcome === 'needs_attention' ? 'Needs attention' : visibleOutcome === 'follow_ups' ? 'Follow-ups recommended' : visibleOutcome === 'promoting' ? 'Approved · promoting preview' : visibleOutcome === 'waiting_promotion' ? 'Approved and waiting promotion' : visibleOutcome === 'in_progress' ? 'In progress' : 'Finished'}</span>}
+    {visibleOutcome && <span className={`agent-outcome agent-outcome-${visibleOutcome}`}>{visibleOutcome === 'needs_attention' ? <AlertTriangle size={11} /> : visibleOutcome === 'follow_ups' ? <Sparkles size={11} /> : visibleOutcome === 'waiting_promotion' ? <Clock size={11} /> : visibleOutcome === 'promoting' || visibleOutcome === 'in_progress' ? <LoaderCircle className="spin" size={11} /> : <Check size={11} />}{visibleOutcome === 'needs_attention' ? 'Needs attention' : visibleOutcome === 'follow_ups' ? 'Follow-ups recommended' : visibleOutcome === 'promoting' ? 'Approved · promoting preview' : visibleOutcome === 'waiting_promotion' ? 'Approved and waiting promotion' : visibleOutcome === 'in_progress' ? 'In progress' : 'Awaiting'}</span>}
   </div>;
 }

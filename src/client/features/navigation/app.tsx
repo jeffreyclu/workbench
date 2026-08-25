@@ -32,7 +32,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from '../../markdown-composer.js';
@@ -60,13 +60,29 @@ import { clearLastOpenedItem, clearSentConversationDraft, readConversationDrafts
 import { QueueExplanationList } from '../../queue-explanations';
 import { ProjectColorDot } from '../../project-color';
 import { InlineProjectEditor } from '../../project-field';
+import { useValuePulse } from '../../use-value-pulse';
 import { isWorkbenchProject, WORKBENCH_PROJECT_NAME } from '../../../shared/project-name';
 import { SourcesDialog } from '../../sources-dialog';
 import { createTaskStackViewModel } from '../../stack-view-model';
 import { useRealtimeNotifications, type RealtimeNotification } from '../../realtime';
+import { useTaskStackReorderAnimation } from '../queue/use-task-stack-reorder-animation';
+import { reorderTaskPages, reorderTasks, type TaskReorderTarget } from '../queue/task-reorder';
 
 import { SharedWorkspace } from '../conversation/view';
 import { TaskDetail } from '../task/view';
+
+type QueueReorderRequest = TaskReorderTarget & { stack: 'attention' | 'workbench' };
+type QueueReorderMutation = {
+  request: QueueReorderRequest;
+  queryKey: readonly ['work-items', string, string];
+  previous: InfiniteData<WorkItemPage> | undefined;
+};
+
+function PulseCount({ value, as: Tag = 'strong' }: { value: number; as?: 'strong' | 'span' }) {
+  const pulse = useValuePulse(value);
+  return <Tag className={pulse}>{value}</Tag>;
+}
+
 export function App() {
   const queryClient = useQueryClient();
   const handleRealtimeNotification = useMemo(() => (notification: RealtimeNotification) => {
@@ -80,7 +96,7 @@ export function App() {
     };
     toast[notification.tone](notification.message, options);
   }, []);
-  useRealtimeNotifications(handleRealtimeNotification);
+  const realtimeConnectionState = useRealtimeNotifications(handleRealtimeNotification);
   const health = useQuery({ queryKey: ['health'], queryFn: api.getHealth, refetchInterval: 15_000 });
   const loadedBuildId = useRef<string | null>(null);
   useEffect(() => {
@@ -115,6 +131,7 @@ export function App() {
   const [conversationRailView, setConversationRailView] = useState<'active' | 'archive'>('active');
   const [pendingTaskNavigation, setPendingTaskNavigation] = useState<string | null>(null);
   const [pendingPinnedNavigation, setPendingPinnedNavigation] = useState(false);
+  const [pendingTaskReorder, setPendingTaskReorder] = useState<QueueReorderRequest | null>(null);
   // A saved primary-surface task can be archived elsewhere between visits. It
   // must not turn clicking Workbench into navigation to the Archive filter.
   const primaryStackTask = useRef<{ taskId: string; stack: Extract<StackName, 'active' | 'workbench'> } | null>(null);
@@ -143,6 +160,11 @@ export function App() {
   const { mobileNavOpen, setMobileNavOpen, isCompactNav, workItems: workItemCounts, conversations: totalConversationCount } = useNavigation();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
   const queueScrollRef = useRef<HTMLDivElement>(null);
+  const [isTaskDragging, setIsTaskDragging] = useState(false);
+  const dragFinishFrame = useRef<number | null>(null);
+  // A pointer/keyboard drag already has dnd-kit's immediate movement. Suppress
+  // the following server refresh so only system-initiated rank changes use FLIP.
+  const skipNextDragReorderAnimation = useRef(false);
   const isArchiveView = view === 'archive' || view === 'workbench-archive';
   const isWorkbenchScope = view === 'workbench' || view === 'workbench-archive';
   const queueView = view === 'workbench-archive' ? 'workbench-archive' : view === 'archive' ? 'archive' : view === 'workbench' ? 'workbench' : 'active';
@@ -249,9 +271,16 @@ export function App() {
     if (queueAgentStatusSignature) void queryClient.invalidateQueries({ queryKey: ['work-items'] });
   }, [queryClient, queueAgentStatusSignature]);
   const reorder = useMutation({
-    mutationFn: api.reorderQueue,
-    onError: (error) => toastError('Could not save the new order. The list will reset.', error),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['work-items'] }),
+    mutationFn: ({ request }: QueueReorderMutation) => api.reorderQueue(request),
+    onError: (error, { queryKey, previous }) => {
+      queryClient.setQueryData(queryKey, previous);
+      setPendingTaskReorder(null);
+      toastError('Could not save the new order. The list will reset.', error);
+    },
+    onSuccess: async (_result, { request }) => {
+      await queryClient.invalidateQueries({ queryKey: ['work-items'] });
+      setPendingTaskReorder((current) => current?.itemId === request.itemId ? null : current);
+    },
   });
   const resolveProposal = useMutation({
     mutationFn: ({ id, resolution }: { id: string; resolution: 'accepted' | 'rejected' }) => api.resolveQueueProposal(id, resolution),
@@ -282,9 +311,34 @@ export function App() {
     },
     onError: (error) => toastError('Could not update the selected tasks.', error),
   });
-  const filtered = useMemo(() => items.data?.pages.flatMap((page) => page.items) ?? [], [items.data?.pages]);
+  const serverFiltered = useMemo(() => items.data?.pages.flatMap((page) => page.items) ?? [], [items.data?.pages]);
+  // TanStack Query remains the server-state owner. This local projection exists
+  // only to guarantee that dnd teardown and the final order share one paint.
+  const filtered = useMemo(
+    () => pendingTaskReorder ? reorderTasks(serverFiltered, pendingTaskReorder) : serverFiltered,
+    [pendingTaskReorder, serverFiltered],
+  );
   const taskStackScope = isArchiveView ? 'archive' : view === 'workbench' ? 'workbench' : 'attention';
   const { items: renderedItems, rows: renderedRows } = useMemo(() => createTaskStackViewModel(filtered, taskStackScope), [filtered, taskStackScope]);
+  // Rendered sections are separate rank domains. The Attention section contains
+  // several raw statuses, so drag-and-drop must use this visible grouping rather
+  // than treating each status as a separate list.
+  const renderedSections = useMemo(() => {
+    type Header = Extract<typeof renderedRows[number], { type: 'header' }>;
+    type Item = Extract<typeof renderedRows[number], { type: 'item' }>;
+    const sections: Array<{ header: Header | null; items: Item[] }> = [];
+    for (const row of renderedRows) {
+      if (row.type === 'header') {
+        sections.push({ header: row, items: [] });
+      } else {
+        const section = sections.at(-1);
+        if (section) section.items.push(row);
+        else sections.push({ header: null, items: [row] });
+      }
+    }
+    return sections;
+  }, [renderedRows]);
+  useTaskStackReorderAnimation(queueScrollRef, renderedItems.map((item) => item.id), skipNextDragReorderAnimation);
   useEffect(() => {
     if (route.name !== 'task' || !pendingTaskNavigation || pendingTaskNavigation !== route.taskId) return;
     // Wait until the stack behind the task is known: before that the queue can
@@ -385,21 +439,57 @@ export function App() {
     navigate({ name: 'task', taskId: item.id });
   }
 
+  useEffect(() => () => {
+    if (dragFinishFrame.current !== null) window.cancelAnimationFrame(dragFinishFrame.current);
+  }, []);
+
+  function startTaskDrag() {
+    if (dragFinishFrame.current !== null) window.cancelAnimationFrame(dragFinishFrame.current);
+    dragFinishFrame.current = null;
+    setIsTaskDragging(true);
+  }
+
+  function finishTaskDrag() {
+    if (dragFinishFrame.current !== null) window.cancelAnimationFrame(dragFinishFrame.current);
+    // Keep visual transitions disabled through dnd-kit's teardown commit. The
+    // class can disappear once the card is already resting in its final style.
+    dragFinishFrame.current = window.requestAnimationFrame(() => {
+      dragFinishFrame.current = null;
+      setIsTaskDragging(false);
+    });
+  }
+
+  function commitTaskReorder(request: QueueReorderRequest) {
+    const queryKey = ['work-items', queueView, taskSearch.trim()] as const;
+    const previous = queryClient.getQueryData<InfiniteData<WorkItemPage>>(queryKey);
+    skipNextDragReorderAnimation.current = true;
+    setPendingTaskReorder(request);
+    queryClient.setQueryData<InfiniteData<WorkItemPage>>(queryKey, (current) => current && ({
+      ...current,
+      pages: reorderTaskPages(current.pages, request),
+    }));
+    reorder.mutate({ request, queryKey, previous });
+  }
+
   function handleDragEnd(event: DragEndEvent) {
+    finishTaskDrag();
     const { active, over } = event;
     if (!over || active.id === over.id || items.isFetchingNextPage) return;
-    const current = filtered;
-    const activeItem = current.find((item) => item.id === active.id);
-    const overItem = current.find((item) => item.id === over.id);
-    if (!activeItem || !overItem || activeItem.status !== overItem.status) return;
-    const group = current.filter((item) => item.status === activeItem.status);
+    const activeRow = renderedRows.find((row) => row.type === 'item' && row.id === active.id);
+    const overRow = renderedRows.find((row) => row.type === 'item' && row.id === over.id);
+    if (!activeRow || activeRow.type !== 'item' || !overRow || overRow.type !== 'item' || activeRow.group !== overRow.group) return;
+    const group = renderedRows.flatMap((row) => row.type === 'item' && row.group === activeRow.group ? [row.item] : []);
     const oldIndex = group.findIndex((item) => item.id === active.id);
     const newIndex = group.findIndex((item) => item.id === over.id);
     const moved = arrayMove(group, oldIndex, newIndex);
     const next = moved[newIndex + 1];
     const previous = moved[newIndex - 1];
-    if (next) reorder.mutate({ itemId: String(active.id), beforeId: next.id });
-    else if (previous) reorder.mutate({ itemId: String(active.id), afterId: previous.id });
+    const stack = view === 'workbench' ? 'workbench' : 'attention';
+    if (next) {
+      commitTaskReorder({ itemId: String(active.id), beforeId: next.id, stack });
+    } else if (previous) {
+      commitTaskReorder({ itemId: String(active.id), afterId: previous.id, stack });
+    }
   }
 
   function handleQueueKeyDown(event: KeyboardEvent<HTMLDivElement>, itemId: string) {
@@ -417,6 +507,11 @@ export function App() {
   return (
     <div className="app-shell">
       <Toaster />
+      {realtimeConnectionState === 'reconnecting' && (
+        <div className="realtime-status-banner" role="status">
+          <LoaderCircle className="spin" size={13} /> Reconnecting… showing cached data
+        </div>
+      )}
       <NavigationView
         view={view === 'workbench-archive' ? 'workbench' : view}
         mobileNavOpen={mobileNavOpen}
@@ -431,6 +526,11 @@ export function App() {
         onOpenInsights={() => { navigate({ name: 'insights' }); setMobileNavOpen(false); }}
         onOpenSources={() => { setShowSources(true); setMobileNavOpen(false); }}
         onToggleMore={() => setMobileNavOpen((open) => !open)}
+        onSelectGlobalSearchResult={(result) => {
+          if (result.conversationId) openConversation(result.conversationId);
+          else if (result.workItemId) openTaskFromConversation(result.workItemId);
+          setMobileNavOpen(false);
+        }}
       />
 
       {view === 'context' ? <SharedWorkspace key={`conversation-${conversationNavigationVersion}`} initialConversationId={agentConversationId} view={conversationRailView} onViewChange={setConversationRailView} onSelectConversation={handleConversationSelected} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} /> : view === 'artifacts' ? <ArtifactLibraryView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : view === 'insights' ? <InsightsView /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenStack={() => navigate({ name: 'stack', stack: 'active' })} /> : <><main className="queue-panel">
@@ -438,10 +538,10 @@ export function App() {
           <div className="stack-toolbar-copy"><span className="eyebrow">{isArchiveView ? 'Archive' : 'Tasks'}</span><h2>{isWorkbenchScope ? 'Workbench focus' : 'Attention stack'}</h2></div>
           <div className="header-actions">
             {(!isArchiveView) && <>
-            <button className="button secondary compact" onClick={() => planQueue.mutate()} disabled={planQueue.isPending}>
-              {planQueue.isPending ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} {planQueue.isPending ? 'Reordering…' : 'Reorder stack'}
+            <button className="icon-button" onClick={() => planQueue.mutate()} disabled={planQueue.isPending} aria-label={planQueue.isPending ? 'Reordering stack' : 'Reorder stack'} title={planQueue.isPending ? 'Reordering stack' : 'Reorder stack'}>
+              {planQueue.isPending ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}
             </button>
-            <button className="button primary compact" onClick={() => setShowCreate(true)}><Plus size={15} /> New</button>
+            <button className="icon-button primary" onClick={() => setShowCreate(true)} aria-label="New task" title="New task"><Plus size={15} /></button>
             </>}
           </div>
         </header>
@@ -455,7 +555,7 @@ export function App() {
           />
           {taskSearch && <button type="button" className="icon-button" aria-label="Clear task search" onClick={() => setTaskSearch('')}><X size={13} /></button>}
         </div>
-        <div className="stack-view-filter task-view-filter" role="group" aria-label="Task view"><button type="button" className={!isArchiveView ? 'active' : ''} aria-pressed={!isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench' : 'active' })}>Active</button><button type="button" className={isArchiveView ? 'active' : ''} aria-pressed={isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench-archive' : 'archive' })}>Archive <span>{isArchiveView ? items.data?.pages[0]?.totalCount ?? '…' : isWorkbenchScope ? workItemCounts.data?.workbenchArchive ?? '…' : workItemCounts.data?.attentionArchive ?? '…'}</span></button></div>
+        <div className="stack-view-filter task-view-filter" role="group" aria-label="Task view"><button type="button" className={!isArchiveView ? 'active' : ''} aria-pressed={!isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench' : 'active' })}>Active</button><button type="button" className={isArchiveView ? 'active' : ''} aria-pressed={isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench-archive' : 'archive' })}>Archive <PulseCount as="span" value={isArchiveView ? items.data?.pages[0]?.totalCount ?? 0 : isWorkbenchScope ? workItemCounts.data?.workbenchArchive ?? 0 : workItemCounts.data?.attentionArchive ?? 0} /></button></div>
         {selectedIds.size > 0 && <div className="queue-bulkbar" role="toolbar" aria-label="Bulk task actions"><span>{selectedIds.size} selected</span><button onClick={() => bulkUpdate.mutate({ action: isArchiveView ? 'restore' : 'archive', ids: [...selectedIds] })} disabled={bulkUpdate.isPending}>{isArchiveView ? 'Restore' : 'Archive'}</button><button onClick={() => setSelectedIds(new Set())}>Clear</button>{isWorkbenchScope && <small>Workbench is filtered to the Workbench project.</small>}</div>}
         {items.data?.pages[0]?.proposal && (
           <div className="proposal-banner">
@@ -472,21 +572,22 @@ export function App() {
             <QueueExplanationList explanations={items.data.pages[0].proposal.explanations} />
           </div>
         )}
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <div ref={queueScrollRef} className="queue-list" role="list" aria-label={isArchiveView ? 'Archived tasks' : view === 'workbench' ? 'Workbench focus' : 'Work stacks'} onScroll={(event) => {
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={startTaskDrag} onDragCancel={finishTaskDrag} onDragEnd={handleDragEnd}>
+        <div ref={queueScrollRef} className={`queue-list ${isTaskDragging ? 'is-dragging' : ''}`} role="list" aria-label={isArchiveView ? 'Archived tasks' : view === 'workbench' ? 'Workbench focus' : 'Work stacks'} onScroll={(event) => {
           const element = event.currentTarget;
           if (element.scrollHeight - element.scrollTop - element.clientHeight < 500 && items.hasNextPage && !items.isFetchingNextPage) void items.fetchNextPage();
         }}>
           {items.isLoading && <ListRowSkeleton count={8} />}
           {items.isError && <div className="list-state error-message">Could not load work items. <button className="button secondary compact" onClick={() => items.refetch()}>Retry</button></div>}
           {!items.isLoading && !items.isError && filtered.length === 0 && <div className="list-state">{taskSearch.trim() ? `No tasks match “${taskSearch.trim()}”.` : view === 'active' ? 'No work items yet. Add one or connect Linear.' : view === 'workbench' ? 'No Workbench-project tasks yet.' : 'No archived tasks.'}</div>}
-          <SortableContext items={(view === 'active' || view === 'workbench') && !items.hasNextPage && selectedIds.size === 0 ? renderedItems.map((item) => item.id) : []} strategy={verticalListSortingStrategy}>
-            <div className="queue-rows">
-              {renderedRows.map((rendered, index) => rendered.type === 'header'
-                ? <div key={rendered.id} className={`stack-header stack-header-${rendered.group}`}><span>{rendered.label}</span><strong>{rendered.count}</strong></div>
-                : <div key={rendered.id} className={`task-group-row task-group-${rendered.group} ${enteringTaskIds.has(rendered.item.id) ? 'is-entering' : ''} ${exitingTaskIds.has(rendered.item.id) ? 'is-exiting' : ''}`}><TaskQueueItem item={rendered.item} index={index} selected={selectedId === rendered.item.id} focused={(focusedId ?? renderedItems[0]?.id) === rendered.item.id} draggable={(view === 'active' || view === 'workbench') && !items.isFetchingNextPage && !items.hasNextPage && selectedIds.size === 0} onSelect={() => selectTaskInStack(rendered.item.id)} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onFocus={() => setFocusedId(rendered.item.id)} onKeyDown={(event) => handleQueueKeyDown(event, rendered.item.id)} /></div>)}
-            </div>
-          </SortableContext>
+          <div className="queue-rows">
+            {renderedSections.map((section, sectionIndex) => <Fragment key={`section-${section.header?.id ?? sectionIndex}`}>
+              {section.header && <div key={section.header.id} className={`stack-header stack-header-${section.header.group}`}><span>{section.header.label}</span><PulseCount value={section.header.count} /></div>}
+              <SortableContext items={(view === 'active' || view === 'workbench') && selectedIds.size === 0 ? section.items.map((item) => item.id) : []} strategy={verticalListSortingStrategy}>
+                {section.items.map((rendered) => <div key={rendered.id} className={`task-group-row task-group-${rendered.group} ${enteringTaskIds.has(rendered.item.id) ? 'is-entering' : ''} ${exitingTaskIds.has(rendered.item.id) ? 'is-exiting' : ''}`}><TaskQueueItem item={rendered.item} index={renderedItems.indexOf(rendered.item)} selected={selectedId === rendered.item.id} focused={(focusedId ?? renderedItems[0]?.id) === rendered.item.id} draggable={(view === 'active' || view === 'workbench') && !items.isFetchingNextPage && selectedIds.size === 0} onSelect={() => selectTaskInStack(rendered.item.id)} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onFocus={() => setFocusedId(rendered.item.id)} onKeyDown={(event) => handleQueueKeyDown(event, rendered.item.id)} /></div>)}
+              </SortableContext>
+            </Fragment>)}
+          </div>
           {items.isFetchingNextPage && <div className="page-state"><LoaderCircle className="spin" size={14} /> Loading more…</div>}
           {!items.hasNextPage && filtered.length > 0 && <div className="page-state">All {items.data?.pages[0]?.totalCount ?? filtered.length} items loaded</div>}
         </div>

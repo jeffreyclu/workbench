@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { ToastTone } from './toast-store';
 
@@ -11,6 +11,13 @@ type RealtimeMessage =
   | { type: 'notification'; tone: ToastTone; message: string; description?: string; duration?: number; action?: { label: string; route: string } };
 
 export type RealtimeNotification = Extract<RealtimeMessage, { type: 'notification' }>;
+
+/**
+ * 'connecting' is the initial/first-attempt state; 'reconnecting' means an
+ * established connection was lost and backoff is in progress. Callers use
+ * this to warn that cached data may be stale while the socket is down.
+ */
+export type RealtimeConnectionState = 'connecting' | 'connected' | 'reconnecting';
 
 const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
   'work-items': [
@@ -62,8 +69,9 @@ export function invalidateRealtimeTopics(queryClient: QueryClient, topics: reado
  * transports cache invalidations and server-authored user notifications. Records
  * still come from REST, so socket payloads never need to carry application data.
  */
-export function useRealtimeNotifications(onNotification: (notification: RealtimeNotification) => void): void {
+export function useRealtimeNotifications(onNotification: (notification: RealtimeNotification) => void): RealtimeConnectionState {
   const queryClient = useQueryClient();
+  const [connectionState, setConnectionState] = useState<RealtimeConnectionState>('connecting');
 
   useEffect(() => {
     if (typeof WebSocket === 'undefined') return;
@@ -76,7 +84,7 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
     const connect = () => {
       if (disposed) return;
       socket = new WebSocket(realtimeUrl());
-      socket.addEventListener('open', () => { attempts = 0; });
+      socket.addEventListener('open', () => { attempts = 0; setConnectionState('connected'); });
       socket.addEventListener('message', (event) => {
         try {
           const message: unknown = JSON.parse(typeof event.data === 'string' ? event.data : '');
@@ -89,6 +97,7 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
       });
       socket.addEventListener('close', () => {
         if (disposed) return;
+        setConnectionState('reconnecting');
         const delay = Math.min(30_000, 1_000 * 2 ** attempts++);
         const jitter = Math.round(delay * (0.2 * Math.random()));
         reconnectTimer = window.setTimeout(connect, delay + jitter);
@@ -102,4 +111,6 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
       socket?.close();
     };
   }, [onNotification, queryClient]);
+
+  return connectionState;
 }

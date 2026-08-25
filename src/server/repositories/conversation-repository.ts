@@ -153,4 +153,9 @@ export class ConversationRepository {
   delete(id: string): boolean {
     return Number(this.database.prepare('UPDATE shared_conversations SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL AND work_item_id IS NULL').run(new Date().toISOString(), id).changes) > 0;
   }
+
+  /** Reverses `delete`: clears deleted_at so the conversation reappears in every list/get query. */
+  undelete(id: string): boolean {
+    return Number(this.database.prepare('UPDATE shared_conversations SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL').run(new Date().toISOString(), id).changes) > 0;
+  }
 }

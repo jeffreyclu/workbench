@@ -6,7 +6,7 @@ import { listAuditLogQuerySchema, submitUsageCalibrationSchema } from '../../sha
 import type { RouteContext } from '../route-context.js';
 import { runtimePreviewStatus } from '../runtime-preview.js';
 import { LIFECYCLE_REPORT_MS, lifecycleReportMinimumCases, OWNER_ID } from '../scheduler.js';
-import { computeWeeklyUsageReport, recordUsageCalibration } from '../usage-meter.js';
+import { computeWeeklyUsageReport, isCalibrationDrift, recordUsageCalibration } from '../usage-meter.js';
 import { readCodexRateLimit } from '../codex-rate-limits.js';
 import { DEFAULT_LIFECYCLE_REPORT_DIRECTORY, lifecycleReportStatus } from '../lifecycle-report.js';
 import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMessage } from '../slack-notify.js';
@@ -47,12 +47,15 @@ export function createSystemRouter({ repository, admin }: RouteContext) {
   });
   router.post('/api/usage/calibration', (request, response) => {
     const input = submitUsageCalibrationSchema.parse(request.body);
-    response.status(201).json({ calibration: recordUsageCalibration(repository, input.provider, input.observedAt, input.observedPercentage) });
+    response.status(201).json({ calibration: recordUsageCalibration(repository, input.provider, input.observedAt, input.observedPercentage, input.resetsAt) });
   });
   router.get('/api/usage/calibration', (request, response) => {
     const provider = z.enum(['claude', 'codex']).default('claude').parse(request.query.provider);
     const limit = z.coerce.number().int().min(1).max(200).default(20).parse(request.query.limit);
-    response.json({ calibrations: repository.listUsageCalibrations(provider, limit) });
+    // Newest-first; each reading is compared against the next-older one to flag drift.
+    const readings = repository.listUsageCalibrations(provider, limit);
+    const calibrations = readings.map((reading, index) => ({ ...reading, flagged: isCalibrationDrift(reading, readings[index + 1] ?? null) }));
+    response.json({ calibrations });
   });
   router.post('/api/autonomy/dispatch', async (_request, response) => {
     admin.sendAction(response, await admin.dispatchAutonomousWork());

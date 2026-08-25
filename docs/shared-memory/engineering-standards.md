@@ -215,6 +215,14 @@ The harness must make those targets explicit, preserve tool traces and usage per
 audits possible. Generalize this: cost control comes from testing the layer an assertion measures,
 not from blocking a legitimate test run after an arbitrary number of calls.
 
+**Status correction (2026-08-24):** Jeffrey later confirmed the Anthropic balance was topped up.
+Do not cite account credit as the remaining blocker for the q21 stability task; verify the actual
+Pluto runtime and the persisted trace/citation evidence instead.
+
+### Claude autocompaction accepts `auto` or 100k–1M tokens
+
+On 2026-08-24, setting Workbench's Claude launcher to `--autocompact 50000` made every run fail immediately: the installed Claude CLI only accepts `auto` or a numeric value from 100k through 1M. Keep the runner at `100k` (the minimum numeric setting), with a regression assertion in `agent-runner.test.ts`; never lower it to a bare `50000`.
+
 ### (always) Never fire billed live-agent eval runs on your own initiative
 
 Immediately after the layered-eval work above landed, an agent started four back-to-back live
@@ -269,6 +277,32 @@ synthesis calls. Task-linked replies share their `agent_runs` row and must be co
 replies have no run row, so their fresh input, cache write, cache read, output, cost, and cost source
 must be persisted on `shared_messages` and included in Insights exactly once.
 
+Historical rows without either cache field are **incomplete telemetry**, not fresh-only traffic. Do
+not put them in Insights token totals or label their `input_tokens` as fresh input: the cache split is
+unknown. Surface the number excluded so a missing split is visible rather than silently guessed. An
+explicit reported zero is complete telemetry and remains eligible.
+
+### Claude stream usage must be deduplicated by provider request
+
+Claude's stream can repeat an `assistant` usage payload once per content block (for example thinking,
+text, and tool use) for one actual provider request. Those replicas share `requestId` and message ID.
+The runner must count that request once, then sum distinct provider requests; the terminal `result`
+remains authoritative and replaces the provisional aggregate. On 2026-08-24, summing every replica
+manufactured 1M-token run failures from about 155K tokens of final observed traffic. Any live
+budget/cost circuit breaker must run after this deduplication, or it will terminate healthy work based
+on presentation duplication instead of provider consumption.
+
+### Claude Workbench runs use one context, not a token kill switch
+
+On 2026-08-24, Jeffrey rejected the per-run Claude token/cost cap after it
+terminated useful work in seconds. Do not reintroduce it as a default safety
+mechanism. Fix excess cache traffic at its source: Workbench Claude runs block
+the `Task` subagent tool, do not forward subagent streams, and use aggressively
+bounded task context, shared brief, retrieval, and conversation history. The
+observed failure had roughly 1.0M cache-read tokens in under a minute for about
+100 visible output tokens, so minimizing fan-out and repeated context is the
+primary invariant; usage telemetry remains for diagnosis, not termination.
+
 ### Codex session accounting: `input_tokens` includes cache reads
 
 On 2026-08-24, Jeffrey's seven-day Codex session-log aggregate reported 637,606,464
@@ -291,3 +325,17 @@ percentage, and Codex app-server percentages describe a short rate-limit window 
 ISO-week ceiling. Neither number may be silently recorded as a weekly calibration. Agents own the
 ongoing local measurement and should run the command when asked to calibrate; an interactive Claude
 `/usage` observation is still required to recalibrate Claude's weekly ceiling.
+
+### Commits must never carry an agent Co-Authored-By trailer
+
+Jeffrey's standing rule (2026-08-24): every git commit must show him as sole author, with no
+`Co-Authored-By`/`Co-authored-by` trailer for Claude, Codex, or any other assistant. Claude Code
+has a real settings toggle for this — `"includeCoAuthoredBy": false"` in `~/.claude/settings.json`
+(applied globally on 2026-08-24) — which suppresses the trailer the CLI otherwise appends by
+default. Codex has no equivalent config toggle as of 2026-08-24 (checked `~/.codex/config.toml`,
+`codex --help`, and repo `.codex/AGENTS.md`/`config.toml`); the durable fix there is a standing
+instruction in `~/AGENTS.md` to omit the trailer explicitly in every commit message, since nothing
+in Codex's own config surface suppresses it. When a PR already carries the trailer, it can be
+rewritten with `git filter-branch --msg-filter` (strip the trailer line + trailing blank line) and
+force-pushed **only when the branch is unmerged, single-author, and not shared with other active
+collaborators** — treat merged branches or shared branches as out of scope for a rewrite.

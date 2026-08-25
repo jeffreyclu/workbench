@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MarkdownCode, MarkdownPre } from './markdown-code.js';
@@ -6,6 +6,80 @@ import { hideWorkbenchControlBlocks, humanizeRunOutput, humanizeRunOutputBlocks 
 import { splitAgentResponse } from './agent-message-logic';
 
 const LIVE_RUN_OUTPUT_PAGE_SIZE = 5;
+const TYPEWRITER_BASE_CHARS_PER_SEC = 60;
+const TYPEWRITER_BACKLOG_CATCHUP_RATE = 5;
+
+// The animation may advance its internal character counter through a word, but
+// rendering that partial slice makes prose and Markdown visibly break (for
+// example, `**Awa`). Keep the visible edge at a completed token until the
+// whole message is ready.
+function completedTokenLength(text: string, revealLength: number): number {
+  if (revealLength >= text.length) return text.length;
+  const lastWhitespace = text.lastIndexOf(' ', revealLength - 1);
+  const lastNewline = text.lastIndexOf('\n', revealLength - 1);
+  const boundary = Math.max(lastWhitespace, lastNewline);
+  return boundary < 0 ? 0 : boundary + 1;
+}
+
+// Streamed bodies arrive in server-paced network chunks, not per-character; this reveals
+// the buffered text at a smooth per-character pace so it reads as a typewriter instead of
+// snapping in per chunk. Backlog-proportional speed keeps large chunks from lagging behind.
+function useTypewriter(text: string, active: boolean): string {
+  const [revealed, setRevealed] = useState(text.length);
+  const textRef = useRef(text);
+  const previousTextRef = useRef(text);
+  const revealedRef = useRef(revealed);
+  textRef.current = text;
+  revealedRef.current = revealed;
+
+  useEffect(() => {
+    previousTextRef.current = text;
+  }, [text]);
+
+  useEffect(() => {
+    if (text.length < revealedRef.current) {
+      revealedRef.current = text.length;
+      setRevealed(text.length);
+    }
+  }, [text]);
+
+  useEffect(() => {
+    const reducedMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (!active || reducedMotion) {
+      if (revealedRef.current !== textRef.current.length) setRevealed(textRef.current.length);
+      return;
+    }
+    let frame = 0;
+    let lastTime: number | null = null;
+    const step = (time: number) => {
+      const dt = lastTime === null ? 0 : time - lastTime;
+      lastTime = time;
+      const target = textRef.current.length;
+      setRevealed((current) => {
+        if (current >= target) return current;
+        const backlog = target - current;
+        const charsPerSec = TYPEWRITER_BASE_CHARS_PER_SEC + backlog * TYPEWRITER_BACKLOG_CATCHUP_RATE;
+        return Math.min(target, current + Math.max(1, Math.round((charsPerSec * dt) / 1000)));
+      });
+      frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [active]);
+
+  // A server chunk can extend the final word of the last rendered chunk
+  // (`Hello` -> `Hello, ...`). Keep that completed prefix visible while the
+  // next token catches up instead of briefly replacing it with nothing.
+  const preservedPrefixLength = text.startsWith(previousTextRef.current) && revealed >= previousTextRef.current.length
+    ? previousTextRef.current.length
+    : 0;
+  return text.slice(0, Math.max(completedTokenLength(text, revealed), preservedPrefixLength));
+}
+
+function StreamingMarkdown({ content, streaming, renderMarkdown }: { content: string; streaming: boolean; renderMarkdown: (content: string) => ReactElement }) {
+  const revealed = useTypewriter(content, streaming);
+  return renderMarkdown(revealed);
+}
 
 export function LiveRunOutput({ output }: { output: string }) {
   const [visibleCount, setVisibleCount] = useState(LIVE_RUN_OUTPUT_PAGE_SIZE);
@@ -40,13 +114,16 @@ export function AgentMessageBody({ body, running, conversationId, workItemId }: 
     },
   }}>{content}</ReactMarkdown>;
 
-  if (!structured) return <div className={`agent-markdown${running ? ' streaming' : ''}`}>{renderMarkdown(visibleBody)}</div>;
+  if (!structured) return <div className={`agent-markdown${running ? ' streaming' : ''}`}><StreamingMarkdown content={visibleBody} streaming={running} renderMarkdown={renderMarkdown} /></div>;
 
-  return <div className={`agent-response${running ? ' streaming' : ''}`} aria-label={`Agent response in ${sections.length} parts`}>
+  const lastIndex = sections.length - 1;
+  return <div className="agent-response" aria-label={`Agent response in ${sections.length} parts`}>
     <div className="agent-response-deck">
       {sections.map((section, index) => <section key={`${section.title}-${index}`} className="agent-response-section" style={{ '--section-index': index } as CSSProperties}>
         <div className="agent-response-section-heading"><h3>{section.title}</h3></div>
-        <div className="agent-markdown">{renderMarkdown(section.body)}</div>
+        <div className={`agent-markdown${running && index === lastIndex ? ' streaming' : ''}`}>
+          <StreamingMarkdown content={section.body} streaming={running && index === lastIndex} renderMarkdown={renderMarkdown} />
+        </div>
       </section>)}
     </div>
   </div>;

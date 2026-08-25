@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { AgentMessageBody } from './agent-message';
 import { splitAgentResponse } from './agent-message-logic';
+
+async function waitForFrame() {
+  await act(async () => {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  });
+}
 
 describe('splitAgentResponse', () => {
   it('uses authored top-level headings as report sections', () => {
@@ -47,5 +53,45 @@ describe('splitAgentResponse', () => {
     const { container } = render(<AgentMessageBody body="Receiving output" running />);
 
     expect(container.querySelector('.agent-markdown')).toHaveClass('streaming');
+  });
+
+  it('reveals newly streamed text a character at a time instead of snapping in whole chunks', async () => {
+    const { container, rerender } = render(<AgentMessageBody body="Hello" running />);
+    await waitForFrame();
+    expect(container.textContent).toBe('Hello');
+
+    rerender(<AgentMessageBody body="Hello, this is a much longer streamed chunk of text." running />);
+    expect(container.textContent).toBe('Hello');
+
+    await waitForFrame();
+    const midway = container.textContent ?? '';
+    expect(midway.length).toBeGreaterThan('Hello'.length);
+    expect(midway.length).toBeLessThan('Hello, this is a much longer streamed chunk of text.'.length);
+    expect('Hello, this is a much longer streamed chunk of text.'.startsWith(midway)).toBe(true);
+
+    for (let i = 0; i < 20; i += 1) await waitForFrame();
+    expect(container.textContent).toBe('Hello, this is a much longer streamed chunk of text.');
+  });
+
+  it('waits for a complete token before rendering streamed text', async () => {
+    const { container, rerender } = render(<AgentMessageBody body="Hello" running />);
+    rerender(<AgentMessageBody body="Hello **Awaiting** next" running />);
+
+    await waitForFrame();
+    await waitForFrame();
+
+    const visible = container.textContent ?? '';
+    expect(visible).not.toMatch(/\*{1,2}[^*\s]*$/);
+    expect('Hello **Awaiting** next'.startsWith(visible)).toBe(true);
+    expect(['Hello', 'Hello ']).toContain(visible);
+  });
+
+  it('snaps streamed text to full once the message finishes running', async () => {
+    const { container, rerender } = render(<AgentMessageBody body="Streaming in" running />);
+    rerender(<AgentMessageBody body="Streaming in, then finishing right away." running />);
+    rerender(<AgentMessageBody body="Streaming in, then finishing right away." running={false} />);
+    await waitForFrame();
+
+    expect(container.textContent).toBe('Streaming in, then finishing right away.');
   });
 });

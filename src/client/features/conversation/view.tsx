@@ -37,7 +37,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from '../../markdown-composer.js';
 import { MarkdownCode, MarkdownPre } from '../../markdown-code.js';
-import { isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAGE, SELF_ASSIGNED_OWNER_MESSAGE } from '../../../shared/contracts';
+import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAGE, SELF_ASSIGNED_OWNER_MESSAGE } from '../../../shared/contracts';
 import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SharedConversation, SharedMessage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
 import { api } from '../../api';
 import { ArtifactLibraryView } from '../../artifacts';
@@ -55,7 +55,7 @@ import { DiscoveryInboxView } from '../../discovery';
 import { useNavigation } from '../../features/navigation/hooks';
 import { NavigationView } from '../../features/navigation/view';
 import { FollowUpArchiveDialog } from '../../follow-up-archive-dialog';
-import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
+import { activityKindLabel, agentDecisionKinds, formatCostUsd, formatFileSize, formatRunTelemetry, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
 import { clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
 import { QueueExplanationList } from '../../queue-explanations';
 import { ProjectColorDot, projectTheme } from '../../project-color';
@@ -65,6 +65,7 @@ import { SourcesDialog } from '../../sources-dialog';
 import { createTaskStackViewModel } from '../../stack-view-model';
 import { useRealtimeNotifications, type RealtimeNotification } from '../../realtime';
 import { conversationData, conversationQueryKeys } from './data';
+import { celebrate } from '../../celebrate';
 import { useDebouncedValue } from './hooks';
 
 const CONVERSATION_ROW_GAP = 6;
@@ -96,10 +97,25 @@ function executionProfileForConversation(messages: SharedMessage[]): Exclude<Age
   return null;
 }
 
+function accountProfileForConversation(messages: SharedMessage[]): string {
+  for (const message of [...messages].reverse()) {
+    if (message.accountProfile) return message.accountProfile;
+  }
+  return DEFAULT_ACCOUNT_PROFILE;
+}
+
+function replyBadge(message: SharedMessage): string {
+  const agent = message.author[0].toUpperCase() + message.author.slice(1);
+  const profile = message.accountProfile ?? 'profile unavailable';
+  const cost = message.estimatedCostUsd === null ? 'cost —' : formatCostUsd(message.estimatedCostUsd);
+  return `${agent} · ${profile} · ${cost}`;
+}
+
 export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectConversation, view, onViewChange }: { initialConversationId?: string | null; onOpenTask?: (taskId: string) => void; onSelectConversation?: (conversationId: string | null) => void; view?: 'active' | 'archive'; onViewChange?: (view: 'active' | 'archive') => void }) {
   const queryClient = useQueryClient();
   const [body, setBody] = useState(() => initialConversationId ? readConversationDrafts()[initialConversationId] ?? '' : '');
   const [dispatchTo, setDispatchTo] = useState<ConversationDispatchTarget>('both');
+  const [accountProfile, setAccountProfile] = useState(DEFAULT_ACCOUNT_PROFILE);
   const [conversationModelProfiles, setConversationModelProfiles] = useState(readConversationModelProfiles);
   const dispatchInitializedConversationId = useRef<string | null>(null);
   // Mirrors dispatchInitializedConversationId as render-visible state: the ref
@@ -178,8 +194,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const [dismissedCompletionPromptPromotionId, setDismissedCompletionPromptPromotionId] = useState<string | null>(null);
   const debouncedConversationSearch = useDebouncedValue(conversationSearch.trim(), 300);
   const conversationSearchResults = useQuery({
-    queryKey: conversationQueryKeys.memorySearch(debouncedConversationSearch),
-    queryFn: () => conversationData.searchMemory(debouncedConversationSearch),
+    queryKey: conversationQueryKeys.search(debouncedConversationSearch),
+    queryFn: () => conversationData.search(debouncedConversationSearch),
     enabled: debouncedConversationSearch.length > 0,
   });
   const [pendingSelectedConversation, setPendingSelectedConversation] = useState<{ id: string; title: string } | null>(null);
@@ -288,6 +304,16 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const selectedConversation = listedConversation ?? conversationDetail.data?.conversation;
   const selectedConversationMissing = Boolean(conversationId) && !listedConversation && conversationDetail.isError;
   useEffect(() => {
+    // A conversation opened via search or a deep link may not belong to the
+    // rail's current tab (e.g. an archived hit while on Active). Follow it,
+    // or the rail keeps listing the wrong tab's contents while the header
+    // silently shows the opened conversation as if it were on this tab.
+    if (!selectedConversation || selectedConversation.id !== conversationId) return;
+    const actualView = selectedConversation.archivedAt ? 'archive' : 'active';
+    if (actualView !== conversationView) setConversationView(actualView);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedConversation, conversationId]);
+  useEffect(() => {
     // Seed the local cache from the server's saved preference the first time
     // a conversation is opened. Once a choice exists locally (picked here, or
     // seeded already), it wins over background list refetches — the server
@@ -336,6 +362,13 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     refetchInterval: (query) => query.state.data?.messages.some((message) => message.status === 'running' || message.status === 'queued') ? 750 : false,
   });
   const allConversationMessages = messages.data?.messages ?? [];
+  const agentAccounts = useQuery({ queryKey: ['agent-accounts'], queryFn: api.listAgentAccounts, refetchInterval: 5_000 });
+  const accountProfiles = useMemo(() => {
+    const configured = agentAccounts.data?.accounts ?? [];
+    return configured.some((account) => account.name === accountProfile)
+      ? configured
+      : [{ name: accountProfile }, ...configured];
+  }, [accountProfile, agentAccounts.data?.accounts]);
   // Conversation preferences are canonical once saved. Message history fills
   // in older conversations whose last model choice predates that preference.
   const executionProfile = conversationId
@@ -365,6 +398,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   useEffect(() => {
     if (!conversationId || dispatchInitializedConversationId.current === conversationId || !messages.data) return;
     setDispatchTo(dispatchTargetForConversation(messages.data.messages));
+    setAccountProfile(accountProfileForConversation(messages.data.messages));
     dispatchInitializedConversationId.current = conversationId;
     setDispatchInitializedFor(conversationId);
   }, [conversationId, messages.data]);
@@ -376,7 +410,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           const reader = new FileReader(); reader.onerror = () => reject(reader.error); reader.onload = () => resolveValue(String(reader.result).split(',')[1] ?? ''); reader.readAsDataURL(file);
         }),
       })));
-      return api.createSharedMessage(conversationId!, body, dispatchTo, attachments, executionProfile);
+      return api.createSharedMessage(conversationId!, body, dispatchTo, attachments, executionProfile, accountProfile);
     },
     onMutate: async () => {
       if (!linkedWorkItemId) return undefined;
@@ -420,7 +454,13 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   });
   const createConversation = useMutation({
     mutationFn: () => api.createSharedConversation(),
-    onSuccess: async ({ conversation }) => { setConversationId(conversation.id); await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }); },
+    onSuccess: async ({ conversation }) => {
+      // A new conversation is always active; stay on the archive tab and it
+      // silently disappears from the list you're looking at.
+      if (conversationView !== 'active') setConversationView('active');
+      setConversationId(conversation.id);
+      await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
+    },
   });
   const setConversationTask = useMutation({
     mutationFn: (workItemId: string | null) => api.setSharedConversationTask(conversationId!, workItemId),
@@ -460,14 +500,26 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       queryClient.removeQueries({ queryKey: ['shared-messages', deletedConversationId] });
       const successorId = nextConversationIdAfterRemoval(deletedConversationId);
       setConversationId((current) => current === deletedConversationId ? successorId : current);
-      toast.success('Conversation deleted.');
+      toast.success('Conversation deleted.', { action: () => undeleteConversation.mutate(deletedConversationId), actionLabel: 'Undo', duration: 10_000 });
       void queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
     },
     onError: (error) => toastError('Could not delete the conversation.', error),
   });
+  const undeleteConversation = useMutation({
+    mutationFn: api.undeleteSharedConversation,
+    onSuccess: async ({ conversation }) => {
+      setConversationView(conversation.archivedAt ? 'archive' : 'active');
+      setConversationId(conversation.id);
+      setPendingSelectedConversation({ id: conversation.id, title: conversation.title });
+      toast.success('Conversation restored.');
+      await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
+    },
+    onError: (error) => toastError('Could not restore the conversation.', error),
+  });
   const archiveConversation = useMutation({
     mutationFn: async (id: string) => { await animateConversationExit(id); return api.archiveSharedConversation(id); },
     onSuccess: async (_response, archivedConversationId) => {
+      if (!linkedWorkItemId) celebrate();
       toast.success(linkedWorkItemId ? 'Conversation and related task archived.' : 'Conversation archived.');
       await queryClient.cancelQueries({ queryKey: ['shared-conversations'] });
       removeConversationFromCachedRails(archivedConversationId);
@@ -497,6 +549,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const completeLinkedTask = useMutation({
     mutationFn: () => api.completeWorkItem(linkedWorkItemId!),
     onSuccess: async ({ item }) => {
+      celebrate();
       queryClient.setQueryData<WorkItemDetail>(['work-item', item.id], (current) => current && ({ ...current, item }));
       const completedConversationId = conversationId;
       toast.success('Task completed.', { description: item.title });
@@ -720,7 +773,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
             aria-label="Search conversations"
             value={conversationSearch}
             onChange={(event) => setConversationSearch(event.target.value)}
-            placeholder="Search everything…"
+            placeholder="Search conversations…"
           />
           {conversationSearch && <button type="button" className="icon-button" aria-label="Clear search" onClick={() => setConversationSearch('')}><X size={13} /></button>}
         </div>
@@ -732,19 +785,17 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               <div className="page-state">No matches for “{debouncedConversationSearch}”.</div>
             )}
             {conversationSearchResults.data?.results.map((result) => (
-              <div key={`${result.source}-${result.sourceId}`} className="virtual-row" style={{ position: 'static' }}>
+              <div key={`${result.type}-${result.messageId ?? result.conversationId}`} className="virtual-row" style={{ position: 'static' }}>
                 <button
                   className={result.conversationId === conversationId ? 'active' : ''}
-                  disabled={!result.conversationId}
                   onClick={() => {
-                    if (!result.conversationId) return;
                     setConversationId(result.conversationId);
-                    setPendingSelectedConversation({ id: result.conversationId, title: result.title });
+                    setPendingSelectedConversation({ id: result.conversationId, title: result.conversationTitle });
                     setConversationSearch('');
                     setRailOpen(false);
                   }}
                 >
-                  <span className="conversation-tab-title"><small className="memory-source-tag">{memorySourceLabel(result.source)}</small> <strong>{result.title}</strong></span>
+                  <span className="conversation-tab-title"><strong>{result.conversationTitle || 'Untitled conversation'}</strong></span>
                   <small>{result.snippet}</small>
                 </button>
               </div>
@@ -765,7 +816,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
 
                   const { conversation, state } = row;
                   const isUnread = Boolean(conversation.isUnread && !locallyReadConversationIds.has(conversation.id) && conversation.id !== conversationId);
-                  const stateLabel = state === 'working' ? 'Working' : state === 'needs_attention' ? 'Failed or canceled' : state === 'waiting_approval' ? 'Review follow-ups' : state === 'promoting' ? 'Approved · promoting preview' : state === 'waiting_promotion' ? 'Approved and waiting promotion' : state === 'finished' ? 'Finished' : null;
+                  const stateLabel = state === 'working' ? 'Working' : state === 'needs_attention' ? 'Failed or canceled' : state === 'waiting_approval' ? 'Review follow-ups' : state === 'promoting' ? 'Approved · promoting preview' : state === 'waiting_promotion' ? 'Approved and waiting promotion' : state === 'finished' ? 'Awaiting' : null;
                   const stateClass = state;
                   const color = conversation.linkedProjectName ? projectTheme(conversation.linkedProjectName) : null;
                   const cardStyle = color ? { '--task-accent': color.accent, '--task-tint': color.tint, '--task-border': color.border } as CSSProperties : undefined;
@@ -820,7 +871,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
             <article className={`shared-message shared-${message.author}`}>
               <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                 {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
-                {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{message.executionProfile === 'routing' ? 'routing' : message.model} · {formatRunBadge(message)}</span>}
+                {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyBadge(message)}</span>}
                 {message.status === 'running' && <button onClick={() => cancelReply.mutate(message.id)} title="Cancel response"><X size={12} /></button>}
               </header>
               {message.status === 'running' && <p className="thinking"><LoaderCircle className="spin" size={13} /> Live · {message.body ? 'receiving activity' : 'starting agent'}</p>}
@@ -869,10 +920,13 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
             <button type="button" className="composer-tool attach-button" onClick={() => fileRef.current?.click()} aria-label="Attach files" title="Attach files"><Paperclip size={14} /></button>
             <span className="composer-hint">Files, screenshots, or context</span>
             <ModelProfileSelect className="model-target" value={executionProfile} onChange={setExecutionProfile} />
-            <select className="agent-target" value={dispatchTo} onChange={(event) => { const target = event.target.value as typeof dispatchTo; setDispatchTo(target); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond">
-              <option value="codex">Ask Codex</option><option value="claude">Ask Claude</option><option value="both">Ask both</option>
+            <select className="agent-target account-target" value={accountProfile} onChange={(event) => setAccountProfile(event.target.value)} aria-label="Account profile" disabled={agentAccounts.isLoading}>
+              {accountProfiles.map((account) => <option key={account.name} value={account.name}>{account.name === 'default' ? 'Default' : account.name}</option>)}
             </select>
-            <button className="composer-send" aria-label="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
+            <select className="agent-target dispatch-target" value={dispatchTo} onChange={(event) => { const target = event.target.value as typeof dispatchTo; setDispatchTo(target); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond">
+              <option value="codex">Codex</option><option value="claude">Claude</option><option value="both">Both</option>
+            </select>
+            <button className="icon-button primary composer-send" aria-label="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
           </div>
           {send.error && <p className="error-message">{send.error.message}</p>}
         </form>}

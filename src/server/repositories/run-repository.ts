@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { AgentRun } from '../../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, type AgentRun } from '../../shared/contracts.js';
 import type { UnitOfWork } from '../unit-of-work.js';
 
 export interface RunPatch {
@@ -95,7 +95,7 @@ export class RunRepository {
     return row ? this.get(row.id) : null;
   }
 
-  create(workItemId: string, kind: AgentRun['kind'], requestedTarget: AgentRun['requestedTarget'], agent: AgentRun['agent'], instructions: string, conversationId: string | null = null, messageId: string | null = null, origin: AgentRun['origin'] = 'manual', accountProfile = 'default'): AgentRun {
+  create(workItemId: string, kind: AgentRun['kind'], requestedTarget: AgentRun['requestedTarget'], agent: AgentRun['agent'], instructions: string, conversationId: string | null = null, messageId: string | null = null, origin: AgentRun['origin'] = 'manual', accountProfile = DEFAULT_ACCOUNT_PROFILE): AgentRun {
     const id = randomUUID();
     const createdAt = new Date().toISOString();
     this.database.prepare(`
