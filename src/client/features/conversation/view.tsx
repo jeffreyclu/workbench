@@ -16,7 +16,6 @@ import {
   Command,
   FileText,
   LoaderCircle,
-  Menu,
   MessageCircle,
   MessageSquarePlus,
   Link2,
@@ -201,9 +200,11 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   });
   const [pendingSelectedConversation, setPendingSelectedConversation] = useState<{ id: string; title: string } | null>(null);
   const [files, setFiles] = useState<File[]>([]);
-  const [railOpen, setRailOpen] = useState(false);
+  // On mobile, railOpen means the conversation stack is showing instead of
+  // the console — default to the stack unless a specific conversation was
+  // requested, mirroring the task stack/detail pattern.
+  const [railOpen, setRailOpen] = useState(() => !initialConversationId);
   const [exitingConversationIds, setExitingConversationIds] = useState<Set<string>>(new Set());
-  const railToggleRef = useRef<HTMLButtonElement>(null);
   const [proposedPlan, setProposedPlan] = useState<ExecutionPlan | null>(null);
   const [proposedPlanConversationId, setProposedPlanConversationId] = useState<string | null>(null);
   const [selectedPlanTaskIndexes, setSelectedPlanTaskIndexes] = useState<Set<number>>(new Set());
@@ -733,17 +734,6 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     setHasNewActivityBelow(false);
     scrollThreadToLatest('smooth');
   };
-  useEffect(() => {
-    if (!railOpen) return;
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      setRailOpen(false);
-      railToggleRef.current?.focus();
-    };
-    document.addEventListener('keydown', closeOnEscape);
-    return () => document.removeEventListener('keydown', closeOnEscape);
-  }, [railOpen]);
-
   // Sending before the agent target / conversation state has finished
   // initializing for this conversation can dispatch to the wrong agent.
   const conversationReadyToSend = Boolean(conversationId) && dispatchInitializedFor === conversationId && !messages.isLoading;
@@ -789,7 +779,6 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
 
   return (
     <main className={`shared-workspace ${railOpen ? 'rail-open' : ''}`}>
-      <button type="button" className="rail-scrim" aria-label="Close conversation list" onClick={() => setRailOpen(false)} />
       <aside id="conversation-rail" className="conversation-rail" aria-label="Conversations">
         <header className="stack-toolbar"><div className="stack-toolbar-copy"><span className="eyebrow">Conversations</span><h2>Conversations</h2></div><div className="conversation-header-actions"><button className="icon-button" onClick={() => createConversation.mutate()} aria-label="New conversation"><Plus size={15} /></button></div></header>
         <div className="search-box">
@@ -828,7 +817,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           </div>
         ) : (
           <>
-            <Tabs ariaLabel="Conversation view" className="conversation-view-tabs" selected={conversationView} onSelect={selectConversationView} items={[
+            <Tabs ariaLabel="Conversation view" className="conversation-view-tabs" panelClassName="conversation-tab-panel" selected={conversationView} onSelect={selectConversationView} items={[
               { value: 'active', label: 'Active' },
               { value: 'archive', label: 'Archive' },
             ]}>
@@ -860,7 +849,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
         )}
       </aside>
       <section className="agent-console" aria-label="Shared agent workspace">
-        <header className="agent-console-header"><button ref={railToggleRef} type="button" className="rail-toggle icon-button" aria-label="Show conversations" aria-controls="conversation-rail" aria-expanded={railOpen} onClick={() => setRailOpen(true)}><Menu size={16} /></button><div className="agent-console-title">{selectedConversation ? <ConversationOriginBadge workItemId={selectedConversation.workItemId} /> : <span className="eyebrow">Shared context</span>}<h2>{selectedConversation?.title
+        <header className="agent-console-header"><button type="button" className="mobile-detail-close icon-button" aria-label="Close conversation" onClick={() => setRailOpen(true)}><X size={16} /></button><div className="agent-console-title">{selectedConversation ? <ConversationOriginBadge workItemId={selectedConversation.workItemId} /> : <span className="eyebrow">Shared context</span>}<h2>{selectedConversation?.title
               ?? (pendingSelectedConversation?.id === conversationId ? pendingSelectedConversation.title
                   : conversationDetail.isLoading ? <span className="conversation-title-skeleton"><Skeleton width="240px" height="19px" /></span>
                   : selectedConversationMissing ? 'Conversation not found'
@@ -893,7 +882,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           {displayedThreadRows.map((row) => {
             const message = conversationMessages[row.index];
             if (!message) return null;
-            return <div key={message.id} ref={hasRunningMessage ? undefined : threadVirtualizer.measureElement} data-index={row.index} className="thread-virtual-row" style={hasRunningMessage ? undefined : { transform: `translateY(${row.start}px)` }}>
+            return <div key={message.id} ref={threadVirtualizer.measureElement} data-index={row.index} className="thread-virtual-row" style={hasRunningMessage ? undefined : { transform: `translateY(${row.start}px)` }}>
             <article className={`shared-message shared-${message.author}`}>
               <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                 {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
@@ -929,7 +918,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                 </a>
               ))}</div>}
               {message.error && <p className="error-message">{message.error}</p>}
-              {message.status === 'completed' && message.author !== 'jeffrey' && message.author !== 'system' && selectedConversation?.workItemId && <div className="message-actions"><button onClick={() => createTasks.mutate({ messageId: message.id, conversationId: conversationId! })} disabled={createTasks.isPending && createTasks.variables?.conversationId === conversationId}>{createTasks.isPending && createTasks.variables?.messageId === message.id && createTasks.variables.conversationId === conversationId ? <><LoaderCircle className="spin" size={12} /> Extracting findings…</> : <><Plus size={12} /> Turn findings into tasks</>}</button></div>}
+              {message.status === 'completed' && message.author !== 'jeffrey' && message.author !== 'system' && <div className="message-actions"><button onClick={() => createTasks.mutate({ messageId: message.id, conversationId: conversationId! })} disabled={createTasks.isPending && createTasks.variables?.conversationId === conversationId}>{createTasks.isPending && createTasks.variables?.messageId === message.id && createTasks.variables.conversationId === conversationId ? <><LoaderCircle className="spin" size={12} /> Extracting findings…</> : <><Plus size={12} /> Turn findings into tasks</>}</button></div>}
             </article>
             </div>;
           })}

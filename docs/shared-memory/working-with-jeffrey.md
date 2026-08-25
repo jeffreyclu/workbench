@@ -184,6 +184,14 @@ adding remote MCP servers: "add it for both claude and codex." Mirror the config
 ships first — Codex bundles OpenAI-curated plugins that may already cover the service, and stacking a
 second server for the same service just gives an agent two competing tool sets.
 
+#### Personal-memory export for shared ingestion
+
+When Jeffrey asks personal agents to contribute past-conversation memory, give them a prompt that
+exports only records they can actually access, with source and confidence, in a structured format.
+Never imply an agent has private memory it cannot inspect, fabricate missing facts, or keep the
+export as a new personal store. Jeffrey will provide the resulting exports for consolidation into the
+shared Workbench memory.
+
 ### Workbench-supplied sources are authenticated access **(always)**
 
 When Workbench supplies Slack, Confluence, GitHub, or another connector's search context in the room,

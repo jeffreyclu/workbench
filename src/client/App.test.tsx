@@ -399,7 +399,7 @@ describe('shared room', () => {
     expect(await screen.findByRole('heading', { name: 'First task' })).toBeTruthy();
   });
 
-  it('opens and closes the conversation drawer with accessible keyboard controls', async () => {
+  it('closing an open conversation on mobile reveals the conversation stack', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000001';
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -410,15 +410,13 @@ describe('shared room', () => {
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+    const workspace = () => document.querySelector('.shared-workspace') as Element;
 
-    const toggle = await screen.findByRole('button', { name: 'Show conversations' });
-    expect(toggle.getAttribute('aria-controls')).toBe('conversation-rail');
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    fireEvent.click(toggle);
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    fireEvent.keyDown(document, { key: 'Escape' });
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    expect(document.activeElement).toBe(toggle);
+    await screen.findByRole('heading', { name: 'Mobile conversation' });
+    expect(workspace().classList.contains('rail-open')).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close conversation' }));
+    expect(workspace().classList.contains('rail-open')).toBe(true);
   });
 
   it('returns to the next active conversation after archiving', async () => {
@@ -621,7 +619,7 @@ describe('shared room', () => {
     const tab = (name: 'Active' | 'Archive') => within(viewTabs()).getByRole('tab', { name });
 
     expect(await screen.findByRole('heading', { name: active.title })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Show conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close conversation' }));
     expect(drawerOpen()).toBe(true);
 
     for (const _step of [1, 2, 3]) {

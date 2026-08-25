@@ -47,6 +47,12 @@ describe('conversation view controls', () => {
     expect(styles).toContain('.conversation-rail { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; padding: 18px 10px;');
   });
 
+  it('keeps both conversation panes as shrinking, independently scrollable flex regions', () => {
+    expect(styles).toContain('.conversation-tab-panel { display: flex; flex: 1; min-height: 0; }');
+    expect(styles).toContain('.conversation-tabs { position: relative; z-index: 0; flex: 1; min-height: 0; overflow: auto; }');
+    expect(styles).toContain('.shared-thread { display: block; flex: 1; min-height: 0; overflow: auto;');
+  });
+
   it('gives expanded desktop navigation its own grid column instead of covering the switch', () => {
     expect(styles).toMatch(/\.app-shell:has\(\.sidebar:hover\),\s*\.app-shell:has\(\.sidebar:focus-within\)\s*\{\s*grid-template-columns:\s*220px/);
     const desktopNavigationRule = styles.match(/@media \(min-width: 821px\) \{[\s\S]*?\.sidebar\s*\{[^}]*\}/)?.[0] ?? '';

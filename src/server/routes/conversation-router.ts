@@ -217,18 +217,32 @@ export function createConversationRouter({ repository, database, capabilities }:
     try {
       const message = repository.getSharedMessageById(request.params.id);
       const conversation = message && repository.listConversations('all').find((item) => item.id === message.conversationId);
-      if (!message || !conversation?.workItemId) return response.status(400).json({ error: 'This report is not linked to a task execution.' });
-      const item = repository.get(conversation.workItemId);
-      if (!item) return response.status(404).json({ error: 'Linked task not found.' });
-      const existingPlan = repository.getPendingExecutionPlan(item.id);
-      if (existingPlan) return response.json({ plan: existingPlan });
+      if (!message || !conversation) return response.status(400).json({ error: 'Message or conversation not found.' });
+      const item = conversation.workItemId ? repository.get(conversation.workItemId) : null;
+      if (conversation.workItemId && !item) return response.status(404).json({ error: 'Linked task not found.' });
+      if (item) {
+        const existingPlan = repository.getPendingExecutionPlan(item.id);
+        if (existingPlan) return response.json({ plan: existingPlan });
+      }
       const existingJob = repository.listSharedMessages(100, null, conversation.id).messages.find((entry) => entry.status === 'running' && entry.author === 'system' && entry.body.startsWith('Turning findings into tasks'));
       if (existingJob) return response.status(202).json({ jobMessage: existingJob });
       const jobMessage = repository.createSharedMessage('system', 'Turning findings into tasks…', 'running', conversation.id);
       void runSharedBackgroundJob(repository, jobMessage.id, async (signal) => {
-        const { output } = await runAgentCommandWithFallback('claude', process.cwd(), `Convert this agent report into independently executable follow-up tasks for Jeffrey's attention stack. Preserve concrete findings, affected files, constraints, and verification in each task. Order tasks by attention. Do not create vague coordination tasks.\n\nOriginal task: ${item.title}\n${item.description}\n\nReport:\n${message.body}\n\nReturn exactly <workbench-plan>{"summary":"...","tasks":[{"title":"...","description":"...","workspacePath":${JSON.stringify(item.workspacePath)}}]}</workbench-plan>`, undefined, signal);
+        const promptPrefix = item
+          ? `Original task: ${item.title}\n${item.description}\n\n`
+          : '';
+        const { output } = await runAgentCommandWithFallback('claude', process.cwd(), `Convert this agent report into independently executable follow-up tasks for Jeffrey's attention stack. Preserve concrete findings, affected files, constraints, and verification in each task. Order tasks by attention. Do not create vague coordination tasks.\n\n${promptPrefix}Report:\n${message.body}\n\nReturn exactly <workbench-plan>{"summary":"...","tasks":[{"title":"...","description":"...","workspacePath":${JSON.stringify(item?.workspacePath ?? null)}}]}</workbench-plan>`, undefined, signal);
         const parsed = parseFollowUpPlan(output);
-        repository.createExecutionPlan(item.id, parsed.summary, parsed.tasks);
+        if (item) {
+          repository.createExecutionPlan(item.id, parsed.summary, parsed.tasks);
+        } else {
+          for (const task of parsed.tasks) {
+            repository.create({
+              title: task.title, description: task.description, priority: 2, status: 'ready',
+              projectName: null, workspacePath: task.workspacePath ?? null, dueDate: null,
+            });
+          }
+        }
         return `Follow-up task proposal ready: ${parsed.summary}`;
       });
       response.status(202).json({ jobMessage });

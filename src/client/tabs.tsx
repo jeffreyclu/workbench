@@ -8,6 +8,7 @@ export type TabItem<Value extends string> = {
 type TabsProps<Value extends string> = {
   ariaLabel: string;
   className: string;
+  panelClassName?: string;
   items: readonly TabItem<Value>[];
   selected: Value;
   onSelect: (value: Value) => void;
@@ -19,7 +20,7 @@ type TabsProps<Value extends string> = {
  * The current view remains controlled by its feature so selection can keep
  * owning the existing query and navigation behavior.
  */
-export function Tabs<Value extends string>({ ariaLabel, className, items, selected, onSelect, children }: TabsProps<Value>) {
+export function Tabs<Value extends string>({ ariaLabel, className, panelClassName, items, selected, onSelect, children }: TabsProps<Value>) {
   const idPrefix = useId();
   const selectedIndex = items.findIndex((item) => item.value === selected);
   const selectedItem = items[selectedIndex >= 0 ? selectedIndex : 0];
@@ -60,7 +61,7 @@ export function Tabs<Value extends string>({ ariaLabel, className, items, select
         >{item.label}</button>;
       })}
     </div>
-    <div id={selectedPanelId} role="tabpanel" aria-labelledby={selectedTabId}>
+    <div id={selectedPanelId} className={panelClassName} role="tabpanel" aria-labelledby={selectedTabId}>
       {children}
     </div>
   </>;
