@@ -350,6 +350,8 @@ nav { display: grid; gap: 3px; }
 .dependency-blocker-banner > span { display: grid; gap: 2px; min-width: 0; }
 .dependency-blocker-banner strong { font-size: 11px; }
 .dependency-blocker-banner small { color: #a08a52; font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }
+.dependency-blocker-link { padding: 0; color: inherit; background: transparent; border: 0; font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.dependency-blocker-link:hover, .dependency-blocker-link:focus-visible { color: #f0c05a; }
 .provider-conflicts { display: grid; gap: 8px; margin: 0 0 14px; padding: 11px; border: 1px solid #704449; border-radius: 7px; background: #251517; color: #f0b5b8; }
 .provider-conflicts > div:first-child { display: grid; gap: 3px; }
 .provider-conflicts small { color: #bd8589; font-size: 9px; line-height: 1.45; }

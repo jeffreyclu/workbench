@@ -33,7 +33,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from '../../markdown-composer.js';
@@ -419,7 +419,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       </div>
       {openDependencies.length > 0 && <div className="dependency-blocker-banner" role="status">
         <AlertTriangle size={16} />
-        <span><strong>Execution blocked</strong><small>Complete {openDependencies.length === 1 ? 'this prerequisite' : 'these prerequisites'} before dispatching an agent: {openDependencies.map((dependency) => dependency.title).join(', ')}.</small></span>
+        <span><strong>Execution blocked</strong><small>Complete {openDependencies.length === 1 ? 'this prerequisite' : 'these prerequisites'} before dispatching an agent: {openDependencies.map((dependency, index) => <Fragment key={dependency.id}>{index > 0 && ', '}<button type="button" className="dependency-blocker-link" onClick={() => onOpenTask(dependency.id)}>{dependency.title}</button></Fragment>)}.</small></span>
       </div>}
       {providerConflicts.length > 0 && <section className="provider-conflicts" aria-label="Linear sync conflicts">
         <div><strong>Linear changes need a decision</strong><small>{providerConflicts.length} field{providerConflicts.length === 1 ? '' : 's'} kept local after Linear changed too.</small></div>
@@ -558,7 +558,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         <div className="task-collapsible-content">
         {hasBeenExecuted && <div className="task-execution-locked"><Check size={13} /><span><strong>Already executed</strong><small>This task cannot be executed again.</small></span></div>}
         {selfAssigned && <div className="task-execution-locked blocked"><User size={13} /><span><strong>Assigned to you</strong><small>{SELF_ASSIGNED_EXECUTION_MESSAGE}</small></span></div>}
-        {openDependencies.length > 0 && <div className="task-execution-locked blocked"><AlertTriangle size={13} /><span><strong>Blocked by {openDependencies.length} prerequisite{openDependencies.length === 1 ? '' : 's'}</strong><small>{openDependencies.map((dependency) => dependency.title).join(', ')}</small></span></div>}
+        {openDependencies.length > 0 && <div className="task-execution-locked blocked"><AlertTriangle size={13} /><span><strong>Blocked by {openDependencies.length} prerequisite{openDependencies.length === 1 ? '' : 's'}</strong><small>{openDependencies.map((dependency, index) => <Fragment key={dependency.id}>{index > 0 && ', '}<button type="button" className="dependency-blocker-link" onClick={() => onOpenTask(dependency.id)}>{dependency.title}</button></Fragment>)}</small></span></div>}
         <p className="execution-copy">Workbench will classify the task, choose the right agent, and either execute it directly or return an approval-ready decomposition for complex work.</p>
         {execute.error && <p className="error-message">{execute.error.message}</p>}
         <div className="execution-controls">
