@@ -1,4 +1,4 @@
-import type { AgentRun, ConversationPage, ExecutionPlan, RetrievedMemoryDetail, SharedConversation, SharedMessage, SharedSearchResponse } from '../../shared/contracts';
+import type { AgentRun, AgentStreamEvent, ConversationPage, ExecutionPlan, RetrievedMemoryDetail, SharedConversation, SharedMessage, SharedSearchResponse } from '../../shared/contracts';
 import { request } from './request';
 
 export const conversationClient = {
@@ -15,6 +15,7 @@ export const conversationClient = {
     return { count: page.totalCount };
   },
   getSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}`),
+  listAgentStreamEvents: (id: string) => request<{ events: AgentStreamEvent[] }>(`/api/shared/conversations/${id}/agent-events`),
   createSharedConversation: (title = 'New conversation') => request<{ conversation: SharedConversation }>('/api/shared/conversations', { method: 'POST', body: JSON.stringify({ title }) }),
   archiveSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/archive`, { method: 'POST' }),
   restoreSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/restore`, { method: 'POST' }),

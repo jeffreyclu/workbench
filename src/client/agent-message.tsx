@@ -81,10 +81,10 @@ function StreamingMarkdown({ content, streaming, renderMarkdown }: { content: st
   return renderMarkdown(revealed);
 }
 
-export function LiveRunOutput({ output }: { output: string }) {
+export function LiveRunOutput({ output, interjections = [] }: { output: string; interjections?: Array<{ id: string; body: string; pending: boolean }> }) {
   const [visibleCount, setVisibleCount] = useState(LIVE_RUN_OUTPUT_PAGE_SIZE);
   const blocks = humanizeRunOutputBlocks(output);
-  if (blocks.length === 0) return null;
+  if (blocks.length === 0 && interjections.length === 0) return null;
   const hiddenCount = Math.max(0, blocks.length - visibleCount);
   const visibleBlocks = blocks.slice(hiddenCount);
   return (
@@ -96,19 +96,25 @@ export function LiveRunOutput({ output }: { output: string }) {
       )}
       <ol aria-live="polite">
         {visibleBlocks.map((block, index) => <li key={`${block}-${index}`}>{block.replace(/^●\s*/, '')}</li>)}
+        {interjections.map((interjection) => (
+          <li key={interjection.id} className={`live-run-interjection${interjection.pending ? ' pending' : ''}`}>
+            <span>{interjection.pending ? 'You interjected (sending)' : 'You interjected'}</span>
+            <strong>{interjection.body}</strong>
+          </li>
+        ))}
       </ol>
     </div>
   );
 }
 
-export function AgentMessageBody({ body, running, conversationId, workItemId }: { body: string; running: boolean; conversationId?: string; workItemId?: string }) {
+export function AgentMessageBody({ body, running, conversationId, workItemId, interjections }: { body: string; running: boolean; conversationId?: string; workItemId?: string; interjections?: Array<{ id: string; body: string; pending: boolean }> }) {
   const sectionIdPrefix = useId();
   const humanized = running ? humanizeRunOutput(body) : body;
   const visibleBody = hideWorkbenchControlBlocks(humanized);
-  if (!visibleBody) return null;
+  if (!visibleBody && (!running || !interjections?.length)) return null;
   // Progress is operational context, not an authored reply. Keep its compact
   // activity feed distinct from the section-card treatment for final answers.
-  if (running) return <LiveRunOutput output={visibleBody} />;
+  if (running) return <LiveRunOutput output={visibleBody} interjections={interjections} />;
   const sections = splitAgentResponse(visibleBody);
   const structured = sections.length > 1;
   const renderMarkdown = (content: string) => <ReactMarkdown remarkPlugins={[remarkGfm]} components={{

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type UsageCalibration, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type UsageCalibration, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType } from '../shared/contracts.js';
 import type { FeedbackWeight, QueueContext, QueuePlan } from './queue-intelligence.js';
 import { listProjects, resolveProjectName } from './project-registry.js';
 import type { WorkbenchDatabase } from './database.js';
@@ -635,6 +635,24 @@ export class WorkItemRepository {
     if (entries.length) this.database.prepare(`UPDATE shared_messages SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE id = ?`)
       .run(...entries.map(([, value]) => value), id);
     return this.getSharedMessageById(id);
+  }
+
+  addAgentStreamEvents(messageId: string, runId: string | null, events: Array<{ kind: AgentStreamEvent['kind']; detail: string }>): void {
+    if (!events.length) return;
+    const insert = this.database.prepare(`INSERT INTO agent_stream_events (id, message_id, run_id, kind, detail, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)`);
+    const createdAt = new Date().toISOString();
+    this.unitOfWork.transaction(() => {
+      for (const event of events) insert.run(randomUUID(), messageId, runId, event.kind, event.detail.slice(0, 2_000), createdAt);
+    });
+  }
+
+  listAgentStreamEvents(conversationId: string): AgentStreamEvent[] {
+    return (this.database.prepare(`SELECT events.id, events.message_id, events.run_id, events.kind, events.detail, events.created_at
+      FROM agent_stream_events AS events
+      JOIN shared_messages AS messages ON messages.id = events.message_id
+      WHERE messages.conversation_id = ? ORDER BY events.created_at ASC, events.rowid ASC`).all(conversationId) as Array<Record<string, string | null>>)
+      .map((row) => ({ id: row.id!, messageId: row.message_id!, runId: row.run_id, kind: row.kind as AgentStreamEvent['kind'], detail: row.detail!, createdAt: row.created_at! }));
   }
 
   getRetrievedMemoryDetail(id: string): { query: string; items: Array<{ source: string; title: string; body: string; createdAt: string }> } | null {

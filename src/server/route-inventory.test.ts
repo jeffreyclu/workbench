@@ -14,6 +14,7 @@ const baselineInventory = [
   'GET /api/health',
   'GET /api/agent-accounts',
   'GET /api/runtime/preview-status',
+  'GET /api/runtime/promotion-status',
   'GET /api/discovery',
   'GET /api/insights',
   'GET /api/process-mining/report',
@@ -42,6 +43,7 @@ const baselineInventory = [
   'PATCH /api/artifacts/:id/comments/:commentId',
   'GET /api/shared/conversations',
   'GET /api/shared/conversations/:id',
+  'GET /api/shared/conversations/:id/agent-events',
   'GET /api/shared/conversations-unread-count',
   'GET /api/shared/conversations-attention-count',
   'GET /api/shared/conversations-count',
@@ -153,7 +155,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(121);
+    expect(baselineInventory).toHaveLength(123);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

@@ -646,20 +646,26 @@ describe('classifyExecution', () => {
   });
 
   it('extracts audit candidates for file reads, writes, and tool use out of the same parsed events', () => {
+    const claudeDecision = readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Decision: The error may be in the route, so read it before editing.' }, { type: 'tool_use', name: 'Read', input: { file_path: 'App.tsx' } }] } }));
+    expect(claudeDecision.audit).toEqual(expect.arrayContaining([
+      expect.objectContaining({ streamKind: 'decision', detail: 'The error may be in the route, so read it before editing.' }),
+      expect.objectContaining({ streamKind: 'file_read', detail: 'App.tsx' }),
+    ]));
+
     const claudeRead = readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'App.tsx' } }] } }));
-    expect(claudeRead.audit).toEqual([{ category: 'agent_file_read', detail: 'App.tsx' }]);
+    expect(claudeRead.audit).toEqual([expect.objectContaining({ category: 'agent_file_read', streamKind: 'file_read', detail: 'App.tsx' })]);
 
     const claudeWrite = readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'src/app.ts' } }] } }));
-    expect(claudeWrite.audit).toEqual([{ category: 'agent_file_write', detail: 'src/app.ts' }]);
+    expect(claudeWrite.audit).toEqual([expect.objectContaining({ category: 'agent_file_write', streamKind: 'file_write', detail: 'src/app.ts' })]);
 
     const claudeBash = readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } }));
-    expect(claudeBash.audit).toEqual([{ category: 'agent_tool_use', detail: 'Bash' }]);
+    expect(claudeBash.audit).toEqual([expect.objectContaining({ category: 'agent_tool_use', streamKind: 'tool', detail: 'Bash' })]);
 
     const codexCommand = readableAgentEvent('codex', JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'npm test' } }));
-    expect(codexCommand.audit).toEqual([{ category: 'agent_tool_use', detail: 'command_execution: npm test' }]);
+    expect(codexCommand.audit).toEqual([expect.objectContaining({ category: 'agent_tool_use', streamKind: 'tool', detail: 'command_execution: npm test' })]);
 
     const codexFileChange = readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'file_change', changes: [{ path: 'src/foo.ts', kind: 'update' }] } }));
-    expect(codexFileChange.audit).toEqual([{ category: 'agent_file_write', detail: 'update: src/foo.ts' }]);
+    expect(codexFileChange.audit).toEqual([expect.objectContaining({ category: 'agent_file_write', streamKind: 'file_write', detail: 'update: src/foo.ts' })]);
 
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'system', subtype: 'init' })).audit).toEqual([]);
   });

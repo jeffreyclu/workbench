@@ -697,6 +697,17 @@ export interface SharedMessage {
 
 export interface SharedAttachment { name: string; path: string; mimeType: string; size: number; }
 
+/** A provider event retained for the agent debugger. It belongs to one reply,
+ * so parallel Codex and Claude streams never get mixed together. */
+export interface AgentStreamEvent {
+  id: string;
+  messageId: string;
+  runId: string | null;
+  kind: 'decision' | 'tool' | 'file_read' | 'file_write';
+  detail: string;
+  createdAt: string;
+}
+
 /** The exact RAG query and matches behind a reply's retrievedMemoryCount, fetched on demand when the memory badge is clicked. */
 export interface RetrievedMemoryDetail {
   query: string;

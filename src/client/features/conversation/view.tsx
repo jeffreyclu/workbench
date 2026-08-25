@@ -289,6 +289,12 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     queryFn: () => conversationData.search(debouncedConversationSearch),
     enabled: debouncedConversationSearch.length > 0,
   });
+  const agentStreamEvents = useQuery({
+    queryKey: conversationQueryKeys.agentEvents(conversationId),
+    queryFn: () => conversationData.listAgentEvents(conversationId!),
+    enabled: decisionTreeOpen && Boolean(conversationId),
+    refetchInterval: decisionTreeOpen ? 2_000 : false,
+  });
   const [pendingSelectedConversation, setPendingSelectedConversation] = useState<{ id: string; title: string } | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   // On mobile, railOpen means the conversation stack is showing instead of
@@ -1058,6 +1064,19 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
             const renderMessage = (message: SharedMessage, inGroup: boolean) => {
               const isAgentMessage = message.author === 'codex' || message.author === 'claude';
               const isQueuedMessage = message.status === 'queued';
+              // Interjections are live input to a specific running provider.
+              // Repeat Jeffrey's text in that provider's stream so the result
+              // is visible where the interruption happened, not only as a
+              // status label on his separate message bubble.
+              const liveInterjections = isAgentMessage && message.status === 'running'
+                ? conversationMessages
+                  .filter((candidate) => candidate.author === 'jeffrey'
+                    && (candidate.queuePriority ?? 0) > 0
+                    && (candidate.status === 'queued' || candidate.status === 'completed')
+                    && candidate.createdAt >= message.createdAt
+                    && (candidate.dispatchTarget === 'auto' || candidate.dispatchTarget === 'both' || candidate.dispatchTarget === message.author))
+                  .map((candidate) => ({ id: candidate.id, body: candidate.body, pending: candidate.status === 'queued' }))
+                : [];
               return <div key={message.id} className={`thread-virtual-row${inGroup ? ' reply-group-message' : ''}`}>
               <article className={`shared-message shared-${message.author}${message.author === 'system' && message.status === 'queued' ? ' shared-system-queued' : ''}`}>
                 <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
@@ -1081,6 +1100,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                   {message.status === 'running' && <button type="button" className="cancel-response" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel response" title="Cancel response"><X size={12} /></button>}
                 </header>
                 {message.status === 'running' && <p className="thinking">Live activity · {message.body ? 'receiving updates' : 'starting agent'}</p>}
+                {(message.body || liveInterjections.length > 0) && (isAgentMessage
+                  ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} interjections={liveInterjections} />
+                  : <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: MarkdownCode, pre: MarkdownPre }}>{message.body}</ReactMarkdown></div>)}
                 {isQueuedMessage && (
                   <div className="queued-message">
                     <span className="queued-message-status"><LoaderCircle size={13} /> {message.queuePriority ? 'Starting now · current response continues' : 'Queued · starts after the current agent finishes'}</span>
@@ -1090,9 +1112,6 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                     </span>}
                   </div>
                 )}
-                {message.body && (isAgentMessage
-                  ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} />
-                  : <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: MarkdownCode, pre: MarkdownPre }}>{message.body}</ReactMarkdown></div>)}
                 {message.status === 'canceled' && <p className="muted">Response canceled.</p>}
                 {(message.author === 'codex' || message.author === 'claude') && (message.status === 'failed' || message.status === 'canceled') && <div className="message-actions"><button onClick={() => retryReply.mutate(message)} disabled={retryReply.isPending}><RefreshCw size={12} /> Retry / continue</button></div>}
                 {message.attachments.length > 0 && <div className="message-files">{message.attachments.map((file) => (
@@ -1152,7 +1171,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       {planArchivePromptOpen && <FollowUpArchiveDialog count={selectedPlanTaskIndexes.size} pending={resolvePlan.isPending} onClose={() => setPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolvePlan.mutate({ resolution: 'accepted', archiveParent })} />}
       {deleteConversationPromptOpen && conversationId && <ConfirmationDialog title="Delete this conversation?" description="This permanently deletes the conversation and cannot be undone." confirmLabel="Delete conversation" pending={deleteConversation.isPending} onClose={() => setDeleteConversationPromptOpen(false)} onConfirm={() => deleteConversation.mutate(conversationId)} />}
       {retrievedMemoryMessageId && <RetrievedMemoryDialog detail={retrievedMemoryDetail.data?.detail} loading={retrievedMemoryDetail.isLoading} onClose={() => setRetrievedMemoryMessageId(null)} />}
-      {decisionTreeOpen && <DecisionTreeVisualizer messages={allConversationMessages} onClose={() => setDecisionTreeOpen(false)} />}
+      {decisionTreeOpen && <DecisionTreeVisualizer messages={allConversationMessages} events={agentStreamEvents.data?.events ?? []} isLoadingEvents={agentStreamEvents.isLoading} onClose={() => setDecisionTreeOpen(false)} />}
     </main>
   );
 }

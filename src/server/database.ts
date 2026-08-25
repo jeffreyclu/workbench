@@ -1473,6 +1473,26 @@ const schemaMigrations: readonly Migration[] = [
       database.exec('CREATE INDEX IF NOT EXISTS idx_shared_messages_dispatch_group ON shared_messages(conversation_id, dispatch_group_id);');
     },
   },
+  {
+    // Agent output is useful as a final report, but it loses the decisions and
+    // tool calls that led there. Keep a compact, append-only stream per reply
+    // so the debugger can show actual provider events for each live agent.
+    id: '048_agent_stream_events',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS agent_stream_events (
+          id TEXT PRIMARY KEY,
+          message_id TEXT NOT NULL REFERENCES shared_messages(id) ON DELETE CASCADE,
+          run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('decision', 'tool', 'file_read', 'file_write')),
+          detail TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_stream_events_message_created
+          ON agent_stream_events(message_id, created_at ASC);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

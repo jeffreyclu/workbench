@@ -160,6 +160,14 @@ status remains semantic.
 Keep the compact response-detail splits added for long agent replies. They should be neutral nested
 surfaces with a restrained green heading, not persona-colored cards or a separate visual system.
 
+### Agent debugger exposes actual decisions and tools
+
+*Decision from Jeffrey, 2026-08-25.* The agent debugger is for the decisions an
+agent makes and the tools it calls in each agent stream. Dispatch metadata
+(model, profile, retry, fallback) is supporting context only; it does not
+fulfill the debugger. Keep events scoped to the owning reply so simultaneous
+Codex and Claude streams never show each other's calls.
+
 ### Restore the last-opened item in each primary surface
 
 *Decision from Jeffrey, 2026-08-23.*
@@ -510,6 +518,16 @@ app-server `turn/steer`; Claude uses its persistent `--input-format stream-json`
 stdin channel. In both cases, return `202 pending` while startup is incomplete,
 continue the existing stream, and never cancel or silently reroute it.
 
+*UI acknowledgement, 2026-08-25.* An accepted interjection must remain visibly
+marked on Jeffrey's message after it becomes completed. `queuePriority > 0` is
+the durable record of an explicit interjection: render **Interjecting** while it
+is still queued and **Interjected** only after the active provider accepted it.
+
+*Presentation correction, 2026-08-25.* The acknowledgement must appear inside
+the matching running agent's live activity stream, with Jeffrey's actual text
+and a clear “You interjected” label. A standalone badge on Jeffrey's message is
+not sufficient; it obscures where the live provider received the direction.
+
 ### In-progress "thinking" activity is a log, not a finished report
 
 *Fix from Claude, 2026-08-25.* The huge-circle-and-missing-space bug Jeffrey
@@ -597,6 +615,18 @@ gate: the `pinned-reminder` query now sets `refetchInterval: 30 * 60_000`
 items still gates it entirely — zero pinned means no toast). Verified:
 `tsc --noEmit` clean; `vitest run src/client/App.test.tsx` 85/85 passing,
 including the existing pinned-reminder-toast navigation test.
+
+### Agent debugger only shows recorded rationale
+
+*Decision from Jeffrey, 2026-08-25; clarified the same day.* The decision-tree
+debugger must never invent a rationale. Show `Why:` only when the provider or
+agent recorded a decision before that call; otherwise omit the line. Start new
+Codex app-server turns with concise reasoning summaries, capture the completed
+provider summary (including its `summary[]` form), and associate it with
+subsequent tool calls. Claude does not expose hidden reasoning in stream-json:
+record only its explicit, agent-authored `Decision:` preamble before a tool
+call. Existing runs cannot be backfilled, but newly started agent streams show
+the actual recorded decision and command sequence.
 
 ### RAG memory index now also ingests the shared ~/notes knowledge base
 

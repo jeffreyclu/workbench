@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { accountProfileForSharedReply, buildSharedReplyPrompt, classificationForLinkedItem, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, memoryQueryForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, memoryQueryForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
 
 function message(index: number, body: string): SharedMessage {
   return {
@@ -139,5 +139,26 @@ describe('compactConversationHistory', () => {
     expect(accountProfileForSharedReply(externalTask)).toBe('default');
     expect(accountProfileForSharedReply(workbenchTask)).toBe('personal');
     database.close();
+  });
+});
+
+describe('agentStreamEventForCodexAppServerItem', () => {
+  it('records the completed provider reasoning summary before the next tool call', () => {
+    expect(agentStreamEventForCodexAppServerItem('item/started', { type: 'reasoning' })).toBeNull();
+    expect(agentStreamEventForCodexAppServerItem('item/completed', {
+      type: 'reasoning', text: 'Inspect the existing event path before changing it.',
+    })).toEqual({ kind: 'decision', detail: 'Inspect the existing event path before changing it.' });
+    expect(agentStreamEventForCodexAppServerItem('item/started', {
+      type: 'commandExecution', command: 'npm test',
+    })).toEqual({ kind: 'tool', detail: 'command_execution: npm test' });
+  });
+
+  it('uses app-server summary parts and explicitly requests concise summaries for new turns', () => {
+    expect(agentStreamEventForCodexAppServerItem('item/completed', {
+      type: 'reasoning', summary: [{ type: 'summary_text', text: 'The failure is likely in the shared route, so inspect that first.' }],
+    })).toEqual({ kind: 'decision', detail: 'The failure is likely in the shared route, so inspect that first.' });
+    expect(codexTurnStartParams('thread', '/workspace', 'Fix it')).toMatchObject({
+      threadId: 'thread', cwd: '/workspace', effort: 'medium', summary: 'concise',
+    });
   });
 });

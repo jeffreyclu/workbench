@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SharedMessage } from '../../../shared/contracts';
-import { buildDecisionTree } from './decision-tree';
+import { buildDecisionTree, formatDecisionTreeEvents } from './decision-tree';
 
 function message(overrides: Partial<SharedMessage>): SharedMessage {
   return {
@@ -28,6 +28,43 @@ describe('buildDecisionTree', () => {
         { id: 'claude', label: 'Claude', status: 'completed', detail: 'opus · personal · attempt 2 · fallback from codex' },
       ],
     }]);
+  });
+
+  it('attaches recorded decisions and tool calls only to their owning stream in event order', () => {
+    const tree = buildDecisionTree([
+      message({ id: 'request', dispatchTarget: 'both' }),
+      message({ id: 'codex', author: 'codex', dispatchGroupId: 'request' }),
+      message({ id: 'claude', author: 'claude', dispatchGroupId: 'request' }),
+    ], [
+      { id: 'decision', messageId: 'codex', runId: null, kind: 'decision', detail: 'Use the existing route.', createdAt: '2026-08-25T12:00:00.000Z' },
+      { id: 'tool', messageId: 'claude', runId: null, kind: 'tool', detail: 'Bash: inspect tests', createdAt: '2026-08-25T12:00:01.000Z' },
+      { id: 'read', messageId: 'codex', runId: null, kind: 'file_read', detail: 'src/routes.ts', createdAt: '2026-08-25T12:00:02.000Z' },
+      { id: 'other-conversation', messageId: 'unrelated', runId: null, kind: 'tool', detail: 'Must not appear', createdAt: '2026-08-25T12:00:03.000Z' },
+    ]);
+
+    expect(tree[0].children[0].events).toEqual([
+      expect.objectContaining({ id: 'decision', kind: 'decision' }),
+      expect.objectContaining({ id: 'read', kind: 'file_read' }),
+    ]);
+    expect(tree[0].children[1].events).toEqual([expect.objectContaining({ id: 'tool', kind: 'tool' })]);
+    expect(tree.flatMap((request) => request.children).flatMap((stream) => stream.events))
+      .not.toContainEqual(expect.objectContaining({ id: 'other-conversation' }));
+  });
+
+  it('turns recorded calls into readable actions and only uses a preceding recorded rationale', () => {
+    const events = formatDecisionTreeEvents([
+      { id: 'first-tool', messageId: 'codex', runId: null, kind: 'tool', detail: 'command_execution: npm test', createdAt: '2026-08-25T12:00:00.000Z' },
+      { id: 'decision', messageId: 'codex', runId: null, kind: 'decision', detail: 'The failure may be in the existing route.', createdAt: '2026-08-25T12:00:01.000Z' },
+      { id: 'read', messageId: 'codex', runId: null, kind: 'file_read', detail: 'src/routes.ts', createdAt: '2026-08-25T12:00:02.000Z' },
+      { id: 'write', messageId: 'codex', runId: null, kind: 'file_write', detail: 'update: src/routes.ts', createdAt: '2026-08-25T12:00:03.000Z' },
+    ]);
+
+    expect(events).toEqual([
+      expect.objectContaining({ id: 'first-tool', action: 'Ran the test suite.', rationale: null }),
+      expect.objectContaining({ id: 'decision', action: 'Recorded the approach.', rationale: null }),
+      expect.objectContaining({ id: 'read', action: 'Read src/routes.ts.', rationale: 'The failure may be in the existing route.' }),
+      expect.objectContaining({ id: 'write', action: 'Updated src/routes.ts.', rationale: 'The failure may be in the existing route.' }),
+    ]);
   });
 
   it('falls back to the latest user dispatch for older stream records', () => {

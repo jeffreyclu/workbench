@@ -58,6 +58,7 @@ const EXPECTED_MIGRATIONS = [
   '045_shared_message_queue_priority',
   '046_artifact_comment_anchors',
   '047_shared_message_dispatch_group',
+  '048_agent_stream_events',
 ];
 
 describe('openDatabase', () => {
@@ -448,6 +449,21 @@ describe('openDatabase', () => {
       VALUES ('a2', 'not_a_category', 'linear', 'detail', NULL, '2026-01-01T00:00:00.000Z')
     `).run()).toThrow();
     database.close();
+  });
+
+  it('adds per-message agent stream events on upgrade from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE agent_stream_events;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '048_agent_stream_events'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(agent_stream_events)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['message_id', 'run_id', 'kind', 'detail', 'created_at']));
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_agent_stream_events_message_created'").get()).toBeTruthy();
+    upgraded.close();
   });
 
   it('accepts destructive_action as an audit category and adds deleted_at soft-delete columns', () => {

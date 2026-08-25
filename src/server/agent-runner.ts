@@ -535,7 +535,11 @@ export async function judgeExecutionProfile(prompt: string, cwd: string, signal?
   return selectPromptExecutionProfile(prompt);
 }
 
-export interface AgentAuditCandidate { category: 'agent_file_read' | 'agent_file_write' | 'agent_tool_use'; detail: string }
+export interface AgentAuditCandidate {
+  category: 'agent_file_read' | 'agent_file_write' | 'agent_tool_use';
+  detail: string;
+  streamKind?: 'decision' | 'tool' | 'file_read' | 'file_write';
+}
 
 /**
  * Coding CLIs launch shell commands of their own. Killing only the CLI leaves
@@ -563,13 +567,26 @@ function terminateAgentProcessTree(child: ReturnType<typeof spawn>, signal: Node
  */
 export interface AgentEventContext { subagents: Map<string, string> }
 
+/**
+ * Claude does not provide its hidden reasoning in stream-json. A visible
+ * `Decision:` preamble is therefore the only rationale we persist: it is
+ * agent-authored, attributable, and never an inferred substitute.
+ */
+export function recordedDecision(text: string): string | null {
+  const match = text.match(/^\s*Decision:\s*([\s\S]+?)\s*$/i);
+  return match?.[1] ? match[1].slice(0, 2_000) : null;
+}
+
 export function readableAgentEvent(agent: AgentRun['agent'], line: string, context?: AgentEventContext): { progress: string; final: string | null; audit: AgentAuditCandidate[]; delta?: string; blockBreak?: boolean } {
   try {
     const event = JSON.parse(line) as Record<string, unknown>;
     if (agent === 'codex') {
       const item = event.item as Record<string, unknown> | undefined;
       if (item?.type === 'agent_message' && typeof item.text === 'string') return { progress: item.text, final: item.text, audit: [] };
-      if (item?.type === 'reasoning' && typeof item.text === 'string') return { progress: `Reasoning summary: ${item.text}`, final: null, audit: [] };
+      if (item?.type === 'reasoning' && typeof item.text === 'string') {
+        const audit = event.type === 'item.completed' ? [{ category: 'agent_tool_use' as const, streamKind: 'decision' as const, detail: item.text.slice(0, 2_000) }] : [];
+        return { progress: `Reasoning summary: ${item.text}`, final: null, audit };
+      }
       if (item?.type === 'command_execution') {
         const command = typeof item.command === 'string' ? item.command : 'command';
         const label = /(?:npm|pnpm|yarn) (?:test|run test)|vitest/.test(command) ? 'Running tests'
@@ -578,14 +595,14 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
           : /(?:rg|grep|find) /.test(command) ? 'Searching the codebase'
           : /(?:cat|sed|head|tail) /.test(command) ? 'Reading project files'
           : `Running a workspace command: ${command.slice(0, 100)}`;
-        const audit: AgentAuditCandidate[] = event.type === 'item.started' ? [{ category: 'agent_tool_use', detail: `command_execution: ${command.slice(0, 500)}` }] : [];
+        const audit: AgentAuditCandidate[] = event.type === 'item.started' ? [{ category: 'agent_tool_use', streamKind: 'tool', detail: `command_execution: ${command.slice(0, 500)}` }] : [];
         return { progress: event.type === 'item.started' ? `● ${label}` : '', final: null, audit };
       }
       if (item?.type === 'file_change') {
         const changes = item.changes as Array<{ path?: string; kind?: string }> | undefined;
         const audit: AgentAuditCandidate[] = (changes ?? [{}]).map((change) => ({
           category: 'agent_file_write',
-          detail: change.path ? `${change.kind ?? 'update'}: ${change.path}` : 'file_change',
+          streamKind: 'file_write', detail: change.path ? `${change.kind ?? 'update'}: ${change.path}` : 'file_change',
         }));
         return { progress: '● Updating project files', final: null, audit };
       }
@@ -628,7 +645,11 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
       const message = event.message as { content?: Array<Record<string, unknown>> } | undefined;
       const audit: AgentAuditCandidate[] = [];
       const parts = (message?.content ?? []).flatMap((content) => {
-        if (content.type === 'text' && typeof content.text === 'string') return [attribute(content.text)];
+        if (content.type === 'text' && typeof content.text === 'string') {
+          const decision = recordedDecision(content.text);
+          if (decision) audit.push({ category: 'agent_tool_use', streamKind: 'decision', detail: attribute(decision) });
+          return [attribute(content.text)];
+        }
         if (content.type === 'tool_use') {
           const name = String(content.name ?? 'tool');
           const input = (content.input ?? {}) as Record<string, unknown>;
@@ -646,9 +667,9 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
             audit.push({ category: 'agent_tool_use', detail: attribute(`delegated to ${worker}${assignment ? `: ${assignment}` : ''}`) });
             return [attribute(`● Delegating to ${worker}${assignment ? `: ${assignment}` : ''}`)];
           }
-          if (name === 'Read') audit.push({ category: 'agent_file_read', detail: attribute(filePath || 'unknown file') });
-          else if (name === 'Edit' || name === 'Write') audit.push({ category: 'agent_file_write', detail: attribute(filePath || 'unknown file') });
-          else audit.push({ category: 'agent_tool_use', detail: attribute(description ? `${name}: ${description}` : name) });
+          if (name === 'Read') audit.push({ category: 'agent_file_read', streamKind: 'file_read', detail: attribute(filePath || 'unknown file') });
+          else if (name === 'Edit' || name === 'Write') audit.push({ category: 'agent_file_write', streamKind: 'file_write', detail: attribute(filePath || 'unknown file') });
+          else audit.push({ category: 'agent_tool_use', streamKind: 'tool', detail: attribute(description ? `${name}: ${description}` : name) });
           if (description) return [attribute(`● ${description.charAt(0).toUpperCase()}${description.slice(1)}`)];
           if (name === 'Read') return [attribute(`● Reading ${String(input.file_path ?? input.file ?? 'a project file')}`)];
           if (name === 'Edit' || name === 'Write') return [attribute(`● Editing ${String(input.file_path ?? input.file ?? 'project files')}`)];
@@ -1128,6 +1149,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
     }, (entries, producingAgent) => {
       for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
+      if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
+        kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+      })));
     }, run.kind, run.accountProfile, autonomousModel ?? undefined);
     if (run.origin !== 'autonomous' && result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the run to Codex.';
@@ -1143,6 +1167,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
       }, (entries, producingAgent) => {
         for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
+        if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
+          kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+        })));
       }, run.kind, run.accountProfile);
       result = { ...recovered, fallbackFrom: 'claude', fallbackReason: reason };
       repository.updateRun(run.id, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });

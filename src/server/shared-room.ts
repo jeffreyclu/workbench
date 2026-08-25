@@ -28,8 +28,42 @@ export function interjectionSteeringPrompt(body: string): string {
   return `The user is interjecting into your active response. Acknowledge and apply this direction immediately; do not wait for a later turn or start a separate response:\n\n${body}`;
 }
 
+export function agentStreamEventForCodexAppServerItem(method: string, item: Record<string, unknown> | undefined): { kind: 'decision' | 'tool'; detail: string } | null {
+  if (!item) return null;
+  const type = String(item.type ?? '');
+  if (method === 'item/started' && (type === 'commandExecution' || type === 'command_execution')) {
+    return { kind: 'tool', detail: `command_execution: ${String(item.command ?? 'command').slice(0, 500)}` };
+  }
+  if (method === 'item/completed' && type === 'reasoning') {
+    // App-server emits the requested reasoning summary as `summary[]`, while
+    // older versions exposed it directly as `text`. Both are provider-recorded
+    // summaries; encrypted reasoning is intentionally never surfaced here.
+    const summary = typeof item.text === 'string' ? item.text : Array.isArray(item.summary)
+      ? item.summary.flatMap((part) => {
+        if (typeof part === 'string') return [part];
+        if (part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string') return [(part as Record<string, unknown>).text as string];
+        return [];
+      }).join('\n').trim()
+      : '';
+    if (summary) return { kind: 'decision', detail: summary.slice(0, 2_000) };
+  }
+  return null;
+}
+
+export function codexTurnStartParams(threadId: string, cwd: string, prompt: string): Record<string, unknown> {
+  return {
+    threadId,
+    cwd,
+    effort: 'medium',
+    // The debugger needs a provider-authored, human-readable decision record.
+    // `concise` provides that without exposing encrypted chain-of-thought.
+    summary: 'concise',
+    input: [{ type: 'text', text: prompt, text_elements: [] }],
+  };
+}
+
 /** Codex's app-server is the provider protocol that supports turn/steer. */
-function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void): Promise<string> {
+function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void): Promise<string> {
   return new Promise((resolveOutput, reject) => {
     const child = spawn('codex', ['app-server', '--stdio'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     let buffered = ''; let output = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
@@ -75,7 +109,7 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
       for (const line of lines.filter(Boolean)) {
         let event: any; try { event = JSON.parse(line); } catch { continue; }
         if (event.id === 1 && event.result) request('thread/start', { cwd, ephemeral: true, model: null, approvalPolicy: 'never' });
-        else if (event.result?.thread?.id && !threadId) { threadId = event.result.thread.id; request('turn/start', { threadId, cwd, effort: 'medium', input: [{ type: 'text', text: prompt, text_elements: [] }] }); }
+        else if (event.result?.thread?.id && !threadId) { threadId = event.result.thread.id; request('turn/start', codexTurnStartParams(threadId, cwd, prompt)); }
         else if (event.result?.turn?.id && !turnId) { turnId = event.result.turn.id; onReady(steer); }
         if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
           const resolveSteer = pendingSteers.get(event.id)!;
@@ -101,6 +135,12 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
           }
           onProgress(output);
         }
+        const item = event.params?.item as Record<string, unknown> | undefined;
+        // Reasoning items begin before their summary text is available. Capture
+        // the completed item so each subsequent tool call has the actual
+        // decision that preceded it rather than an empty placeholder.
+        const agentEvent = agentStreamEventForCodexAppServerItem(event.method, item);
+        if (agentEvent) onEvent(agentEvent);
         if (event.method === 'turn/completed') {
           settled = true;
           rejectPendingSteers();
@@ -251,7 +291,7 @@ ${formatRetrievedMemory(retrievedMemory ?? [])}
 Current conversation:
 ${compactConversationHistory(thread)}
 
-Answer Jeffrey concisely. State the decision, handoff, or blocker you are continuing and any conflict with observed state. Retrieved memory covers the latest message only; query more via curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=100'. Record durable facts in docs/shared-memory/*.md, never private memory. Workbench is non-interactive: use tools directly and report exact missing access. Finish foreground work now; never detach work or promise a later result.`;
+Answer Jeffrey concisely. State the decision, handoff, or blocker you are continuing and any conflict with observed state. Before each tool call, emit a separate, concise \`Decision: <why this tool is the next correct action>\` statement. It is recorded in the agent debugger, so make it concrete and human-readable; never claim hidden reasoning. Retrieved memory covers the latest message only; query more via curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=100'. Record durable facts in docs/shared-memory/*.md, never private memory. Workbench is non-interactive: use tools directly and report exact missing access. Finish foreground work now; never detach work or promise a later result.`;
 }
 
 /**
@@ -471,7 +511,8 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
         // Keep that explicitly promoted human message queued, then deliver it
         // as soon as the same live session exposes turn/steer.
         void deliverPendingSharedInterjections(repository, messageId);
-      }).then((output) => ({ output, agent: 'codex' as const, usage: { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null }, fallbackFrom: null, fallbackReason: null }))
+      }, (event) => repository.addAgentStreamEvents(messageId, runId ?? null, [event]))
+        .then((output) => ({ output, agent: 'codex' as const, usage: { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null }, fallbackFrom: null, fallbackReason: null }))
       : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       repository.updateSharedMessage(messageId, { body: partial });
       if (runId) repository.updateRun(runId, { output: partial });
@@ -482,7 +523,9 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
       repository.updateSharedMessage(messageId, telemetry);
       if (runId) repository.updateRun(runId, telemetry);
-    }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, agent === 'claude' ? (steer) => {
+    }, (entries) => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
+      kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+    }))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, agent === 'claude' ? (steer) => {
       registerActiveReplySteering(messageId, steer);
       void deliverPendingSharedInterjections(repository, messageId);
     } : undefined);

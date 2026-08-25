@@ -109,6 +109,7 @@ export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: Memo
 }
 
 export function PromotionQueueStatus() {
+  const [open, setOpen] = useState(false);
   const status = useQuery({
     queryKey: ['promotion-queue-status'],
     queryFn: () => api.getPromotionQueueStatus(),
@@ -116,27 +117,48 @@ export function PromotionQueueStatus() {
   });
   const data = status.data;
   if (!data) return null;
+
+  let className = 'promotion-status';
+  let icon = <Command size={14} />;
+  let label = '';
   if (data.running) {
-    return <div className="promotion-status promotion-status-running" title={data.running.progress}>
-      <LoaderCircle size={14} className="spin" /> Promoting… {data.queueLength > 0 && <span className="promotion-status-queue">+{data.queueLength} queued</span>}
-    </div>;
+    className += ' promotion-status-running';
+    icon = <LoaderCircle size={14} className="spin" />;
+    label = 'Promoting…';
+  } else if (data.queueLength > 0) {
+    className += ' promotion-status-queued';
+    label = `${data.queueLength} promotion${data.queueLength === 1 ? '' : 's'} queued`;
+  } else if (data.lastBuild?.status === 'failed') {
+    className += ' promotion-status-failed';
+    icon = <AlertTriangle size={14} />;
+    label = 'Last build failed';
+  } else if (data.lastBuild?.status === 'succeeded') {
+    className += ' promotion-status-succeeded';
+    icon = <Check size={14} />;
+    label = 'Build promoted';
+  } else {
+    return null;
   }
-  if (data.queueLength > 0) {
-    return <div className="promotion-status promotion-status-queued">
-      <Command size={14} /> {data.queueLength} promotion{data.queueLength === 1 ? '' : 's'} queued
-    </div>;
-  }
-  if (data.lastBuild?.status === 'failed') {
-    return <div className="promotion-status promotion-status-failed" title={data.lastBuild.summary}>
-      <AlertTriangle size={14} /> Last build failed
-    </div>;
-  }
-  if (data.lastBuild?.status === 'succeeded') {
-    return <div className="promotion-status promotion-status-succeeded" title={data.lastBuild.summary}>
-      <Check size={14} /> Build promoted
-    </div>;
-  }
-  return null;
+
+  return <div className="promotion-status-wrap" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
+    <button type="button" className={className} aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen((current) => !current)}>
+      {icon} {label} {data.running && data.queueLength > 0 && <span className="promotion-status-queue">+{data.queueLength} queued</span>}
+    </button>
+    {open && <div className="promotion-status-popover" role="dialog" aria-label="Promotion status">
+      <div className="promotion-status-popover-row">
+        <strong>Queue</strong>
+        <span>{data.queueLength > 0 ? `${data.queueLength} waiting${data.oldestQueuedAt ? ` since ${new Date(data.oldestQueuedAt).toLocaleTimeString()}` : ''}` : 'Empty'}</span>
+      </div>
+      <div className="promotion-status-popover-row">
+        <strong>Running</strong>
+        <span>{data.running ? `${data.running.progress} (started ${new Date(data.running.startedAt).toLocaleTimeString()})` : 'None'}</span>
+      </div>
+      <div className="promotion-status-popover-row">
+        <strong>Last build</strong>
+        <span>{data.lastBuild ? `${data.lastBuild.status} at ${new Date(data.lastBuild.at).toLocaleTimeString()} — ${data.lastBuild.summary}` : 'No builds yet'}</span>
+      </div>
+    </div>}
+  </div>;
 }
 
 function GlobalSearchResultSkeleton() {

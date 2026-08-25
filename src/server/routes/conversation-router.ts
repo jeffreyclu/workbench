@@ -27,6 +27,11 @@ export function createConversationRouter({ repository, database, capabilities }:
     response.json({ conversation });
   });
 
+  router.get('/api/shared/conversations/:id/agent-events', (request, response) => {
+    if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
+    response.json({ events: repository.listAgentStreamEvents(request.params.id) });
+  });
+
   router.get('/api/shared/conversations-unread-count', (_request, response) => {
     response.json({ count: repository.countUnreadConversations() });
   });

@@ -259,6 +259,24 @@ describe('shared room', () => {
     expect(await screen.findByText('No messages yet. Ask Codex or Claude to get started.')).toBeTruthy();
   });
 
+  it('renders an interjection inside the matching live agent stream', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000110';
+    const agentReply = { id: 'reply-1', conversationId, author: 'codex', body: '● Inspecting the active stream', pinned: false, status: 'running', error: '', createdAt: '2025-12-31T23:59:00Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'none', queuePriority: 0 };
+    const interjection = { id: 'interjection-1', conversationId, author: 'jeffrey', body: 'aada', pinned: false, status: 'completed', error: '', createdAt: '2026-01-01T00:00:00Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'codex', queuePriority: 1 };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Live steering', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages: [agentReply, interjection] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    expect(await screen.findByText('You interjected')).toBeTruthy();
+    expect(screen.getAllByText('aada')).toHaveLength(2);
+  });
+
   it('does not offer preview approval from a new empty conversation when changes are pending elsewhere', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000006';
