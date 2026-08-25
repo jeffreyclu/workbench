@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
-import { chunkText, indexPendingMemory, reciprocalRankFusion, searchMemory, setEmbedder } from './memory-index.js';
+import { chunkText, indexPendingMemory, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE, reciprocalRankFusion, searchMemory, setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 
 describe('chunkText', () => {
@@ -57,6 +57,12 @@ describe('reciprocalRankFusion', () => {
 
   it('returns an empty map for no rankings', () => {
     expect(reciprocalRankFusion([]).size).toBe(0);
+  });
+});
+
+describe('memory retrieval candidate pool', () => {
+  it('keeps enough chunk candidates to preserve broad document recall after deduplication', () => {
+    expect(MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE).toBe(400);
   });
 });
 

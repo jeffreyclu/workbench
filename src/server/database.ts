@@ -1436,6 +1436,18 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // Interject must reorder scheduled work without falsifying the message's
+    // authored timestamp, which is also the transcript's chronological order.
+    id: '045_shared_message_queue_priority',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'queue_priority')) {
+        database.exec('ALTER TABLE shared_messages ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0;');
+      }
+      database.exec('CREATE INDEX IF NOT EXISTS idx_shared_messages_queue_priority ON shared_messages(conversation_id, status, queue_priority DESC, created_at ASC);');
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

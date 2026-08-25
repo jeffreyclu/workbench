@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { reconcileArtifactDirectory, renderArtifactPage, repairLegacyArtifactSnapshots } from './artifact-publisher.js';
+import { addFeedbackToPublishedPage, reconcileArtifactDirectory, renderArtifactPage, repairLegacyArtifactSnapshots } from './artifact-publisher.js';
 
 describe('artifact snapshots', () => {
   it('renders Markdown while removing active content', () => {
@@ -75,6 +75,21 @@ describe('artifact snapshots', () => {
     const withoutFeedback = renderArtifactPage(path, 'Rollout', { version: 2 });
     expect(withoutFeedback).not.toContain('Send feedback');
     expect(withoutFeedback).not.toContain('<script');
+  });
+
+  it('adds feedback to an existing public snapshot without changing the artifact content', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-'));
+    const path = join(directory, 'report.md');
+    writeFileSync(path, '# Rollout');
+    const original = renderArtifactPage(path, 'Rollout', { version: 2 });
+    const refreshed = addFeedbackToPublishedPage(original, { artifactId: 'abc123', endpointOrigin: 'https://workbench.example.com' });
+
+    expect(refreshed).toContain('<h1>Rollout</h1>');
+    expect(refreshed).toContain('<strong>Version 2</strong>');
+    expect(refreshed).toContain('Send feedback');
+    expect(refreshed).toContain('https://workbench.example.com/api/artifacts/abc123/comments');
+    expect(refreshed).toContain("connect-src https://workbench.example.com");
+    expect(addFeedbackToPublishedPage(refreshed, { artifactId: 'abc123', endpointOrigin: 'https://workbench.example.com' })).toBe(refreshed);
   });
 
   it('rebuilds current and historical URLs from immutable snapshots in a fresh directory', () => {

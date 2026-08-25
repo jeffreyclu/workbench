@@ -405,6 +405,7 @@ export class WorkItemRepository {
       dispatchTarget: row.dispatch_target as SharedMessage['dispatchTarget'] ?? 'none',
       attempt: Number(row.attempt ?? 0), maxAttempts: Number(row.max_attempts ?? 3),
       nextAttemptAt: row.next_attempt_at ? String(row.next_attempt_at) : null,
+      queuePriority: Number(row.queue_priority ?? 0),
       retrievedMemoryCount: row.retrieved_memory_count === null || row.retrieved_memory_count === undefined ? null : Number(row.retrieved_memory_count),
     };
   }
@@ -583,7 +584,7 @@ export class WorkItemRepository {
     if (!conversation) throw new Error('Conversation not found.');
     const message: SharedMessage = {
       id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), completedAt: ['completed', 'failed', 'canceled'].includes(status) ? new Date().toISOString() : null, attachments, model: null, accountProfile, executionProfile, inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: dispatchTarget as SharedMessage['dispatchTarget'],
-      attempt: 0, maxAttempts: 3, nextAttemptAt: null, retrievedMemoryCount: null,
+      attempt: 0, maxAttempts: 3, nextAttemptAt: null, queuePriority: 0, retrievedMemoryCount: null,
     };
     this.database.prepare(`
       INSERT INTO shared_messages (id, conversation_id, author, body, pinned, status, error, attachments_json, dispatch_target, created_at, completed_at, execution_profile, account_profile)
@@ -597,7 +598,7 @@ export class WorkItemRepository {
   nextQueuedSharedTurn(conversationId: string, busyAgents: ReadonlySet<AgentRun['agent']> = new Set()): { message: SharedMessage; dispatchTarget: 'auto' | 'codex' | 'claude' | 'both' } | null {
     const rows = this.database.prepare(`SELECT id, dispatch_target FROM shared_messages
       WHERE conversation_id = ? AND author = 'jeffrey' AND status = 'queued'
-      ORDER BY created_at ASC, rowid ASC`).all(conversationId) as Array<{ id: string; dispatch_target: string }>;
+      ORDER BY queue_priority DESC, created_at ASC, rowid ASC`).all(conversationId) as Array<{ id: string; dispatch_target: string }>;
     for (const row of rows) {
       if (!['auto', 'codex', 'claude', 'both'].includes(row.dispatch_target)) continue;
       const dispatchTarget = row.dispatch_target as 'auto' | 'codex' | 'claude' | 'both';
@@ -613,12 +614,9 @@ export class WorkItemRepository {
   promoteQueuedSharedMessage(id: string): SharedMessage | null {
     const message = this.getSharedMessageById(id);
     if (!message || message.status !== 'queued') return null;
-    const earliest = this.database.prepare(`SELECT MIN(created_at) AS value FROM shared_messages WHERE conversation_id = ? AND status = 'queued'`)
-      .get(message.conversationId) as { value: string | null };
-    const promotedAt = earliest.value && earliest.value <= message.createdAt
-      ? new Date(new Date(earliest.value).getTime() - 1).toISOString()
-      : message.createdAt;
-    this.database.prepare('UPDATE shared_messages SET created_at = ? WHERE id = ?').run(promotedAt, id);
+    const nextPriority = this.database.prepare(`SELECT COALESCE(MAX(queue_priority), 0) + 1 AS value
+      FROM shared_messages WHERE conversation_id = ? AND status = 'queued'`).get(message.conversationId) as { value: number };
+    this.database.prepare('UPDATE shared_messages SET queue_priority = ? WHERE id = ?').run(nextPriority.value, id);
     return this.getSharedMessageById(id);
   }
 

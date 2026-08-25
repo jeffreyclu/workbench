@@ -431,10 +431,13 @@ still selected by query-relative relevance and prompt budget, never a fixed
 count. Regression coverage dispatches both fake agents and asserts one search
 and identical four-memory details on both replies.
 
-Retrieval candidate budget (2026-08-25): Jeffrey increased the candidate
-ceiling to 100. This expands the pool considered by both shared-room replies
-and task runs; it does not require injecting 100 memories. Selection remains
-query-relative, non-duplicative, and constrained by the prompt token budget.
+Retrieval candidate budget (2026-08-25): `searchMemory` considers up to 400
+FTS chunks and 400 vector chunks before reciprocal-rank fusion and the
+one-result-per-document deduplication. Long transcripts can otherwise fill a
+100-chunk pool before deduplication, preventing broad recall across distinct
+conversations, activities, and docs. The public result limit remains 100 and
+prompt injection remains query-relative, non-duplicative, and constrained by
+the prompt token budget; this change expands only the candidates considered.
 
 Current-turn echo exclusion (2026-08-25): shared-room retrieval must exclude
 an indexed message whose body is exactly the current retrieval query before

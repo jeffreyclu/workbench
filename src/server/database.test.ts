@@ -55,6 +55,7 @@ const EXPECTED_MIGRATIONS = [
   '042_shared_message_retrieved_memory_detail',
   '043_shared_conversation_draft_body',
   '044_shared_conversation_composer_preferences',
+  '045_shared_message_queue_priority',
 ];
 
 describe('openDatabase', () => {
@@ -244,6 +245,21 @@ describe('openDatabase', () => {
     const upgraded = openDatabase(path);
     const columns = upgraded.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
     expect(columns.map((column) => column.name)).toContain('retrieved_memory_detail_json');
+    upgraded.close();
+  });
+
+  it('adds queue priority when upgrading from migration 044', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP INDEX idx_shared_messages_queue_priority; ALTER TABLE shared_messages DROP COLUMN queue_priority;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '045_shared_message_queue_priority'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toContain('queue_priority');
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_shared_messages_queue_priority'").get()).toBeTruthy();
     upgraded.close();
   });
 

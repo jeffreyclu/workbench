@@ -687,6 +687,8 @@ export interface SharedMessage {
   attempt: number;
   maxAttempts: number;
   nextAttemptAt: string | null;
+  /** Higher values run first among queued human turns; set only by Interject. */
+  queuePriority?: number;
   /** Number of memory matches retrieved from RAG for this reply's prompt, or null if retrieval was not run (e.g. the human's own message). */
   retrievedMemoryCount: number | null;
 }

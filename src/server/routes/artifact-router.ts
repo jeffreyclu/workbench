@@ -105,6 +105,14 @@ export function createArtifactRouter({ repository, artifacts, artifactService, a
     }
   });
 
+  router.post('/api/artifacts/refresh-feedback', async (_request, response) => {
+    try {
+      response.json({ refreshed: await artifactService.refreshFeedback() });
+    } catch (error) {
+      response.status(500).json({ error: error instanceof Error ? error.message : 'Could not enable comments on published artifacts.' });
+    }
+  });
+
   router.get('/api/artifacts/status', (request, response) => {
     try {
       const input = artifactPathSchema.parse(request.query);

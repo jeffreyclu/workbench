@@ -23,6 +23,10 @@ import { buildFtsMatchQuery } from './fts-query.js';
 
 export const EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2';
 const EMBED_BATCH_SIZE = 32;
+// Keep a wider pre-dedup pool than the API response cap. Long conversations can
+// occupy many high-ranking chunks; document-level dedup needs enough candidates
+// to still surface distinct conversations, activities, and docs.
+export const MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE = 400;
 
 export type Embedder = (texts: string[]) => Promise<Float32Array[]>;
 
@@ -406,8 +410,8 @@ type MemoryDocumentRow = {
 };
 
 /**
- * Hybrid retrieval: FTS5 BM25 (top 100) fused with brute-force cosine
- * similarity over embedded chunks (top 100) via Reciprocal Rank Fusion,
+ * Hybrid retrieval: FTS5 BM25 (top 400) fused with brute-force cosine
+ * similarity over embedded chunks (top 400) via Reciprocal Rank Fusion,
  * grouped to document level keeping the best-scoring chunk as the snippet.
  * Never throws on the embedding side -- a model failure or an empty
  * embeddings table just falls back to the FTS ranking alone.
@@ -426,7 +430,7 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
         JOIN memory_chunks ON memory_chunks.id = memory_chunks_fts.chunk_id
         WHERE memory_chunks_fts MATCH ?
         ORDER BY bm25(memory_chunks_fts)
-        LIMIT 100
+        LIMIT ${MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE}
       `).all(matchQuery) as Array<{ chunk_id: number; document_id: string; text: string }>
     : [];
 
@@ -438,7 +442,7 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
       vectorRows = embedded
         .map((row) => ({ chunk_id: row.id, document_id: row.document_id, text: row.text, score: cosineSimilarity(queryVector, blobToEmbedding(row.embedding)) }))
         .sort((a, b) => b.score - a.score)
-        .slice(0, 100);
+        .slice(0, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE);
     }
   } catch (error) {
     console.error('[memory-index] embedding query failed; falling back to full-text results only', error);

@@ -115,6 +115,14 @@ export class ArtifactService {
     ));
   }
 
+  async refreshFeedback() {
+    return this.serialize(async () => {
+      const feedback = artifactFeedbackConfig();
+      if (!feedback) throw new Error('Artifact feedback is not configured. Set APP_API_ORIGIN and ARTIFACT_PUBLIC_BASE_URL.');
+      return this.publisher.refreshFeedback(this.library.listLive(), { artifactId: '', endpointOrigin: feedback.endpointOrigin });
+    });
+  }
+
   repairSnapshotsOnStartup() {
     const repaired = repairLegacyArtifactSnapshots(
       process.env.ARTIFACT_OUTPUT_DIRECTORY ?? 'data/published',

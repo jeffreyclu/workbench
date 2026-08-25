@@ -86,6 +86,8 @@ type ConversationDispatchTarget = 'both' | 'codex' | 'claude';
 function dispatchTargetForConversation(messages: SharedMessage[]): ConversationDispatchTarget {
   for (const message of [...messages].reverse()) {
     if (message.author === 'jeffrey' && (message.dispatchTarget === 'both' || message.dispatchTarget === 'codex' || message.dispatchTarget === 'claude')) return message.dispatchTarget;
+  }
+  for (const message of [...messages].reverse()) {
     if (message.author === 'codex' || message.author === 'claude') return message.author;
   }
   return 'both';
@@ -489,7 +491,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   // cached-height transition: streamed Markdown can grow or settle at any
   // time without another bubble ever reusing its vertical space.
   useEffect(() => {
-    if (!conversationId || dispatchInitializedConversationId.current === conversationId || !messages.data) return;
+    // Message history can resolve before the selected conversation record.
+    // Do not mark this composer initialized from that legacy fallback: its
+    // saved recipient preference is canonical and may arrive a render later.
+    if (!conversationId || dispatchInitializedConversationId.current === conversationId || !messages.data || !selectedConversation) return;
     setDispatchTo(composerPreferences?.preferredDispatchTarget ?? dispatchTargetForConversation(messages.data.messages));
     setAccountProfile(composerPreferences?.preferredAccountProfile ?? accountProfileForConversation(messages.data.messages));
     dispatchInitializedConversationId.current = conversationId;
@@ -706,7 +711,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   });
   const interjectMessage = useMutation({
     mutationFn: api.interjectSharedMessage,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] }),
+    onSuccess: () => {
+      toast.success('Message moved next. The current response will continue.');
+      return queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] });
+    },
     onError: (error) => toastError('Could not interject that message.', error),
   });
   // Rapid clicks on the agent-target select can fire several owner updates
@@ -1059,7 +1067,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                 {message.status === 'running' && <p className="thinking">Live activity · {message.body ? 'receiving updates' : 'starting agent'}</p>}
                 {isQueuedMessage && (
                   <div className="queued-message">
-                    <span className="queued-message-status"><LoaderCircle size={13} /> Queued · starts after the current agent finishes</span>
+                    <span className="queued-message-status"><LoaderCircle size={13} /> {message.queuePriority ? 'Next up · current response continues' : 'Queued · starts after the current agent finishes'}</span>
                     {message.author !== 'system' && <span className="queued-message-actions">
                     <button type="button" className="icon-button queued-message-action" onClick={() => interjectMessage.mutate(message.id)} disabled={interjectMessage.isPending} aria-label="Move this message next without stopping the current agent" title="Send next without stopping the current agent"><ArrowUpRight size={14} /></button>
                       <button type="button" className="icon-button queued-message-action danger" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel queued message" title="Cancel this queued message"><X size={14} /></button>

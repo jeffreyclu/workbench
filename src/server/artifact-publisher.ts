@@ -55,6 +55,7 @@ export interface PublishInput {
 
 export interface ArtifactPublisher {
   publish(input: PublishInput, live: LiveArtifact[]): Promise<PublishedArtifact>;
+  refreshFeedback(live: LiveArtifact[], feedback: NonNullable<ArtifactPageOptions['feedback']>): Promise<number>;
   revoke(id: string, live: LiveArtifact[], publicUrl: string): Promise<{ verified: boolean }>;
 }
 
@@ -87,6 +88,20 @@ function renderPageFooter(options: ArtifactPageOptions): string {
 function injectFooter(page: string, footer: string): string {
   if (!footer) return page;
   return /<\/body>/i.test(page) ? page.replace(/<\/body>/i, `${footer}</body>`) : `${page}${footer}`;
+}
+
+/** Adds Workbench-owned feedback chrome to an already-published page. */
+export function addFeedbackToPublishedPage(page: string, feedback: NonNullable<ArtifactPageOptions['feedback']>): string {
+  if (page.includes('id="wb-feedback"')) return page;
+  const form = renderPageFooter({ feedback }).match(/<form id="wb-feedback">[\s\S]*?<\/script>/)?.[0];
+  if (!form) throw new Error('Could not build the artifact feedback form.');
+  const withForm = /<footer class="wb-artifact-meta">/i.test(page)
+    ? page.replace(/<\/footer>/i, `${form}</footer>`)
+    : injectFooter(page, renderPageFooter({ feedback }));
+  const withConnection = withForm.replace(/connect-src 'none'/g, `connect-src ${feedback.endpointOrigin}`);
+  return /script-src[^;]*'unsafe-inline'/.test(withConnection)
+    ? withConnection
+    : withConnection.replace(/style-src ([^;]+);/i, "style-src $1; script-src 'unsafe-inline';");
 }
 
 export function renderArtifactPage(sourcePath: string, title: string, options: ArtifactPageOptions = {}): string {
@@ -304,6 +319,33 @@ export class CloudflarePagesPublisher implements ArtifactPublisher {
     rmSync(this.outputDirectory, { recursive: true, force: true });
     renameSync(stagingDirectory, this.outputDirectory);
     return { id: input.id, title: input.title, url: `${baseUrl}/${input.id}/` };
+  }
+
+  async refreshFeedback(live: LiveArtifact[], feedback: NonNullable<ArtifactPageOptions['feedback']>): Promise<number> {
+    this.configuration();
+    const stagingDirectory = resolve(dirname(this.outputDirectory), `.published-stage-${randomBytes(8).toString('hex')}`);
+    rmSync(stagingDirectory, { recursive: true, force: true });
+    const { missing } = reconcileArtifactDirectory(stagingDirectory, live);
+    if (missing.length) throw new Error(`Cannot enable artifact feedback: ${missing.length} published artifact version(s) have no immutable rendered snapshot (${missing.join(', ')}).`);
+    let refreshed = 0;
+    for (const artifact of live) {
+      for (const snapshot of artifact.snapshots) {
+        if (!snapshot.content) continue;
+        const page = addFeedbackToPublishedPage(snapshot.content, { ...feedback, artifactId: artifact.id });
+        if (page === snapshot.content) continue;
+        writeFileSync(resolve(stagingDirectory, artifact.id, `v${snapshot.version}`, 'index.html'), page);
+        if (snapshot.version === artifact.version) writeFileSync(resolve(stagingDirectory, artifact.id, 'index.html'), page);
+        refreshed += 1;
+      }
+    }
+    if (refreshed > 0) {
+      await this.deploy(stagingDirectory);
+      rmSync(this.outputDirectory, { recursive: true, force: true });
+      renameSync(stagingDirectory, this.outputDirectory);
+    } else {
+      rmSync(stagingDirectory, { recursive: true, force: true });
+    }
+    return refreshed;
   }
 
   versionUrl(id: string, version: number): string {

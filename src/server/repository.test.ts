@@ -1122,11 +1122,16 @@ describe('WorkItemRepository', () => {
     const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);
     const earlier = repository.createSharedMessage('jeffrey', 'Do this afterward', 'queued', conversation.id, [], 'codex');
     const interjected = repository.createSharedMessage('jeffrey', 'Do this next', 'queued', conversation.id, [], 'codex');
+    const originalCreatedAt = interjected.createdAt;
 
     expect(interjectQueuedSharedMessage(repository, interjected.id)).toEqual([]);
     expect(repository.getSharedMessageById(running.id)).toEqual(expect.objectContaining({ status: 'running' }));
     expect(repository.nextQueuedSharedTurn(conversation.id)).toEqual(expect.objectContaining({
       message: expect.objectContaining({ id: interjected.id }),
+    }));
+    expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({
+      createdAt: originalCreatedAt,
+      queuePriority: 1,
     }));
     expect(repository.getSharedMessageById(earlier.id)).toEqual(expect.objectContaining({ status: 'queued' }));
   });

@@ -29,6 +29,7 @@ const baselineInventory = [
   'GET /api/artifacts/raw',
   'POST /api/artifacts/publish',
   'POST /api/artifacts/repair-snapshots',
+  'POST /api/artifacts/refresh-feedback',
   'GET /api/artifacts/status',
   'GET /api/artifacts',
   'GET /api/artifacts/:id',
@@ -152,7 +153,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(120);
+    expect(baselineInventory).toHaveLength(121);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

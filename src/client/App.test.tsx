@@ -1224,6 +1224,36 @@ describe('shared room', () => {
     expect(modelChoice.value).toBe('deep');
   });
 
+  it('keeps Both selected after switching away from and back to a conversation', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const firstId = '00000000-0000-4000-8000-000000000041';
+    const secondId = '00000000-0000-4000-8000-000000000042';
+    const conversations = [
+      { id: firstId, title: 'Both recipients', workItemId: null, preferredDispatchTarget: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+      { id: secondId, title: 'Other conversation', workItemId: null, preferredDispatchTarget: 'claude', createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith(`/api/shared/conversations/${firstId}/preferences`) && init?.method === 'PATCH') {
+        conversations[0] = { ...conversations[0], preferredDispatchTarget: 'both' };
+        return new Response(JSON.stringify({ conversation: conversations[0] }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations, nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={firstId} /></QueryClientProvider>);
+
+    const recipient = await screen.findByLabelText('Who should respond') as HTMLSelectElement;
+    fireEvent.change(recipient, { target: { value: 'both' } });
+    await waitFor(() => expect(recipient.value).toBe('both'));
+    fireEvent.click(screen.getByRole('button', { name: /Other conversation/i }));
+    await waitFor(() => expect(recipient.value).toBe('claude'));
+    fireEvent.click(screen.getByRole('button', { name: /Both recipients/i }));
+    await waitFor(() => expect(recipient.value).toBe('both'));
+  });
+
   it('restores the last recipient and model choice from conversation history', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000031';
