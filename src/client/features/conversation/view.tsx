@@ -1182,7 +1182,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
             <select className="agent-target dispatch-target" value={dispatchTo} onChange={(event) => { const target = event.target.value as typeof dispatchTo; setDispatchTo(target); updateComposerPreferences({ dispatchTarget: target }); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond">
               <option value="codex">Codex</option><option value="claude">Claude</option><option value="both">Both</option>
             </select>
-            <button type="button" className="icon-button composer-queue" onClick={queueMessage} aria-label="Queue message for the next turn" title="Queue for the next turn" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}><Clock size={14} /></button>
+            <button type="button" className="button secondary compact composer-queue" onClick={queueMessage} title="Queue for the next turn" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}><Clock size={14} /> Queue</button>
             <button className="icon-button primary composer-send" aria-label="Send message" title="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
           </div>
           {send.error && <p className="error-message">{send.error.message}</p>}

@@ -276,7 +276,7 @@ describe('shared room', () => {
     expect(await screen.findByText('You interjected')).toBeTruthy();
     expect(screen.getByText('Interjected')).toBeTruthy();
     expect(screen.getAllByText('aada')).toHaveLength(2);
-    expect(screen.getByRole('button', { name: 'Queue message for the next turn' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Queue' })).toBeTruthy();
   });
 
   it('keeps the interjected chip on the reply after it completes', async () => {
@@ -1084,6 +1084,30 @@ describe('shared room', () => {
     fireEvent.change(fileInput, { target: { files: [new File(['normal message'], 'message.txt', { type: 'text/plain' })] } });
     await screen.findByText('message.txt');
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === '/api/shared/messages' && init?.method === 'POST')).toBe(true));
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/interject'))).toBe(false);
+  });
+
+  it('queues an ordinary composer message without interjecting', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000027';
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Queue test', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages') && init?.method === 'POST') return new Response(JSON.stringify({ message: { id: 'human-queue', status: 'queued' }, replies: [] }), { status: 202, headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    await screen.findByRole('heading', { name: 'Queue test' });
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [new File(['queued message'], 'queued.txt', { type: 'text/plain' })] } });
+    await screen.findByText('queued.txt');
+    fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === '/api/shared/messages' && init?.method === 'POST')).toBe(true));
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/interject'))).toBe(false);

@@ -698,7 +698,7 @@ nav { display: grid; gap: 3px; }
 .model-target { width: 112px; margin-left: auto; padding: 7px 24px 7px 8px; color: #c5c4bc; background: #11110f; border: 1px solid #30302b; border-radius: 7px; font: 10px 'DM Mono'; }
 .agent-target { width: 92px; padding: 7px 24px 7px 8px; color: #c5c4bc; background: #11110f; border: 1px solid #30302b; border-radius: 7px; font: 10px 'DM Mono'; }
 .composer-send { width: 34px; height: 34px; }
-.composer-queue { width: 34px; height: 34px; }
+.composer-queue { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 72px; height: 34px; }
 .composer-send:hover:not(:disabled) { background: #d4ff45; transform: translateY(-1px); }.composer-send:disabled { color: #64645e; background: #292925; cursor: not-allowed; }
 .shared-thread { display: block; flex: 1; min-height: 0; overflow: auto; padding: 4px 5px 16px; }
 .thread-virtualizer { position: relative; width: 100%; }
@@ -967,7 +967,7 @@ nav { display: grid; gap: 3px; }
   .agent-presence { display: none; }
   .composer-hint { display: none; }
   .agent-console .shared-composer textarea { min-height: 72px; max-height: 180px; padding: 12px 13px 8px; resize: none; }
-  .agent-console .composer-toolbar { display: grid; grid-template-columns: 34px repeat(3, minmax(0, 1fr)) 34px 34px; grid-template-areas: 'attach model account dispatch queue send'; gap: 4px; min-height: 46px; padding: 6px; }
+  .agent-console .composer-toolbar { display: grid; grid-template-columns: 34px repeat(3, minmax(0, 1fr)) 72px 34px; grid-template-areas: 'attach model account dispatch queue send'; gap: 4px; min-height: 46px; padding: 6px; }
   .agent-console .composer-tool { justify-content: center; width: 34px; padding: 7px; font-size: 0; }
   .agent-console .attach-button { grid-area: attach; }.agent-console .model-target { grid-area: model; }.agent-console .account-target { grid-area: account; }.agent-console .dispatch-target { grid-area: dispatch; }.agent-console .composer-queue { grid-area: queue; }.agent-console .composer-send { grid-area: send; }
   .agent-console .model-target, .agent-console .agent-target { width: 100%; min-width: 0; height: 34px; padding: 7px 4px; font-size: 9px; }

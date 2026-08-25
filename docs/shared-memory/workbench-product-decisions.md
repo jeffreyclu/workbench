@@ -37,6 +37,13 @@ second/parallel agent reply. Cancellation remains an explicit, separate
 action. The prior implementation that allowed busy agents was rejected because
 it visibly opened a parallel thread instead of steering the live one.
 
+### Queue is an explicit, labeled composer action
+
+*Decision from Jeffrey, 2026-08-25.* The composer must expose a visible **Queue**
+button in addition to Send. Queue creates a normal next-turn message; it never
+interjects into a live run. Interject remains the explicit action on an already
+queued message.
+
 ### Parallel agent replies remain individually retryable
 
 *Decision from Jeffrey, 2026-08-25; reconfirmed and superseding an earlier same-day instruction.*

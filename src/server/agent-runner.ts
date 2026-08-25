@@ -877,7 +877,15 @@ ${CLAUDE_EXECUTION_CONTRACT}` : instrumentedPrompt;
           progress += `${progress ? '\n\n' : ''}${event.progress}`;
           lastProgressEvent = event.progress;
         }
-        if (event.final) setFinal(event.final);
+        if (event.final) {
+          setFinal(event.final);
+          // The terminal `result` event ends this turn. A completed shared message
+          // can no longer accept a steered interjection (see the `status === 'running'`
+          // filter in interjectQueuedSharedMessage), so keeping stdin open past this
+          // point only leaves the process waiting for input that will never arrive —
+          // the run would never reach `child.on('close')` and stay stuck "live" forever.
+          if (agent === 'claude' && child.stdin.writable) child.stdin.end();
+        }
         if (event.audit.length) onAudit?.(event.audit, agent);
       }
       if (progress) flushProgress();
