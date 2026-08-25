@@ -105,11 +105,12 @@ function accountProfileForConversation(messages: SharedMessage[]): string {
   return DEFAULT_ACCOUNT_PROFILE;
 }
 
-function replyBadge(message: SharedMessage): string {
+export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'accountProfile' | 'estimatedCostUsd'>): string {
   const agent = message.author[0].toUpperCase() + message.author.slice(1);
+  const model = message.model ?? 'model unavailable';
   const profile = message.accountProfile ?? 'profile unavailable';
   const cost = message.estimatedCostUsd === null ? 'cost —' : formatCostUsd(message.estimatedCostUsd);
-  return `${agent} · ${profile} · ${cost}`;
+  return `${agent} · ${model} · ${profile} · ${cost}`;
 }
 
 type ConversationTaskPickerProps = {
@@ -1012,7 +1013,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           <div className="thread-virtualizer thread-live-flow">
           {conversationMessages.map((message) => {
             const isAgentMessage = message.author === 'codex' || message.author === 'claude';
-            const isQueuedAgentMessage = isAgentMessage && message.status === 'queued';
+            const isQueuedMessage = message.status === 'queued';
             return <div key={message.id} className="thread-virtual-row">
             <article className={`shared-message shared-${message.author}${message.author === 'system' && message.status === 'queued' ? ' shared-system-queued' : ''}`}>
               <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
@@ -1034,13 +1035,13 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                 {message.status === 'running' && <button type="button" className="cancel-response" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel response" title="Cancel response"><X size={12} /></button>}
               </header>
               {message.status === 'running' && <p className="thinking"><LoaderCircle className="spin" size={13} /> Live · {message.body ? 'receiving activity' : 'starting agent'}</p>}
-              {isQueuedAgentMessage && (
+              {isQueuedMessage && (
                 <div className="queued-message">
                   <span className="queued-message-status"><LoaderCircle size={13} /> Queued · starts after the current agent finishes</span>
-                  <span className="queued-message-actions">
+                  {message.author !== 'system' && <span className="queued-message-actions">
                     <button type="button" className="icon-button queued-message-action" onClick={() => interjectMessage.mutate(message.id)} disabled={interjectMessage.isPending} aria-label="Interrupt the current agent and send this queued message now" title="Interrupt the current agent and send this now"><ArrowUpRight size={14} /></button>
                     <button type="button" className="icon-button queued-message-action danger" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel queued message" title="Cancel this queued message"><X size={14} /></button>
-                  </span>
+                  </span>}
                 </div>
               )}
               {message.body && (isAgentMessage

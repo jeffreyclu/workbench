@@ -694,9 +694,14 @@ nav { display: grid; gap: 3px; }
 .thread-virtual-row { position: absolute; top: 0; left: 0; display: flex; width: 100%; padding-bottom: 10px; }
 .thread-live-flow .thread-virtual-row { position: relative; top: auto; left: auto; transform: none; }
 .thread-virtual-row .shared-message.shared-jeffrey { margin-left: auto; }
+.thread-virtual-row.reply-group { flex-direction: column; align-items: stretch; gap: 6px; }
+.reply-group-header { padding-left: 2px; color: #8f8e86; font: 9px 'DM Mono'; text-transform: uppercase; letter-spacing: .04em; }
+.reply-group-columns { display: flex; gap: 10px; width: 100%; }
+.reply-group-columns .thread-virtual-row.reply-group-message { position: static; flex: 1 1 0; min-width: 0; padding-bottom: 0; }
 .shared-thread > .completion-prompt, .shared-thread > .preview-approval, .shared-thread > .chat-plan, .shared-thread > .finding-progress, .shared-thread > .list-state { margin-top: 10px; }
 .shared-message { --response-section-surface: #0d0d0c; --response-section-border: #292925; --response-section-hover-border: #3a3a35; position: relative; align-self: flex-start; width: min(94%, 640px); min-width: 0; max-width: 100%; overflow: hidden; padding: 11px 13px; background: #11110f; border: 1px solid #2b2b27; border-radius: 9px; }
 .shared-message.shared-jeffrey { align-self: flex-end; background: #202318; border-color: #434c29; }
+.reply-group-columns .shared-message { width: 100%; max-width: 100%; }
 .shared-message header { display: flex; align-items: center; gap: 8px; }
 .shared-message header strong { color: #c8c7bf; font: 9px 'DM Mono'; text-transform: capitalize; }
 .shared-message header time { color: #575650; font: 8px 'DM Mono'; }
@@ -753,7 +758,7 @@ nav { display: grid; gap: 3px; }
 .queued-message-status, .queued-message-actions { display: inline-flex; align-items: center; gap: 7px; }
 .queued-message-status { min-width: 0; }
 .queued-message-actions { margin-left: auto; }
-.queued-message-action { flex: 0 0 auto; width: 28px; height: 28px; color: #e6c75f; border-color: #4a4426; border-radius: 50%; }
+.queued-message-action { flex: 0 0 auto; width: 28px; height: 28px; color: #e6c75f; border-color: #4a4426; border-radius: 6px; }
 .queued-message-action:hover:not(:disabled) { color: #171911; background: #e6c75f; border-color: #e6c75f; }
 .queued-message-action.danger:hover:not(:disabled) { color: #ff9384; background: #2b1715; border-color: #542b26; }
 .queued-message-action:disabled { opacity: .5; cursor: default; }
@@ -915,6 +920,7 @@ nav { display: grid; gap: 3px; }
   .shared-message header { flex-wrap: wrap; }
   .shared-message header .model-badge { flex: 0 1 auto; order: 2; max-width: 100%; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .queued-message-action { width: 44px; height: 44px; }
+  .reply-group-columns { flex-direction: column; }
 }
 @media (max-width: 640px) {
   .dialog-backdrop { align-items: start; overflow-y: auto; padding: 12px; }

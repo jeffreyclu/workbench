@@ -344,7 +344,7 @@ describe('shared room', () => {
     await waitFor(() => expect(extractionStarted).toBe(true));
   });
 
-  it('shows only the agent, account profile, and cost on an agent reply', async () => {
+  it('shows the agent, model, account profile, and cost on an agent reply', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000005';
     const reply = { id: 'agent-proof', conversationId, author: 'claude', body: 'Completed.', pinned: false, status: 'completed', error: '', createdAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:00:02Z', attachments: [], model: 'sonnet', accountProfile: 'personal', executionProfile: 'standard', inputTokens: 1, outputTokens: 1, estimatedCostUsd: 0.05, fallbackFrom: 'codex', fallbackReason: 'quota', dispatchTarget: 'none' };
@@ -357,7 +357,7 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
-    expect(await screen.findByText('Claude · personal · $0.050')).toBeTruthy();
+    expect(await screen.findByText('Claude · sonnet · personal · $0.050')).toBeTruthy();
     expect(screen.queryByText(/1 in · 1 out/i)).toBeNull();
   });
 
