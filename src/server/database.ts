@@ -1397,6 +1397,18 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // The RAG badge only ever showed a count. Persisting the query and the
+    // actual matched items lets the badge open into an exact record of what
+    // was requested and retrieved, instead of just how many results came back.
+    id: '042_shared_message_retrieved_memory_detail',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'retrieved_memory_detail_json')) {
+        database.exec('ALTER TABLE shared_messages ADD COLUMN retrieved_memory_detail_json TEXT;');
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

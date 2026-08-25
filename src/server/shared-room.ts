@@ -1,5 +1,5 @@
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
-import { buildPrompt, claudeScopeRecoveryPrompt, classifyExecution, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile } from './agent-runner.js';
+import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classifyExecution, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -256,7 +256,10 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
     });
-    repository.updateSharedMessage(messageId, { retrievedMemoryCount: retrievedMemory.length });
+    repository.updateSharedMessage(messageId, {
+      retrievedMemoryCount: retrievedMemory.length,
+      retrievedMemoryDetail: { query: memoryQuery, items: retrievedMemory },
+    });
     const prompt = buildSharedReplyPrompt(
       agent,
       repository.getSharedContext(target.conversationId, { conversationId: target.conversationId }),
@@ -346,10 +349,14 @@ export function cancelSharedReply(repository: WorkItemRepository, messageId: str
     repository.updateSharedMessage(messageId, { status: 'canceled' });
     return { ...message, status: 'canceled' as const };
   }
-  activeReplies.get(messageId)?.abort();
-  repository.updateSharedMessage(messageId, { status: 'canceled' });
   const runId = replyRunIds.get(messageId) ?? repository.getRunByMessage(messageId)?.id;
-  if (runId) repository.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString() });
+  // Task-linked replies execute through the durable run runner. Cancelling
+  // only the chat bubble marks it canceled but leaves a runner in another
+  // process free to keep working; route it through the run cancel protocol so
+  // its cancellation flag reaches that process and kills its whole CLI tree.
+  if (runId) cancelAgentRun(repository, runId);
+  else activeReplies.get(messageId)?.abort();
+  repository.updateSharedMessage(messageId, { status: 'canceled' });
   const dispatched = dispatchNextSharedTurn(repository, message.conversationId);
   if (!dispatched.length) settleLinkedTask(repository, message.conversationId, 'Agent conversation was canceled; review or redirect the task.');
   return { ...message, status: 'canceled' as const };

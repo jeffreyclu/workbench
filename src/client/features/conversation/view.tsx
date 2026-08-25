@@ -58,6 +58,7 @@ import { FollowUpArchiveDialog } from '../../follow-up-archive-dialog';
 import { activityKindLabel, agentDecisionKinds, formatCostUsd, formatFileSize, formatRunTelemetry, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
 import { clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
 import { QueueExplanationList } from '../../queue-explanations';
+import { RetrievedMemoryDialog } from '../../retrieved-memory-dialog';
 import { ProjectColorDot, projectTheme } from '../../project-color';
 import { InlineProjectEditor } from '../../project-field';
 import { isWorkbenchProject, WORKBENCH_PROJECT_NAME } from '../../../shared/project-name';
@@ -191,6 +192,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const conversationView = view ?? ownConversationView;
   const setConversationView = (next: 'active' | 'archive') => { setOwnConversationView(next); onViewChange?.(next); };
   const [deleteConversationPromptOpen, setDeleteConversationPromptOpen] = useState(false);
+  const [retrievedMemoryMessageId, setRetrievedMemoryMessageId] = useState<string | null>(null);
   const [conversationSearch, setConversationSearch] = useState('');
   const [dismissedCompletionPromptPromotionId, setDismissedCompletionPromptPromotionId] = useState<string | null>(null);
   const debouncedConversationSearch = useDebouncedValue(conversationSearch.trim(), 300);
@@ -335,6 +337,11 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const linkedWorkItemId = selectedConversation?.workItemId ?? null;
   const linkedWorkItem = useQuery({ queryKey: ['work-item', linkedWorkItemId], queryFn: () => api.getWorkItem(linkedWorkItemId!), enabled: Boolean(linkedWorkItemId), refetchInterval: 1_000 });
   const linkableTasks = useQuery({ queryKey: ['conversation-linkable-tasks'], queryFn: () => api.listWorkItems('active', ''), staleTime: 30_000 });
+  const retrievedMemoryDetail = useQuery({
+    queryKey: ['retrieved-memory', retrievedMemoryMessageId],
+    queryFn: () => api.getRetrievedMemory(retrievedMemoryMessageId!),
+    enabled: Boolean(retrievedMemoryMessageId),
+  });
   const linkedTaskCompleted = linkedWorkItem.data?.item?.completionStatus === 'completed';
   // A task Jeffrey has claimed keeps its owner: chatting here must not hand it to an agent.
   const linkedTaskIsSelfAssigned = isSelfAssigned(linkedWorkItem.data?.item?.assignees ?? []);
@@ -907,17 +914,20 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                 {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
                 {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyBadge(message)}</span>}
-                <span
+                <button
+                  type="button"
                   className={`memory-badge${typeof message.retrievedMemoryCount === 'number' ? '' : ' memory-badge-not-run'}`}
+                  disabled={typeof message.retrievedMemoryCount !== 'number'}
+                  onClick={() => setRetrievedMemoryMessageId(message.id)}
                   title={typeof message.retrievedMemoryCount === 'number'
                     ? message.retrievedMemoryCount > 0
-                      ? `Retrieved ${message.retrievedMemoryCount} memory match${message.retrievedMemoryCount === 1 ? '' : 'es'} from RAG for this reply`
+                      ? `Retrieved ${message.retrievedMemoryCount} memory match${message.retrievedMemoryCount === 1 ? '' : 'es'} from RAG for this reply — click to view`
                       : 'RAG memory search ran but found no matches'
                     : 'RAG memory retrieval did not run for this message'}
                 >
                   <Search size={11} /> {typeof message.retrievedMemoryCount === 'number' ? message.retrievedMemoryCount : '—'}
-                </span>
-                {message.status === 'running' && <button onClick={() => cancelReply.mutate(message.id)} title="Cancel response"><X size={12} /></button>}
+                </button>
+                {message.status === 'running' && <button type="button" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel response" title="Cancel response"><X size={12} /></button>}
               </header>
               {message.status === 'running' && <p className="thinking"><LoaderCircle className="spin" size={13} /> Live · {message.body ? 'receiving activity' : 'starting agent'}</p>}
               {message.status === 'queued' && (
@@ -978,6 +988,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       </section>
       {planArchivePromptOpen && <FollowUpArchiveDialog count={selectedPlanTaskIndexes.size} pending={resolvePlan.isPending} onClose={() => setPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolvePlan.mutate({ resolution: 'accepted', archiveParent })} />}
       {deleteConversationPromptOpen && conversationId && <ConfirmationDialog title="Delete this conversation?" description="This permanently deletes the conversation and cannot be undone." confirmLabel="Delete conversation" pending={deleteConversation.isPending} onClose={() => setDeleteConversationPromptOpen(false)} onConfirm={() => deleteConversation.mutate(conversationId)} />}
+      {retrievedMemoryMessageId && <RetrievedMemoryDialog detail={retrievedMemoryDetail.data?.detail} loading={retrievedMemoryDetail.isLoading} onClose={() => setRetrievedMemoryMessageId(null)} />}
     </main>
   );
 }

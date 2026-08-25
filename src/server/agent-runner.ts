@@ -1022,7 +1022,10 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     repository.addActivity(item.id, 'system', 'progress', retrievedMemory.length > 0
       ? `Retrieved ${retrievedMemory.length} memory match${retrievedMemory.length === 1 ? '' : 'es'} for context.`
       : 'No relevant memory found.');
-    if (run.messageId) repository.updateSharedMessage(run.messageId, { retrievedMemoryCount: retrievedMemory.length });
+    if (run.messageId) repository.updateSharedMessage(run.messageId, {
+      retrievedMemoryCount: retrievedMemory.length,
+      retrievedMemoryDetail: { query: memoryQueryForRun(item, run), items: retrievedMemory },
+    });
     const prompt = buildPrompt(item, run, sharedContext, retrievedMemory);
     if (run.messageId) repository.updateSharedMessage(run.messageId, { executionProfile: 'routing' });
     const decision: { profile: ExecutionProfile; source: ExecutionProfileSource } = run.executionProfile

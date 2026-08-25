@@ -1,5 +1,19 @@
 ## Working with Jeffrey
 
+### Background and preferences (self-reported, from a separate Claude surface's memory export)
+
+*Jeffrey pasted a memory export from a different Claude chat (claude.ai, not Workbench) on 2026-08-24/25 asking for it to be consolidated into shared memory. These facts are self-reported by that other session's memory store, not independently verified in Workbench — treat as background, not as ground truth to argue from.*
+
+- Senior software engineer at Writer AI; background as a frontend engineer and technical founder with production systems shipped (project name: Pluto).
+- Deep experience in agent reliability, observability tooling, and building interfaces that make complex/opaque agent systems legible to users.
+- Communication preference: practical and efficiency-oriented, strong preference for directness.
+- Teaching preference: ELI5-style explanations grounded in real-world examples; pushes back on imprecise or jargon-heavy explanations.
+- Studied distributed-systems fundamentals (CAP theorem, replication, sharding, queues, caching, load balancing, SQL vs NoSQL), RAG pipelines, multi-tenancy isolation, auth/SSO, LLM evaluation, and scaling considerations.
+- Tech stack preference: TypeScript and React for anything he iterates on himself; interest in practical bash/CLI tooling.
+- Side project (Pluto-related): an "agent execution map" — a nodes-and-paths visualization making agent behavior legible to builders, built and validated using production traces from his workflow builder. Finding from that work: bounded agents cluster into a few dominant path shapes; failure-rate-above-baseline per node was judged the most actionable signal.
+- Side project: "entitlement recovery" — helping people claim money they're legally owed but haven't collected, scoped initially to himself and his personal network; the scoring model weights total dollar value of one-time entitlements over frequency.
+- Completed a work trial at Level, a fintech company using AI to help auto lenders reclaim money from undervalued total-loss insurance claims.
+
 ### Never ask clarifying questions just act
 
 *Jeffrey wants agents to act on ambiguous or incomplete reports (e.g. \"this looks fucked\") rather than stopping to ask for a screenshot or clarification*

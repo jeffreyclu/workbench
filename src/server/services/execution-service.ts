@@ -180,6 +180,31 @@ export class ExecutionService {
     });
   }
 
+  /**
+   * Backstop for `shared_messages` that reach `queued` and are never claimed
+   * (dispatch died between insert and claim, test tooling created the row
+   * directly, an invalid `dispatch_target`, etc). Queued rows never receive a
+   * lease, so `reclaimExpired`'s lease-expiry check can't see them, and
+   * `hasLiveWork()` counts any queued codex/claude message with no timeout —
+   * one orphaned row blocks every runtime promotion forever (see the
+   * 2026-08-25 incident in docs/shared-memory/workbench-operating-practices.md).
+   * The grace period is long relative to `reclaimExpired`'s because a queued
+   * codex/claude message can legitimately wait several minutes for a busy
+   * agent to free up; only a row idle far longer than that is orphaned.
+   */
+  reclaimOrphanedQueuedMessages(graceMs = 15 * 60_000): { canceledMessageIds: string[] } {
+    return this.unitOfWork.transaction(() => {
+      const now = new Date().toISOString();
+      const cutoff = new Date(Date.now() - graceMs).toISOString();
+      const orphaned = this.database.prepare(`SELECT id FROM shared_messages
+        WHERE status = 'queued' AND author IN ('codex', 'claude') AND created_at <= ?`).all(cutoff) as Array<{ id: string }>;
+      for (const message of orphaned) {
+        this.database.prepare(`UPDATE shared_messages SET status = 'canceled', error = 'Orphaned queued message auto-canceled: never claimed or dispatched.', completed_at = ? WHERE id = ?`).run(now, message.id);
+      }
+      return { canceledMessageIds: orphaned.map(({ id }) => id) };
+    });
+  }
+
   listRunningPromotionMessageIds(): string[] {
     return (this.database.prepare(`SELECT id FROM shared_messages
       WHERE author = 'system' AND dispatch_target = 'promotion' AND status = 'running'

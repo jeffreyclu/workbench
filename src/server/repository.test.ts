@@ -1095,6 +1095,7 @@ describe('WorkItemRepository', () => {
     cancelSharedReply(repository, reply.id);
 
     expect(repository.getRun(run.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
+    expect(repository.isCancellationRequested(run.id)).toBe(true);
     expect(repository.listSharedMessages(100, null, conversation.id).messages.find((message) => message.id === reply.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
   });
 
@@ -1609,6 +1610,41 @@ describe('WorkItemRepository', () => {
 
       repository.updateSharedMessage(message.id, { status: 'completed' });
       expect(repository.hasLiveWork()).toBe(false);
+    });
+
+    it('reclaimOrphanedQueuedMessages cancels a queued codex/claude message that has aged past the grace period, freeing hasLiveWork', () => {
+      const conversation = repository.createConversation();
+      const message = repository.createSharedMessage('codex', '', 'queued', conversation.id);
+      database.prepare("UPDATE shared_messages SET created_at = datetime('now', '-1 hour') WHERE id = ?").run(message.id);
+      expect(repository.hasLiveWork()).toBe(true);
+
+      const result = repository.reclaimOrphanedQueuedMessages(15 * 60_000);
+
+      expect(result.canceledMessageIds).toContain(message.id);
+      expect(repository.getSharedMessageById(message.id)?.status).toBe('canceled');
+      expect(repository.hasLiveWork()).toBe(false);
+    });
+
+    it('reclaimOrphanedQueuedMessages leaves a recently queued codex/claude message untouched', () => {
+      const conversation = repository.createConversation();
+      const message = repository.createSharedMessage('codex', '', 'queued', conversation.id);
+
+      const result = repository.reclaimOrphanedQueuedMessages(15 * 60_000);
+
+      expect(result.canceledMessageIds).not.toContain(message.id);
+      expect(repository.getSharedMessageById(message.id)?.status).toBe('queued');
+      expect(repository.hasLiveWork()).toBe(true);
+    });
+
+    it('reclaimOrphanedQueuedMessages never touches a queued jeffrey dispatch message, however old', () => {
+      const conversation = repository.createConversation();
+      const message = repository.createSharedMessage('jeffrey', 'Dispatch request', 'queued', conversation.id);
+      database.prepare("UPDATE shared_messages SET created_at = datetime('now', '-1 hour') WHERE id = ?").run(message.id);
+
+      const result = repository.reclaimOrphanedQueuedMessages(15 * 60_000);
+
+      expect(result.canceledMessageIds).not.toContain(message.id);
+      expect(repository.getSharedMessageById(message.id)?.status).toBe('queued');
     });
   });
 

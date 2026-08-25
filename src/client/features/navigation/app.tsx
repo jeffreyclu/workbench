@@ -127,7 +127,19 @@ export function App() {
   const selectedId = route.name === 'task' ? route.taskId : null;
   const animateTaskExit = (id: string) => new Promise<void>((resolve) => {
     setExitingTaskIds((current) => new Set(current).add(id));
-    window.setTimeout(resolve, 560);
+    window.setTimeout(() => {
+      // The item is gone from the active query results by now (or is about to
+      // be), but if it comes back later — e.g. Undo restoring an archived
+      // task — this class must not still be attached, or the animation's
+      // `both` fill-mode keeps it hidden until a full page reload.
+      setExitingTaskIds((current) => {
+        if (!current.has(id)) return current;
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+      resolve();
+    }, 560);
   });
   const animateTaskEnter = (id: string) => {
     setEnteringTaskIds((current) => new Set(current).add(id));

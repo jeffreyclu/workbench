@@ -375,3 +375,12 @@ both retrieve and present up to eight bounded matches, replacing the prior
 shared-room cap of three that made the badge uninformative. Decision from
 Jeffrey, 2026-08-25.
 `vitest run` 837/837 passing.
+
+### Agent cancellation must be visible and authoritative
+
+*Decision from Jeffrey, 2026-08-25.* Active conversation replies need an
+explicit, touch-safe **Cancel** control — not a tiny unlabeled close icon.
+Cancelling a task-linked reply must use the durable agent-run cancellation
+protocol, so a runner owned by another process receives the cancellation
+request and terminates its CLI process tree instead of merely changing the
+message's displayed status.

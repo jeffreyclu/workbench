@@ -169,6 +169,21 @@ rendered content before a stable terminal measurement must use live flow.
 
 ## Stale responsive overrides survive UI convention changes — check media queries when a "fixed" style regresses
 
+### Restoring a control must not turn it into a large text CTA
+
+*Correction from Jeffrey, 2026-08-25.* When restoring a missing agent-run
+cancel control in the shared conversation, keep the original compact icon
+button with an accessible name and title. Do not add visible `Cancel` text or
+apply the 44px mobile text-button treatment just to make it more obvious. The
+functional regression and the visual convention are separate: restore the
+action path, then preserve the established dense header footprint.
+
+### Conversation titles truncate to one line on phones
+
+*Decision from Jeffrey, 2026-08-25.* In the mobile conversation header, keep the
+title to one visual line, ellipsizing overflow. Reserve room for the pinned close
+control so title text never renders underneath it.
+
 2026-08-23: after task-status badges were moved from top-right/inline to `position: absolute; bottom:
 13px; right: 12px` on `.agent-outcome` (styles.css), two old responsive breakpoints (`max-width:
 1200px` and `max-width: 820px`) still forced `.agent-outcome { position: static; ...margin-top: 2px

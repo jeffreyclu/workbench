@@ -68,6 +68,28 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.agent-console .shared-thread .jump-to-latest-button');
     expect(phoneRules).toContain('position: sticky; bottom: 12px;');
   });
+
+  it('keeps the mobile conversation title to one line clear of the close control', () => {
+    const phoneRules = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.conversation-window-actions \{[^}]*\}/)?.[0] ?? '';
+
+    expect(phoneRules).toContain('.agent-console-header .mobile-detail-close { position: absolute; top: 12px; right: 14px; }');
+    expect(phoneRules).toContain('.agent-console-title { flex: 1 1 100%; min-width: 0; max-width: calc(100% - 44px); }');
+    expect(phoneRules).toContain('.agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }');
+  });
+});
+
+describe('phone dialogs', () => {
+  it('bounds the new-task dialog to the visual viewport and makes its content scrollable', () => {
+    const dialogRule = styles.match(/^\.dialog\s*\{[^}]*\}/m)?.[0] ?? '';
+    const phoneRules = styles.slice(styles.lastIndexOf('@media (max-width: 640px)'));
+
+    expect(dialogRule).toContain('max-height: calc(100dvh - 48px)');
+    expect(dialogRule).toContain('overflow-y: auto');
+    expect(dialogRule).toContain('-webkit-overflow-scrolling: touch');
+    expect(phoneRules).toContain('.dialog-backdrop { align-items: start; overflow-y: auto; padding: 12px; }');
+    expect(phoneRules).toContain('.dialog { max-height: calc(100dvh - 24px); margin-block: 0; }');
+    expect(phoneRules).toContain('.add-task-dialog { min-height: 0; }');
+  });
 });
 
 describe('interaction motion', () => {

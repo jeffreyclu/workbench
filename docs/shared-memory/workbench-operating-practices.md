@@ -334,3 +334,25 @@ canceling it unblocks the whole promotion queue immediately. `waitForPromotionSl
 `hasLiveWork()`, so a single orphaned test message can wedge every future promotion indefinitely —
 e2e specs that intentionally create long-"running" messages to test streaming/overlap UI should clean
 them up (or cancel/complete them) in an `afterEach`/`afterAll`, not leave them queued forever.
+
+### Automatic GC backstop for orphaned queued `shared_messages` (follow-up to the incident above)
+
+The 2026-08-25 incident above was fixed by hand (`cancel_conversation_message`) plus a point-fix in
+`ConversationService.setArchived()`. Neither generalizes: any future path that inserts a
+`shared_messages` row with `author IN ('codex','claude')` and `status = 'queued'` that never gets
+claimed (crashed dispatch, bad `dispatch_target`, new test tooling) reproduces the same
+promotion-blocking bug, since `reclaimExpired()` only ever resets *leased* (`running`) rows — a
+`queued` row has no lease and is invisible to it, and `waitForPromotionSlot()` still has no timeout.
+
+Added `ExecutionService.reclaimOrphanedQueuedMessages(graceMs = 15 * 60_000)` (facade:
+`repository.reclaimOrphanedQueuedMessages()`), wired into `scheduler.ts`'s 5s `tick` alongside the
+existing `reclaimExpired()`/`surfaceStrandedRuns()` calls. It cancels any `shared_messages` row with
+`status = 'queued'`, `author IN ('codex','claude')`, and `created_at` older than the grace period,
+setting `status = 'canceled'` (not `'failed'` — the row never started, so there's no interrupted work
+to report). The grace period is 5x `reclaimExpired`'s 3-minute default because a legitimately queued
+codex/claude message can wait several minutes for a busy agent to free up in `dispatchNextSharedTurn`;
+only a row idle far longer than that is actually orphaned. `jeffrey`-authored queued dispatch rows are
+untouched by design — they aren't in `hasLiveWork()`'s filter and already get retried via
+`dispatchNextSharedTurn`'s `finally`-block calls. Tests in `repository.test.ts` cover: an aged
+codex/claude queued row gets canceled and `hasLiveWork()` flips false; a fresh one is left alone; a
+`jeffrey` row is never touched regardless of age.

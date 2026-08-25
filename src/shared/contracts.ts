@@ -692,6 +692,12 @@ export interface SharedMessage {
 }
 
 export interface SharedAttachment { name: string; path: string; mimeType: string; size: number; }
+
+/** The exact RAG query and matches behind a reply's retrievedMemoryCount, fetched on demand when the memory badge is clicked. */
+export interface RetrievedMemoryDetail {
+  query: string;
+  items: Array<{ source: string; title: string; body: string; createdAt: string }>;
+}
 export interface PublishedArtifact { id: string; url: string; title: string; }
 
 // --- Artifact library -------------------------------------------------------

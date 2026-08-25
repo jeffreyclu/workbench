@@ -388,6 +388,35 @@ describe('shared room', () => {
     expect(await screen.findByTitle('Pinned task')).toBeTruthy();
   });
 
+  it('keeps an icon-only cancel control on a running conversation reply and sends its cancellation request', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000208';
+    const replyId = '00000000-0000-4000-8000-000000000209';
+    let canceled = false;
+    const conversation = { id: conversationId, title: 'Cancelable reply', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const runningReply = { id: replyId, conversationId, author: 'codex', body: 'Working on it.', pinned: false, status: 'running', error: '', createdAt: '2026-01-01T00:00:00Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'none' };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/shared/messages/${replyId}/cancel` && init?.method === 'POST') {
+        canceled = true;
+        return new Response(JSON.stringify({ message: { ...runningReply, status: 'canceled' } }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [{ ...runningReply, status: canceled ? 'canceled' : 'running' }] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ conversation }), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    const cancel = await screen.findByRole('button', { name: 'Cancel response' });
+    expect(cancel).toHaveTextContent('');
+    fireEvent.click(cancel);
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === `/api/shared/messages/${replyId}/cancel` && init?.method === 'POST')).toBe(true));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel response' })).toBeNull());
+  });
+
   it('uses the linked task project color in the conversation stack', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000109';

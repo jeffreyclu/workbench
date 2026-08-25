@@ -71,6 +71,16 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
         );
       }
       repository.surfaceStrandedRuns();
+      const { canceledMessageIds } = repository.reclaimOrphanedQueuedMessages();
+      if (canceledMessageIds.length) {
+        repository.logDiagnostic(
+          'scheduler_tick',
+          'scheduler',
+          'success',
+          `Canceled ${canceledMessageIds.length} orphaned queued shared message(s) that were never claimed.`,
+          Date.now() - start,
+        );
+      }
       // This only creates a queued run. The loop below claims and executes it
       // through the same durable scheduler path used by manual work.
       dispatchAutonomousWork(repository);

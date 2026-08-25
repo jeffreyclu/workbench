@@ -52,6 +52,7 @@ const EXPECTED_MIGRATIONS = [
   '039_shared_message_retrieved_memory_count',
   '040_shared_messages_conversation_author_created_index',
   '041_work_item_attachments',
+  '042_shared_message_retrieved_memory_detail',
 ];
 
 describe('openDatabase', () => {
@@ -195,6 +196,20 @@ describe('openDatabase', () => {
     const upgraded = openDatabase(path);
     const columns = upgraded.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>;
     expect(columns.map((column) => column.name)).toContain('attachments_json');
+    upgraded.close();
+  });
+
+  it('adds the retrieved-memory-detail column when upgrading from migration 041', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE shared_messages DROP COLUMN retrieved_memory_detail_json;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '042_shared_message_retrieved_memory_detail'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toContain('retrieved_memory_detail_json');
     upgraded.close();
   });
 

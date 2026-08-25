@@ -183,6 +183,12 @@ export function createConversationRouter({ repository, database, capabilities }:
     response.json({ message });
   });
 
+  router.get('/api/shared/messages/:id/retrieved-memory', (request, response) => {
+    const message = repository.getSharedMessageById(request.params.id);
+    if (!message) return response.status(404).json({ error: 'Shared message not found.' });
+    response.json({ detail: repository.getRetrievedMemoryDetail(request.params.id) });
+  });
+
   router.post('/api/shared/messages/:id/cancel', (request, response) => {
     const message = cancelSharedReply(repository, request.params.id);
     if (!message) return response.status(404).json({ error: 'Running or queued message not found.' });

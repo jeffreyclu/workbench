@@ -599,7 +599,7 @@ export class WorkItemRepository {
     return this.getSharedMessageById(id);
   }
 
-  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; accountProfile?: string | null; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; estimatedCostUsd?: number | null; costSource?: SharedMessage['costSource']; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null; retrievedMemoryCount?: number | null }): SharedMessage | null {
+  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; accountProfile?: string | null; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; estimatedCostUsd?: number | null; costSource?: SharedMessage['costSource']; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null; retrievedMemoryCount?: number | null; retrievedMemoryDetail?: { query: string; items: Array<{ source: string; title: string; body: string; createdAt: string }> } | null }): SharedMessage | null {
     // A retry reuses the same message row. Never let the error from the prior
     // attempt survive a successful or user-canceled terminal transition.
     const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
@@ -607,11 +607,18 @@ export class WorkItemRepository {
       pinned: changes.pinned === undefined ? undefined : Number(changes.pinned),
       body: changes.body, status: changes.status, error, author: changes.author, model: changes.model, account_profile: changes.accountProfile, execution_profile: changes.executionProfile,
       input_tokens: changes.inputTokens, cache_creation_input_tokens: changes.cacheCreationInputTokens, cache_read_input_tokens: changes.cacheReadInputTokens, output_tokens: changes.outputTokens, estimated_cost_usd: changes.estimatedCostUsd, cost_source: changes.costSource, fallback_from: changes.fallbackFrom, fallback_reason: changes.fallbackReason, retrieved_memory_count: changes.retrievedMemoryCount,
+      retrieved_memory_detail_json: changes.retrievedMemoryDetail === undefined ? undefined : changes.retrievedMemoryDetail === null ? null : JSON.stringify(changes.retrievedMemoryDetail),
       completed_at: changes.completedAt ?? (changes.status && ['completed', 'failed', 'canceled'].includes(changes.status) ? new Date().toISOString() : undefined),
-    }).filter((entry): entry is [string, string | number] => entry[1] !== undefined);
+    }).filter((entry): entry is [string, string | number | null] => entry[1] !== undefined);
     if (entries.length) this.database.prepare(`UPDATE shared_messages SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE id = ?`)
       .run(...entries.map(([, value]) => value), id);
     return this.getSharedMessageById(id);
+  }
+
+  getRetrievedMemoryDetail(id: string): { query: string; items: Array<{ source: string; title: string; body: string; createdAt: string }> } | null {
+    const row = this.database.prepare('SELECT retrieved_memory_detail_json FROM shared_messages WHERE id = ?').get(id) as { retrieved_memory_detail_json: string | null } | undefined;
+    if (!row?.retrieved_memory_detail_json) return null;
+    return JSON.parse(row.retrieved_memory_detail_json);
   }
 
   /**
@@ -1715,6 +1722,11 @@ export class WorkItemRepository {
    */
   reclaimExpired(graceMs = 3 * 60_000): { recoveredRunIds: string[]; failedRunIds: string[]; recoveredMessageIds: string[] } {
     return this.execution.reclaimExpired(graceMs);
+  }
+
+  /** See `ExecutionService.reclaimOrphanedQueuedMessages` for why this backstop exists. */
+  reclaimOrphanedQueuedMessages(graceMs = 15 * 60_000): { canceledMessageIds: string[] } {
+    return this.execution.reclaimOrphanedQueuedMessages(graceMs);
   }
 
   /**
