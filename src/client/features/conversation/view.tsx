@@ -1011,7 +1011,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                 </a>
               ))}</div>}
               {message.error && <p className="error-message">{message.error}</p>}
-              {message.status === 'completed' && message.author !== 'jeffrey' && message.author !== 'system' && <div className="message-actions"><button onClick={() => createTasks.mutate({ messageId: message.id, conversationId: conversationId! })} disabled={createTasks.isPending && createTasks.variables?.conversationId === conversationId}>{createTasks.isPending && createTasks.variables?.messageId === message.id && createTasks.variables.conversationId === conversationId ? <><LoaderCircle className="spin" size={12} /> Extracting findings…</> : <><Plus size={12} /> Turn findings into tasks</>}</button></div>}
+              {message.status === 'completed' && message.author !== 'jeffrey' && (message.author !== 'system' || message.body.startsWith('Synthesis:')) && <div className="message-actions"><button onClick={() => createTasks.mutate({ messageId: message.id, conversationId: conversationId! })} disabled={createTasks.isPending && createTasks.variables?.conversationId === conversationId}>{createTasks.isPending && createTasks.variables?.messageId === message.id && createTasks.variables.conversationId === conversationId ? <><LoaderCircle className="spin" size={12} /> Extracting findings…</> : <><Plus size={12} /> Turn findings into tasks</>}</button></div>}
             </article>
             </div>;
           })}

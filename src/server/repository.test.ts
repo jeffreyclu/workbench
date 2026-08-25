@@ -1048,8 +1048,8 @@ describe('WorkItemRepository', () => {
     const conversation = repository.createConversation('Concurrent retrieval');
     repository.createSharedMessage('jeffrey', 'The durable fact has several relevant details.', 'completed', conversation.id);
     repository.createSharedMessage('jeffrey', 'Continue the durable fact investigation.', 'queued', conversation.id, [], 'both');
-    const matches = Array.from({ length: 4 }, (_, index) => ({
-      source: 'message', title: `Relevant ${index + 1}`, body: `Durable detail ${index + 1}`, createdAt: '2026-08-25T00:00:00.000Z', score: 0.03 - index * 0.001,
+    const matches = Array.from({ length: 12 }, (_, index) => ({
+      source: 'message', title: `Relevant ${index + 1}`, body: `Durable detail ${index + 1}: ${'evidence '.repeat(24)}`, createdAt: '2026-08-25T00:00:00.000Z', score: 0.03 - index * 0.001,
     }));
     const retrieval = vi.spyOn(repository, 'searchActivityMemory').mockResolvedValue(matches);
     const previousPath = process.env.PATH;
@@ -1062,11 +1062,13 @@ describe('WorkItemRepository', () => {
         if (Date.now() > deadline) throw new Error('Timed out waiting for concurrent replies.');
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
-      expect(retrieval).toHaveBeenCalledTimes(1);
+      expect(retrieval).toHaveBeenCalledOnce();
+      expect(retrieval).toHaveBeenCalledWith('Continue the durable fact investigation.', 40);
       expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(expect.arrayContaining(['claude', 'codex']));
+      const expectedTitles = matches.map((match) => match.title);
       expect(replies.map((reply) => repository.getRetrievedMemoryDetail(reply.id)?.items.map((item) => item.title))).toEqual([
-        ['Relevant 1', 'Relevant 2', 'Relevant 3', 'Relevant 4'],
-        ['Relevant 1', 'Relevant 2', 'Relevant 3', 'Relevant 4'],
+        expectedTitles,
+        expectedTitles,
       ]);
     } finally {
       process.env.PATH = previousPath;
