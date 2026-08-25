@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -45,6 +45,9 @@ function pruneOldSnapshots(): void {
   for (const file of files.slice(KEEP_COUNT)) unlinkSync(file);
 }
 
+const CHUNK_PREFIX = 'latest.db.gz.part';
+const CHUNK_SIZE_MB = 90; // stay well under GitHub's 100 MB per-file limit
+
 function pushOffsite(snapshotPath: string): void {
   const workdir = mkdtempSync(resolve(tmpdir(), 'workbench-backup-'));
   try {
@@ -57,8 +60,29 @@ function pushOffsite(snapshotPath: string): void {
     } catch {
       git('checkout', '-q', '-b', BACKUP_BRANCH);
     }
-    execFileSync('cp', [snapshotPath, resolve(workdir, 'latest.db')]);
-    git('add', 'latest.db');
+    // GitHub hard-rejects any single blob over 100 MB, and the DB has already outgrown
+    // that once. Compress, then split into fixed-size chunks so no single pushed file
+    // can cross the limit no matter how large the source database grows.
+    copyFileSync(snapshotPath, resolve(workdir, 'latest.db'));
+    // The remote checkout already contains the prior latest.db.gz; replace it.
+    execFileSync('gzip', ['-9', '-f', 'latest.db'], { cwd: workdir, stdio: 'pipe' });
+    execFileSync(
+      'split',
+      ['-d', '-a', '4', '-b', `${CHUNK_SIZE_MB}m`, 'latest.db.gz', CHUNK_PREFIX],
+      { cwd: workdir, stdio: 'pipe' },
+    );
+    unlinkSync(resolve(workdir, 'latest.db.gz'));
+    git('rm', '--ignore-unmatch', '-q', 'latest.db', 'latest.db.gz');
+    for (const name of readdirSync(workdir)) {
+      // Backup repositories commonly ignore generated archives. These chunk files
+      // are the intentional restore artifact, so stage them explicitly.
+      if (name.startsWith(CHUNK_PREFIX)) git('add', '-f', name);
+    }
+    // Remove any leftover chunks from a previous, larger backup that this snapshot no
+    // longer needs (e.g. the DB shrank after a vacuum/prune).
+    for (const name of git('ls-files').toString().split('\n')) {
+      if (name.startsWith(CHUNK_PREFIX) && !readdirSync(workdir).includes(name)) git('rm', '-q', name);
+    }
     git('-c', 'user.email=backup@workbench.local', '-c', 'user.name=Workbench Backup', 'commit', '-q', '-m', `Snapshot ${timestamp()}`, '--allow-empty');
     git('push', '-q', 'origin', `HEAD:${BACKUP_BRANCH}`);
   } finally {

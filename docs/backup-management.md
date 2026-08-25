@@ -6,7 +6,7 @@ Every 4 hours, launchd runs `scripts/backup.ts`:
 
 1. Snapshots the live SQLite database (`data/workbench.db`) with `VACUUM INTO` into `data/backups/`.
 2. Redacts `source_connections.settings_json` (Atlassian, GitHub, Slack, Figma tokens) to `{"redacted":true}`.
-3. Pushes the redacted snapshot as `latest.db` to the private GitHub repo [`jeffreyclu/workbench-backups`](https://github.com/jeffreyclu/workbench-backups) — separate from the public `workbench` repo.
+3. Compresses the redacted snapshot and splits it into 90 MB chunks (`latest.db.gz.part0000`, `part0001`, ...), pushed to the private GitHub repo [`jeffreyclu/workbench-backups`](https://github.com/jeffreyclu/workbench-backups) — separate from the public `workbench` repo. GitHub hard-rejects any single blob over 100 MB; chunking keeps every pushed file under that limit no matter how large the database grows.
 
 Local snapshots in `data/backups/` are kept for the last 20 runs (~3.3 days at 4h cadence) and pruned after that. The offsite copy keeps full history as git commits.
 
@@ -56,4 +56,4 @@ rm ~/Library/LaunchAgents/com.jeffrey.workbench.backup.plist
 git clone https://github.com/jeffreyclu/workbench-backups /tmp/workbench-backups-check
 ls /tmp/workbench-backups-check
 ```
-or browse github.com/jeffreyclu/workbench-backups — each push is a commit, so history = restore points.
+or browse github.com/jeffreyclu/workbench-backups — each push is a commit, so history = restore points. Reassemble and decompress an offsite restore point before using it: `cat latest.db.gz.part* > latest.db.gz && gzip -dk latest.db.gz`.
