@@ -275,8 +275,29 @@ describe('shared room', () => {
 
     expect(await screen.findByText('You interjected')).toBeTruthy();
     expect(screen.getByText('Interjected')).toBeTruthy();
-    expect(screen.getAllByText('aada')).toHaveLength(2);
-    expect(screen.getByRole('button', { name: 'Queue' })).toBeTruthy();
+    expect(screen.getAllByText('aada')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Queue' })).toBeNull();
+  });
+
+  it('plays the exit state before removing a canceled queued draft', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000112';
+    const queuedDraft = { id: 'queued-draft', conversationId, author: 'jeffrey', body: 'Do this after the active response.', pinned: false, status: 'queued', error: '', createdAt: '2026-01-01T00:00:00Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'codex', queuePriority: 0 };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Cancel queued draft', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.endsWith('/queued-draft/cancel')) return new Response(JSON.stringify({ message: { ...queuedDraft, status: 'canceled' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages: [queuedDraft] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel queued message' }));
+
+    expect(document.querySelector('.shared-message-exiting')).toBeTruthy();
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/queued-draft/cancel') && init?.method === 'POST')).toBe(true));
   });
 
   it('keeps the interjected chip on the reply after it completes', async () => {
@@ -1089,7 +1110,7 @@ describe('shared room', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/interject'))).toBe(false);
   });
 
-  it('queues an ordinary composer message without interjecting', async () => {
+  it('sends an ordinary composer message without exposing a separate Queue action', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000027';
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1107,10 +1128,11 @@ describe('shared room', () => {
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [new File(['queued message'], 'queued.txt', { type: 'text/plain' })] } });
     await screen.findByText('queued.txt');
-    fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === '/api/shared/messages' && init?.method === 'POST')).toBe(true));
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/interject'))).toBe(false);
+    expect(screen.queryByRole('button', { name: 'Queue' })).toBeNull();
   });
 
   it('resolves an archived conversation that is not on the loaded page via a detail lookup', async () => {

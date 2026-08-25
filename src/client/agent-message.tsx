@@ -139,6 +139,29 @@ export function LiveRunOutput({ output, interjections = [] }: { output: string; 
   );
 }
 
+export interface AgentMessageInterjection { id: string; body: string; pending: boolean; streamOffset?: number | null }
+
+// A completed reply that was steered mid-stream reads as one continuous
+// answer even though Jeffrey's input landed partway through it. Splitting at
+// the server-recorded block offsets turns that into the same before/after
+// shape the live activity view already shows while the agent is running.
+export function splitBodyAtInterjections(body: string, interjections: AgentMessageInterjection[]): Array<{ body: string; precedingInterjection: AgentMessageInterjection | null }> {
+  const boundaries = interjections
+    .filter((interjection): interjection is AgentMessageInterjection & { streamOffset: number } => interjection.streamOffset != null)
+    .sort((a, b) => a.streamOffset - b.streamOffset);
+  if (boundaries.length === 0) return [{ body, precedingInterjection: null }];
+  const blocks = humanizeRunOutputBlocks(body);
+  const segments: Array<{ body: string; precedingInterjection: AgentMessageInterjection | null }> = [];
+  let cursor = 0;
+  boundaries.forEach((interjection, index) => {
+    const offset = Math.max(cursor, Math.min(interjection.streamOffset, blocks.length));
+    segments.push({ body: blocks.slice(cursor, offset).join('\n\n'), precedingInterjection: index === 0 ? null : boundaries[index - 1] });
+    cursor = offset;
+  });
+  segments.push({ body: blocks.slice(cursor).join('\n\n'), precedingInterjection: boundaries[boundaries.length - 1] });
+  return segments.filter((segment) => segment.body.length > 0);
+}
+
 export function AgentMessageBody({ body, running, conversationId, workItemId, interjections, detailForSingle = false }: { body: string; running: boolean; conversationId?: string; workItemId?: string; interjections?: Array<{ id: string; body: string; pending: boolean; streamOffset?: number | null }>; detailForSingle?: boolean }) {
   const sectionIdPrefix = useId();
   const humanized = running ? humanizeRunOutput(body) : body;

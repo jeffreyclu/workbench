@@ -1,5 +1,20 @@
 ## Workbench frontend lessons
 
+### Conversation telemetry badges size to their content
+
+*Decision from Jeffrey, 2026-08-25.* The blue model/telemetry badge in a
+conversation bubble header is content-sized, not a fixed or full-row control.
+It may shrink and ellipsize only when the bubble cannot accommodate its full
+text; otherwise its pill boundary should end at the content.
+
+### Dual agent replies size independently
+
+*Decision from Jeffrey, 2026-08-25.* When Codex and Claude replies render
+side-by-side, each bubble starts at its intrinsic content height. Keep the
+pair's flex columns top-aligned (`align-items: flex-start`) and do not apply
+`height: 100%` to either bubble; longer streamed output may grow its own
+column without adding empty space to the other.
+
 ### Interactive details need an in-app tooltip, not a native `title`
 
 *Confirmed 2026-08-25.* Browser-native `title` text is not a reliable details

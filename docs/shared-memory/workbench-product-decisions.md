@@ -37,12 +37,12 @@ second/parallel agent reply. Cancellation remains an explicit, separate
 action. The prior implementation that allowed busy agents was rejected because
 it visibly opened a parallel thread instead of steering the live one.
 
-### Queue is an explicit, labeled composer action
+### The composer has one Send action; Queue is not a control
 
-*Decision from Jeffrey, 2026-08-25.* The composer must expose a visible **Queue**
-button in addition to Send. Queue creates a normal next-turn message; it never
-interjects into a live run. Interject remains the explicit action on an already
-queued message.
+*Decision from Jeffrey, 2026-08-25, superseding the earlier Queue-control
+decision.* Remove the composer **Queue** button. **Send** creates the normal
+next-turn message. Interject remains an explicit action on an already queued
+message.
 
 ### Parallel agent replies remain individually retryable
 
@@ -138,6 +138,15 @@ history. For non-Workbench work, useful results therefore depend on that work
 having been recorded back into Workbench; this is an ingestion-coverage gap,
 not evidence of a different retrieval algorithm or a Workbench-only ranking
 path.
+
+### Global search opens as an overlay and exposes result caps
+
+*Decision from Jeffrey, 2026-08-25.* **Search everything** opens from its
+search icon into a centered overlay, with the search field at the top and
+results beneath it. Do not return to a sidebar-attached dropdown: it can be
+clipped or sit behind the workspace. Hybrid-memory search must never silently
+truncate its visible result cap; state how many results are shown and provide
+an explicit way to load the next set when more ranked matches exist.
 
 ### Agent conversations are visual, not text walls
 

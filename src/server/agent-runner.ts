@@ -1345,6 +1345,32 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
   };
 }
 
+/**
+ * A task's kind is classified once at creation, but a linked conversation keeps
+ * taking new requests. Re-infer intent from what Jeffrey actually asks in each
+ * turn instead of forcing every reply through the task's original kind. Returns
+ * null when the message carries no clear deliverable signal (short follow-ups
+ * like "yes" or "why?"), so callers should fall back to the stored classification.
+ */
+export function classifyMessageIntent(message: string): AgentRun['kind'] | null {
+  const text = message.toLowerCase();
+  if (!text.trim()) return null;
+  const explicitCodeReview = /\bcode review\b/.test(text)
+    || /\breview\b[^\n.!?]{0,80}\b(?:pr|pull request|diff|patch|code changes?|implementation)\b/.test(text)
+    || /\b(?:pr|pull request|diff|patch)\b[^\n.!?]{0,40}\breview\b/.test(text);
+  const implementation = /\b(implement|build|code|fix|debug|refactor|test|edit|update|reduce|trim|rewrite|remove|add|change|create|write|publish|deploy|install|configure|connect|move|rename|delete|archive|restore|enable|disable|convert|migrate|upgrade|replace|clean|automate|expose)\b/.test(text);
+  const documentStrategy = /\b(spec|rfc|technical document|design doc|proposal|plan|strategy)\b/.test(text)
+    && /\b(plan|draft|write|create|produce|author|revise|define|spec|rfc|proposal|scope|design)\b/.test(text);
+  const research = /\b(research|investigate|explore|compare|evaluate)\b/.test(text);
+  const analysis = /\b(explain|summarize|describe|organize|discuss|assess)\b/.test(text);
+  if (explicitCodeReview && !implementation) return 'review';
+  if (documentStrategy && !implementation) return 'strategy';
+  if (implementation) return 'execute';
+  if (research) return 'research';
+  if (analysis) return 'analysis';
+  return null;
+}
+
 export function classificationForKind(item: WorkItem, kind: AgentRun['kind']): ReturnType<typeof classifyExecution> {
   let agent: AgentRun['agent'] = kind === 'execute' || kind === 'review' ? 'codex' : 'claude';
   if (kind === 'execute' && isDocumentWork(item)) agent = 'claude';

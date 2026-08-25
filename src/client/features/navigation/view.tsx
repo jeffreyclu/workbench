@@ -14,38 +14,42 @@ import { useDebouncedValue } from '../conversation/hooks';
 
 export type NavigationViewName = 'active' | 'workbench' | 'archive' | 'artifacts' | 'context' | 'discovery' | 'insights';
 
+const GLOBAL_SEARCH_RESULT_LIMIT = 20;
+const GLOBAL_SEARCH_MAX_RESULTS = 100;
+
 export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: MemorySearchResult) => void }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
+  const [resultLimit, setResultLimit] = useState(GLOBAL_SEARCH_RESULT_LIMIT);
   const [activeResultIndex, setActiveResultIndex] = useState(-1);
   const debouncedQuery = useDebouncedValue(query.trim(), 300);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const results = useQuery({
-    queryKey: ['global-memory-search', debouncedQuery],
-    queryFn: () => api.searchMemory(debouncedQuery, 20),
-    enabled: debouncedQuery.length > 0,
+    queryKey: ['global-memory-search', debouncedQuery, resultLimit],
+    queryFn: () => api.searchMemory(debouncedQuery, resultLimit),
+    enabled: open && debouncedQuery.length > 0,
   });
-  useEffect(() => {
-    function handlePointerDown(event: PointerEvent) {
-      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
-    }
-    document.addEventListener('pointerdown', handlePointerDown);
-    return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, []);
-  const selectableResults = results.data?.results.filter((result) => Boolean(result.conversationId || result.workItemId)) ?? [];
+  const visibleResults = results.data?.results ?? [];
+  const selectableResults = visibleResults.filter((result) => Boolean(result.conversationId || result.workItemId));
   useEffect(() => {
     setActiveResultIndex(-1);
-  }, [debouncedQuery, results.data]);
-  function selectResult(result: MemorySearchResult) {
-    onSelectResult(result);
+    setResultLimit(GLOBAL_SEARCH_RESULT_LIMIT);
+  }, [debouncedQuery]);
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open]);
+  function closeOverlay() {
     setQuery('');
     setOpen(false);
+    setActiveResultIndex(-1);
+  }
+  function selectResult(result: MemorySearchResult) {
+    onSelectResult(result);
+    closeOverlay();
   }
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === 'Escape') {
-      setQuery('');
-      setOpen(false);
-      setActiveResultIndex(-1);
+      closeOverlay();
       return;
     }
     if (event.key === 'Enter' && activeResultIndex >= 0) {
@@ -59,52 +63,73 @@ export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: Memo
       ? Math.min(current + 1, selectableResults.length - 1)
       : Math.max(current === -1 ? selectableResults.length - 1 : current - 1, 0));
   }
-  return <div className="global-search" ref={containerRef}>
-    <div className="search-box">
+  return <div className="global-search">
+    <button type="button" className="icon-button global-search-trigger" aria-label="Search everything" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
       <Search size={15} />
-      <input
-        aria-label="Search everything"
-        aria-autocomplete="list"
-        aria-controls="global-search-results"
-        aria-activedescendant={activeResultIndex >= 0 ? `global-search-result-${activeResultIndex}` : undefined}
-        aria-expanded={open && Boolean(debouncedQuery)}
-        role="combobox"
-        value={query}
-        onChange={(event) => { setQuery(event.target.value); setOpen(true); setActiveResultIndex(-1); }}
-        onFocus={() => setOpen(true)}
-        onKeyDown={handleKeyDown}
-        placeholder="Search everything…"
-      />
-      {query && <button type="button" className="icon-button" aria-label="Clear search" onClick={() => setQuery('')}><X size={13} /></button>}
-    </div>
-    {open && debouncedQuery && (
-      <div id="global-search-results" className="global-search-results" role="listbox">
-        {results.isLoading && <GlobalSearchResultSkeleton />}
-        {results.isError && <div className="page-state error-message">Search failed. <button className="button secondary compact" onClick={() => results.refetch()}>Retry</button></div>}
-        {!results.isLoading && !results.isError && (results.data?.results.length ?? 0) === 0 && (
-          <div className="page-state">No matches for “{debouncedQuery}”.</div>
-        )}
-        {results.data?.results.map((result) => {
-          const canOpen = Boolean(result.conversationId || result.workItemId);
-          const selectableIndex = selectableResults.indexOf(result);
-          const Tag = canOpen ? 'button' : 'div';
-          return <Tag
-            key={`${result.source}-${result.sourceId}`}
-            id={canOpen ? `global-search-result-${selectableIndex}` : undefined}
-            className="global-search-result"
-            aria-selected={canOpen ? selectableIndex === activeResultIndex : undefined}
-            role={canOpen ? 'option' : undefined}
-            onClick={canOpen ? () => selectResult(result) : undefined}
-          >
-            <span className="global-search-result-meta">
-              <span className="global-search-result-source">{memorySourceLabel(result.source)}</span>
-              {!canOpen && <span className="global-search-result-preview">Preview only</span>}
-            </span>
-            <strong>{result.title || 'Untitled'}</strong>
-            <small>{result.snippet}</small>
-          </Tag>;
-        })}
-      </div>
+    </button>
+    {open && createPortal(
+      <div
+        className="global-search-overlay"
+        role="presentation"
+        onMouseDown={(event) => { if (event.target === event.currentTarget) closeOverlay(); }}
+      >
+        <div className="global-search-panel" role="dialog" aria-modal="true" aria-label="Search everything">
+          <div className="search-box">
+            <Search size={15} />
+            <input
+              ref={inputRef}
+              aria-label="Search everything"
+              aria-autocomplete="list"
+              aria-controls="global-search-results"
+              aria-activedescendant={activeResultIndex >= 0 ? `global-search-result-${activeResultIndex}` : undefined}
+              aria-expanded={Boolean(debouncedQuery)}
+              role="combobox"
+              value={query}
+              onChange={(event) => { setQuery(event.target.value); setActiveResultIndex(-1); }}
+              onKeyDown={handleKeyDown}
+              placeholder="Search everything…"
+            />
+            {query && <button type="button" className="icon-button" aria-label="Clear search" onClick={() => setQuery('')}><X size={13} /></button>}
+            <button type="button" className="icon-button" aria-label="Close search" onClick={closeOverlay}><X size={13} /></button>
+          </div>
+          {debouncedQuery && (
+            <div id="global-search-results" className="global-search-results" role="listbox">
+              {results.isLoading && <GlobalSearchResultSkeleton />}
+              {results.isError && <div className="page-state error-message">Search failed. <button className="button secondary compact" onClick={() => results.refetch()}>Retry</button></div>}
+              {!results.isLoading && !results.isError && visibleResults.length === 0 && (
+                <div className="page-state">No matches for “{debouncedQuery}”.</div>
+              )}
+              {visibleResults.map((result) => {
+                const canOpen = Boolean(result.conversationId || result.workItemId);
+                const selectableIndex = selectableResults.indexOf(result);
+                const Tag = canOpen ? 'button' : 'div';
+                return <Tag
+                  key={`${result.source}-${result.sourceId}`}
+                  id={canOpen ? `global-search-result-${selectableIndex}` : undefined}
+                  className="global-search-result"
+                  aria-selected={canOpen ? selectableIndex === activeResultIndex : undefined}
+                  role={canOpen ? 'option' : undefined}
+                  onClick={canOpen ? () => selectResult(result) : undefined}
+                >
+                  <span className="global-search-result-meta">
+                    <span className="global-search-result-source">{memorySourceLabel(result.source)}</span>
+                    {!canOpen && <span className="global-search-result-preview">Preview only</span>}
+                  </span>
+                  <strong>{result.title || 'Untitled'}</strong>
+                  <small>{result.snippet}</small>
+                </Tag>;
+              })}
+              {!results.isLoading && !results.isError && visibleResults.length > 0 && <div className="global-search-more-hint">
+                <span>Showing {visibleResults.length} result{visibleResults.length === 1 ? '' : 's'}.</span>
+                {results.data?.hasMore && resultLimit < GLOBAL_SEARCH_MAX_RESULTS && <button type="button" className="button secondary compact" onClick={() => setResultLimit((limit) => Math.min(limit + GLOBAL_SEARCH_RESULT_LIMIT, GLOBAL_SEARCH_MAX_RESULTS))}>Show 20 more</button>}
+                {results.data?.hasMore && resultLimit === GLOBAL_SEARCH_MAX_RESULTS && <span>More matches may exist. Refine your search to narrow them.</span>}
+                {!results.data?.hasMore && <span>All ranked matches shown.</span>}
+              </div>}
+            </div>
+          )}
+        </div>
+      </div>,
+      document.body,
     )}
   </div>;
 }

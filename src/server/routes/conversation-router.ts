@@ -162,7 +162,8 @@ export function createConversationRouter({ repository, database, capabilities }:
     const limit = z.coerce.number().int().min(1).max(100).default(20).parse(request.query.limit);
     const sourceParam = z.string().trim().min(1).optional().parse(request.query.source);
     const sources = sourceParam ? sourceParam.split(',').map((value) => value.trim()).filter(Boolean) : undefined;
-    response.json({ results: await searchMemory(database, query, { limit, sources }) });
+    const matches = await searchMemory(database, query, { limit: limit + 1, sources });
+    response.json({ results: matches.slice(0, limit), hasMore: matches.length > limit });
   });
 
   router.get('/api/shared/messages', (request, response) => {

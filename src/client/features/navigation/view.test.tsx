@@ -13,6 +13,11 @@ function renderSearch(onSelectResult = vi.fn()) {
   return onSelectResult;
 }
 
+function openSearch() {
+  fireEvent.click(screen.getByRole('button', { name: 'Search everything' }));
+  return screen.getByRole('combobox', { name: 'Search everything' });
+}
+
 describe('GlobalSearch', () => {
   it('holds the result-panel shape with skeleton rows while the search is pending', async () => {
     vi.useFakeTimers();
@@ -20,7 +25,7 @@ describe('GlobalSearch', () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { resolveResponse = resolve; })));
     renderSearch();
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Search everything' }), { target: { value: 'handoff' } });
+    fireEvent.change(openSearch(), { target: { value: 'handoff' } });
     await act(async () => { await vi.advanceTimersByTimeAsync(300); });
 
     expect(document.querySelector('.global-search-skeleton')).toBeInTheDocument();
@@ -35,12 +40,12 @@ describe('GlobalSearch', () => {
     }), { headers: { 'Content-Type': 'application/json' } })));
     const onSelectResult = renderSearch();
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Search everything' }), { target: { value: 'mobile' } });
+    fireEvent.change(openSearch(), { target: { value: 'mobile' } });
     expect(await screen.findByText('Fix mobile stack')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('option', { name: /Fix mobile stack/i }));
 
     expect(onSelectResult).toHaveBeenCalledWith(expect.objectContaining({ workItemId: 'task-1' }));
-    expect(screen.getByRole('combobox', { name: 'Search everything' })).toHaveValue('');
+    expect(screen.queryByRole('dialog', { name: 'Search everything' })).not.toBeInTheDocument();
   });
 
   it('labels results without a destination as preview-only and keeps them inert', async () => {
@@ -49,7 +54,7 @@ describe('GlobalSearch', () => {
     }), { headers: { 'Content-Type': 'application/json' } })));
     const onSelectResult = renderSearch();
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Search everything' }), { target: { value: 'context' } });
+    fireEvent.change(openSearch(), { target: { value: 'context' } });
 
     expect(await screen.findByText('Preview only')).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /Background context/i })).not.toBeInTheDocument();
@@ -66,7 +71,7 @@ describe('GlobalSearch', () => {
       ],
     }), { headers: { 'Content-Type': 'application/json' } })));
     const onSelectResult = renderSearch();
-    const input = screen.getByRole('combobox', { name: 'Search everything' });
+    const input = openSearch();
 
     fireEvent.change(input, { target: { value: 'open' } });
     await screen.findByRole('option', { name: /Open task/i });
@@ -78,16 +83,36 @@ describe('GlobalSearch', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
 
     expect(onSelectResult).toHaveBeenCalledWith(expect.objectContaining({ workItemId: 'task-1' }));
-    expect(input).toHaveValue('');
+    expect(screen.queryByRole('dialog', { name: 'Search everything' })).not.toBeInTheDocument();
   });
 
   it('clears and closes its result panel on Escape', async () => {
     renderSearch();
-    const input = screen.getByRole('combobox', { name: 'Search everything' });
+    const input = openSearch();
     fireEvent.change(input, { target: { value: 'mobile' } });
     fireEvent.keyDown(input, { key: 'Escape' });
 
-    expect(input).toHaveValue('');
+    expect(screen.queryByRole('dialog', { name: 'Search everything' })).not.toBeInTheDocument();
     expect(screen.queryByText(/No matches for/)).not.toBeInTheDocument();
+  });
+
+  it('shows that the cap was reached and fetches more ranked results on demand', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const limit = String(input).includes('limit=40') ? 40 : 20;
+      return new Response(JSON.stringify({
+        results: Array.from({ length: limit }, (_, index) => ({ source: 'activity', sourceId: String(index), title: `Result ${index + 1}`, snippet: 'Matching memory.', createdAt: '2026-08-24T00:00:00.000Z', conversationId: null, workItemId: `task-${index}`, actor: null, score: 1 })),
+        hasMore: limit === 20,
+      }), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderSearch();
+    const input = openSearch();
+
+    fireEvent.change(input, { target: { value: 'memory' } });
+    expect(await screen.findByText('Showing 20 results.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show 20 more' }));
+
+    expect(await screen.findByText('Showing 40 results.')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenLastCalledWith(expect.stringContaining('limit=40'), expect.anything());
   });
 });

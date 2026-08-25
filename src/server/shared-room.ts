@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
-import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classifyExecution, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type AgentInputSteering, type RetrievedMemory } from './agent-runner.js';
+import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyMessageIntent, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type AgentInputSteering, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -248,8 +248,18 @@ export function hasUntrackedContinuationClaim(output: string): boolean {
     || /\b(?:subagent|child\s+agent)\b[\s\S]{0,180}\b(?:still\s+running|in\s+progress|finish(?:es|ed)?|complete(?:s|d)?|report)\b/i.test(output);
 }
 
-export function classificationForLinkedItem(repository: WorkItemRepository, item: WorkItem) {
-  return repository.getClassification(item.id) ?? repository.setClassification(item.id, classifyExecution(item));
+/**
+ * A linked task's stored classification reflects intent at creation time, not
+ * whatever Jeffrey is asking for in the current turn. When the current message
+ * carries a clear deliverable signal (e.g. "now implement this" after a research
+ * reply), route this turn on that inferred kind instead of the stale stored one.
+ * Ambiguous or context-dependent turns (short follow-ups) fall back to storage.
+ */
+export function classificationForLinkedItem(repository: WorkItemRepository, item: WorkItem, currentMessage?: string) {
+  const stored = repository.getClassification(item.id) ?? repository.setClassification(item.id, classifyExecution(item));
+  const inferredKind = currentMessage ? classifyMessageIntent(currentMessage) : null;
+  if (!inferredKind || inferredKind === stored.kind) return stored;
+  return { ...classificationForKind(item, inferredKind), reason: `keyword rules: this turn's request reads as ${inferredKind}, overriding the task's original ${stored.kind} classification` };
 }
 
 /** Linked conversations inherit their task workspace rather than the Workbench server cwd. */
@@ -407,9 +417,10 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   const conversation = repository.listConversations().find((item) => item.id === conversationId);
   const linkedItem = conversation?.workItemId ? repository.get(conversation.workItemId) : null;
   // A linked task may predate classification. Use its deterministic routing
-  // instead of treating every chat instruction as generic analysis, and persist
-  // it so later execute/retry paths use the same capability.
-  const classification = linkedItem ? classificationForLinkedItem(repository, linkedItem) : null;
+  // instead of treating every chat instruction as generic analysis, but let
+  // each turn's own request override that routing when it reads as a
+  // different kind of work than the task started as.
+  const classification = linkedItem ? classificationForLinkedItem(repository, linkedItem, queued.message.body) : null;
   const taskKind = classification?.kind ?? 'analysis';
   const resolvedAgents = resolveAgents(taskKind, queued.dispatchTarget);
   const agents = queued.dispatchTarget === 'auto'

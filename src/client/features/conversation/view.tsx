@@ -49,7 +49,7 @@ import { Toaster } from '../../toast';
 import { toast, toastError } from '../../toast-store';
 import { Tabs } from '../../tabs';
 import { SortableQueueItem as TaskQueueItem, TaskClassificationSelect } from '../../task-queue';
-import { AgentMessageBody, LiveRunOutput } from '../../agent-message';
+import { AgentMessageBody, LiveRunOutput, splitBodyAtInterjections, type AgentMessageInterjection } from '../../agent-message';
 import { ConversationOriginBadge, ModelProfileSelect, ReferenceTypeIcon } from '../../badges';
 import { CreateTask } from '../../create-task-dialog';
 import { DiscoveryInboxView } from '../../discovery';
@@ -208,6 +208,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const [conversationId, setConversationId] = useState<string | null>(initialConversationId ?? null);
   const isCreatingConversationRef = useRef(false);
   const [locallyReadConversationIds, setLocallyReadConversationIds] = useState<Set<string>>(new Set());
+  const [exitingMessageIds, setExitingMessageIds] = useState<Set<string>>(new Set());
   const conversationIdRef = useRef(conversationId);
   const sentDraftRef = useRef<{ conversationId: string; body: string } | null>(null);
   const updateConversationPreferences = useMutation({
@@ -489,14 +490,24 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const conversationMessages = hasEarlierMessages
     ? allConversationMessages.slice(allConversationMessages.length - threadVisibleCount)
     : allConversationMessages;
+  // Accepted interjections are durable events in their target agent's activity
+  // timeline. Repeating their standalone Jeffrey bubble after completion makes
+  // the same input appear twice and breaks that timeline.
+  const renderedConversationMessages = conversationMessages.filter((message) => {
+    const acceptedInterjection = message.author === 'jeffrey'
+      && message.status === 'completed'
+      && (message.queuePriority ?? 0) > 0;
+    const canceledDraft = message.author === 'jeffrey' && message.status === 'canceled';
+    return !acceptedInterjection && (!canceledDraft || exitingMessageIds.has(message.id));
+  });
   // Consecutive codex+claude replies with no jeffrey message between them came
   // from the same "both" dispatch — render them as one side-by-side group
   // instead of two look-alike rows stacked on top of each other.
   const conversationRenderRows = useMemo(() => {
     const rows: ({ type: 'single'; message: SharedMessage } | { type: 'pair'; a: SharedMessage; b: SharedMessage })[] = [];
-    for (let i = 0; i < conversationMessages.length; i++) {
-      const message = conversationMessages[i];
-      const next = conversationMessages[i + 1];
+    for (let i = 0; i < renderedConversationMessages.length; i++) {
+      const message = renderedConversationMessages[i];
+      const next = renderedConversationMessages[i + 1];
       const isAgent = (m: SharedMessage) => m.author === 'codex' || m.author === 'claude';
       if (next && isAgent(message) && isAgent(next) && message.author !== next.author) {
         rows.push({ type: 'pair', a: message, b: next });
@@ -506,7 +517,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       }
     }
     return rows;
-  }, [conversationMessages]);
+  }, [renderedConversationMessages]);
   // The visible thread is already capped to a handful of recent messages.
   // Keeping even completed rows in document flow removes the virtualizer's
   // cached-height transition: streamed Markdown can grow or settle at any
@@ -728,6 +739,29 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] }),
     onError: (error) => toastError('Could not cancel the response.', error),
   });
+  const cancelQueuedMessage = useMutation({
+    mutationFn: api.cancelSharedReply,
+    onMutate: (id: string) => {
+      setExitingMessageIds((current) => new Set(current).add(id));
+    },
+    onSuccess: async (_result, id) => {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 560));
+      setExitingMessageIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+      await queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] });
+    },
+    onError: (error, id) => {
+      setExitingMessageIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+      toastError('Could not cancel the queued message.', error);
+    },
+  });
   const retryReply = useMutation<unknown, Error, SharedMessage>({
     mutationFn: async (message: SharedMessage) => {
       const linkedRun = linkedWorkItem.data?.runs.find((run) => run.messageId === message.id);
@@ -941,13 +975,6 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     }
   }
 
-  function queueMessage() {
-    if ((body.trim() || files.length) && conversationId && !send.isPending && conversationReadyToSend) {
-      sentDraftRef.current = { conversationId, body };
-      send.mutate({ intent: 'queue' });
-    }
-  }
-
   const previewStatus = useQuery({ queryKey: ['runtime-preview-status'], queryFn: api.getRuntimePreviewStatus, refetchInterval: 2_000 });
   const promotionInFlight = conversationMessages.some((message) =>
     message.author === 'system' && message.status === 'running' && /approval received|promot/i.test(message.body));
@@ -1095,7 +1122,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               // Repeat Jeffrey's text in that provider's stream so the result
               // is visible where the interruption happened, not only as a
               // status label on his separate message bubble.
-              const liveInterjections = isAgentMessage
+              const liveInterjections: AgentMessageInterjection[] = isAgentMessage
                 ? conversationMessages
                   .filter((candidate) => candidate.author === 'jeffrey'
                     && (candidate.queuePriority ?? 0) > 0
@@ -1104,11 +1131,19 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                     && (candidate.dispatchTarget === 'auto' || candidate.dispatchTarget === 'both' || candidate.dispatchTarget === message.author))
                   .map((candidate) => ({ id: candidate.id, body: candidate.body, pending: candidate.status === 'queued', streamOffset: candidate.interjectionStreamOffset }))
                 : [];
-              return <div key={message.id} className={`thread-virtual-row${inGroup ? ' reply-group-message' : ''}`}>
-              <article className={`shared-message shared-${message.author}${message.author === 'system' && message.status === 'queued' ? ' shared-system-queued' : ''}`}>
+              // A completed reply that absorbed an interjection mid-stream should
+              // read as separate before/after bubbles, not one answer that quietly
+              // swallowed Jeffrey's input. Only split once the interjection has a
+              // server-recorded boundary — a still-queued one has nowhere to land yet.
+              const segments = isAgentMessage && message.status !== 'running' && message.body
+                ? splitBodyAtInterjections(message.body, liveInterjections)
+                : null;
+              const splitIntoBubbles = (segments?.length ?? 0) > 1;
+
+              const renderHeader = (showSummaryBadges: boolean) => (
                 <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                   {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
-                  <span className="header-badge-row">
+                  {showSummaryBadges && <span className="header-badge-row">
                     {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyBadge(message)}</span>}
                     {isAgentMessage && <button
                       type="button"
@@ -1123,20 +1158,19 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                     >
                       <Search size={11} /> {typeof message.retrievedMemoryCount === 'number' ? message.retrievedMemoryCount : '—'}
                     </button>}
-                  </span>
-                  {isAgentMessage && liveInterjections.length > 0 && <span className={`interjection-badge${liveInterjections.some((interjection) => interjection.pending) ? ' pending' : ''}`}>{liveInterjections.some((interjection) => interjection.pending) ? 'Interjecting' : 'Interjected'}</span>}
+                  </span>}
+                  {showSummaryBadges && isAgentMessage && liveInterjections.length > 0 && <span className={`interjection-badge${liveInterjections.some((interjection) => interjection.pending) ? ' pending' : ''}`}>{liveInterjections.some((interjection) => interjection.pending) ? 'Interjecting' : 'Interjected'}</span>}
                   {message.status === 'running' && <button type="button" className="cancel-response" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel response" title="Cancel response"><X size={12} /></button>}
                 </header>
-                {message.status === 'running' && <p className="thinking">Live activity · {message.body ? 'receiving updates' : 'starting agent'}</p>}
-                {(message.body || liveInterjections.length > 0 || (isAgentMessage && message.status === 'running')) && (isAgentMessage || message.author === 'system'
-                  ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} interjections={liveInterjections} detailForSingle={message.status !== 'running'} />
-                  : <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: MarkdownCode, pre: MarkdownPre }}>{message.body}</ReactMarkdown></div>)}
+              );
+
+              const renderFooter = () => (<>
                 {isQueuedMessage && (
                   <div className="queued-message">
                     <span className="queued-message-status"><LoaderCircle size={13} /> {message.queuePriority ? 'Starting now · current response continues' : 'Queued · starts after the current agent finishes'}</span>
                     {message.author !== 'system' && <span className="queued-message-actions">
                     <button type="button" className="icon-button queued-message-action" onClick={() => interjectMessage.mutate(message.id)} disabled={interjectMessage.isPending} aria-label="Interject now without stopping the current agent" title="Interject now without stopping the current agent"><ArrowUpRight size={14} /></button>
-                      <button type="button" className="icon-button queued-message-action danger" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel queued message" title="Cancel this queued message"><X size={14} /></button>
+                      <button type="button" className="icon-button queued-message-action danger" onClick={() => message.author === 'jeffrey' ? cancelQueuedMessage.mutate(message.id) : cancelReply.mutate(message.id)} disabled={cancelQueuedMessage.isPending || cancelReply.isPending} aria-label="Cancel queued message" title="Cancel this queued message"><X size={14} /></button>
                     </span>}
                   </div>
                 )}
@@ -1149,6 +1183,37 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                 ))}</div>}
                 {message.error && <p className="error-message">{message.error}</p>}
                 {message.status === 'completed' && message.author !== 'jeffrey' && (message.author !== 'system' || message.body.startsWith('Synthesis:')) && <div className="message-actions"><button onClick={() => createTasks.mutate({ messageId: message.id, conversationId: conversationId! })} disabled={createTasks.isPending && createTasks.variables?.conversationId === conversationId}>{createTasks.isPending && createTasks.variables?.messageId === message.id && createTasks.variables.conversationId === conversationId ? <><LoaderCircle className="spin" size={12} /> Extracting findings…</> : <><Plus size={12} /> Turn findings into tasks</>}</button></div>}
+              </>);
+
+              if (splitIntoBubbles && segments) {
+                return <div key={message.id} className={`thread-virtual-row${inGroup ? ' reply-group-message' : ''}`}>
+                  {segments.map((segment, index) => {
+                    const isLast = index === segments.length - 1;
+                    return <div key={`${message.id}-segment-${index}`} className="shared-message-segment-group">
+                      {segment.precedingInterjection && (
+                        <article className="shared-message shared-jeffrey shared-message-interjection">
+                          <header><strong>You</strong><span className="interjection-badge">Interjected</span></header>
+                          <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: MarkdownCode, pre: MarkdownPre }}>{segment.precedingInterjection.body}</ReactMarkdown></div>
+                        </article>
+                      )}
+                      <article className={`shared-message shared-${message.author}${exitingMessageIds.has(message.id) ? ' shared-message-exiting' : ''}`}>
+                        {renderHeader(isLast)}
+                        <AgentMessageBody body={segment.body} running={false} conversationId={message.conversationId} interjections={[]} detailForSingle />
+                        {isLast && renderFooter()}
+                      </article>
+                    </div>;
+                  })}
+                </div>;
+              }
+
+              return <div key={message.id} className={`thread-virtual-row${inGroup ? ' reply-group-message' : ''}`}>
+              <article className={`shared-message shared-${message.author}${message.author === 'system' && message.status === 'queued' ? ' shared-system-queued' : ''}${exitingMessageIds.has(message.id) ? ' shared-message-exiting' : ''}`}>
+                {renderHeader(true)}
+                {message.status === 'running' && <p className="thinking">Live activity · {message.body ? 'receiving updates' : 'starting agent'}</p>}
+                {(message.body || liveInterjections.length > 0 || (isAgentMessage && message.status === 'running')) && (isAgentMessage || message.author === 'system'
+                  ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} interjections={liveInterjections} detailForSingle={message.status !== 'running'} />
+                  : <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: MarkdownCode, pre: MarkdownPre }}>{message.body}</ReactMarkdown></div>)}
+                {renderFooter()}
               </article>
               </div>;
             };
@@ -1191,7 +1256,6 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
             <select className="agent-target dispatch-target" value={dispatchTo} onChange={(event) => { const target = event.target.value as typeof dispatchTo; setDispatchTo(target); updateComposerPreferences({ dispatchTarget: target }); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond">
               <option value="codex">Codex</option><option value="claude">Claude</option><option value="both">Both</option>
             </select>
-            <button type="button" className="button secondary compact composer-queue" onClick={queueMessage} title="Queue for the next turn" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}><Clock size={14} /> Queue</button>
             <button className="icon-button primary composer-send" aria-label="Send message" title="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
           </div>
           {send.error && <p className="error-message">{send.error.message}</p>}

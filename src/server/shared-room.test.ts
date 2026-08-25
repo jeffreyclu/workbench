@@ -118,6 +118,26 @@ describe('compactConversationHistory', () => {
     database.close();
   });
 
+  it('reclassifies a turn when the current message asks for different work than the task started as', () => {
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Research pagination approaches', description: 'Investigate cursor vs offset pagination.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    repository.createConversation('Pagination thread', task.id);
+
+    const initial = classificationForLinkedItem(repository, task);
+    expect(initial.kind).toBe('research');
+
+    const followUp = classificationForLinkedItem(repository, task, 'Great, now implement the cursor-based approach.');
+    expect(followUp.kind).toBe('execute');
+
+    // The task's stored classification is untouched; only this turn's routing changes.
+    expect(repository.getClassification(task.id)?.kind).toBe('research');
+
+    const ambiguous = classificationForLinkedItem(repository, task, 'why?');
+    expect(ambiguous.kind).toBe('research');
+    database.close();
+  });
+
   it('runs a linked conversation reply in its task workspace rather than Workbench', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);

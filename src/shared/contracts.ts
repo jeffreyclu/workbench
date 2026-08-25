@@ -270,6 +270,7 @@ export interface MemorySearchResult {
 
 export interface MemorySearchResponse {
   results: MemorySearchResult[];
+  hasMore: boolean;
 }
 
 export const createWorkItemSchema = z.object({

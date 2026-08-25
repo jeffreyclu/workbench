@@ -447,7 +447,9 @@ type MemoryDocumentRow = {
 export async function searchMemory(database: WorkbenchDatabase, query: string, options: { limit?: number; sources?: string[]; projectKey?: string } = {}): Promise<MemorySearchResult[]> {
   const trimmed = query.trim();
   if (trimmed.length < 2) return [];
-  const limit = Math.max(1, Math.min(100, options.limit ?? 20));
+  // API consumers can request a single lookahead row to report whether the
+  // visible result set is truncated while preserving the public 100-row cap.
+  const limit = Math.max(1, Math.min(101, options.limit ?? 20));
   const sourceFilter = options.sources && options.sources.length ? new Set(options.sources) : null;
 
   const matchQuery = buildFtsMatchQuery(trimmed);

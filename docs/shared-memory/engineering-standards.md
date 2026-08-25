@@ -385,3 +385,22 @@ every directory with that name anywhere in the tree. Before adding or reviewing 
 `<name>/`-style ignore rule, check whether that name recurs elsewhere in the tree (`find . -type d
 -name <name>`); if it does and the rule is only meant for one location, anchor it. This is a standing
 review point for any future `.gitignore` change, not a one-off fix.
+
+### A task's run kind must be re-inferred per conversation turn, not frozen at creation
+
+On 2026-08-25, Jeffrey flagged that a linked task's kind (`execute`/`review`/`research`/`strategy`/
+`analysis` — which drives agent persona and instructions) was classified once from the task's title
+and description, then cached and reused for every future chat reply in that task's conversation
+regardless of what a later message actually asked for. A task created as "research pagination
+approaches" stayed `research` forever, even after Jeffrey wrote "now implement the cursor-based
+approach" in a follow-up.
+
+The fix (`classifyMessageIntent` + `classificationForLinkedItem` in `src/server/shared-room.ts` and
+`src/server/agent-runner.ts`): each dispatched turn re-derives kind from that turn's own message text
+using the same keyword rules as task-level classification, and uses it *only* to route that turn
+(persona/agent for the `AgentRun` created for that reply) when the message carries a clear deliverable
+signal. The task's stored classification (used for the task's own default routing and UI) is left
+untouched, and ambiguous/context-dependent messages (short follow-ups like "why?" or "do it") fall
+back to the stored kind rather than being misrouted by absence of a keyword. Any future change to task
+routing must re-infer per-turn intent from the current message, not just from the task's original
+title/description.
