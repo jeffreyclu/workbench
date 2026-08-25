@@ -167,6 +167,18 @@ promotion system message before the runner marks it running; treating only
 bubble overlap on desktop. Any status that can be inserted or mutate its
 rendered content before a stable terminal measurement must use live flow.
 
+### The bounded conversation thread must not virtualize message rows
+
+*Confirmed 2026-08-25.* The conversation view intentionally renders only a
+small recent page of messages (five by default). Virtualizing that bounded set
+created a cached-height mode switch when a streamed reply settled: rows changed
+between normal flow and absolute `translateY` positioning, so a stale height
+could still make bubbles collide on mobile after several prior mitigations.
+Keep every visible conversation message in normal document flow, regardless of
+status. The “Show earlier messages” page limit remains the performance bound;
+do not reintroduce virtualized thread rows unless there is a measured need and
+the implementation has no height-cache transition.
+
 ## Stale responsive overrides survive UI convention changes — check media queries when a "fixed" style regresses
 
 ### Restoring a control must not turn it into a large text CTA

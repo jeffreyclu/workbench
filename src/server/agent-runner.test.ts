@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { CLAUDE_EXECUTION_CONTRACT, backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { CLAUDE_EXECUTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -582,6 +582,10 @@ describe('classifyExecution', () => {
     expect(buildPrompt(item('Build it'), run, 'jeffrey: Prefer small React components.'))
       .toContain('Shared context available to every agent:\njeffrey: Prefer small React components.');
     expect(buildPrompt(item('Build it'), run)).toContain('no permission prompts or dialogs exist to approve');
+  });
+
+  it('uses forty as a candidate ceiling, not an injection target', () => {
+    expect(PROMPT_MEMORY_CANDIDATE_LIMIT).toBe(40);
   });
 
   it('injects bounded, untrusted historical retrieval into task prompts', () => {

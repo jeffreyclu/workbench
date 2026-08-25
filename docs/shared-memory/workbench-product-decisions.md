@@ -311,10 +311,9 @@ vitest suite:
 
 - `formatRetrievedMemory`'s header/no-match copy in `src/server/shared-room.ts`
   trimmed (158 → 136 chars for the match-found header; 102 → 92 chars for the
-  no-match line) — same meaning, fewer static tokens resent every turn. Match
-  count (top 8) and per-match body truncation (200 chars) left unchanged;
-  cutting those further risks losing the actual retrieved content, which is
-  the opposite of what this optimization is for.
+  no-match line) — same meaning, fewer static tokens resent every turn. The
+  injected subset remains relevance- and token-budgeted from up to 40
+  candidates; cutting useful retrieved content further is counterproductive.
 
 Verified: typecheck clean; 57/57 tests pass (7 shared-room, 50 agent-runner).
 
@@ -371,10 +370,26 @@ RAG badge coverage and cardinality (2026-08-25): show a RAG badge on every
 conversation detail bubble. A numeric count means retrieval ran for that
 reply; `—` means it did not run (normally a human-authored message or an older
 record), never an implied zero. Shared-room replies and task-run reply bubbles
-both retrieve and present up to eight bounded matches, replacing the prior
-shared-room cap of three that made the badge uninformative. Decision from
-Jeffrey, 2026-08-25.
-`vitest run` 837/837 passing.
+both retrieve from up to 40 candidates and present only the relevance- and
+token-budgeted subset, replacing the prior shared-room cap of three that made
+the badge uninformative. Decision from
+Jeffrey, 2026-08-25. The retrieval query is the latest complete user request
+alone; only a context-dependent shorthand follow-up inherits its preceding
+user turn. This prevents unrelated controls such as preview approval from
+out-ranking the topic actually asked about. Verified after the fix:
+`shared-room.test.ts` and `agent-runner.test.ts` pass, as do typecheck and
+production build. The full suite has one unrelated existing failure in
+`src/client/App.test.tsx` where "Turn findings into tasks" is absent.
+
+Concurrent-recipient retrieval (correction from Jeffrey, 2026-08-25): when a
+turn is sent to both agents, fetch exactly one 40-candidate retrieval snapshot
+before either reply starts, then give that snapshot to both. Independent
+per-reply refreshes allow the first agent's streamed output to enter the
+index while the second search is waiting, so it can displace the prior context
+and leave the second recipient with only one memory. The injected result is
+still selected by query-relative relevance and prompt budget, never a fixed
+count. Regression coverage dispatches both fake agents and asserts one search
+and identical four-memory details on both replies.
 
 ### Agent cancellation must be visible and authoritative
 

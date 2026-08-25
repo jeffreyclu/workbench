@@ -1,11 +1,10 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { AlertTriangle, Bot, Check, Clock, GripVertical, LoaderCircle, Sparkles, Unlock, User } from 'lucide-react';
-import { useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { AlertTriangle, Bot, Check, Clock, GripVertical, LoaderCircle, Sparkles, User } from 'lucide-react';
+import { type CSSProperties, type KeyboardEvent } from 'react';
 import type { AgentRun, Assignee, WorkItem } from '../../../shared/contracts';
-import { ConfirmationDialog } from '../../confirmation-dialog';
 import { ProjectColorDot, projectTheme } from '../../project-color';
-import { useTaskClassification, useUnblockWorkItem } from '../../features/queue/hooks';
+import { useTaskClassification } from '../../features/queue/hooks';
 
 function AssigneeIcon({ assignee }: { assignee: Assignee }) {
   const Icon = assignee === 'jeffrey' ? User : Bot;
@@ -23,42 +22,6 @@ export function TaskClassificationSelect({ itemId, kind, compact = false }: { it
     </select>
     {update.isPending && <LoaderCircle className="spin card-classification-spinner" size={10} />}
   </span>;
-}
-
-function QueueItemUnblockButton({ item }: { item: WorkItem }) {
-  const unblock = useUnblockWorkItem(item.id);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [reason, setReason] = useState('');
-  const trimmedReason = reason.trim();
-  const confirm = () => {
-    if (!trimmedReason) return;
-    unblock.mutate(trimmedReason, { onSuccess: () => setDialogOpen(false) });
-  };
-  const close = () => {
-    if (unblock.isPending) return;
-    setDialogOpen(false);
-    setReason('');
-  };
-
-  return <>
-    <button type="button" className="queue-item-cta queue-item-cta-unblock" disabled={unblock.isPending} onClick={(event) => {
-      event.stopPropagation();
-      setDialogOpen(true);
-    }} aria-label={`Unblock ${item.title}`}>
-      {unblock.isPending ? <LoaderCircle className="spin" size={12} /> : <Unlock size={12} />} Unblock
-    </button>
-    {dialogOpen && <ConfirmationDialog title={`Unblock “${item.title}”?`} description="Record why this task is ready to continue." confirmLabel="Unblock task" confirmVariant="primary" pending={unblock.isPending} confirmDisabled={!trimmedReason} onClose={close} onConfirm={confirm}>
-      <label htmlFor={`unblock-reason-${item.id}`}>
-        Unblock reason
-        <textarea id={`unblock-reason-${item.id}`} value={reason} onChange={(event) => setReason(event.target.value)} onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey && trimmedReason) {
-            event.preventDefault();
-            confirm();
-          }
-        }} autoFocus rows={3} />
-      </label>
-    </ConfirmationDialog>}
-  </>;
 }
 
 export function SortableQueueItem({ item, index, selected, focused, draggable, onSelect, onOpenTask, onFocus, onKeyDown }: {
@@ -100,7 +63,7 @@ export function SortableQueueItem({ item, index, selected, focused, draggable, o
       {isHumanOnly && <span className="human-only-marker"><User size={11} /> Your task</span>}
       {(item.agentOutcome === 'needs_attention' || item.agentOutcome === 'follow_ups' || openDependencies.length > 0) && <span className="queue-item-ctas">
         {item.agentOutcome === 'needs_attention' && <button type="button" className="queue-item-cta queue-item-cta-review" onClick={(event) => { event.stopPropagation(); onSelect(); }} aria-label={`Review ${item.title}`}>Review</button>}
-        {openDependencies.length > 0 && <QueueItemUnblockButton item={item} />}
+        {openDependencies.length > 0 && <button type="button" className="queue-item-cta" onClick={(event) => { event.stopPropagation(); onSelect(); }} aria-label={`View prerequisites for ${item.title}`}>View prerequisites</button>}
         {item.agentOutcome === 'follow_ups' && <button type="button" className="queue-item-cta queue-item-cta-inspect" onClick={(event) => { event.stopPropagation(); onSelect(); }} aria-label={`Inspect execution results for ${item.title}`}>Inspect</button>}
       </span>}
       {item.archivedAt && <time className="archive-date" dateTime={item.archivedAt}>Archived {new Date(item.archivedAt).toLocaleDateString()}</time>}

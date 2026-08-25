@@ -9,6 +9,11 @@ const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
 export const isSharedReplyActive = (id: string) => activeReplies.has(id);
 
+type SharedReplyRetrieval = {
+  query: string;
+  matches: Promise<RetrievedMemory[]>;
+};
+
 function connectionSearchQuery(message: string): string {
   return message.replace(/https?:\/\/\S+/g, ' ').replace(/\b(?:linear|search|find|look|show|check|issues?|tasks?|tickets?|for|in|on|the|a|an|me|please)\b/gi, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -138,9 +143,26 @@ ${compactConversationHistory(thread)}
 Answer Jeffrey concisely. State the decision, handoff, or blocker you are continuing and any conflict with observed state. Retrieved memory covers the latest message only; query more via curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=40'. Record durable facts in docs/shared-memory/*.md, never private memory. Workbench is non-interactive: use tools directly and report exact missing access. Finish foreground work now; never detach work or promise a later result.`;
 }
 
-/** A short follow-up needs the preceding user turn to retrieve the right decision. */
+/**
+ * A shorthand follow-up needs the preceding user turn to retrieve the right
+ * decision. A complete new question does not: adding an unrelated control turn
+ * (for example, "Approve the Workbench preview") dilutes its retrieval terms
+ * and lets exact lexical noise outrank the requested memory.
+ */
+function isContextDependentFollowUp(message: string): boolean {
+  const normalized = message.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalized) return false;
+  if (/^(?:yes|yeah|yep|no|nope|ok|okay|do it|go ahead|ship it|fix it|that works|sounds good)[.!?]*$/.test(normalized)) return true;
+  if (/^(?:why|how|what|which|who|when|where)\??$/.test(normalized)) return true;
+  return normalized.split(' ').length <= 8
+    && /\b(?:it|that|this|those|these|them|there|same|again|previous|above)\b/.test(normalized);
+}
+
+/** A short, context-dependent follow-up needs the preceding user decision. */
 export function memoryQueryForSharedReply(thread: SharedMessage[]): string {
   const userTurns = thread.filter((message) => message.author === 'jeffrey' && message.body.trim());
+  const latest = userTurns.at(-1)?.body.trim() ?? '';
+  if (!isContextDependentFollowUp(latest)) return latest.slice(0, 2_000);
   return userTurns.slice(-2).map((message) => message.body.trim()).join('\n').slice(0, 2_000);
 }
 
@@ -186,13 +208,26 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     repository.addActivity(linkedItem.id, 'jeffrey', 'chat_started', `To ${agents.join(' and ')}${attachmentText}: ${queued.message.body.trim() || '(attachment-only message)'}`);
   }
   const accountProfile = accountProfileForSharedReply(linkedItem, queued.message.accountProfile);
+  // Both recipients of one human turn must see the exact same retrieval
+  // snapshot. Starting independent refreshes lets the first recipient's
+  // streamed output enter the index before the second searches, which can
+  // crowd out the prior context the two agents were meant to share.
+  const retrievalThread = repository.listSharedMessages(100, null, conversationId).messages;
+  const retrievalQuery = memoryQueryForSharedReply(retrievalThread);
+  const retrieval: SharedReplyRetrieval = {
+    query: retrievalQuery,
+    matches: repository.searchActivityMemory(retrievalQuery, PROMPT_MEMORY_CANDIDATE_LIMIT).catch((error) => {
+      console.error('[shared-room] memory retrieval failed for prompt injection', error);
+      return [];
+    }),
+  };
   const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'running', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile, accountProfile));
   for (const reply of replies) {
     const agent = reply.author as AgentRun['agent'];
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'
       ? repository.createRun(linkedItem.id, taskKind, queued.dispatchTarget, agent, queued.message.body, conversationId, reply.id, 'manual', accountProfile)
       : null;
-    void replyInSharedRoom(repository, agent, reply.id, run?.id);
+    void replyInSharedRoom(repository, agent, reply.id, run?.id, retrieval);
   }
   return replies;
 }
@@ -246,7 +281,7 @@ export async function runSharedBackgroundJob(
   }
 }
 
-export async function replyInSharedRoom(repository: WorkItemRepository, agent: AgentRun['agent'], messageId: string, runId?: string): Promise<void> {
+export async function replyInSharedRoom(repository: WorkItemRepository, agent: AgentRun['agent'], messageId: string, runId?: string, retrievalSnapshot?: SharedReplyRetrieval): Promise<void> {
   const target = repository.getSharedMessageById(messageId);
   if (!target) return;
 
@@ -272,17 +307,17 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
   try {
     const thread = repository.listSharedMessages(100, null, target.conversationId).messages.filter((message) => message.id !== messageId);
     const latestUserMessage = [...thread].reverse().find((message) => message.author === 'jeffrey')?.body ?? '';
-    const memoryQuery = memoryQueryForSharedReply(thread);
+    const memoryQuery = retrievalSnapshot?.query ?? memoryQueryForSharedReply(thread);
     const recentSourceReferences = thread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body);
     const connectionContext = await connectionContextForPrompt(repository, [latestUserMessage, ...recentSourceReferences].join('\n'));
     const linkedRun = runId ? repository.getRun(runId) : null;
     const linkedItem = linkedRun ? repository.get(linkedRun.workItemId) : null;
     const cwd = resolveSharedReplyWorkingDirectory(linkedItem);
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}.`);
-    const retrievedMemory = await repository.searchActivityMemory(memoryQuery, PROMPT_MEMORY_CANDIDATE_LIMIT).catch((error) => {
+    const retrievedMemory = await (retrievalSnapshot?.matches ?? repository.searchActivityMemory(memoryQuery, PROMPT_MEMORY_CANDIDATE_LIMIT).catch((error) => {
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
-    });
+    }));
     const injectedMemory = selectRelevantMemoryForPrompt(retrievedMemory);
     repository.updateSharedMessage(messageId, {
       retrievedMemoryCount: injectedMemory.length,

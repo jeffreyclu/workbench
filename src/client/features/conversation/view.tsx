@@ -31,7 +31,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { type CSSProperties, type FormEvent, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from '../../markdown-composer.js';
@@ -462,48 +462,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const conversationMessages = hasEarlierMessages
     ? allConversationMessages.slice(allConversationMessages.length - threadVisibleCount)
     : allConversationMessages;
-  // Message cards are variable-height markdown, often with substantial agent
-  // output. Rendering all of them makes the composer re-render painfully slow
-  // on long threads, so measure only the visible cards and a small buffer.
-  const threadVirtualizer = useVirtualizer({
-    count: conversationMessages.length,
-    getScrollElement: () => threadScrollRef.current,
-    estimateSize: () => 220,
-    getItemKey: (index) => conversationMessages[index]?.id ?? index,
-    overscan: 4,
-    initialRect: { width: 900, height: 700 },
-  });
-  // A typewriter changes a message's rendered height independently of the
-  // server-polled message body. Virtual row transforms can therefore be a
-  // frame behind a growing live card on mobile. Keep the bounded, paged live
-  // thread in normal document flow until streaming finishes: later messages
-  // then follow a newly queued or growing card by construction rather than
-  // relying on a height-cache invalidation race. Preview approval creates a
-  // queued promotion message before the runner marks it running, so queued is
-  // part of this same live-layout state.
-  const hasLiveMessage = conversationMessages.some((message) => message.status === 'running' || message.status === 'queued');
-  const threadRows = threadVirtualizer.getVirtualItems();
-  const displayedThreadRows = hasLiveMessage
-    ? conversationMessages.map((_, index) => ({ index, start: 0 }))
-    : threadRows.length
-    ? threadRows
-    : conversationMessages.map((_, index) => ({ index, start: index * 220 }));
-  // The final agent report can replace a small live update with a multi-section
-  // response in one polling tick. Its row key does not change, so relying only
-  // on ResizeObserver can leave the virtualizer positioned with the old height
-  // until a full reload. Do not clear the cache while live-flow is rendering:
-  // those measurements are exactly what the virtualized layout needs when the
-  // running -> completed transition switches modes.
-  const threadLayoutSignature = conversationMessages.map((message) => `${message.id}:${message.status}:${message.body}`).join('\u0000');
-  // useLayoutEffect (not useEffect): the live -> completed transition
-  // switches this list from live document flow to absolute-positioned
-  // transforms in the very next render. Clearing the stale cache must
-  // happen before that frame paints, or the transforms briefly use heights
-  // from before live-flow started and rows visibly overlap.
-  useLayoutEffect(() => {
-    if (hasLiveMessage) return;
-    threadVirtualizer.measure();
-  }, [hasLiveMessage, threadLayoutSignature, threadVirtualizer]);
+  // The visible thread is already capped to a handful of recent messages.
+  // Keeping even completed rows in document flow removes the virtualizer's
+  // cached-height transition: streamed Markdown can grow or settle at any
+  // time without another bubble ever reusing its vertical space.
   useEffect(() => {
     if (!conversationId || dispatchInitializedConversationId.current === conversationId || !messages.data) return;
     setDispatchTo(dispatchTargetForConversation(messages.data.messages));
@@ -843,10 +805,19 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     const updateHeaderVisibility = () => {
       const { scrollTop } = container;
       const delta = scrollTop - lastThreadScrollTopRef.current;
-      if (scrollTop <= revealThreshold) setConsoleHeaderHidden(false);
-      else if (delta > revealThreshold) setConsoleHeaderHidden(true);
-      else if (delta < -revealThreshold) setConsoleHeaderHidden(false);
-      lastThreadScrollTopRef.current = scrollTop;
+      // Only re-anchor the baseline when the header actually flips state;
+      // re-anchoring on every scroll event (as before) collapsed delta to
+      // near-zero per-frame velocity and made momentum scrolling flicker.
+      if (scrollTop <= revealThreshold) {
+        setConsoleHeaderHidden(false);
+        lastThreadScrollTopRef.current = scrollTop;
+      } else if (delta > revealThreshold) {
+        setConsoleHeaderHidden(true);
+        lastThreadScrollTopRef.current = scrollTop;
+      } else if (delta < -revealThreshold) {
+        setConsoleHeaderHidden(false);
+        lastThreadScrollTopRef.current = scrollTop;
+      }
     };
     container.addEventListener('scroll', updateHeaderVisibility, { passive: true });
     return () => container.removeEventListener('scroll', updateHeaderVisibility);
@@ -999,11 +970,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               Show earlier messages ({allConversationMessages.length - threadVisibleCount} more)
             </button>
           )}
-          <div className={`thread-virtualizer${hasLiveMessage ? ' thread-live-flow' : ''}`} style={hasLiveMessage ? undefined : { height: threadVirtualizer.getTotalSize() }}>
-          {displayedThreadRows.map((row) => {
-            const message = conversationMessages[row.index];
-            if (!message) return null;
-            return <div key={message.id} ref={threadVirtualizer.measureElement} data-index={row.index} className="thread-virtual-row" style={hasLiveMessage ? undefined : { transform: `translateY(${row.start}px)` }}>
+          <div className="thread-virtualizer thread-live-flow">
+          {conversationMessages.map((message) => {
+            return <div key={message.id} className="thread-virtual-row">
             <article className={`shared-message shared-${message.author}`}>
               <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                 {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}

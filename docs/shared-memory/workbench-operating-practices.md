@@ -186,13 +186,16 @@ discarding durable history.
 
 ### Retrieval is adaptive, and compaction preserves key points
 
-*Decision from Jeffrey, 2026-08-25.* The retrieval limit is a ceiling, never a
-target. A room or task prompt may inspect up to 40 candidates, but must inject
-only the relevant, non-duplicative evidence that clears its score threshold and
-fits the prompt budget. Do not silently make every turn inject a fixed maximum
-of 8 or 40 memories. Before prompt injection, summarize/compact long shared
-briefs and conversation history around durable decisions, blockers, evidence,
-and current requests; raw head/tail truncation alone loses the useful middle.
+*Decision from Jeffrey, 2026-08-25.* A room or task prompt may retrieve at
+most eight candidates; eight is a ceiling, not an injection target. Inject
+only relevant, non-duplicative evidence that clears the query-relative score
+threshold and fits the prompt budget. A complete latest user question must
+query on its own: do not append an unrelated previous control turn and dilute
+the retrieval terms. Only a context-dependent shorthand follow-up (for example,
+"Yes, do it") inherits the preceding user turn. Before prompt injection,
+summarize/compact long shared briefs and conversation history around durable
+decisions, blockers, evidence, and current requests; raw head/tail truncation
+alone loses the useful middle.
 
 ### Automate it; don't add a button **(always)**
 

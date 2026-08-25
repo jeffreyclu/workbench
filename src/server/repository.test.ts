@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync, rmSync } from 'node:fs';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
 import { cancelSharedReply, dispatchNextSharedTurn } from './shared-room.js';
 import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
+import { fakeAgentDirectory } from './test-fake-agent.js';
 
 describe('WorkItemRepository', () => {
   let database: WorkbenchDatabase;
@@ -1040,6 +1042,36 @@ describe('WorkItemRepository', () => {
     expect(repository.nextQueuedSharedTurn(conversation.id)).toEqual({ message, dispatchTarget: 'both' });
     repository.updateSharedMessage(message.id, { status: 'completed' });
     expect(repository.nextQueuedSharedTurn(conversation.id)).toBeNull();
+  });
+
+  it('shares one retrieval snapshot between concurrent Codex and Claude replies', async () => {
+    const conversation = repository.createConversation('Concurrent retrieval');
+    repository.createSharedMessage('jeffrey', 'The durable fact has several relevant details.', 'completed', conversation.id);
+    repository.createSharedMessage('jeffrey', 'Continue the durable fact investigation.', 'queued', conversation.id, [], 'both');
+    const matches = Array.from({ length: 4 }, (_, index) => ({
+      source: 'message', title: `Relevant ${index + 1}`, body: `Durable detail ${index + 1}`, createdAt: '2026-08-25T00:00:00.000Z', score: 0.03 - index * 0.001,
+    }));
+    const retrieval = vi.spyOn(repository, 'searchActivityMemory').mockResolvedValue(matches);
+    const previousPath = process.env.PATH;
+    const { directory, log } = fakeAgentDirectory("printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'", "printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'");
+    try {
+      const replies = dispatchNextSharedTurn(repository, conversation.id);
+      expect(replies).toHaveLength(2);
+      const deadline = Date.now() + 2_000;
+      while (repository.listAllSharedMessages(conversation.id).some((message) => message.status === 'running')) {
+        if (Date.now() > deadline) throw new Error('Timed out waiting for concurrent replies.');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(retrieval).toHaveBeenCalledTimes(1);
+      expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(expect.arrayContaining(['claude', 'codex']));
+      expect(replies.map((reply) => repository.getRetrievedMemoryDetail(reply.id)?.items.map((item) => item.title))).toEqual([
+        ['Relevant 1', 'Relevant 2', 'Relevant 3', 'Relevant 4'],
+        ['Relevant 1', 'Relevant 2', 'Relevant 3', 'Relevant 4'],
+      ]);
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('does not dispatch or cancel a queued turn while the same agent is active', () => {

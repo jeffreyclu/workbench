@@ -93,27 +93,19 @@ describe('task status badges', () => {
   });
 });
 
-describe('QueueItemUnblockButton', () => {
-  it('collects an unblock reason in the styled dialog and submits it', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ item }), { headers: { 'Content-Type': 'application/json' } }));
-    const prompt = vi.spyOn(window, 'prompt');
+describe('prerequisite-blocked queue cards', () => {
+  it('opens the task prerequisites instead of submitting a manual unblock', () => {
+    const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const blockedItem: WorkItem = { ...item, blockedBy: [{ id: 'dependency-id', title: 'A prerequisite', status: 'blocked', archivedAt: null, completedAt: null, isOpen: true }] };
+    const onSelect = vi.fn();
 
-    render(<QueryClientProvider client={client}><SortableQueueItem item={blockedItem} index={0} selected={false} focused={false} draggable={false} onSelect={vi.fn()} onOpenTask={vi.fn()} onFocus={vi.fn()} onKeyDown={vi.fn()} /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><SortableQueueItem item={blockedItem} index={0} selected={false} focused={false} draggable={false} onSelect={onSelect} onOpenTask={vi.fn()} onFocus={vi.fn()} onKeyDown={vi.fn()} /></QueryClientProvider>);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Unblock Conversation task' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View prerequisites for Conversation task' }));
 
-    expect(screen.getByRole('dialog', { name: 'Unblock “Conversation task”?' })).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Unblock task' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(prompt).not.toHaveBeenCalled();
-
-    fireEvent.change(screen.getByLabelText('Unblock reason'), { target: { value: 'The prerequisite is complete.' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Unblock task' }));
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/work-items/${item.id}/unblock`, expect.objectContaining({
-      method: 'POST', body: JSON.stringify({ reason: 'The prerequisite is complete.' }),
-    })));
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

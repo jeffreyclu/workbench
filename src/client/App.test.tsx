@@ -290,7 +290,7 @@ describe('shared room', () => {
     expect(await screen.findByRole('button', { name: 'Approve preview' })).toBeTruthy();
   });
 
-  it('keeps the thread in document flow as soon as preview approval queues promotion', async () => {
+  it('keeps the thread in document flow for queued promotion and completed messages', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000099';
     let approvalQueued = false;
@@ -311,9 +311,12 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
+    expect(await screen.findByText('Completed the change.')).toBeTruthy();
+    expect(document.querySelector('.thread-virtualizer')).toHaveClass('thread-live-flow');
     fireEvent.click(await screen.findByRole('button', { name: 'Approve preview' }));
     await screen.findByText('Promotion queued. It will build once active agent work reaches a durable terminal state.');
     expect(document.querySelector('.thread-virtualizer')).toHaveClass('thread-live-flow');
+    expect(document.querySelector('.thread-virtual-row')).not.toHaveAttribute('style');
   });
 
   it('keeps task extraction on completed synthesis findings', async () => {
@@ -1448,7 +1451,8 @@ describe('task prerequisites', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><Toaster /><TaskDetail id={taskId} onClose={vi.fn()} onOpenConversation={vi.fn()} onOpenTask={vi.fn()} onCreated={vi.fn()} /></QueryClientProvider>);
+    const onOpenTask = vi.fn();
+    render(<QueryClientProvider client={client}><Toaster /><TaskDetail id={taskId} onClose={vi.fn()} onOpenConversation={vi.fn()} onOpenTask={onOpenTask} onCreated={vi.fn()} /></QueryClientProvider>);
 
     fireEvent.click(await screen.findByTitle('Click to edit title'));
     fireEvent.change(screen.getByDisplayValue('Editable task'), { target: { value: 'Saved title' } });
@@ -1462,6 +1466,8 @@ describe('task prerequisites', () => {
     fireEvent.change(search, { target: { value: 'prerequisite' } });
     fireEvent.click(await screen.findByRole('button', { name: /A prerequisite/ }));
     expect(await screen.findByText('Prerequisites saved.')).toBeTruthy();
+    fireEvent.click(screen.getByTitle('Open A prerequisite'));
+    expect(onOpenTask).toHaveBeenCalledWith(candidateId);
 
     fireEvent.click(screen.getByRole('button', { name: 'claude' }));
     expect(await screen.findByText('Could not save the owners.')).toBeTruthy();

@@ -78,6 +78,16 @@ describe('compactConversationHistory', () => {
     expect(memoryQueryForSharedReply(messages)).toBe('Cut prompt tokens, but do not lose durable decisions.\nYes, do it.');
   });
 
+  it('does not contaminate a standalone question with an unrelated prior control turn', () => {
+    const messages = [
+      message(0, 'Approve the Workbench preview.'),
+      message(1, 'That preview is now live.'),
+      message(2, 'What are my hobbies?'),
+    ];
+
+    expect(memoryQueryForSharedReply(messages)).toBe('What are my hobbies?');
+  });
+
   it('injects only memory matches that clear the query-relative relevance threshold', () => {
     const retrieved = Array.from({ length: 9 }, (_, index) => ({
       source: 'message', title: `Memory ${index + 1}`, body: `Detail ${index + 1}`, createdAt: '2026-08-25T00:00:00.000Z', score: index < 3 ? 0.03 - index * 0.001 : 0.01,
