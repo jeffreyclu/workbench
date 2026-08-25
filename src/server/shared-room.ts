@@ -179,8 +179,11 @@ export function linearContextForPrompt(repository: WorkItemRepository, message: 
   ].filter(Boolean).join('\n')).join('\n')}`;
 }
 
-export function dispatchNextSharedTurn(repository: WorkItemRepository, conversationId: string): SharedMessage[] {
-  const busyAgents = new Set(
+export function dispatchNextSharedTurn(repository: WorkItemRepository, conversationId: string, options: { allowBusyAgents?: boolean } = {}): SharedMessage[] {
+  // Normal conversation turns remain one-at-a-time per agent. Interject is
+  // explicitly different: it starts a new live turn immediately, while the
+  // existing response keeps streaming to its own message.
+  const busyAgents = options.allowBusyAgents ? new Set<AgentRun['agent']>() : new Set(
     repository.listAllSharedMessages(conversationId)
       .filter((message) => message.status === 'running' && (message.author === 'codex' || message.author === 'claude'))
       .map((message) => message.author as AgentRun['agent']),
@@ -428,10 +431,10 @@ export function cancelSharedReply(repository: WorkItemRepository, messageId: str
 export function interjectQueuedSharedMessage(repository: WorkItemRepository, messageId: string): SharedMessage[] | null {
   const message = repository.getSharedMessageById(messageId);
   if (!message || message.status !== 'queued') return null;
-  // Interject is a non-destructive steering action: put this exact turn next
+  // Interject is a non-destructive steering action: start this exact turn now
   // without interrupting an active reply. Explicit Cancel owns termination.
   repository.promoteQueuedSharedMessage(messageId);
-  return dispatchNextSharedTurn(repository, message.conversationId);
+  return dispatchNextSharedTurn(repository, message.conversationId, { allowBusyAgents: true });
 }
 
 function synthesisSource(repository: WorkItemRepository, conversationId: string, replyCreatedAt: string): { prompt: string; codex: SharedMessage; claude: SharedMessage } | null {

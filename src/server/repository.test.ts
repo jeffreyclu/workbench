@@ -1117,23 +1117,37 @@ describe('WorkItemRepository', () => {
     expect(repository.nextQueuedSharedTurn(conversation.id)).toEqual(expect.objectContaining({ message: expect.objectContaining({ id: second.id }) }));
   });
 
-  it('interjects a queued turn without canceling the active reply', () => {
+  it('interjects a queued turn immediately without canceling the active reply', async () => {
     const conversation = repository.createConversation('Non-destructive steering');
     const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);
     const earlier = repository.createSharedMessage('jeffrey', 'Do this afterward', 'queued', conversation.id, [], 'codex');
     const interjected = repository.createSharedMessage('jeffrey', 'Do this next', 'queued', conversation.id, [], 'codex');
     const originalCreatedAt = interjected.createdAt;
 
-    expect(interjectQueuedSharedMessage(repository, interjected.id)).toEqual([]);
-    expect(repository.getSharedMessageById(running.id)).toEqual(expect.objectContaining({ status: 'running' }));
-    expect(repository.nextQueuedSharedTurn(conversation.id)).toEqual(expect.objectContaining({
-      message: expect.objectContaining({ id: interjected.id }),
-    }));
-    expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({
-      createdAt: originalCreatedAt,
-      queuePriority: 1,
-    }));
-    expect(repository.getSharedMessageById(earlier.id)).toEqual(expect.objectContaining({ status: 'queued' }));
+    const previousPath = process.env.PATH;
+    const { directory } = fakeAgentDirectory("printf '%s\\n' '{\"type\":\"result\",\"result\":\"Steered\"}'", "printf '%s\\n' '{\"type\":\"result\",\"result\":\"Steered\"}'");
+    try {
+      const replies = interjectQueuedSharedMessage(repository, interjected.id);
+      expect(replies).not.toBeNull();
+      if (!replies) throw new Error('Interjection was not dispatched.');
+      expect(replies).toEqual([expect.objectContaining({ author: 'codex', status: 'running' })]);
+      expect(repository.getSharedMessageById(running.id)).toEqual(expect.objectContaining({ status: 'running' }));
+      expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({
+        createdAt: originalCreatedAt,
+        status: 'completed',
+        queuePriority: 1,
+      }));
+      expect(repository.getSharedMessageById(earlier.id)).toEqual(expect.objectContaining({ status: 'queued' }));
+
+      const deadline = Date.now() + 2_000;
+      while (replies.some((reply) => repository.getSharedMessageById(reply.id)?.status === 'running')) {
+        if (Date.now() > deadline) throw new Error('Timed out waiting for interjected reply.');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('does not promote a message that is not queued', () => {

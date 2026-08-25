@@ -712,7 +712,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const interjectMessage = useMutation({
     mutationFn: api.interjectSharedMessage,
     onSuccess: () => {
-      toast.success('Message moved next. The current response will continue.');
+      toast.success('Interjection started. The current response will continue.');
       return queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] });
     },
     onError: (error) => toastError('Could not interject that message.', error),
@@ -1067,9 +1067,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                 {message.status === 'running' && <p className="thinking">Live activity · {message.body ? 'receiving updates' : 'starting agent'}</p>}
                 {isQueuedMessage && (
                   <div className="queued-message">
-                    <span className="queued-message-status"><LoaderCircle size={13} /> {message.queuePriority ? 'Next up · current response continues' : 'Queued · starts after the current agent finishes'}</span>
+                    <span className="queued-message-status"><LoaderCircle size={13} /> {message.queuePriority ? 'Starting now · current response continues' : 'Queued · starts after the current agent finishes'}</span>
                     {message.author !== 'system' && <span className="queued-message-actions">
-                    <button type="button" className="icon-button queued-message-action" onClick={() => interjectMessage.mutate(message.id)} disabled={interjectMessage.isPending} aria-label="Move this message next without stopping the current agent" title="Send next without stopping the current agent"><ArrowUpRight size={14} /></button>
+                    <button type="button" className="icon-button queued-message-action" onClick={() => interjectMessage.mutate(message.id)} disabled={interjectMessage.isPending} aria-label="Interject now without stopping the current agent" title="Interject now without stopping the current agent"><ArrowUpRight size={14} /></button>
                       <button type="button" className="icon-button queued-message-action danger" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel queued message" title="Cancel this queued message"><X size={14} /></button>
                     </span>}
                   </div>

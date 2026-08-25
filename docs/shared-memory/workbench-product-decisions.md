@@ -25,10 +25,12 @@ require an explicit opt-in permission UX.
 *Decision from Jeffrey, 2026-08-25.*
 
 Interjecting a queued message must not cancel an already-running agent stream.
-It is a steering mechanism: preserve and render the in-flight response, then
-prioritize the interjected message as the next applicable turn. Cancellation
-remains an explicit, separate action. This replaces the prior behavior that
-aborted matching running replies before promoting the queued message.
+It is a steering mechanism: preserve and render the in-flight response, and
+start the interjected turn immediately as an additional live reply—even when
+it targets the same agent. It is not merely a queue-priority change.
+Cancellation remains an explicit, separate action. This replaces the prior
+behavior that aborted matching running replies before promoting the queued
+message.
 
 ### Parallel agent replies remain individually retryable
 
