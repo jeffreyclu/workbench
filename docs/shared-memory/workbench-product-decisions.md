@@ -168,6 +168,16 @@ closing the mobile conversation rail so its composer is visible. Disable the
 control while the create request is pending; one tap must never look like a
 no-op or produce duplicate empty conversations.
 
+### Completing or archiving a conversation returns to its stack
+
+*Decision from Jeffrey, 2026-08-25.*
+
+When a conversation is archived, or its linked task is completed (which
+archives the conversation), clear the active conversation and show only the
+conversation stack. Do not auto-open the first remaining conversation, even if
+that first card is in **Pinned for you**. The next conversation opens only from
+an explicit card selection or creating a new conversation.
+
 ### Project color is one system
 
 *Jeffrey corrected this on 2026-08-23 after repeated partial fixes.*

@@ -578,6 +578,8 @@ nav { display: grid; gap: 3px; }
 .mcp-required { color: #8d8c84; font: 9px 'DM Mono'; text-transform: uppercase; letter-spacing: .06em; }
 .shared-room-dialog { display: flex; flex-direction: column; width: min(760px, 100%); height: min(820px, 92vh); }
 .shared-workspace { grid-column: 2 / -1; display: grid; grid-template-columns: var(--stack-column-width) minmax(0, 1fr); min-width: 0; min-height: 0; height: 100vh; overflow: hidden; background: #0f0f0e; animation: view-enter var(--motion-standard) var(--motion-ease); }
+.shared-workspace.stack-only { grid-template-columns: var(--stack-column-width); }
+.shared-workspace.stack-only .agent-console { display: none; }
 .conversation-rail { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; padding: 18px 10px; background: #10100f; border-right: 1px solid var(--line); }
 .conversation-rail > header { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 0 5px 10px; }
 .conversation-rail > header .stack-toolbar-copy h2 { display: none; }

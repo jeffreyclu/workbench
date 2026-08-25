@@ -531,7 +531,7 @@ describe('shared room', () => {
     expect(workspace().classList.contains('rail-open')).toBe(true);
   });
 
-  it('returns to the next active conversation after archiving', async () => {
+  it('shows only the conversation stack after archiving', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000009';
     const active = { id: conversationId, title: 'Conversation to archive', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
@@ -550,8 +550,8 @@ describe('shared room', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Archive conversation' }));
 
-    expect(await screen.findByRole('heading', { name: 'Unrelated conversation one' })).toBeTruthy();
-    expect(screen.getAllByText('Unrelated conversation one').length).toBeGreaterThanOrEqual(2);
+    await waitFor(() => expect(document.querySelector('.shared-workspace')).toHaveClass('stack-only'));
+    expect(screen.queryByRole('heading', { name: 'Unrelated conversation one' })).toBeNull();
     expect(screen.getByText('Unrelated conversation two')).toBeTruthy();
     expect(screen.queryByText(/Archived conversation · restore or fork it to continue/)).toBeNull();
   });
@@ -815,7 +815,7 @@ describe('shared room', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === `/api/shared/conversations/${conversationId}/task` && init?.method === 'PATCH' && init.body === JSON.stringify({ workItemId: alphaTaskId }))).toBe(true));
   });
 
-  it('completes a linked task from its conversation and keeps the archived thread selected', async () => {
+  it('completes a linked task from its conversation and shows only the conversation stack', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000013';
     const taskId = '00000000-0000-4000-8000-000000000014';
@@ -858,7 +858,7 @@ describe('shared room', () => {
     fireEvent.click(completeTask);
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === `/api/work-items/${taskId}/complete` && init?.method === 'POST')).toBe(true));
-    expect(await screen.findByRole('heading', { name: 'New conversation' })).toBeTruthy();
+    await waitFor(() => expect(document.querySelector('.shared-workspace')).toHaveClass('stack-only'));
     expect(screen.queryByText(/Archived conversation · restore or fork it to continue/)).toBeNull();
   });
 
