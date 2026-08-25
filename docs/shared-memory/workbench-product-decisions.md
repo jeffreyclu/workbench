@@ -8,6 +8,12 @@ The library tracks and resolves received comments, but must not duplicate the
 composer or present an internal Comment action. When `APP_API_ORIGIN` is public,
 published pages use it as the feedback endpoint unless explicitly overridden.
 
+*Correction from Jeffrey, 2026-08-25.* The public-page interaction is row-anchored,
+not a page-level feedback composer: every artifact table row has an inline comment
+control, selecting it highlights that row, and its thread opens in a side rail.
+Store the deterministic page-local row selector with each comment so the thread
+remains associated with the reviewed row across reads of that artifact version.
+
 ### Browser chrome signals actionable conversation work
 
 *Decision implemented 2026-08-25.*
@@ -20,24 +26,31 @@ count refreshes through the authenticated shared WebSocket invalidation, with
 a polling fallback. Desktop notifications remain unimplemented because they
 require an explicit opt-in permission UX.
 
-### Interject steers without canceling an active stream
+### Interject steers the active run; it must not create a parallel reply
 
-*Decision from Jeffrey, 2026-08-25.*
+*Decision corrected by Jeffrey, 2026-08-25.*
 
-Interjecting a queued message must not cancel an already-running agent stream.
-It is a steering mechanism: preserve and render the in-flight response, and
-start the interjected turn immediately as an additional live reply—even when
-it targets the same agent. It is not merely a queue-priority change.
-Cancellation remains an explicit, separate action. This replaces the prior
-behavior that aborted matching running replies before promoting the queued
-message.
+Interjecting a queued message must steer the already-running agent run in
+place. It must not cancel the stream, defer to the next turn, or create a
+second/parallel agent reply. Cancellation remains an explicit, separate
+action. The prior implementation that allowed busy agents was rejected because
+it visibly opened a parallel thread instead of steering the live one.
 
 ### Parallel agent replies remain individually retryable
 
-*Decision from Jeffrey, 2026-08-25.* When a conversation dispatches to both Codex and Claude,
-each failed or canceled agent reply keeps its own **Retry / continue** control. Do not restrict
-retry to the chronologically latest agent message: its sibling may have already failed and must
-not become unrecoverable merely because another parallel reply exists.
+*Decision from Jeffrey, 2026-08-25; reconfirmed and superseding an earlier same-day instruction.*
+
+When a conversation dispatches to both Codex and Claude, each failed or canceled agent reply keeps
+its own **Retry / continue** control. Do not restrict retry to the chronologically latest agent
+message: its sibling may have already failed and must not become unrecoverable merely because
+another parallel reply exists.
+
+Jeffrey initially asked for Cancel/Interject/Retry to be coupled into one atomic action across both
+threads on a dual-agent dispatch ("cancel both together, retry both together"). He then retracted
+this the same session: one stream can already be canceled or errored while the other is still
+running, so **do not couple these actions** — Cancel, Interject, and Retry must each act on a single
+agent reply independently. Any in-flight implementation work toward atomic paired-group semantics
+for these controls should be dropped in favor of the existing per-reply behavior described above.
 
 ### Task attachments are part of pre-execution task context
 
@@ -457,6 +470,15 @@ protocol, so a runner owned by another process receives the cancellation
 request and terminates its CLI process tree instead of merely changing the
 message's displayed status.
 
+### Interject steers the active provider turn; it never queues or forks
+
+*Decision from Jeffrey, 2026-08-25.* Interject is live input to every matching
+active agent turn. It must preserve the existing stream and reply bubble, and
+must never cancel it, wait until the next turn, or launch a parallel reply.
+Explicit Cancel remains the only termination action. The Codex app-server
+protocol exposes this as `turn/steer`; a one-shot `codex exec` process cannot
+implement the requirement.
+
 ### In-progress "thinking" activity is a log, not a finished report
 
 *Fix from Claude, 2026-08-25.* The huge-circle-and-missing-space bug Jeffrey
@@ -481,3 +503,66 @@ Decision: in-progress/thinking content is intentionally styled distinct from
 a finished reply — dimmer color, monospace voice, dashed section border — via
 a new `.agent-progress` class, so a live activity log never looks like the
 polished final Brief/Detail report it will be replaced by.
+
+### Fix: retrying one double-thread reply no longer blocks its sibling's retry
+
+*Fix from Claude, 2026-08-25, per Jeffrey's decision above that Cancel/
+Interject/Retry act on each agent reply independently.* Root cause of the
+"Could not retry the response.×2 / This task already has an active agent
+run." bug: `WorkbenchAdminService.retryRun`
+(`src/server/services/workbench-admin-service.ts`) gated retry on
+`repository.activeRunsForItem(workItemId).length`, i.e. any active run
+anywhere on the task — including the sibling agent's own just-started retry.
+On a task with two independent Codex+Claude threads, retrying both in
+sequence made the second retry see the first retry's now-active run and
+refuse. Fixed by scoping the guard to `run.agent === prior.agent`, so retry
+only conflicts with an active run from the *same* agent. `startAgentRun` and
+`startWorkItemExecution` keep the item-wide guard — those are fresh dispatch
+paths, not per-reply retries, so deduping across the whole task is still
+correct there. Regression test:
+`src/server/app.test.ts` — "retrying one of two independent agent threads on
+the same task does not block the other".
+
+### Status: Google-Docs-style row comments on the public artifact page — done
+
+*Verified by Claude, 2026-08-25, per Jeffrey's decisions "comments should be
+on the PUBLIC page" then "google doc style... highlight rows and leave
+comments that appear off to the side".* Implementation was already complete
+from a prior handoff; this pass only verified and fixed test drift. The
+public artifact HTML (`renderCommentingLayer` in
+`src/server/artifact-publisher.ts`) injects a per-row comment button, a
+`box-shadow`-highlighted selected row, and a fixed side rail
+(`.wb-comment-rail`) with a thread + form, keyed off a page-local CSS-selector
+anchor (`main table:nth-of-type(n) tr:nth-of-type(n)`) computed client-side
+and persisted via `ArtifactComment.anchor`. Backed by
+`POST/GET /api/artifacts/:id/comments` and
+`PATCH /api/artifacts/:id/comments/:commentId`
+(`src/server/routes/artifact-router.ts`), a rate limiter
+(`createCommentRateLimiter`), and migration `046_artifact_comment_anchors`
+(additive column + index, forward-only per the DB-safety rule). The internal
+artifact drawer (`src/client/artifacts.tsx`) still shows the same comment
+thread read-only/resolve view for triage; it is not where coworkers leave
+feedback. Found and fixed one unrelated pre-existing bug while verifying:
+`src/server/database.test.ts`'s `EXPECTED_MIGRATIONS` list was missing
+`047_shared_message_dispatch_group` (an unrelated migration from other
+in-progress work on this branch), which failed `openDatabase` migration-count
+assertions — added the entry. Verification: `tsc --noEmit` clean; focused
+artifact/database/client suites (85 tests) pass; full suite passes except a
+pre-existing flaky teardown failure in `src/server/app.test.ts` ("lets an
+unblocked task past the gate", `ERR_INVALID_STATE` / "database is not open"
+during `releaseWorkspace`) that reproduces intermittently on full-suite runs
+but passes in isolation — unrelated to auth-gate backoff work on this
+branch, not to comments.
+
+Reply badge content expansion (2026-08-25): once the model/RAG badge row was
+moved to its own line on both desktop and mobile (freeing horizontal room),
+Jeffrey asked to add more info to the blue reply badge. `replyBadge`
+(`src/client/features/conversation/view.tsx`) now also shows the execution
+tier in parentheses after the model name when known (`economy`/`standard`/
+`deep`; omitted for `routing`/null), prompt-cache token reuse as `"N cached"`
+when `cacheReadInputTokens > 0`, and fallback provenance
+(`fallback from <agent> (<reason>)`) when the reply is a fallback — all
+previously hover-tooltip-only via `formatRunTelemetry`, now visible at a
+glance. `compactTokenCount` was exported from `src/client/formatters.ts` to
+back the cache-reuse figure. Verified: `tsc --noEmit` clean; full
+`vitest run` 897/897 passing; production build clean.
