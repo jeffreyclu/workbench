@@ -88,6 +88,27 @@ describe('SourcesDialog disconnect', () => {
   });
 });
 
+describe('SourcesDialog Figma scope', () => {
+  it('reports a failed Figma scope save without discarding the entered URL', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/source-connections') return jsonResponse({ connections: [figmaConnection] });
+      if (url === '/api/source-connections/figma/scope' && !init?.method) return jsonResponse({ roots: [] });
+      if (url === '/api/source-connections/figma/scope' && init?.method === 'PUT') return jsonResponse({ error: 'Figma is unavailable.' }, 503);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderDialog(fetchMock);
+
+    const scope = await screen.findByLabelText(/Discovery scope/);
+    fireEvent.change(scope, { target: { value: 'https://www.figma.com/design/example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save scope' }));
+
+    await waitFor(() => expect(getToasts().map((entry) => entry.message)).toContain('Could not save the Figma scope.'));
+    expect((scope as HTMLTextAreaElement).value).toBe('https://www.figma.com/design/example');
+    expect(await screen.findByText('Could not save Figma scope: Figma is unavailable.')).toBeTruthy();
+  });
+});
+
 describe('SourcesDialog connection loading', () => {
   it('reserves connection-card space while connections are loading', () => {
     const fetchMock = vi.fn(() => new Promise<Response>(() => {}));

@@ -5,11 +5,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ArtifactLibraryView } from './artifacts';
 import { versionUrl } from './artifact-url';
+import { getToasts, toast } from './toast-store';
 
 const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, 'execCommand');
 
 afterEach(() => {
   cleanup();
+  toast.clear();
   vi.unstubAllGlobals();
   if (execCommandDescriptor) Object.defineProperty(document, 'execCommand', execCommandDescriptor);
   else Reflect.deleteProperty(document, 'execCommand');
@@ -122,6 +124,21 @@ describe('artifact library', () => {
     expect(screen.getByText('Published')).toBeTruthy();
     expect(screen.getByText('Ashley')).toBeTruthy();
     expect(screen.getByText('The rollout section needs dates.')).toBeTruthy();
+  });
+
+  it('reports a failure when resolving feedback', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/artifacts?')) return new Response(JSON.stringify({ artifacts: [artifact], counts: { published: 1, revoked: 0, openComments: 1 } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/artifacts/abc123') return new Response(JSON.stringify(detail), { headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/artifacts/abc123/comments/comment-1' && init?.method === 'PATCH') return new Response(JSON.stringify({ error: 'Comment was already resolved.' }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    renderLibrary();
+
+    fireEvent.click(await screen.findByRole('button', { name: /history & feedback/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Resolve' }));
+    await waitFor(() => expect(getToasts().map((entry) => entry.message)).toContain('Could not update that comment.'));
   });
 
   it('republishes an artifact from the library without needing the file path', async () => {
