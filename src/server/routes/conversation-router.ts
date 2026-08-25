@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { createSharedConversationSchema, createSharedMessageSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedMessageSchema } from '../../shared/contracts.js';
+import { createSharedConversationSchema, createSharedMessageSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema } from '../../shared/contracts.js';
 import { runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, runSharedBackgroundJob } from '../shared-room.js';
@@ -90,6 +90,13 @@ export function createConversationRouter({ repository, database, capabilities }:
   router.patch('/api/shared/conversations/:id/brief', (request, response) => {
     const { brief } = updateSharedBriefSchema.parse(request.body);
     const conversation = repository.setConversationSharedBrief(request.params.id, brief);
+    if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
+    response.json({ conversation });
+  });
+
+  router.patch('/api/shared/conversations/:id/draft', (request, response) => {
+    const { body } = updateSharedConversationDraftSchema.parse(request.body);
+    const conversation = repository.setConversationDraft(request.params.id, body);
     if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
     response.json({ conversation });
   });

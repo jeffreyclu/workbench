@@ -53,7 +53,8 @@ const EXPECTED_MIGRATIONS = [
   '040_shared_messages_conversation_author_created_index',
   '041_work_item_attachments',
   '042_shared_message_retrieved_memory_detail',
-  '043_shared_conversation_composer_preferences',
+  '043_shared_conversation_draft_body',
+  '044_shared_conversation_composer_preferences',
 ];
 
 describe('openDatabase', () => {
@@ -137,13 +138,27 @@ describe('openDatabase', () => {
       ALTER TABLE shared_conversations DROP COLUMN preferred_account_profile;
       ALTER TABLE shared_conversations DROP COLUMN preferred_dispatch_target;
     `);
-    current.prepare("DELETE FROM schema_migrations WHERE id = '043_shared_conversation_composer_preferences'").run();
+    current.prepare("DELETE FROM schema_migrations WHERE id = '044_shared_conversation_composer_preferences'").run();
     current.close();
 
     const upgraded = openDatabase(path);
     const columns = (upgraded.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toEqual(expect.arrayContaining(['preferred_execution_profile', 'preferred_account_profile', 'preferred_dispatch_target']));
-    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '043_shared_conversation_composer_preferences'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '044_shared_conversation_composer_preferences'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds the conversation draft body when upgrading from migration 042', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE shared_conversations DROP COLUMN draft_body;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '043_shared_conversation_draft_body'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toContain('draft_body');
     upgraded.close();
   });
 

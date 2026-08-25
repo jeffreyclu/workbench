@@ -242,6 +242,10 @@ export class WorkItemRepository {
     return this.conversations.setSharedBrief(id, brief) ? this.getConversation(id) : null;
   }
 
+  setConversationDraft(id: string, body: string): SharedConversation | null {
+    return this.conversations.setDraftBody(id, body) ? this.getConversation(id) : null;
+  }
+
   countActiveConversations(): number {
     return this.conversations.countActive();
   }
@@ -1549,7 +1553,7 @@ export class WorkItemRepository {
     `).all(workItemId, workItemId) as Array<Record<string, string | number | null>>;
     return rows.map((row) => ({
       id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
-      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, preferredAccountProfile: row.preferred_account_profile ? String(row.preferred_account_profile) : null, preferredDispatchTarget: row.preferred_dispatch_target as SharedConversation['preferredDispatchTarget'] ?? null, createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
+      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, draftBody: String(row.draft_body ?? ''), preferredAccountProfile: row.preferred_account_profile ? String(row.preferred_account_profile) : null, preferredDispatchTarget: row.preferred_dispatch_target as SharedConversation['preferredDispatchTarget'] ?? null, createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
     }));
   }
 

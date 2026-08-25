@@ -1410,10 +1410,22 @@ const schemaMigrations: readonly Migration[] = [
     },
   },
   {
+    // A reply typed on one machine was invisible on another, since drafts
+    // lived only in that browser's localStorage. Persisting the draft body
+    // server-side lets it follow the conversation across devices.
+    id: '043_shared_conversation_draft_body',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'draft_body')) {
+        database.exec("ALTER TABLE shared_conversations ADD COLUMN draft_body TEXT NOT NULL DEFAULT '';");
+      }
+    },
+  },
+  {
     // Composer choices are conversation state, not a byproduct of the last
     // message. Persist all three so a selection survives a reload or another
     // Workbench device before Jeffrey sends the next turn.
-    id: '043_shared_conversation_composer_preferences',
+    id: '044_shared_conversation_composer_preferences',
     apply(database) {
       const columns = database.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>;
       if (!columns.some((column) => column.name === 'preferred_account_profile')) {
