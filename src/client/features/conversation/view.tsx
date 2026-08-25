@@ -463,6 +463,24 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const conversationMessages = hasEarlierMessages
     ? allConversationMessages.slice(allConversationMessages.length - threadVisibleCount)
     : allConversationMessages;
+  // Consecutive codex+claude replies with no jeffrey message between them came
+  // from the same "both" dispatch — render them as one side-by-side group
+  // instead of two look-alike rows stacked on top of each other.
+  const conversationRenderRows = useMemo(() => {
+    const rows: ({ type: 'single'; message: SharedMessage } | { type: 'pair'; a: SharedMessage; b: SharedMessage })[] = [];
+    for (let i = 0; i < conversationMessages.length; i++) {
+      const message = conversationMessages[i];
+      const next = conversationMessages[i + 1];
+      const isAgent = (m: SharedMessage) => m.author === 'codex' || m.author === 'claude';
+      if (next && isAgent(message) && isAgent(next) && message.author !== next.author) {
+        rows.push({ type: 'pair', a: message, b: next });
+        i++;
+      } else {
+        rows.push({ type: 'single', message });
+      }
+    }
+    return rows;
+  }, [conversationMessages]);
   // The visible thread is already capped to a handful of recent messages.
   // Keeping even completed rows in document flow removes the virtualizer's
   // cached-height transition: streamed Markdown can grow or settle at any
@@ -1011,52 +1029,63 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
             </button>
           )}
           <div className="thread-virtualizer thread-live-flow">
-          {conversationMessages.map((message) => {
-            const isAgentMessage = message.author === 'codex' || message.author === 'claude';
-            const isQueuedMessage = message.status === 'queued';
-            return <div key={message.id} className="thread-virtual-row">
-            <article className={`shared-message shared-${message.author}${message.author === 'system' && message.status === 'queued' ? ' shared-system-queued' : ''}`}>
-              <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
-                {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
-                {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyBadge(message)}</span>}
-                {isAgentMessage && <button
-                  type="button"
-                  className={`memory-badge${typeof message.retrievedMemoryCount === 'number' ? '' : ' memory-badge-not-run'}`}
-                  disabled={typeof message.retrievedMemoryCount !== 'number'}
-                  onClick={() => setRetrievedMemoryMessageId(message.id)}
-                  title={typeof message.retrievedMemoryCount === 'number'
-                    ? message.retrievedMemoryCount > 0
-                      ? `Retrieved ${message.retrievedMemoryCount} memory match${message.retrievedMemoryCount === 1 ? '' : 'es'} from RAG for this reply — click to view`
-                      : 'RAG memory search ran but found no matches'
-                    : 'RAG memory retrieval did not run for this message'}
-                >
-                  <Search size={11} /> {typeof message.retrievedMemoryCount === 'number' ? message.retrievedMemoryCount : '—'}
-                </button>}
-                {message.status === 'running' && <button type="button" className="cancel-response" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel response" title="Cancel response"><X size={12} /></button>}
-              </header>
-              {message.status === 'running' && <p className="thinking"><LoaderCircle className="spin" size={13} /> Live · {message.body ? 'receiving activity' : 'starting agent'}</p>}
-              {isQueuedMessage && (
-                <div className="queued-message">
-                  <span className="queued-message-status"><LoaderCircle size={13} /> Queued · starts after the current agent finishes</span>
-                  {message.author !== 'system' && <span className="queued-message-actions">
-                    <button type="button" className="icon-button queued-message-action" onClick={() => interjectMessage.mutate(message.id)} disabled={interjectMessage.isPending} aria-label="Interrupt the current agent and send this queued message now" title="Interrupt the current agent and send this now"><ArrowUpRight size={14} /></button>
-                    <button type="button" className="icon-button queued-message-action danger" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel queued message" title="Cancel this queued message"><X size={14} /></button>
-                  </span>}
-                </div>
-              )}
-              {message.body && (isAgentMessage
-                ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} />
-                : <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: MarkdownCode, pre: MarkdownPre }}>{message.body}</ReactMarkdown></div>)}
-              {message.status === 'canceled' && <p className="muted">Response canceled.</p>}
-              {(message.author === 'codex' || message.author === 'claude') && (message.status === 'failed' || message.status === 'canceled') && <div className="message-actions"><button onClick={() => retryReply.mutate(message)} disabled={retryReply.isPending}><RefreshCw size={12} /> Retry / continue</button></div>}
-              {message.attachments.length > 0 && <div className="message-files">{message.attachments.map((file) => (
-                <a key={file.path} href={`/api/artifacts/raw?path=${encodeURIComponent(file.path)}&conversationId=${encodeURIComponent(message.conversationId)}`} target="_blank" rel="noreferrer" title={`${file.mimeType} · ${formatFileSize(file.size)}`}>
-                  <Paperclip size={11} /> {file.name} <span className="message-file-meta">{formatFileSize(file.size)}</span>
-                </a>
-              ))}</div>}
-              {message.error && <p className="error-message">{message.error}</p>}
-              {message.status === 'completed' && message.author !== 'jeffrey' && (message.author !== 'system' || message.body.startsWith('Synthesis:')) && <div className="message-actions"><button onClick={() => createTasks.mutate({ messageId: message.id, conversationId: conversationId! })} disabled={createTasks.isPending && createTasks.variables?.conversationId === conversationId}>{createTasks.isPending && createTasks.variables?.messageId === message.id && createTasks.variables.conversationId === conversationId ? <><LoaderCircle className="spin" size={12} /> Extracting findings…</> : <><Plus size={12} /> Turn findings into tasks</>}</button></div>}
-            </article>
+          {conversationRenderRows.map((row) => {
+            const renderMessage = (message: SharedMessage, inGroup: boolean) => {
+              const isAgentMessage = message.author === 'codex' || message.author === 'claude';
+              const isQueuedMessage = message.status === 'queued';
+              return <div key={message.id} className={`thread-virtual-row${inGroup ? ' reply-group-message' : ''}`}>
+              <article className={`shared-message shared-${message.author}${message.author === 'system' && message.status === 'queued' ? ' shared-system-queued' : ''}`}>
+                <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
+                  {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
+                  {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyBadge(message)}</span>}
+                  {isAgentMessage && <button
+                    type="button"
+                    className={`memory-badge${typeof message.retrievedMemoryCount === 'number' ? '' : ' memory-badge-not-run'}`}
+                    disabled={typeof message.retrievedMemoryCount !== 'number'}
+                    onClick={() => setRetrievedMemoryMessageId(message.id)}
+                    title={typeof message.retrievedMemoryCount === 'number'
+                      ? message.retrievedMemoryCount > 0
+                        ? `Retrieved ${message.retrievedMemoryCount} memory match${message.retrievedMemoryCount === 1 ? '' : 'es'} from RAG for this reply — click to view`
+                        : 'RAG memory search ran but found no matches'
+                      : 'RAG memory retrieval did not run for this message'}
+                  >
+                    <Search size={11} /> {typeof message.retrievedMemoryCount === 'number' ? message.retrievedMemoryCount : '—'}
+                  </button>}
+                  {message.status === 'running' && <button type="button" className="cancel-response" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel response" title="Cancel response"><X size={12} /></button>}
+                </header>
+                {message.status === 'running' && <p className="thinking">Live activity · {message.body ? 'receiving updates' : 'starting agent'}</p>}
+                {isQueuedMessage && (
+                  <div className="queued-message">
+                    <span className="queued-message-status"><LoaderCircle size={13} /> Queued · starts after the current agent finishes</span>
+                    {message.author !== 'system' && <span className="queued-message-actions">
+                    <button type="button" className="icon-button queued-message-action" onClick={() => interjectMessage.mutate(message.id)} disabled={interjectMessage.isPending} aria-label="Move this message next without stopping the current agent" title="Send next without stopping the current agent"><ArrowUpRight size={14} /></button>
+                      <button type="button" className="icon-button queued-message-action danger" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel queued message" title="Cancel this queued message"><X size={14} /></button>
+                    </span>}
+                  </div>
+                )}
+                {message.body && (isAgentMessage
+                  ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} />
+                  : <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: MarkdownCode, pre: MarkdownPre }}>{message.body}</ReactMarkdown></div>)}
+                {message.status === 'canceled' && <p className="muted">Response canceled.</p>}
+                {(message.author === 'codex' || message.author === 'claude') && (message.status === 'failed' || message.status === 'canceled') && <div className="message-actions"><button onClick={() => retryReply.mutate(message)} disabled={retryReply.isPending}><RefreshCw size={12} /> Retry / continue</button></div>}
+                {message.attachments.length > 0 && <div className="message-files">{message.attachments.map((file) => (
+                  <a key={file.path} href={`/api/artifacts/raw?path=${encodeURIComponent(file.path)}&conversationId=${encodeURIComponent(message.conversationId)}`} target="_blank" rel="noreferrer" title={`${file.mimeType} · ${formatFileSize(file.size)}`}>
+                    <Paperclip size={11} /> {file.name} <span className="message-file-meta">{formatFileSize(file.size)}</span>
+                  </a>
+                ))}</div>}
+                {message.error && <p className="error-message">{message.error}</p>}
+                {message.status === 'completed' && message.author !== 'jeffrey' && (message.author !== 'system' || message.body.startsWith('Synthesis:')) && <div className="message-actions"><button onClick={() => createTasks.mutate({ messageId: message.id, conversationId: conversationId! })} disabled={createTasks.isPending && createTasks.variables?.conversationId === conversationId}>{createTasks.isPending && createTasks.variables?.messageId === message.id && createTasks.variables.conversationId === conversationId ? <><LoaderCircle className="spin" size={12} /> Extracting findings…</> : <><Plus size={12} /> Turn findings into tasks</>}</button></div>}
+              </article>
+              </div>;
+            };
+            if (row.type === 'single') return renderMessage(row.message, false);
+            const runningCount = [row.a, row.b].filter((message) => message.status === 'running').length;
+            return <div key={`${row.a.id}-${row.b.id}`} className="thread-virtual-row reply-group">
+              <div className="reply-group-header">{runningCount > 0 ? `${runningCount} agent${runningCount > 1 ? 's' : ''} responding` : 'Codex + Claude replied'}</div>
+              <div className="reply-group-columns">
+                {renderMessage(row.a, true)}
+                {renderMessage(row.b, true)}
+              </div>
             </div>;
           })}
           </div>

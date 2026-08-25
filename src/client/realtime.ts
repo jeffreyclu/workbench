@@ -26,7 +26,7 @@ const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
   ],
   shared: [
     ['shared-conversations'], ['shared-conversation'], ['shared-messages'], ['shared-message-activity'],
-    ['conversation-count'], ['notification-conversations'], ['conversation-unread-count'], ['shared-search'],
+    ['conversation-count'], ['notification-conversations'], ['conversation-unread-count'], ['conversation-attention-count'], ['shared-search'],
   ],
   discovery: [['discovery'], ['discovery-merge-targets']],
   runtime: [['runtime-preview-status']],

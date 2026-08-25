@@ -52,38 +52,29 @@ describe('splitAgentResponse', () => {
   it('marks live agent text for the streaming motion treatment', () => {
     const { container } = render(<AgentMessageBody body="Receiving output" running />);
 
-    expect(container.querySelector('.agent-markdown')).toHaveClass('streaming');
+    expect(container.querySelector('.live-run-output')).toBeInTheDocument();
+    expect(container.querySelector('.agent-response')).toBeNull();
+    expect(screen.getByText('Receiving output')).toBeInTheDocument();
   });
 
-  it('reveals newly streamed text a character at a time instead of snapping in whole chunks', async () => {
+  it('renders live activity immediately instead of treating it as a typed final reply', async () => {
     const { container, rerender } = render(<AgentMessageBody body="Hello" running />);
     await waitForFrame();
     expect(container.textContent).toBe('Hello');
 
     rerender(<AgentMessageBody body="Hello, this is a much longer streamed chunk of text." running />);
-    expect(container.textContent).toBe('Hello');
-
-    await waitForFrame();
-    const midway = container.textContent ?? '';
-    expect(midway.length).toBeGreaterThan('Hello'.length);
-    expect(midway.length).toBeLessThan('Hello, this is a much longer streamed chunk of text.'.length);
-    expect('Hello, this is a much longer streamed chunk of text.'.startsWith(midway)).toBe(true);
-
-    for (let i = 0; i < 20; i += 1) await waitForFrame();
     expect(container.textContent).toBe('Hello, this is a much longer streamed chunk of text.');
+    expect(container.querySelector('.agent-response')).toBeNull();
   });
 
-  it('waits for a complete token before rendering streamed text', async () => {
+  it('uses separate activity items for progress blocks', async () => {
     const { container, rerender } = render(<AgentMessageBody body="Hello" running />);
-    rerender(<AgentMessageBody body="Hello **Awaiting** next" running />);
+    rerender(<AgentMessageBody body={'● Inspecting repository\n\n● Running tests'} running />);
 
     await waitForFrame();
-    await waitForFrame();
-
-    const visible = container.textContent ?? '';
-    expect(visible).not.toMatch(/\*{1,2}[^*\s]*$/);
-    expect('Hello **Awaiting** next'.startsWith(visible)).toBe(true);
-    expect(['Hello', 'Hello ']).toContain(visible);
+    expect(container.querySelectorAll('.live-run-output li')).toHaveLength(2);
+    expect(container.textContent).toContain('Inspecting repository');
+    expect(container.textContent).toContain('Running tests');
   });
 
   it('snaps streamed text to full once the message finishes running', async () => {

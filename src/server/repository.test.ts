@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync, rmSync } from 'node:fs';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
-import { cancelSharedReply, dispatchNextSharedTurn } from './shared-room.js';
+import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage } from './shared-room.js';
 import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
@@ -623,6 +623,7 @@ describe('WorkItemRepository', () => {
     expect(states.get(failed.id)).toBe('needs_attention');
     expect(states.get(finished.id)).toBe('finished');
     expect(states.get(approval.id)).toBe('waiting_approval');
+    expect(repository.countAttentionConversations()).toBe(2);
     expect(repository.countUnreadConversations()).toBe(4);
     repository.markConversationRead(finished.id);
     expect(repository.countUnreadConversations()).toBe(3);
@@ -1114,6 +1115,20 @@ describe('WorkItemRepository', () => {
     const second = repository.createSharedMessage('jeffrey', 'Second in line', 'queued', conversation.id, [], 'claude');
     expect(repository.promoteQueuedSharedMessage(second.id)).toEqual(expect.objectContaining({ id: second.id }));
     expect(repository.nextQueuedSharedTurn(conversation.id)).toEqual(expect.objectContaining({ message: expect.objectContaining({ id: second.id }) }));
+  });
+
+  it('interjects a queued turn without canceling the active reply', () => {
+    const conversation = repository.createConversation('Non-destructive steering');
+    const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);
+    const earlier = repository.createSharedMessage('jeffrey', 'Do this afterward', 'queued', conversation.id, [], 'codex');
+    const interjected = repository.createSharedMessage('jeffrey', 'Do this next', 'queued', conversation.id, [], 'codex');
+
+    expect(interjectQueuedSharedMessage(repository, interjected.id)).toEqual([]);
+    expect(repository.getSharedMessageById(running.id)).toEqual(expect.objectContaining({ status: 'running' }));
+    expect(repository.nextQueuedSharedTurn(conversation.id)).toEqual(expect.objectContaining({
+      message: expect.objectContaining({ id: interjected.id }),
+    }));
+    expect(repository.getSharedMessageById(earlier.id)).toEqual(expect.objectContaining({ status: 'queued' }));
   });
 
   it('does not promote a message that is not queued', () => {

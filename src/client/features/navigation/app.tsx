@@ -65,6 +65,7 @@ import { isWorkbenchProject, WORKBENCH_PROJECT_NAME } from '../../../shared/proj
 import { SourcesDialog } from '../../sources-dialog';
 import { createTaskStackViewModel } from '../../stack-view-model';
 import { useRealtimeNotifications, type RealtimeNotification } from '../../realtime';
+import { useAttentionIndicator } from '../../attention-indicator';
 import { useTaskStackReorderAnimation } from '../queue/use-task-stack-reorder-animation';
 import { reorderTaskPages, reorderTasks, type TaskReorderTarget } from '../queue/task-reorder';
 
@@ -86,6 +87,12 @@ function PulseCount({ value, as: Tag = 'strong' }: { value: number; as?: 'strong
 export function App() {
   const queryClient = useQueryClient();
   const health = useQuery({ queryKey: ['health'], queryFn: api.getHealth, refetchInterval: 15_000 });
+  const attentionCount = useQuery({
+    queryKey: ['conversation-attention-count'],
+    queryFn: api.getAttentionConversationCount,
+    refetchInterval: 15_000,
+  });
+  useAttentionIndicator(attentionCount.data?.count ?? 0);
   const loadedBuildId = useRef<string | null>(null);
   useEffect(() => {
     const buildId = health.data?.buildId;

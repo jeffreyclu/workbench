@@ -558,7 +558,7 @@ function terminateAgentProcessTree(child: ReturnType<typeof spawn>, signal: Node
  */
 export interface AgentEventContext { subagents: Map<string, string> }
 
-export function readableAgentEvent(agent: AgentRun['agent'], line: string, context?: AgentEventContext): { progress: string; final: string | null; audit: AgentAuditCandidate[]; delta?: string } {
+export function readableAgentEvent(agent: AgentRun['agent'], line: string, context?: AgentEventContext): { progress: string; final: string | null; audit: AgentAuditCandidate[]; delta?: string; blockBreak?: boolean } {
   try {
     const event = JSON.parse(line) as Record<string, unknown>;
     if (agent === 'codex') {
@@ -606,6 +606,13 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
       if (streamed.type === 'content_block_start' && subagent) {
         const block = (streamed.content_block ?? {}) as Record<string, unknown>;
         if (block.type === 'text') return { progress: `[${subagent}]`, final: null, audit: [] };
+      }
+      // A new text block streaming without a worker label still needs a break
+      // from whatever progress line preceded it (e.g. a tool-use marker) —
+      // otherwise the first delta lands glued onto that line's last word.
+      if (streamed.type === 'content_block_start' && !subagent) {
+        const block = (streamed.content_block ?? {}) as Record<string, unknown>;
+        if (block.type === 'text') return { progress: '', final: null, audit: [], blockBreak: true };
       }
       // A thinking block prints nothing. Announcing each one buried the real
       // answer under dozens of identical markers; the quiet-run heartbeat is
@@ -819,6 +826,10 @@ ${CLAUDE_EXECUTION_CONTRACT}` : prompt;
         terminalError ||= terminalAgentError(agent, line) ?? '';
         try { const usage = usageFromEvent(agent, JSON.parse(line)); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
         const event = readableAgentEvent(agent, line, eventContext);
+        // A new text block starting mid-stream needs its own line — without
+        // this, its first delta glues directly onto whatever progress line
+        // (e.g. a tool-use marker) came right before it.
+        if (event.blockBreak && progress && !progress.endsWith('\n\n')) progress += '\n\n';
         // Streamed text is appended verbatim: it is one message arriving in
         // pieces, not a separate progress line.
         if (event.delta) {

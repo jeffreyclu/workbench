@@ -1,5 +1,27 @@
 ## Workbench product decisions
 
+### Browser chrome signals actionable conversation work
+
+*Decision implemented 2026-08-25.*
+
+When Workbench is backgrounded, browser chrome must surface conversations in
+`needs_attention` or `waiting_approval`: title format is `(N) Workbench` and
+the favicon has an attention dot. Do not use unread conversations for this
+count; ordinary completed agent replies are not action-required. The precise
+count refreshes through the authenticated shared WebSocket invalidation, with
+a polling fallback. Desktop notifications remain unimplemented because they
+require an explicit opt-in permission UX.
+
+### Interject steers without canceling an active stream
+
+*Decision from Jeffrey, 2026-08-25.*
+
+Interjecting a queued message must not cancel an already-running agent stream.
+It is a steering mechanism: preserve and render the in-flight response, then
+prioritize the interjected message as the next applicable turn. Cancellation
+remains an explicit, separate action. This replaces the prior behavior that
+aborted matching running replies before promoting the queued message.
+
 ### Parallel agent replies remain individually retryable
 
 *Decision from Jeffrey, 2026-08-25.* When a conversation dispatches to both Codex and Claude,
@@ -411,3 +433,28 @@ Cancelling a task-linked reply must use the durable agent-run cancellation
 protocol, so a runner owned by another process receives the cancellation
 request and terminates its CLI process tree instead of merely changing the
 message's displayed status.
+
+### In-progress "thinking" activity is a log, not a finished report
+
+*Fix from Claude, 2026-08-25.* The huge-circle-and-missing-space bug Jeffrey
+flagged in a screenshot had two separate root causes, both in the live
+progress path (`AgentMessageBody` with `running=true`), not the final reply:
+
+- Missing space (e.g. "commandTypecheck is clean"): `agent-runner.ts` appends
+  streamed `text_delta` chunks to `progress` verbatim with no separator. When
+  a `content_block_start` for a new text block arrived right after a
+  non-subagent tool-use progress line (e.g. `● Running a workspace command`),
+  the first delta glued directly onto that line with zero characters between.
+  Fixed by emitting a `blockBreak` signal on non-subagent `content_block_start`
+  for `type: 'text'` and inserting `\n\n` before resuming delta appends.
+- Huge circle: progress lines are logged server-side as literal `● Label`
+  text, which `AgentMessageBody` fed straight through Markdown as plain
+  paragraph text. The `●` glyph's em-box renders much taller than the 12px
+  body copy, so it reads as an oversized circle. Fixed by converting
+  `^●\s+` lines to real Markdown list items (`- `) only while `running`, so
+  the browser sizes the bullet marker to match the text.
+
+Decision: in-progress/thinking content is intentionally styled distinct from
+a finished reply — dimmer color, monospace voice, dashed section border — via
+a new `.agent-progress` class, so a live activity log never looks like the
+polished final Brief/Detail report it will be replaced by.

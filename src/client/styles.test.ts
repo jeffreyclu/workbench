@@ -6,7 +6,7 @@ const styles = readFileSync(fileURLToPath(new URL('./styles.css', import.meta.ur
 
 describe('shared message layout', () => {
   it('caps conversation bubbles on every viewport and keeps them inside their thread', () => {
-    const sharedMessageRule = styles.match(/\.shared-message\s*\{[^}]*\}/)?.[0] ?? '';
+    const sharedMessageRule = styles.match(/^\.shared-message\s*\{[^}]*\}/m)?.[0] ?? '';
 
     expect(sharedMessageRule).toContain('width: min(94%, 640px)');
     expect(sharedMessageRule).toContain('min-width: 0');
@@ -27,14 +27,11 @@ describe('shared message layout', () => {
     }
   });
 
-  it('keeps streaming run output inside the bubble', () => {
-    // A bare <pre> is white-space: pre with no overflow, so an unstyled live
-    // run log stretches the bubble to the width of its longest tool line.
-    const rule = styles.match(/\.live-run-output pre\s*\{[^}]*\}/)?.[0] ?? '';
+  it('keeps the live activity feed inside the bubble', () => {
+    const rule = styles.match(/^\.live-run-output li\s*\{[^}]*\}/m)?.[0] ?? '';
 
-    expect(rule).toContain('max-width: 100%');
-    expect(rule).toContain('white-space: pre-wrap');
     expect(rule).toContain('overflow-wrap: anywhere');
+    expect(rule).toContain('word-break: break-word');
   });
 });
 

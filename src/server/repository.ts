@@ -250,6 +250,13 @@ export class WorkItemRepository {
     return this.conversations.countUnread();
   }
 
+  /** Conversations whose next meaningful action belongs to Jeffrey. */
+  countAttentionConversations(): number {
+    return this.listConversations().filter((conversation) =>
+      conversation.state === 'needs_attention' || conversation.state === 'waiting_approval',
+    ).length;
+  }
+
   private withConversationState(conversation: SharedConversation): SharedConversation {
     const promoting = Boolean(this.database.prepare(`
       SELECT 1 FROM shared_messages

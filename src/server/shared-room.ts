@@ -428,20 +428,8 @@ export function cancelSharedReply(repository: WorkItemRepository, messageId: str
 export function interjectQueuedSharedMessage(repository: WorkItemRepository, messageId: string): SharedMessage[] | null {
   const message = repository.getSharedMessageById(messageId);
   if (!message || message.status !== 'queued') return null;
-  const targetAgents = message.dispatchTarget === 'both' ? ['codex', 'claude'] as const
-    : message.dispatchTarget === 'auto' ? ['codex', 'claude'] as const
-    : message.dispatchTarget === 'none' ? [] : [message.dispatchTarget];
-  const running = repository.listAllSharedMessages(message.conversationId)
-    .filter((item) => item.status === 'running' && targetAgents.includes(item.author as AgentRun['agent']));
-  // Do not call cancelSharedReply here: it dispatches the next queued message
-  // after each cancellation, which can let an older turn win before this one
-  // is promoted. Steering must make this exact message the next dispatch.
-  for (const runningMessage of running) {
-    activeReplies.get(runningMessage.id)?.abort();
-    repository.updateSharedMessage(runningMessage.id, { status: 'canceled' });
-    const runId = replyRunIds.get(runningMessage.id) ?? repository.getRunByMessage(runningMessage.id)?.id;
-    if (runId) repository.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString() });
-  }
+  // Interject is a non-destructive steering action: put this exact turn next
+  // without interrupting an active reply. Explicit Cancel owns termination.
   repository.promoteQueuedSharedMessage(messageId);
   return dispatchNextSharedTurn(repository, message.conversationId);
 }

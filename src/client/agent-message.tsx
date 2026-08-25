@@ -88,21 +88,27 @@ export function LiveRunOutput({ output }: { output: string }) {
   const hiddenCount = Math.max(0, blocks.length - visibleCount);
   const visibleBlocks = blocks.slice(hiddenCount);
   return (
-    <div className="live-run-output">
+    <div className="live-run-output" aria-label="Live agent activity">
       {hiddenCount > 0 && (
         <button type="button" className="show-more-activity-button" onClick={() => setVisibleCount((current) => current + LIVE_RUN_OUTPUT_PAGE_SIZE)}>
           Show earlier ({hiddenCount} more)
         </button>
       )}
-      <pre aria-live="polite">{visibleBlocks.join('\n\n')}</pre>
+      <ol aria-live="polite">
+        {visibleBlocks.map((block, index) => <li key={`${block}-${index}`}>{block.replace(/^●\s*/, '')}</li>)}
+      </ol>
     </div>
   );
 }
 
 export function AgentMessageBody({ body, running, conversationId, workItemId }: { body: string; running: boolean; conversationId?: string; workItemId?: string }) {
   const sectionIdPrefix = useId();
-  const visibleBody = hideWorkbenchControlBlocks(running ? humanizeRunOutput(body) : body);
+  const humanized = running ? humanizeRunOutput(body) : body;
+  const visibleBody = hideWorkbenchControlBlocks(humanized);
   if (!visibleBody) return null;
+  // Progress is operational context, not an authored reply. Keep its compact
+  // activity feed distinct from the section-card treatment for final answers.
+  if (running) return <LiveRunOutput output={visibleBody} />;
   const sections = splitAgentResponse(visibleBody);
   const structured = sections.length > 1;
   const renderMarkdown = (content: string) => <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
@@ -115,7 +121,7 @@ export function AgentMessageBody({ body, running, conversationId, workItemId }: 
     },
   }}>{content}</ReactMarkdown>;
 
-  if (!structured) return <div className={`agent-markdown${running ? ' streaming' : ''}`}><StreamingMarkdown content={visibleBody} streaming={running} renderMarkdown={renderMarkdown} /></div>;
+  if (!structured) return <div className="agent-markdown"><StreamingMarkdown content={visibleBody} streaming={false} renderMarkdown={renderMarkdown} /></div>;
 
   const lastIndex = sections.length - 1;
   return <div className="agent-response" role="group" aria-label={`Agent response in ${sections.length} parts`}>

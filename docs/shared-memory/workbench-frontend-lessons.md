@@ -435,6 +435,18 @@ same `transform: rotate()` transition now pivots cleanly. Any future rotating-
 icon-via-text-glyph should use this border-box (or an SVG/icon component)
 pattern instead.
 
+### Live agent progress is operational context, not the final reply
+
+*Decision from Jeffrey, 2026-08-25.* In-progress agent messages must use a
+compact activity-feed treatment, visibly distinct from a completed response.
+Do not split live tool/progress output into the final-response `Brief` / `Detail`
+cards or render raw `●` glyphs beside prose: those glyphs have an oversized
+em-box and read as giant circles. Show one restrained active marker and small,
+separate activity rows; reserve the report styling for the answer after the
+agent completes. When a streamed text block follows a tool marker, insert a
+block boundary in `agent-runner.ts` so words cannot concatenate (for example,
+`commandTypecheck`).
+
 ### A `streaming` class on a CSS grid container breaks a trailing `::after` caret
 
 *Confirmed 2026-08-24.* `agent-message.tsx`'s structured (multi-section)

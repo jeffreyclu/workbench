@@ -31,6 +31,10 @@ export function createConversationRouter({ repository, database, capabilities }:
     response.json({ count: repository.countUnreadConversations() });
   });
 
+  router.get('/api/shared/conversations-attention-count', (_request, response) => {
+    response.json({ count: repository.countAttentionConversations() });
+  });
+
   router.get('/api/shared/conversations-count', (_request, response) => {
     response.json({ count: repository.countActiveConversations() });
   });
