@@ -27,6 +27,7 @@ function message(index: number, body: string): SharedMessage {
     attempt: 0,
     maxAttempts: 3,
     nextAttemptAt: null,
+    retrievedMemoryCount: null,
     completedAt: '2026-08-21T00:00:00.000Z',
     createdAt: `2026-08-21T00:00:${String(index).padStart(2, '0')}.000Z`,
   };

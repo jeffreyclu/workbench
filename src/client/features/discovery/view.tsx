@@ -2,6 +2,7 @@ import { ArrowUpRight, Check, LoaderCircle, RefreshCw, Search, Sparkles } from '
 import type { DiscoveryCandidate, WorkItem } from '../../../shared/contracts';
 import { MarkdownComposer } from '../../markdown-composer.js';
 import { DiscoveryCardSkeleton } from '../../skeleton';
+import { Tabs } from '../../tabs';
 import { useDiscoveryCard, useDiscoveryInbox, useDiscoveryNav } from './hooks';
 
 export function DiscoveryNav({ active, onClick }: { active: boolean; onClick: () => void }) {
@@ -33,7 +34,10 @@ export function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (i
       {lastRun?.errors.map((error) => <span className="error-message" key={error}>{error}</span>)}
     </div>
     {inbox.data?.queueProposal && <div className="morning-proposal"><span><Sparkles size={15} /><strong>Morning stack proposal ready</strong><small>{inbox.data.queueProposal.rationale}</small></span><button className="button primary compact" onClick={onOpenStack}>Review reorder</button></div>}
-    <div className="discovery-tabs"><button className={inboxView === 'pending' ? 'active' : ''} onClick={() => { setInboxView('pending'); setSelected(new Set()); }}>Pending <span>{inbox.data?.pendingCount ?? '…'}</span></button><button className={inboxView === 'reviewed' ? 'active' : ''} onClick={() => { setInboxView('reviewed'); setSelected(new Set()); }}>Reviewed <span>{inbox.data?.reviewedCount ?? '…'}</span></button></div>
+    <Tabs ariaLabel="Discovery view" className="discovery-tabs" selected={inboxView} onSelect={(view) => { setInboxView(view); setSelected(new Set()); }} items={[
+      { value: 'pending', label: <>Pending <span>{inbox.data?.pendingCount ?? '…'}</span></> },
+      { value: 'reviewed', label: <>Reviewed <span>{inbox.data?.reviewedCount ?? '…'}</span></> },
+    ]}>
     {inboxView === 'pending' && !!inbox.data?.candidates.length && <div className="discovery-bulkbar">
       <label><input type="checkbox" checked={selected.size === inbox.data.candidates.length} onChange={(event) => setSelected(event.target.checked ? new Set(inbox.data!.candidates.map((candidate) => candidate.id)) : new Set())} /> Select all</label>
       <span>{selected.size ? `${selected.size} selected` : 'Select items for bulk review'}</span>
@@ -49,6 +53,7 @@ export function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (i
         onSelected={(checked) => setSelected((current) => { const next = new Set(current); if (checked) next.add(candidate.id); else next.delete(candidate.id); return next; })}
         onResolve={(action, workItemId) => action === 'merge' ? resolveMerge.mutate({ id: candidate.id, workItemId: workItemId! }) : resolveCandidate.mutate({ candidate, action })} />)}
     </div>
+    </Tabs>
   </section>;
 }
 
@@ -58,10 +63,10 @@ function DiscoveryCard({ candidate, selected, tasks, pendingAction, onSelected, 
   const isPending = pendingAction !== null;
   return <article className={`discovery-card ${selected ? 'selected' : ''}`}>
     <div className="discovery-source"><label><input type="checkbox" checked={selected} onChange={(event) => onSelected(event.target.checked)} /><span>{candidate.provider}</span>{candidate.relevance === 2 && <em>Focus</em>}</label><time>{new Date(candidate.occurredAt ?? candidate.discoveredAt).toLocaleString()}</time></div>
-    {editing ? <div className="discovery-editor"><input value={title} onChange={(event) => setTitle(event.target.value)} /><MarkdownComposer conversationId={`discovery-${candidate.id}`} value={description} onChange={setDescription} placeholder="Discovery description" ariaLabel="Discovery description" /><div><button className="button secondary compact" onClick={() => { setTitle(candidate.title); setDescription(candidate.description); setEditing(false); }}>Cancel</button><button className="button primary compact" disabled={!title.trim() || update.isPending} onClick={() => update.mutate()}><Check size={13} /> Save</button></div></div> : <><button className="discovery-copy" onClick={() => setEditing(true)} title="Edit before adding"><h3>{candidate.title}</h3>{candidate.description && <p>{candidate.description}</p>}</button>
+    {editing ? <div className="discovery-editor"><label className="visually-hidden" htmlFor={`discovery-title-${candidate.id}`}>Title</label><input id={`discovery-title-${candidate.id}`} value={title} onChange={(event) => setTitle(event.target.value)} /><MarkdownComposer conversationId={`discovery-${candidate.id}`} value={description} onChange={setDescription} placeholder="Discovery description" ariaLabel="Discovery description" /><div><button className="button secondary compact" onClick={() => { setTitle(candidate.title); setDescription(candidate.description); setEditing(false); }}>Cancel</button><button className="button primary compact" disabled={!title.trim() || update.isPending} onClick={() => update.mutate()}><Check size={13} /> Save</button></div></div> : <><button className="discovery-copy" onClick={() => setEditing(true)} title="Edit before adding"><h3>{candidate.title}</h3>{candidate.description && <p>{candidate.description}</p>}</button>
     <div className="discovery-actions">
       {candidate.sourceUrl && <a className="button secondary compact" href={candidate.sourceUrl} target="_blank" rel="noreferrer"><ArrowUpRight size={13} /> Source</a>}
-      {suggestedTask ? <span className="discovery-match"><small>Already tracked as</small><strong>{suggestedTask.title}</strong><button className="button primary compact" disabled={isPending} onClick={() => onResolve('merge', suggestedTask.id)}>{pendingAction === 'merge' ? 'Merging…' : 'Add update'}</button></span> : !!tasks.length && <span className="discovery-merge"><select value={mergeTarget} disabled={isPending} onChange={(event) => setMergeTarget(event.target.value)}><option value="">Merge into task…</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select><button className="button secondary compact" disabled={!mergeTarget || isPending} onClick={() => onResolve('merge', mergeTarget)}>{pendingAction === 'merge' ? 'Merging…' : 'Merge'}</button></span>}
+      {suggestedTask ? <span className="discovery-match"><small>Already tracked as</small><strong>{suggestedTask.title}</strong><button className="button primary compact" disabled={isPending} onClick={() => onResolve('merge', suggestedTask.id)}>{pendingAction === 'merge' ? 'Merging…' : 'Add update'}</button></span> : !!tasks.length && <span className="discovery-merge"><label className="visually-hidden" htmlFor={`discovery-merge-${candidate.id}`}>Merge into task</label><select id={`discovery-merge-${candidate.id}`} value={mergeTarget} disabled={isPending} onChange={(event) => setMergeTarget(event.target.value)}><option value="">Merge into task…</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select><button className="button secondary compact" disabled={!mergeTarget || isPending} onClick={() => onResolve('merge', mergeTarget)}>{pendingAction === 'merge' ? 'Merging…' : 'Merge'}</button></span>}
       <button className="button secondary compact" disabled={isPending} onClick={() => onResolve('snooze')}>{pendingAction === 'snooze' ? 'Snoozing…' : 'Tomorrow'}</button>
       <button className="button secondary compact" disabled={isPending} onClick={() => onResolve('dismiss')}>{pendingAction === 'dismiss' ? 'Dismissing…' : 'Dismiss'}</button>
       <button className={`button ${suggestedTask ? 'secondary' : 'primary'} compact`} disabled={isPending} onClick={() => onResolve('convert')}>{pendingAction === 'convert' ? 'Adding…' : suggestedTask ? 'Add separately' : 'Add to stack'}</button>

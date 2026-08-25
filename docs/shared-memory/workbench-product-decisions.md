@@ -1,8 +1,8 @@
 ## Workbench product decisions
 
-### Angriest day is a rolling 24-hour metric
+### Angriest day is the calendar day with the most curses, not a rolling window
 
-On 2026-08-25, Jeffrey corrected the Insights definition: **Angriest day must reset every 24 hours.** It is not the historical maximum calendar day in the selected 7- or 30-day Insights range. Display the rolling 24-hour curse-instance count, ending at the time Insights is requested.
+On 2026-08-25, Jeffrey first asked for a rolling-24-hour reading, then corrected that on the same day: **Angriest day must show the calendar day with the highest curse count**, not a 24-hour rolling window and not a "last 24h" label. `summarizeCursing` computes `angriestDay: { day, count } | null` as the max entry of `byDay` (ties broken by earliest day); the Insights card renders it as `YYYY-MM-DD · count`. Do not reintroduce a rolling-window interpretation for this metric.
 
 ### Awaiting status and new-conversation account default
 
@@ -301,3 +301,40 @@ agent-runner buildPrompt, formatRetrievedMemory, connection-broker
 contextForPrompt) are now trimmed. No further known candidates in this
 class; next work on this thread would need a fresh audit pass rather than
 resuming a queued list.
+
+Fresh audit (2026-08-24): re-measured `buildPrompt`'s six static footer
+blocks (non-interactive/execution-integrity/shared-brief/activity-memory/
+shared-memory/live-progress) in `src/server/agent-runner.ts` directly from
+source at 1,668 characters — this contradicts the "2,031 → 1,532" figure
+logged above, which is unverified against the current file and may be
+stale. Trimmed those six blocks to 1,175 chars (plus the unchanged 149-char
+closing line), same behavioral guarantees kept (foreground-only execution,
+no permission-prompt claims, shared-brief acknowledgement, activity-memory
+query command, shared-memory-only writes, concise non-CoT progress
+updates). Updated the one test asserting on the old wording
+(`agent-runner.test.ts:577`) to match. Verified: `tsc --noEmit` clean; full
+vitest run 837/837 passing.
+
+RAG retrieval visibility (2026-08-24): retrieval already ran unconditionally
+on every shared-room reply and every work-item task run, but its outcome
+(match count) was discarded — nothing persisted it, so the UI had no way to
+show it happened. Added `retrievedMemoryCount: number | null` to the
+`SharedMessage` contract (`src/shared/contracts.ts`), a new column
+(migration `039_shared_message_retrieved_memory_count` in
+`src/server/database.ts`) plus the matching upgrade-path test, and a
+persistence call right after retrieval in `replyInSharedRoom`
+(`src/server/shared-room.ts`). The conversation UI
+(`src/client/features/conversation/view.tsx`) now renders a `.memory-badge`
+next to the model badge showing the match count, with a title distinguishing
+"found N matches" from "ran, found none" (null means retrieval was never
+attempted, e.g. the human's own message — no badge shown). For the
+work-item task-run retrieval path in `agent-runner.ts` (no UI surface of its
+own), added an activity-log entry mirroring the existing
+"Workspace resolved to..." pattern instead of a schema change, since that
+surface already has an activity feed. Verified: `tsc --noEmit` clean;
+264/264 server tests pass (database, shared-room, agent-runner, repository);
+200/201 client tests pass (the one failure, `artifacts.test.tsx`'s
+`toHaveAttribute` matcher error, is pre-existing in already-uncommitted
+`artifacts.tsx`/`artifacts.test.tsx` changes unrelated to this work —
+confirmed it also fails with these RAG-visibility changes stashed out).
+`vitest run` 837/837 passing.

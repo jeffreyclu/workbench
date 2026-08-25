@@ -95,7 +95,10 @@ export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: Memo
             role={canOpen ? 'option' : undefined}
             onClick={canOpen ? () => selectResult(result) : undefined}
           >
-            <span className="global-search-result-source">{memorySourceLabel(result.source)}</span>
+            <span className="global-search-result-meta">
+              <span className="global-search-result-source">{memorySourceLabel(result.source)}</span>
+              {!canOpen && <span className="global-search-result-preview">Preview only</span>}
+            </span>
             <strong>{result.title || 'Untitled'}</strong>
             <small>{result.snippet}</small>
           </Tag>;

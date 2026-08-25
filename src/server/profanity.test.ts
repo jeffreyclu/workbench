@@ -7,11 +7,11 @@ describe('summarizeCursing', () => {
       { body: 'This is fucking shit. Damn.', createdAt: '2026-08-20T09:00:00.000Z' },
       { body: 'A shitty handoff, but not assassin.', createdAt: '2026-08-20T10:00:00.000Z' },
       { body: 'Hell yeah.', createdAt: '2026-08-21T09:00:00.000Z' },
-    ], new Date('2026-08-21T10:00:00.000Z'));
+    ]);
 
     expect(summary).toEqual({
       total: 5,
-      last24Hours: 2,
+      angriestDay: { day: '2026-08-20', count: 4 },
       messagesAnalyzed: 3,
       messagesWithCurses: 3,
       instancesPer100Messages: 5 / 3 * 100,
@@ -41,18 +41,18 @@ describe('summarizeCursing', () => {
   });
 
   it('returns an explicit zero state when no messages are available', () => {
-    expect(summarizeCursing([])).toEqual({ total: 0, last24Hours: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] });
+    expect(summarizeCursing([])).toEqual({ total: 0, angriestDay: null, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] });
   });
 
-  it('resets the angriest-day count after 24 hours instead of retaining the selected Insights window', () => {
-    const now = new Date('2026-08-25T12:00:00.000Z');
+  it('reports the calendar day with the most curses, regardless of how long ago it was', () => {
     const summary = summarizeCursing([
-      { body: 'Fuck this old result.', createdAt: '2026-08-24T11:59:59.999Z' },
-      { body: 'This is shit right now.', createdAt: '2026-08-24T12:00:00.000Z' },
-    ], now);
+      { body: 'Fuck this old result.', createdAt: '2026-08-20T11:00:00.000Z' },
+      { body: 'Fuck. Shit. Damn.', createdAt: '2026-08-24T12:00:00.000Z' },
+      { body: 'This is shit right now.', createdAt: '2026-08-24T13:00:00.000Z' },
+    ]);
 
-    expect(summary.total).toBe(2);
-    expect(summary.last24Hours).toBe(1);
+    expect(summary.total).toBe(5);
+    expect(summary.angriestDay).toEqual({ day: '2026-08-24', count: 4 });
   });
 
   it('uses the disk-backed comprehensive list while preserving whole-word boundaries', () => {

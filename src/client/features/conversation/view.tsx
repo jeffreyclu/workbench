@@ -47,6 +47,7 @@ import { navigate, parseRoute, routePath, useRoute, type StackName } from '../..
 import { ConversationComposerSkeleton, ConversationRailSkeleton, ConversationSearchResultSkeleton, ConversationThreadSkeleton, Skeleton } from '../../skeleton';
 import { Toaster } from '../../toast';
 import { toast, toastError } from '../../toast-store';
+import { Tabs } from '../../tabs';
 import { SortableQueueItem as TaskQueueItem, TaskClassificationSelect } from '../../task-queue';
 import { AgentMessageBody, LiveRunOutput } from '../../agent-message';
 import { ConversationOriginBadge, ModelProfileSelect, ReferenceTypeIcon } from '../../badges';
@@ -391,8 +392,17 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     overscan: 4,
     initialRect: { width: 900, height: 700 },
   });
+  // A typewriter changes a message's rendered height independently of the
+  // server-polled message body. Virtual row transforms can therefore be a
+  // frame behind a growing live card on mobile. Keep the bounded, paged live
+  // thread in normal document flow until streaming finishes: later messages
+  // then follow the growing card by construction rather than relying on a
+  // height-cache invalidation race.
+  const hasRunningMessage = conversationMessages.some((message) => message.status === 'running');
   const threadRows = threadVirtualizer.getVirtualItems();
-  const displayedThreadRows = threadRows.length
+  const displayedThreadRows = hasRunningMessage
+    ? conversationMessages.map((_, index) => ({ index, start: 0 }))
+    : threadRows.length
     ? threadRows
     : conversationMessages.map((_, index) => ({ index, start: index * 220 }));
   // The final agent report can replace a small live update with a multi-section
@@ -404,22 +414,6 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   useEffect(() => {
     threadVirtualizer.measure();
   }, [threadLayoutSignature, threadVirtualizer]);
-  // While a message is streaming, its body reveals character-by-character on a
-  // rAF loop (see useTypewriter in agent-message.tsx) independent of the body
-  // text itself changing, so threadLayoutSignature never re-fires during the
-  // reveal. ResizeObserver alone can lag a frame or more behind that growth on
-  // slower mobile browsers, leaving later rows' translateY stuck at a stale
-  // offset and visibly overlapping the growing card. Re-measure every frame
-  // while anything is live to keep offsets in lockstep with the animation.
-  const hasRunningMessage = conversationMessages.some((message) => message.status === 'running');
-  useEffect(() => {
-    if (!hasRunningMessage) return;
-    let frame = requestAnimationFrame(function tick() {
-      threadVirtualizer.measure();
-      frame = requestAnimationFrame(tick);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [hasRunningMessage, threadVirtualizer]);
   useEffect(() => {
     if (!conversationId || dispatchInitializedConversationId.current === conversationId || !messages.data) return;
     setDispatchTo(dispatchTargetForConversation(messages.data.messages));
@@ -834,10 +828,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           </div>
         ) : (
           <>
-            <div className="conversation-view-tabs" role="group" aria-label="Conversation view">
-              <button type="button" className={conversationView === 'active' ? 'active' : ''} aria-pressed={conversationView === 'active'} onClick={() => selectConversationView('active')}>Active</button>
-              <button type="button" className={conversationView === 'archive' ? 'active' : ''} aria-pressed={conversationView === 'archive'} onClick={() => selectConversationView('archive')}>Archive</button>
-            </div>
+            <Tabs ariaLabel="Conversation view" className="conversation-view-tabs" selected={conversationView} onSelect={selectConversationView} items={[
+              { value: 'active', label: 'Active' },
+              { value: 'archive', label: 'Archive' },
+            ]}>
             <div ref={conversationScrollRef} className="conversation-tabs">
               <div className="virtual-list" style={{ height: conversationVirtualizer.getTotalSize() }}>
                 {displayedConversationRows.map((virtualRow) => {
@@ -861,6 +855,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               {!conversations.isLoading && !conversations.isError && conversationList.length === 0 && <div className="page-state">No {conversationView} conversations.</div>}
               {conversations.isFetchingNextPage && <ConversationRailSkeleton count={2} />}
             </div>
+            </Tabs>
           </>
         )}
       </aside>
@@ -894,15 +889,25 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               Show earlier messages ({allConversationMessages.length - threadVisibleCount} more)
             </button>
           )}
-          <div className="thread-virtualizer" style={{ height: threadVirtualizer.getTotalSize() }}>
+          <div className={`thread-virtualizer${hasRunningMessage ? ' thread-live-flow' : ''}`} style={hasRunningMessage ? undefined : { height: threadVirtualizer.getTotalSize() }}>
           {displayedThreadRows.map((row) => {
             const message = conversationMessages[row.index];
             if (!message) return null;
-            return <div key={message.id} ref={threadVirtualizer.measureElement} data-index={row.index} className="thread-virtual-row" style={{ transform: `translateY(${row.start}px)` }}>
+            return <div key={message.id} ref={hasRunningMessage ? undefined : threadVirtualizer.measureElement} data-index={row.index} className="thread-virtual-row" style={hasRunningMessage ? undefined : { transform: `translateY(${row.start}px)` }}>
             <article className={`shared-message shared-${message.author}`}>
               <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                 {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
                 {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyBadge(message)}</span>}
+                {typeof message.retrievedMemoryCount === 'number' && (
+                  <span
+                    className="memory-badge"
+                    title={message.retrievedMemoryCount > 0
+                      ? `Retrieved ${message.retrievedMemoryCount} memory match${message.retrievedMemoryCount === 1 ? '' : 'es'} from RAG for this reply`
+                      : 'RAG memory search ran but found no matches'}
+                  >
+                    <Search size={11} /> {message.retrievedMemoryCount}
+                  </span>
+                )}
                 {message.status === 'running' && <button onClick={() => cancelReply.mutate(message.id)} title="Cancel response"><X size={12} /></button>}
               </header>
               {message.status === 'running' && <p className="thinking"><LoaderCircle className="spin" size={13} /> Live · {message.body ? 'receiving activity' : 'starting agent'}</p>}

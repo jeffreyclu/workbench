@@ -155,7 +155,7 @@ function CursingInsight({ data }: { data: RunInsights['cursing'] }) {
     <div className="cursing-insight-stats">
       <div><span>Messages with curses</span><b>{data.messagesWithCurses}/{data.messagesAnalyzed}</b></div>
       <div><span>Frequency</span><b>{data.instancesPer100Messages.toFixed(1)} per 100</b></div>
-      <div><span>Angriest day</span><b>{data.last24Hours} · last 24h</b></div>
+      <div><span>Angriest day</span><b>{data.angriestDay ? `${data.angriestDay.day} · ${data.angriestDay.count}` : '—'}</b></div>
     </div>
     {cursedModels.length > 0 && <div className="cursing-model-list" aria-label="Curse count by responding model">
       {cursedModels.map(({ model, count, instancesPer100Messages }) => <span key={model}><b>{model}</b><em>{count} · {instancesPer100Messages.toFixed(1)}/100</em></span>)}

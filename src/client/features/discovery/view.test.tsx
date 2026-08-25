@@ -35,6 +35,25 @@ const inbox: DiscoveryInbox = {
 afterEach(() => { cleanup(); toast.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('DiscoveryInboxView bulk review failures', () => {
+  it('exposes the Pending and Reviewed views as linked tabs', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/discovery?view=')) return new Response(JSON.stringify(inbox), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [], nextCursor: null, totalCount: 0, proposal: null }), { headers: { 'Content-Type': 'application/json' } });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DiscoveryInboxView onOpenTask={vi.fn()} onOpenStack={vi.fn()} /></QueryClientProvider>);
+
+    const tablist = await screen.findByRole('tablist', { name: 'Discovery view' });
+    const pending = within(tablist).getByRole('tab', { name: /pending/i });
+    const reviewed = within(tablist).getByRole('tab', { name: /reviewed/i });
+    expect(pending).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(reviewed);
+    expect(reviewed).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', reviewed.id);
+  });
+
   it.each([
     ['Tomorrow', 'snooze'],
     ['Dismiss', 'dismiss'],

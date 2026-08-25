@@ -10,6 +10,18 @@ because he was still looking at the stale live build, and only then was it promo
 against source and tests is not the same as verifying it against what Jeffrey actually sees — for
 UI-visible changes, promotion is part of "done."
 
+### Compact form controls (select/input in dense rows) get a real `<label>`, not `aria-label`
+
+Jeffrey's explicit constraint (2026-08-25, WCAG labels-or-instructions task): `aria-label` alone is
+insufficient even when a control is visually self-evident from a placeholder or a neighboring button —
+sighted keyboard/voice-control/translation-tool users still need a real `<label htmlFor>` element. Where
+adding visible label text would break a dense layout (the discovery card's inline title/merge editors,
+the add-reference form's select/URL/title row), use `<label className="visually-hidden" htmlFor="...">`
+paired with a matching `id` on the control — this is a real, programmatically associated `<label>`
+element (not `aria-label`), it satisfies the constraint, and it keeps the existing compact visual design.
+The `.visually-hidden` utility class already existed in `styles.css` (used for the hidden file input in
+conversation view) — check for an existing hidden-label utility before adding a new one.
+
 ### A "regression test added" claim must be checked for what it actually asserts
 
 2026-08-24: Codex reported the Active/Archive conversation-view toggle fixed, verified, and
@@ -416,6 +428,17 @@ measures everything again. Re-measure the thread when each visible message's
 ID, status, or body changes; do not rely solely on the row's ResizeObserver
 for this content-shape transition. The regression must cover running text
 being replaced by a completed structured report without a page reload.
+
+### Do not call a virtualizer-wide `measure()` on every streaming animation frame
+
+*Confirmed 2026-08-25.* An attempted mobile streaming-overlap fix called
+TanStack Virtual's `measure()` in `requestAnimationFrame` while an agent
+message was running. That API clears the virtualizer's whole size cache;
+repeated every frame, it reverted later rows to their 220px estimate and made
+long streamed messages overlap even more. A bounded, paged thread must render
+in normal document flow while its typewriter is active (and resume
+virtualization after completion), or use a targeted row-size update. Never use
+cache-clearing virtualizer measurement as a per-frame animation primitive.
 
 ### Dialogs had no entrance animation; toasts had entrance but no exit animation
 

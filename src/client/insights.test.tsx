@@ -172,17 +172,17 @@ describe('InsightsView', () => {
     expect(screen.getByText('sonnet')).toBeTruthy();
   });
 
-  it('shows only the rolling 24-hour curse count for angriest day', async () => {
+  it('shows the calendar day with the most curses for angriest day', async () => {
     stubInsightsFetch({
       retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
       medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
-      cursing: { total: 5, last24Hours: 1, messagesAnalyzed: 2, messagesWithCurses: 2, instancesPer100Messages: 250, byTerm: [], byDay: [{ day: '2026-08-20', count: 4 }, { day: '2026-08-21', count: 1 }] },
+      cursing: { total: 5, angriestDay: { day: '2026-08-20', count: 4 }, messagesAnalyzed: 2, messagesWithCurses: 2, instancesPer100Messages: 250, byTerm: [], byDay: [{ day: '2026-08-20', count: 4 }, { day: '2026-08-21', count: 1 }] },
     });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
     render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
 
-    expect(await screen.findByText('1 · last 24h')).toBeTruthy();
+    expect(await screen.findByText('2026-08-20 · 4')).toBeTruthy();
   });
 
   it('shows the weekly usage dial with the manual/autonomous split and the 20% autonomous slice', async () => {

@@ -273,3 +273,28 @@ created at `00:43:56.766Z` but did not start (and the item did not flip to `in_p
 diagnosing a "task not promoted" report as a realtime/status-flip bug, check whether another `execute`
 run already holds the lease on the same `resolvedWorkspace` — if so, the task is correctly queued, not
 stuck.
+
+### Missing index on `shared_messages(conversation_id, ...)` can freeze the whole UI, not just one component
+
+Jeffrey reported (2026-08-25): "when i click send in a convo, the whole UI freezes for a second or
+more." `withConversationState()` in `src/server/repository.ts` runs four per-conversation SQL queries
+on every `listConversations()` call, and `listConversations()` fires repeatedly per Send — once from
+the conversation rail's poll, again from `dispatchNextSharedTurn`, again from `settleLinkedTask`. One
+of the four queries (the "latest agent status" lookup: `... WHERE conversation_id = ? AND author IN
+('codex','claude') ORDER BY created_at DESC ... LIMIT 1`) had no supporting index, so SQLite did a full
+`SCAN shared_messages` plus a temp B-tree sort per conversation. Because this codebase uses
+`node:sqlite`'s `DatabaseSync`, that scan runs synchronously on Node's single event loop — it blocks
+*every* concurrent request, not just the one that triggered it, which is why the symptom looked like a
+global UI freeze rather than a slow Send button.
+
+Measured against a copy of the live db (319 conversations, 3,727 `shared_messages` rows): 226ms for
+the full per-request loop before the fix. Fixed with a new forward-only migration,
+`040_shared_messages_conversation_author_created_index` in `src/server/database.ts`, adding a composite
+index `shared_messages(conversation_id, author, created_at DESC)` — same query plan afterward shows
+`SEARCH ... USING INDEX` instead of `SCAN`, and the same loop dropped to 4ms (~55x).
+
+General lesson: when a symptom is described as affecting "the whole UI" rather than one component,
+suspect a synchronous, unindexed query on a hot path (anything reachable from polling or Send) rather
+than a client-side rendering or state issue — Node's single-threaded event loop means any blocking
+server-side scan presents as a global freeze. `EXPLAIN QUERY PLAN` against a copy of the live db is the
+fastest way to confirm `SCAN` vs `SEARCH` before writing a fix.

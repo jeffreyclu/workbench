@@ -8,6 +8,7 @@ import { ConfirmationDialog } from './confirmation-dialog';
 import { toast, toastError } from './toast-store';
 import { MarkdownComposer } from './markdown-composer.js';
 import { ArtifactCardSkeleton, ArtifactDetailSkeleton } from './skeleton';
+import { Tabs } from './tabs';
 import type { ArtifactComment, ArtifactEvent, ArtifactSummary, ArtifactVersion } from '../shared/contracts';
 
 type LibraryView = 'published' | 'revoked' | 'all';
@@ -224,11 +225,11 @@ export function ArtifactLibraryView({ onOpenTask, onOpenConversation }: {
           <p>Every page you have shared with a coworker, with its versions, history, and feedback.</p>
         </div>
       </header>
-      <div className="discovery-tabs">
-        <button className={view === 'published' ? 'active' : ''} onClick={() => setView('published')}>Live <span>{counts?.published ?? '…'}</span></button>
-        <button className={view === 'revoked' ? 'active' : ''} onClick={() => setView('revoked')}>Revoked <span>{counts?.revoked ?? '…'}</span></button>
-        <button className={view === 'all' ? 'active' : ''} onClick={() => setView('all')}>All</button>
-      </div>
+      <Tabs ariaLabel="Artifact view" className="discovery-tabs" selected={view} onSelect={setView} items={[
+        { value: 'published', label: <>Live <span>{counts?.published ?? '…'}</span></> },
+        { value: 'revoked', label: <>Revoked <span>{counts?.revoked ?? '…'}</span></> },
+        { value: 'all', label: 'All' },
+      ]}>
       <div className="artifact-list">
         {library.isLoading && <ArtifactCardSkeleton count={6} />}
         {library.isError && <div className="list-state error-message">Could not load the artifact library. <button className="button secondary compact" onClick={() => library.refetch()}>Retry</button></div>}
@@ -243,6 +244,7 @@ export function ArtifactLibraryView({ onOpenTask, onOpenConversation }: {
           <ArtifactCard key={artifact.id} artifact={artifact} onOpenTask={onOpenTask} onOpenConversation={onOpenConversation} />
         ))}
       </div>
+      </Tabs>
     </section>
   );
 }

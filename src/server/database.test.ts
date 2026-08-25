@@ -49,6 +49,8 @@ const EXPECTED_MIGRATIONS = [
   '036_usage_calibration_resets_at',
   '037_autonomy_governor_policy',
   '038_machine_discovery_proposals',
+  '039_shared_message_retrieved_memory_count',
+  '040_shared_messages_conversation_author_created_index',
 ];
 
 describe('openDatabase', () => {
@@ -151,6 +153,33 @@ describe('openDatabase', () => {
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '015_durable_artifact_publication'").get()).toBeTruthy();
     expect((upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>).map((column) => column.name)).toContain('adopted_conversation_id');
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_agent_runs_adopted_conversation'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds the retrieved-memory-count column when upgrading from migration 038', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE shared_messages DROP COLUMN retrieved_memory_count;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '039_shared_message_retrieved_memory_count'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toContain('retrieved_memory_count');
+    upgraded.close();
+  });
+
+  it('adds the conversation/author/created-at index when upgrading from migration 039', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP INDEX idx_shared_messages_conv_author_created;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '040_shared_messages_conversation_author_created_index'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_shared_messages_conv_author_created'").get()).toBeTruthy();
     upgraded.close();
   });
 

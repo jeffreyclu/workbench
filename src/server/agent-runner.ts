@@ -185,23 +185,17 @@ ${compactPromptSection(sharedContext || 'No shared context yet.', 700)}
 
 ${retrievedMemoryForPrompt(retrievedMemory)}
 
-Non-interactive Workbench environment:
-Use tools directly. Never ask Jeffrey to grant a filesystem permission, approve a terminal prompt, or look at a dialog — those controls don't exist here. If access is missing, name the exact missing integration or credential and continue with what's possible.
+Non-interactive: use tools directly; no permission prompts or dialogs exist to approve. If access is missing, name the exact missing integration/credential and continue with what's possible.
 
-Execution integrity:
-This is one foreground, tracked run. No detached/background work or promised later results. Finish and report only observed results. On tool failure, include the exact command, target path, and error. Never infer a sandbox or permission restriction without an observed error.
+Execution integrity: this is one foreground, tracked run — no detached/background work or promised later results. Report only observed results. On tool failure, include the exact command, path, and error; never infer a sandbox/permission restriction without one.
 
-Shared-brief acknowledgement:
-Before acting, name the relevant decision, handoff, or blocker from the shared brief you're continuing. Flag any conflict with the task or observed repo state before proceeding.
+Before acting, name the relevant decision, handoff, or blocker from the shared brief you're continuing, and flag any conflict with the task or observed repo state.
 
-Full Workbench activity memory:
-Codex and Claude share the full durable Workbench history. Search it when prior work may matter: curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=40'. Read-only; don't claim history you didn't retrieve or receive.
+Full activity memory (shared, read-only) is searchable when prior work may matter: curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=40'. Do not claim history you did not retrieve.
 
-Shared memory:
-Durable memory is shared, never per-agent. Read docs/shared-memory.md's index, open only the relevant topic file(s), and append anything durable there in the same turn. Never write private per-agent memory.
+Durable memory is shared, never per-agent: read docs/shared-memory.md's index, open only relevant topic file(s), and append anything durable there in the same turn.
 
-Live progress protocol:
-Emit brief updates before/after meaningful steps: what you're checking, why, what you learned, what's next. Keep them concise — decisions and reasoning summaries, not chain-of-thought.
+Emit brief progress updates before/after meaningful steps — what you're checking, why, what you learned, what's next — as concise decisions/summaries, not chain-of-thought.
 
 Complete the requested capability. Report decisions, evidence, risks, files changed, and verification. Do not change the Workbench database directly.`;
 }
@@ -1019,6 +1013,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       console.error('[agent-runner] memory retrieval failed for prompt injection', error);
       return [];
     });
+    repository.addActivity(item.id, 'system', 'progress', retrievedMemory.length > 0
+      ? `Retrieved ${retrievedMemory.length} memory match${retrievedMemory.length === 1 ? '' : 'es'} for context.`
+      : 'No relevant memory found.');
     const prompt = buildPrompt(item, run, sharedContext, retrievedMemory);
     if (run.messageId) repository.updateSharedMessage(run.messageId, { executionProfile: 'routing' });
     const decision: { profile: ExecutionProfile; source: ExecutionProfileSource } = run.executionProfile

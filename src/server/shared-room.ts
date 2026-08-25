@@ -254,6 +254,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
     });
+    repository.updateSharedMessage(messageId, { retrievedMemoryCount: retrievedMemory.length });
     const prompt = buildSharedReplyPrompt(
       agent,
       repository.getSharedContext(target.conversationId, { conversationId: target.conversationId }),

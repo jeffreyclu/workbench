@@ -679,6 +679,8 @@ export interface SharedMessage {
   attempt: number;
   maxAttempts: number;
   nextAttemptAt: string | null;
+  /** Number of memory matches retrieved from RAG for this reply's prompt, or null if retrieval was not run (e.g. the human's own message). */
+  retrievedMemoryCount: number | null;
 }
 
 export interface SharedAttachment { name: string; path: string; mimeType: string; size: number; }
@@ -867,8 +869,8 @@ export interface RunInsights {
 
 export interface CurseInsight {
   total: number;
-  /** Curse instances in the rolling 24 hours ending when Insights is requested. */
-  last24Hours: number;
+  /** The calendar day (local) with the highest curse count in this window, or null when there are none. */
+  angriestDay: { day: string; count: number } | null;
   messagesAnalyzed: number;
   messagesWithCurses: number;
   instancesPer100Messages: number;

@@ -711,15 +711,18 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
           {removeReference.error && <p className="error-message">Could not remove reference: {removeReference.error.message}</p>}
           {showAddReference ? (
             <form className="reference-form" onSubmit={(event) => { event.preventDefault(); if (referenceUrl.trim()) addReference.mutate(); }}>
-              <select value={referenceType} onChange={(event) => setReferenceType(event.target.value as WorkItemReferenceType)}>
+              <label className="visually-hidden" htmlFor="reference-type">Reference type</label>
+              <select id="reference-type" value={referenceType} onChange={(event) => setReferenceType(event.target.value as WorkItemReferenceType)}>
                 <option value="linear_issue">Linear issue</option>
                 <option value="pull_request">Pull request</option>
                 <option value="slack_thread">Slack thread</option>
                 <option value="document">Document</option>
                 <option value="other">Other</option>
               </select>
-              <input autoFocus value={referenceUrl} onChange={(event) => setReferenceUrl(event.target.value)} placeholder="https://…" type="url" />
-              <input value={referenceTitle} onChange={(event) => setReferenceTitle(event.target.value)} placeholder="Title (optional)" />
+              <label className="visually-hidden" htmlFor="reference-url">URL</label>
+              <input id="reference-url" autoFocus value={referenceUrl} onChange={(event) => setReferenceUrl(event.target.value)} placeholder="https://…" type="url" />
+              <label className="visually-hidden" htmlFor="reference-title">Title (optional)</label>
+              <input id="reference-title" value={referenceTitle} onChange={(event) => setReferenceTitle(event.target.value)} placeholder="Title (optional)" />
               {addReference.error && <p className="error-message">Could not add reference: {addReference.error.message}</p>}
               <div><button type="button" className="button secondary compact" onClick={() => setShowAddReference(false)}>Cancel</button><button className="button primary compact" disabled={!referenceUrl.trim() || addReference.isPending}>{addReference.isPending ? <LoaderCircle className="spin" size={13} /> : <Plus size={13} />} Link</button></div>
             </form>

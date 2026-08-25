@@ -23,6 +23,10 @@ harness.post('/api/e2e/seed-message', (request, response) => {
   const { conversationId, author, body, status } = request.body ?? {};
   response.status(201).json({ message: seedRepository.createSharedMessage(author, body, status ?? 'completed', conversationId) });
 });
+harness.post('/api/e2e/update-message', (request, response) => {
+  const { id, body, status } = request.body ?? {};
+  response.status(200).json({ message: seedRepository.updateSharedMessage(id, { body, status }) });
+});
 harness.use(app);
 
 const server = createServer(harness);

@@ -574,7 +574,7 @@ describe('classifyExecution', () => {
     const run = { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun;
     expect(buildPrompt(item('Build it'), run, 'jeffrey: Prefer small React components.'))
       .toContain('Shared context available to every agent:\njeffrey: Prefer small React components.');
-    expect(buildPrompt(item('Build it'), run)).toContain('Never ask Jeffrey to grant a filesystem permission');
+    expect(buildPrompt(item('Build it'), run)).toContain('no permission prompts or dialogs exist to approve');
   });
 
   it('injects bounded, untrusted historical retrieval into task prompts', () => {

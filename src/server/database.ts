@@ -1358,6 +1358,33 @@ const schemaMigrations: readonly Migration[] = [
       database.exec('CREATE INDEX IF NOT EXISTS idx_work_items_machine_proposal_window ON work_items(machine_proposed, machine_proposal_window_start);');
     },
   },
+  {
+    // RAG retrieval already runs on every shared-room reply, but nothing
+    // recorded whether it found anything, so the UI had no way to show it
+    // happened. Persisting the match count on the reply itself makes
+    // retrieval visible without a separate lookup.
+    id: '039_shared_message_retrieved_memory_count',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'retrieved_memory_count')) {
+        database.exec('ALTER TABLE shared_messages ADD COLUMN retrieved_memory_count INTEGER;');
+      }
+    },
+  },
+  {
+    // withConversationState() runs its "latest agent status" lookup once per
+    // conversation on every listConversations() call (every poll, plus again
+    // inside dispatchNextSharedTurn on every send). With no index covering
+    // conversation_id, that query did a full SCAN of shared_messages plus a
+    // temp B-tree sort per conversation, which is what made Send freeze the
+    // whole event loop for a second or more once the table grew.
+    id: '040_shared_messages_conversation_author_created_index',
+    apply(database) {
+      database.exec(
+        'CREATE INDEX IF NOT EXISTS idx_shared_messages_conv_author_created ON shared_messages(conversation_id, author, created_at DESC);',
+      );
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

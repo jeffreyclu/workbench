@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import '@testing-library/jest-dom/vitest';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ArtifactLibraryView } from './artifacts';
@@ -170,7 +171,12 @@ describe('artifact library requests', () => {
     renderLibrary();
 
     await waitFor(() => expect(calls.some((call) => call.url === '/api/artifacts?view=published')).toBe(true));
-    fireEvent.click(await screen.findByRole('button', { name: /revoked/i }));
+    const tablist = await screen.findByRole('tablist', { name: 'Artifact view' });
+    const revoked = within(tablist).getByRole('tab', { name: /revoked/i });
+    expect(revoked).toHaveAttribute('aria-selected', 'false');
+    fireEvent.click(revoked);
+    expect(revoked).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', revoked.id);
     await waitFor(() => expect(calls.some((call) => call.url === '/api/artifacts?view=revoked')).toBe(true));
   });
 });

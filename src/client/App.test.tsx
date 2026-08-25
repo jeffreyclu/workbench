@@ -461,14 +461,15 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={active.id} /></QueryClientProvider>);
 
-    const viewTabs = await screen.findByRole('group', { name: 'Conversation view' });
-    const archiveView = within(viewTabs).getByRole('button', { name: 'Archive' });
+    const viewTabs = await screen.findByRole('tablist', { name: 'Conversation view' });
+    const archiveView = within(viewTabs).getByRole('tab', { name: 'Archive' });
     fireEvent.click(archiveView);
-    await waitFor(() => expect(archiveView.getAttribute('aria-pressed')).toBe('true'));
+    await waitFor(() => expect(archiveView.getAttribute('aria-selected')).toBe('true'));
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', archiveView.id);
     await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/shared/conversations?') && String(input).includes('view=archive')).length).toBeGreaterThan(0));
     const archiveRequestsBeforeRepeat = fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/shared/conversations?') && String(input).includes('view=archive')).length;
 
-    const archiveViewAfterSelection = within(screen.getByRole('group', { name: 'Conversation view' })).getByRole('button', { name: 'Archive' });
+    const archiveViewAfterSelection = within(screen.getByRole('tablist', { name: 'Conversation view' })).getByRole('tab', { name: 'Archive' });
     archiveViewAfterSelection.focus();
     fireEvent.click(archiveViewAfterSelection);
     await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/shared/conversations?') && String(input).includes('view=archive')).length).toBeGreaterThan(archiveRequestsBeforeRepeat));
@@ -493,7 +494,7 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={active.id} /></QueryClientProvider>);
 
     expect(await screen.findByRole('heading', { name: active.title })).toBeTruthy();
-    fireEvent.click(within(screen.getByRole('group', { name: 'Conversation view' })).getByRole('button', { name: 'Archive' }));
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Conversation view' })).getByRole('tab', { name: 'Archive' }));
     releaseArchiveRequest();
 
     expect(await screen.findByRole('heading', { name: archived.title })).toBeTruthy();
@@ -518,12 +519,12 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
     expect(await screen.findByRole('heading', { name: active.title })).toBeTruthy();
-    fireEvent.click(within(screen.getByRole('group', { name: 'Conversation view' })).getByRole('button', { name: 'Archive' }));
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Conversation view' })).getByRole('tab', { name: 'Archive' }));
     expect(await screen.findByRole('heading', { name: archived.title })).toBeTruthy();
     expect(window.location.pathname).toBe(`/conversations/${archived.id}`);
 
     const archiveRequestsBeforeRepeat = fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/shared/conversations?') && String(input).includes('view=archive')).length;
-    fireEvent.click(within(screen.getByRole('group', { name: 'Conversation view' })).getByRole('button', { name: 'Archive' }));
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Conversation view' })).getByRole('tab', { name: 'Archive' }));
     await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/shared/conversations?') && String(input).includes('view=archive')).length).toBeGreaterThan(archiveRequestsBeforeRepeat));
     expect(screen.getByRole('heading', { name: archived.title })).toBeTruthy();
     expect(window.location.pathname).toBe(`/conversations/${archived.id}`);
@@ -543,12 +544,12 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={active.id} /></QueryClientProvider>);
 
-    const viewTabs = await screen.findByRole('group', { name: 'Conversation view' });
-    fireEvent.click(within(viewTabs).getByRole('button', { name: 'Archive' }));
+    const viewTabs = await screen.findByRole('tablist', { name: 'Conversation view' });
+    fireEvent.click(within(viewTabs).getByRole('tab', { name: 'Archive' }));
     fireEvent.click(await screen.findByRole('button', { name: /Archived conversation/i }));
     expect(await screen.findByRole('heading', { name: 'Archived conversation' })).toBeTruthy();
 
-    fireEvent.click(within(screen.getByRole('group', { name: 'Conversation view' })).getByRole('button', { name: 'Archive' }));
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Conversation view' })).getByRole('tab', { name: 'Archive' }));
 
     expect(screen.getByRole('heading', { name: 'Archived conversation' })).toBeTruthy();
   });
@@ -574,8 +575,8 @@ describe('shared room', () => {
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
-    const viewTabs = () => screen.getByRole('group', { name: 'Conversation view' });
-    const tab = (name: 'Active' | 'Archive') => within(viewTabs()).getByRole('button', { name });
+    const viewTabs = () => screen.getByRole('tablist', { name: 'Conversation view' });
+    const tab = (name: 'Active' | 'Archive') => within(viewTabs()).getByRole('tab', { name });
 
     expect(await screen.findByRole('heading', { name: active.title })).toBeTruthy();
 
@@ -583,14 +584,14 @@ describe('shared room', () => {
     // had been rendered at least once.
     for (const step of [1, 2, 3]) {
       fireEvent.click(tab('Archive'));
-      await waitFor(() => expect(tab('Archive').getAttribute('aria-pressed')).toBe('true'), { timeout: 3000 });
-      expect(tab('Active').getAttribute('aria-pressed')).toBe('false');
+      await waitFor(() => expect(tab('Archive').getAttribute('aria-selected')).toBe('true'), { timeout: 3000 });
+      expect(tab('Active').getAttribute('aria-selected')).toBe('false');
       expect(await screen.findByRole('heading', { name: archived.title })).toBeTruthy();
       expect(screen.queryByRole('heading', { name: active.title })).toBeNull();
       expect(step).toBeGreaterThan(0);
 
       fireEvent.click(tab('Active'));
-      await waitFor(() => expect(tab('Active').getAttribute('aria-pressed')).toBe('true'), { timeout: 3000 });
+      await waitFor(() => expect(tab('Active').getAttribute('aria-selected')).toBe('true'), { timeout: 3000 });
       expect(await screen.findByRole('heading', { name: active.title })).toBeTruthy();
     }
   });
@@ -616,8 +617,8 @@ describe('shared room', () => {
     const { container } = render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
     const workspace = () => container.querySelector('.shared-workspace')!;
     const drawerOpen = () => workspace().classList.contains('rail-open');
-    const viewTabs = () => screen.getByRole('group', { name: 'Conversation view' });
-    const tab = (name: 'Active' | 'Archive') => within(viewTabs()).getByRole('button', { name });
+    const viewTabs = () => screen.getByRole('tablist', { name: 'Conversation view' });
+    const tab = (name: 'Active' | 'Archive') => within(viewTabs()).getByRole('tab', { name });
 
     expect(await screen.findByRole('heading', { name: active.title })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Show conversations' }));
@@ -625,12 +626,12 @@ describe('shared room', () => {
 
     for (const _step of [1, 2, 3]) {
       fireEvent.click(tab('Archive'));
-      await waitFor(() => expect(tab('Archive').getAttribute('aria-pressed')).toBe('true'), { timeout: 3000 });
+      await waitFor(() => expect(tab('Archive').getAttribute('aria-selected')).toBe('true'), { timeout: 3000 });
       await screen.findByRole('heading', { name: archived.title });
       expect(drawerOpen()).toBe(true);
 
       fireEvent.click(tab('Active'));
-      await waitFor(() => expect(tab('Active').getAttribute('aria-pressed')).toBe('true'), { timeout: 3000 });
+      await waitFor(() => expect(tab('Active').getAttribute('aria-selected')).toBe('true'), { timeout: 3000 });
       await screen.findByRole('heading', { name: active.title });
       expect(drawerOpen()).toBe(true);
     }

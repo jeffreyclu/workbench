@@ -43,6 +43,20 @@ describe('GlobalSearch', () => {
     expect(screen.getByRole('combobox', { name: 'Search everything' })).toHaveValue('');
   });
 
+  it('labels results without a destination as preview-only and keeps them inert', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      results: [{ source: 'activity', sourceId: '1', title: 'Background context', snippet: 'No destination.', createdAt: '2026-08-24T00:00:00.000Z', conversationId: null, workItemId: null, actor: null, score: 1 }],
+    }), { headers: { 'Content-Type': 'application/json' } })));
+    const onSelectResult = renderSearch();
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search everything' }), { target: { value: 'context' } });
+
+    expect(await screen.findByText('Preview only')).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Background context/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Background context'));
+    expect(onSelectResult).not.toHaveBeenCalled();
+  });
+
   it('navigates selectable results with Arrow keys and opens the active result with Enter', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       results: [
