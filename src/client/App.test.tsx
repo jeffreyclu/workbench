@@ -425,6 +425,30 @@ describe('shared room', () => {
     await waitFor(() => expect(extractionStarted).toBe(true));
   });
 
+  it('does not show session feedback after a dual-agent response is synthesized', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000095';
+    const timestamp = '2026-01-01T00:00:00Z';
+    const conversation = { id: conversationId, title: 'Dual response', workItemId: null, archivedAt: null, state: 'finished', createdAt: timestamp, updatedAt: timestamp };
+    const messages = [
+      { id: 'codex-1', conversationId, author: 'codex', body: 'Codex completed the change.', pinned: false, status: 'completed', error: '', createdAt: timestamp, attachments: [], model: null, executionProfile: 'auto', dispatchTarget: 'none' },
+      { id: 'claude-1', conversationId, author: 'claude', body: 'Claude completed the change.', pinned: false, status: 'completed', error: '', createdAt: timestamp, attachments: [], model: null, executionProfile: 'auto', dispatchTarget: 'none' },
+      { id: 'synthesis-1', conversationId, author: 'system', body: 'Synthesis:\n\nThe change is complete.', pinned: false, status: 'completed', error: '', createdAt: timestamp, attachments: [], model: null, executionProfile: null, dispatchTarget: 'none' },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations') && !url.includes('/feedback')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.endsWith('/feedback')) return new Response(JSON.stringify({ feedback: null }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    expect(await screen.findByText('The change is complete.')).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'How did we do?' })).toBeNull());
+  });
+
   it('shows the agent, model, account profile, usage, and duration on an agent reply', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000005';

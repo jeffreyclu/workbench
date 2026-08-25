@@ -9,6 +9,7 @@ import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, runSharedBackgroundJob } from '../shared-room.js';
 import { parseFollowUpPlan } from '../app-exports.js';
 import { isRuntimeApproval } from '../runtime-promotion.js';
+import { PROMOTION_QUEUED_MESSAGE } from '../promotion-messages.js';
 import type { RouteContext } from '../route-context.js';
 
 export function createConversationRouter({ repository, database, capabilities }: RouteContext) {
@@ -202,7 +203,7 @@ export function createConversationRouter({ repository, database, capabilities }:
     });
     if (isRuntimeApproval(input.body)) {
       const message = repository.createSharedMessage('jeffrey', input.body, 'completed', input.conversationId, attachments, 'none');
-      const reply = repository.createSharedMessage('system', 'Promotion queued. It will build once active agent work reaches a durable terminal state.', 'queued', input.conversationId, [], 'promotion');
+      const reply = repository.createSharedMessage('system', PROMOTION_QUEUED_MESSAGE, 'queued', input.conversationId, [], 'promotion');
       response.status(202).json({ message, replies: [reply] });
       return;
     }

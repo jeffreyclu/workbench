@@ -7,6 +7,7 @@ import type { WorkbenchDatabase } from './database.js';
 import { ArtifactLibrary } from './artifact-library.js';
 import { DEFAULT_WORKBENCH_TIMEZONE } from '../shared/due-date.js';
 import { describeLifecycleChange, summarizeWorkItemChanges } from './activity-log.js';
+import { PROMOTION_QUEUED_MESSAGE } from './promotion-messages.js';
 import { collectMemoryDocuments, indexPendingMemory, searchMemory } from './memory-index.js';
 import { buildFtsMatchQuery } from './fts-query.js';
 import { UnitOfWork } from './unit-of-work.js';
@@ -608,7 +609,7 @@ export class WorkItemRepository {
         const message = this.getSharedMessageById(active.id);
         if (message) return message;
       }
-      return this.createSharedMessage('system', 'Promotion queued. It will build once active agent work reaches a durable terminal state.', 'queued', conversationId, [], 'promotion');
+      return this.createSharedMessage('system', PROMOTION_QUEUED_MESSAGE, 'queued', conversationId, [], 'promotion');
     });
   }
 

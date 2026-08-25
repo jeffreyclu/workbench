@@ -5,6 +5,7 @@ import { isMcpReauthenticationError, mcpAuthenticationMessage, scanRemoteMcp } f
 import { searchSlackWithCodex } from './slack-codex.js';
 import { searchAtlassianWithCodex, searchFigmaWithCodex } from './managed-connector.js';
 import { scanSource, type SourceSignal } from './source-scanner.js';
+import { LinearProvider } from './providers/linear.js';
 
 const cache = new Map<string, { expires: number; value: Promise<SourceSignal[]> }>();
 
@@ -117,7 +118,35 @@ export async function searchBrokerSources(repository: WorkItemRepository, query:
   const batches = await Promise.all(sources.map(async (source) => {
     try {
       if (source === 'google') throw new Error('Google Workspace is disabled pending Writer approval.');
-      if (source === 'linear') return repository.searchLinear(query, 20).map((item) => ({ provider: 'linear', title: `${item.sourceIdentifier ?? 'Linear'} · ${item.title}`, summary: item.description, url: item.sourceUrl, occurredAt: item.providerUpdatedAt }));
+      if (source === 'linear') {
+        // Start with the local catalog, but make Linear the live source for each
+        // submitted search and persist what it returns for immediate assignment.
+        // This avoids a full workspace sync while keeping current issues findable.
+        const localItems = repository.searchLinear(query, 20);
+        const config = repository.getLinearConfig();
+        const provider = new LinearProvider(process.env.LINEAR_API_KEY ?? '', config.teamIds, config.projectIds);
+        const liveItems = await provider.searchIssues(query, 20, signal);
+        for (const item of liveItems) repository.upsertLinearItem(item);
+
+        // An explicit identifier intentionally escapes configured sync scope:
+        // Jeffrey can add a just-created Linear issue without waiting for sync.
+        const identifier = query.match(/(?:\/issue\/)?([A-Za-z]+-\d+)/i)?.[1]?.toUpperCase();
+        if (identifier && !liveItems.some((item) => item.sourceIdentifier === identifier)) {
+          const item = await provider.fetchIssue(identifier);
+          repository.upsertLinearItem(item);
+          liveItems.unshift(item);
+        }
+        const seen = new Set<string>();
+        return [...liveItems, ...localItems]
+          .filter((item) => {
+            const key = item.sourceIdentifier ?? item.sourceUrl ?? item.title;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          })
+          .slice(0, 20)
+          .map((item) => ({ provider: 'linear', title: `${item.sourceIdentifier ?? 'Linear'} · ${item.title}`, summary: item.description, url: item.sourceUrl, occurredAt: item.providerUpdatedAt }));
+      }
       if (source === 'slack') { const settings = repository.getSourceSettings('slack'); return cached(`slack:search:${query}`, () => !settings || settings.mode === 'managed' ? searchSlackWithCodex(query, undefined, signal) : scanRemoteMcp('slack', settings, query)); }
       if (source === 'figma') { const settings = repository.getSourceSettings('figma'); if (!settings) throw new Error('Figma is not connected.'); return cached(`figma:search:${query}`, () => settings.mode === 'managed' ? searchFigmaWithCodex(query, signal) : scanRemoteMcp('figma', settings, query)); }
       if (source === 'atlassian') {

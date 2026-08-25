@@ -12,7 +12,7 @@ interface LinearIssue {
   dueDate: string | null;
   updatedAt: string;
   state: { type: string; name: string };
-  project: { name: string } | null;
+  project: { id: string; name: string } | null;
   labels: { nodes: Array<{ name: string }> };
   team: { id: string; name: string };
 }
@@ -33,7 +33,7 @@ const issueFields = `
   nodes {
     id identifier title description priority url dueDate updatedAt
     state { type name }
-    project { name }
+    project { id name }
     labels { nodes { name } }
     team { id name }
   }
@@ -89,10 +89,16 @@ const issueQuery = `
     issue(id: $id) {
       id identifier title description priority url dueDate updatedAt
       state { type name }
-      project { name }
+      project { id name }
       labels { nodes { name } }
       team { id name }
     }
+  }
+`;
+
+const issueSearchQuery = `
+  query WorkbenchIssueSearch($term: String!, $first: Int!, $teamId: String) {
+    searchIssues(term: $term, first: $first, teamId: $teamId) { ${issueFields} }
   }
 `;
 
@@ -148,12 +154,13 @@ export class LinearProvider {
     private readonly fetchImpl: typeof fetch = createOutboundFetch('linear-api'),
   ) {}
 
-  private async request<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
+  private async request<T>(query: string, variables: Record<string, unknown> = {}, signal?: AbortSignal): Promise<T> {
     if (!this.apiKey) throw new Error('LINEAR_API_KEY is not configured.');
     const response = await this.fetchImpl('https://api.linear.app/graphql', {
       method: 'POST',
       headers: { Authorization: this.apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, variables }),
+      signal,
     });
     const payload = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
     if (payload.errors?.length) throw new Error(payload.errors.map((error) => error.message).join('; '));
@@ -180,6 +187,23 @@ export class LinearProvider {
   async fetchIssue(identifier: string): Promise<ProviderWorkItem> {
     const data = await this.request<{ issue: LinearIssue }>(issueQuery, { id: identifier });
     return mapIssue(data.issue);
+  }
+
+  /**
+   * Search Linear at request time. This is a current lookup, not a workspace
+   * sync; configured teams/projects still constrain the returned results.
+   */
+  async searchIssues(query: string, first = 20, signal?: AbortSignal): Promise<ProviderWorkItem[]> {
+    // searchIssues only accepts one team ID and has no project filter. Ask for
+    // enough matches to apply a project scope locally without downloading the
+    // whole catalog, then keep the picker response bounded.
+    const teamId = this.teamIds.length === 1 ? this.teamIds[0] : undefined;
+    const data = await this.request<{ searchIssues: { nodes: LinearIssue[] } }>(issueSearchQuery, { term: query, first: this.projectIds.length > 0 ? 100 : first, teamId }, signal);
+    return data.searchIssues.nodes
+      .filter((issue) => this.teamIds.length === 0 || this.teamIds.includes(issue.team.id))
+      .filter((issue) => this.projectIds.length === 0 || (issue.project !== null && this.projectIds.includes(issue.project.id)))
+      .slice(0, first)
+      .map(mapIssue);
   }
 
   async fetchOpenIssues(): Promise<ProviderWorkItem[]> {

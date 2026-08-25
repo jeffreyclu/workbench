@@ -1,5 +1,17 @@
 ## Workbench frontend lessons
 
+### New Task Linear identifiers resolve beyond the current sync scope
+
+*Confirmed 2026-08-25.* The New Task modal searches through
+`POST /api/sources/search`, not the legacy Linear-only route. Its Linear
+provider must query Linear's supported live `searchIssues(term:)` API for every
+submitted search, persist those results, and merge them ahead of local matches.
+That gives immediate assignment of new or changed scoped issues without a full
+catalog sync. For a specific identifier (for example `CON-159`), the broker
+must also fetch and persist the issue on demand when it falls outside the
+configured scope. Do not use Linear's deprecated `issueSearch(query:)` field:
+the API returns an error even though it still appears in schema introspection.
+
 ### Conversation telemetry badges size to their content
 
 *Decision from Jeffrey, 2026-08-25.* The blue model/telemetry badge in a

@@ -328,3 +328,18 @@ Beware the specific failure that triggered this: a subagent reported "repository
 locally, so this cannot be verified" and that was relayed as a blocker. The consuming code, generated
 clients, tests, and docs frequently encode the same contract. A missing repository is one closed door,
 not the end of the search.
+
+## "Diagnose" is a hard boundary, and it is time-boxed
+
+When Jeffrey asks for a diagnosis, he means analysis only: no source edits, no test
+edits, no commits, not even "the fix is obvious so I applied it." On 2026-08-25 during
+the CON-186 duplicate-fetch work he had to say "don't implement anything," "revert what
+you just did," and "so fucking diagnose and don't execute!!" across successive turns
+because agents kept sliding from investigation into implementation. Implementation needs
+its own explicit go-ahead, every time, even when the diagnosis makes the fix look trivial.
+
+The second half matters as much: a diagnosis is due fast. In the same session he asked
+"what the actual fuck were you doing? reading code for 10 minutes?" — a long silent
+read-only exploration reads as no progress. Take the shortest evidence path that supports
+a ranked answer, report the findings with file/line citations, and let him direct the
+follow-up. Depth is not a substitute for a timely answer.

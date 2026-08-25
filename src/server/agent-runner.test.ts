@@ -656,6 +656,12 @@ describe('classifyExecution', () => {
     expect(readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'reasoning', text: 'The failing test points to stale state.' } })).progress).toContain('Reasoning summary');
   });
 
+  it('requires a separate recorded Why for every tool call', () => {
+    expect(AGENT_DEBUGGER_CONTRACT).toContain('For every tool call');
+    expect(AGENT_DEBUGGER_CONTRACT).toContain('exactly that one tool call');
+    expect(AGENT_DEBUGGER_CONTRACT).toContain('Do not reuse a decision for later calls');
+  });
+
   it('extracts audit candidates for file reads, writes, and tool use out of the same parsed events', () => {
     const claudeDecision = readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Decision: The error may be in the route, so read it before editing.' }, { type: 'tool_use', name: 'Read', input: { file_path: 'App.tsx' } }] } }));
     expect(claudeDecision.audit).toEqual(expect.arrayContaining([
@@ -682,7 +688,7 @@ describe('classifyExecution', () => {
     expect(codexDecision.audit).toEqual([expect.objectContaining({ streamKind: 'decision', detail: 'Confirm the focused test still passes.' })]);
 
     const multiLineClaudeText = readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Decision: Inspect the route.\n\nThe route is large.' }] } }));
-    expect(multiLineClaudeText.audit).toEqual([]);
+    expect(multiLineClaudeText.audit).toEqual([expect.objectContaining({ streamKind: 'decision', detail: 'Inspect the route.' })]);
 
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'system', subtype: 'init' })).audit).toEqual([]);
   });

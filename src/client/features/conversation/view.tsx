@@ -425,10 +425,6 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedConversation, conversationId]);
   const linkedWorkItemId = selectedConversation?.workItemId ?? null;
-  useEffect(() => {
-    if (!conversationId || !selectedConversation || selectedConversation.workItemId || selectedConversation.state !== 'finished' || conversationFeedback.data?.feedback || conversationFeedback.isLoading) return;
-    setFeedbackTarget((current) => current ?? { conversationId });
-  }, [conversationFeedback.data?.feedback, conversationFeedback.isLoading, conversationId, selectedConversation]);
   const linkedWorkItem = useQuery({ queryKey: ['work-item', linkedWorkItemId], queryFn: () => api.getWorkItem(linkedWorkItemId!), enabled: Boolean(linkedWorkItemId), refetchInterval: 1_000 });
   const linkableTasks = useQuery({ queryKey: ['conversation-linkable-tasks'], queryFn: () => api.listWorkItems('active', ''), staleTime: 30_000 });
   const retrievedMemoryDetail = useQuery({
@@ -471,6 +467,15 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     refetchInterval: (query) => query.state.data?.messages.some((message) => message.status === 'running' || message.status === 'queued') ? 750 : false,
   });
   const allConversationMessages = messages.data?.messages ?? [];
+  const completionIsSynthesized = allConversationMessages.some((message) =>
+    message.author === 'system'
+      && message.status === 'completed'
+      && message.body.startsWith('Synthesis:'),
+  );
+  useEffect(() => {
+    if (!conversationId || !selectedConversation || selectedConversation.workItemId || selectedConversation.state !== 'finished' || completionIsSynthesized || conversationFeedback.data?.feedback || conversationFeedback.isLoading) return;
+    setFeedbackTarget((current) => current ?? { conversationId });
+  }, [completionIsSynthesized, conversationFeedback.data?.feedback, conversationFeedback.isLoading, conversationId, selectedConversation]);
   const agentAccounts = useQuery({ queryKey: ['agent-accounts'], queryFn: api.listAgentAccounts, refetchInterval: 5_000 });
   const accountProfiles = useMemo(() => {
     const configured = agentAccounts.data?.accounts ?? [];

@@ -29,7 +29,7 @@ const PROGRESS_FLUSH_MS = 250;
  * footprint proportional to the actual task rather than multiplying it across
  * fresh subagent contexts. */
 export const CLAUDE_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Report a command as passing only if it ran in this run and its output was observed.`;
-export const AGENT_DEBUGGER_CONTRACT = 'Before each tool call, prefix that same turn with one concise `Decision: <why this tool is the next correct action>` line, then make the call — do not spend an extra turn on it. This is recorded in the agent debugger, so use only an explicit, human-readable rationale; never expose or claim hidden reasoning.';
+export const AGENT_DEBUGGER_CONTRACT = 'For every tool call, first emit one standalone text block exactly in the form `Decision: <why this tool is the next correct action>`, then make exactly that one tool call. Do not reuse a decision for later calls or batch multiple tool calls under one decision. This is recorded in the agent debugger, so use only an explicit, human-readable rationale; never expose or claim hidden reasoning.';
 const activeRunControllers = new Map<string, AbortController>();
 export const isAgentRunActive = (id: string) => activeRunControllers.has(id);
 
@@ -571,11 +571,16 @@ export interface AgentEventContext { subagents: Map<string, string> }
 /**
  * Claude does not provide its hidden reasoning in stream-json. A visible
  * `Decision:` preamble is therefore the only rationale we persist: it is
- * agent-authored, attributable, and never an inferred substitute.
+ * agent-authored, attributable, and never an inferred substitute. Unlike
+ * Codex (which emits the preamble as its own agent_message item), Claude
+ * routinely folds the preamble and the rest of its turn into one text
+ * block — requiring the whole block to be just the preamble silently
+ * dropped the overwhelming majority of Claude's decisions, so only the
+ * leading line is required to match.
  */
 export function recordedDecision(text: string): string | null {
-  const match = text.match(/^\s*Decision:\s*([^\n]+?)\s*$/i);
-  return match?.[1] ? match[1].slice(0, 2_000) : null;
+  const match = text.match(/^\s*Decision:\s*([^\n]+)/i);
+  return match?.[1]?.trim() ? match[1].trim().slice(0, 2_000) : null;
 }
 
 export function readableAgentEvent(agent: AgentRun['agent'], line: string, context?: AgentEventContext): { progress: string; final: string | null; audit: AgentAuditCandidate[]; delta?: string; blockBreak?: boolean } {

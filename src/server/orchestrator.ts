@@ -1,4 +1,5 @@
 import type { WorkItemRepository } from './repository.js';
+import { PROMOTION_QUEUED_MESSAGE } from './promotion-messages.js';
 
 const POLL_MS = 1_000;
 
@@ -18,7 +19,7 @@ export async function waitForPromotionSlot(
     if (signal.aborted) throw new Error('Preview promotion canceled.');
     if (!announced) {
       announced = true;
-      onProgress('Promotion is queued by the orchestrator until active agent work reaches a durable terminal state.');
+      onProgress(PROMOTION_QUEUED_MESSAGE);
     }
     await new Promise<void>((resolveWait) => setTimeout(resolveWait, POLL_MS));
   }

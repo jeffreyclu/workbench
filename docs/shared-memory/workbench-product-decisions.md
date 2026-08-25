@@ -754,3 +754,9 @@ contains only one response section. The one-card case is labeled `Detail`.
 This does not reintroduce the stream regression: decision preambles stay out
 of the completed body, and multi-block replies remain capped to a small number
 of cards rather than one card per streamed line.
+### Synthesized dual-agent replies do not trigger session feedback
+
+*Decision from Jeffrey, 2026-08-25.* The automatic “How did we do?” prompt
+must not open when a Codex-and-Claude turn finishes with a system synthesis.
+That synthesis is system-generated completion, not an explicit request for
+session feedback. Manual archive and task-completion feedback remain available.
