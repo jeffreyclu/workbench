@@ -21,42 +21,38 @@ function runGit(args: string[], root: string): Promise<{ code: number | null; ou
   });
 }
 
-/**
- * Commits and pushes the working tree after a promotion, in the background.
- * Failures are logged via onProgress but never fail the promotion itself —
- * the runtime has already switched by the time this runs.
- */
-async function commitAndPushAfterPromotion(root: string, onProgress: (body: string) => void): Promise<void> {
+/** A runtime may only be promoted from a committed, pushed `main`. This makes
+ * the deployed release reproducible and prevents feature branches from
+ * becoming an accidental deployment channel. */
+async function commitAndPushMain(root: string, onProgress: (body: string) => void): Promise<void> {
+  const branch = await runGit(['branch', '--show-current'], root);
+  if (branch.code !== 0 || branch.output.trim() !== 'main') {
+    throw new Error(`Promotion requires the main branch. Current branch: ${branch.output.trim() || 'unknown'}.`);
+  }
   const status = await runGit(['status', '--porcelain'], root);
   if (status.code !== 0) {
-    onProgress(`Skipped auto-commit after promotion: git status failed.\n\n${status.output.trim()}`);
-    return;
+    throw new Error(`Promotion requires a clean Git status check.\n\n${status.output.trim()}`);
   }
-  if (!status.output.trim()) return;
-  const add = await runGit(['add', '-A'], root);
-  if (add.code !== 0) {
-    onProgress(`Skipped auto-commit after promotion: git add failed.\n\n${add.output.trim()}`);
-    return;
+  if (status.output.trim()) {
+    const add = await runGit(['add', '-A'], root);
+    if (add.code !== 0) throw new Error(`Promotion could not stage main.\n\n${add.output.trim()}`);
+    const commit = await runGit(['commit', '-m', 'chore: commit before runtime promotion'], root);
+    if (commit.code !== 0) throw new Error(`Promotion could not commit main.\n\n${commit.output.trim()}`);
   }
-  const commit = await runGit(['commit', '-m', 'chore: auto-commit after runtime promotion'], root);
-  if (commit.code !== 0) {
-    onProgress(`Skipped auto-commit after promotion: git commit failed.\n\n${commit.output.trim()}`);
-    return;
-  }
-  const push = await runGit(['push'], root);
+  const push = await runGit(['push', 'origin', 'main'], root);
   if (push.code !== 0) {
-    onProgress(`Auto-committed after promotion but push failed.\n\n${push.output.trim()}`);
-    return;
+    throw new Error(`Promotion requires main to be pushed successfully.\n\n${push.output.trim()}`);
   }
-  onProgress('Auto-committed and pushed the working tree after promotion.');
+  onProgress('Committed and pushed main; building the verified release…');
 }
 
 export async function promoteRuntime(
   signal: AbortSignal,
   onProgress: (body: string) => void,
 ): Promise<string> {
-  onProgress('Building and verifying the approved Workbench preview…');
   const root = process.cwd();
+  await commitAndPushMain(root, onProgress);
+  onProgress('Building and verifying the approved Workbench preview…');
   const command = join(root, 'node_modules/.bin/tsx');
   const script = resolve(root, 'scripts/promote-runtime.ts');
   return new Promise((resolvePromotion, reject) => {
@@ -76,7 +72,6 @@ export async function promoteRuntime(
       signal.removeEventListener('abort', abort);
       if (signal.aborted) return reject(new Error('Preview approval canceled.'));
       if (code !== 0) return reject(new Error(`Preview promotion failed.\n\n${output.trim() || `Process exited with code ${code}.`}`));
-      void commitAndPushAfterPromotion(root, onProgress);
       resolvePromotion('Preview approved and promoted. The live Workbench switched to the verified release without changing its URL.');
     });
   });
