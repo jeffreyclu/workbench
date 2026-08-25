@@ -993,6 +993,13 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   repository.update(item.id, { status: 'in_progress' }, false, { actor: 'system', source: 'agent_runner' });
   repository.moveForAttention(item.id, 'bottom', `${run.agent} started ${run.kind}.`);
   repository.addActivity(item.id, run.agent, 'progress', `Started ${run.kind}.`);
+  // The request that kicked off this run already returned (executeAgentRun
+  // runs fire-and-forget), and the audit middleware's realtime event fired
+  // before this status flip happened. Without a second event here, the
+  // client's optimistic "in progress" update gets overwritten by the stale
+  // refetch that race triggers, and the task never visibly reaches the
+  // in-progress stack until the run finishes.
+  publishRealtimeEvent('work-items', 'shared', 'insights');
   // Seed the reply bubble immediately. Assembling the prompt reads shared
   // context and source systems, so without this the chat sits empty for the
   // first few seconds of every run and the run reads as hung.
