@@ -206,7 +206,12 @@ export class WorkItemRepository {
   }
 
   restoreDiscoveryCandidate(id: string): DiscoveryCandidate | null {
-    return this.discovery.restoreCandidate(id);
+    return this.transaction(() => {
+      const candidate = this.discovery.getCandidate(id);
+      if (!candidate || !['converted', 'dismissed', 'snoozed'].includes(candidate.status)) return null;
+      if (candidate.status === 'converted' && (!candidate.workItemId || !this.delete(candidate.workItemId))) return null;
+      return this.discovery.restoreCandidate(id, candidate.status === 'converted');
+    });
   }
 
   listConversations(view: 'active' | 'archive' | 'all' = 'active'): SharedConversation[] {

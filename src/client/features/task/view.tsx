@@ -46,7 +46,7 @@ import { ConfirmationDialog } from '../../confirmation-dialog';
 import { InsightsView } from '../../insights';
 import { navigate, parseRoute, routePath, useRoute, type StackName } from '../../router';
 import { useDebouncedValue } from '../conversation/hooks';
-import { ListRowSkeleton } from '../../skeleton';
+import { CandidateRowSkeleton, TaskDetailSkeleton } from '../../skeleton';
 import { Toaster } from '../../toast';
 import { toast, toastError } from '../../toast-store';
 import { SortableQueueItem as TaskQueueItem, TaskClassificationSelect } from '../../task-queue';
@@ -57,7 +57,7 @@ import { DiscoveryInboxView } from '../../discovery';
 import { useNavigation } from '../../features/navigation/hooks';
 import { NavigationView } from '../../features/navigation/view';
 import { FollowUpArchiveDialog } from '../../follow-up-archive-dialog';
-import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
+import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, providerConflictFieldLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
 import { clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
 import { QueueExplanationList } from '../../queue-explanations';
 import { ProjectColorDot } from '../../project-color';
@@ -124,6 +124,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
       ]);
     },
+    onError: (error, input) => toastError(`Could not resolve the ${providerConflictFieldLabel(input.field)} conflict with Linear.`, error),
   });
   const dependencyCandidates = useQuery({
     queryKey: ['dependency-candidates', id, normalizedDependencyQuery],
@@ -339,7 +340,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
     setRunsVisibleCount(RUNS_PAGE_SIZE);
   }, [id]);
 
-  if (detail.isLoading) return <ListRowSkeleton count={6} className="detail-empty-skeleton" />;
+  if (detail.isLoading) return <TaskDetailSkeleton />;
   if (!detail.data) return <div className="detail-empty">Unable to load this item.</div>;
   const { item, activity } = detail.data;
   const decisionCount = activity.filter((entry) => agentDecisionKinds.has(entry.kind)).length;
@@ -399,12 +400,18 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       </div>}
       {providerConflicts.length > 0 && <section className="provider-conflicts" aria-label="Linear sync conflicts">
         <div><strong>Linear changes need a decision</strong><small>{providerConflicts.length} field{providerConflicts.length === 1 ? '' : 's'} kept local after Linear changed too.</small></div>
-        {providerConflicts.map((conflict) => <div className="provider-conflict" key={conflict.field}>
-          <strong>{conflict.field === 'projectName' ? 'Project' : conflict.field === 'dueDate' ? 'Due date' : conflict.field}</strong>
-          <span><small>Local</small>{Array.isArray(conflict.localValue) ? conflict.localValue.join(', ') || 'None' : conflict.localValue || 'None'}</span>
-          <span><small>Linear</small>{Array.isArray(conflict.providerValue) ? conflict.providerValue.join(', ') || 'None' : conflict.providerValue || 'None'}</span>
-          <div className="provider-conflict-actions"><button className="button secondary compact" onClick={() => resolveProviderConflict.mutate({ field: conflict.field, resolution: 'keep_local' })}>Keep local</button><button className="button compact" onClick={() => resolveProviderConflict.mutate({ field: conflict.field, resolution: 'use_provider' })}>Use Linear</button></div>
-        </div>)}
+        {providerConflicts.map((conflict) => {
+          const resolvingThisField = resolveProviderConflict.isPending && resolveProviderConflict.variables?.field === conflict.field;
+          return <div className="provider-conflict" key={conflict.field}>
+            <strong>{providerConflictFieldLabel(conflict.field)}</strong>
+            <span><small>Local</small>{Array.isArray(conflict.localValue) ? conflict.localValue.join(', ') || 'None' : conflict.localValue || 'None'}</span>
+            <span><small>Linear</small>{Array.isArray(conflict.providerValue) ? conflict.providerValue.join(', ') || 'None' : conflict.providerValue || 'None'}</span>
+            <div className="provider-conflict-actions">
+              <button className="button secondary compact" disabled={resolvingThisField} onClick={() => resolveProviderConflict.mutate({ field: conflict.field, resolution: 'keep_local' })}>{resolvingThisField ? <LoaderCircle className="spin" size={13} /> : null} Keep local</button>
+              <button className="button compact" disabled={resolvingThisField} onClick={() => resolveProviderConflict.mutate({ field: conflict.field, resolution: 'use_provider' })}>{resolvingThisField ? <LoaderCircle className="spin" size={13} /> : null} Use Linear</button>
+            </div>
+          </div>;
+        })}
       </section>}
       <div className="task-lifecycle-actions">
         <button type="button" className="icon-button" onClick={() => setShowFollowUp((value) => !value)} aria-label="Create follow-up task" title="Create follow-up task"><Plus size={14} /></button>
@@ -496,7 +503,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
           const chosen = new Set(dependencies.map((dependency) => dependency.id));
           const candidates = (dependencyCandidates.data?.items ?? []).filter((candidate) => !chosen.has(candidate.id)
             && !(candidate.blockedBy ?? []).some((edge) => edge.id === item.id));
-          if (dependencyCandidates.isLoading) return <p className="muted dependency-empty">Loading tasks…</p>;
+          if (dependencyCandidates.isLoading) return <CandidateRowSkeleton />;
           if (!candidates.length) return <p className="muted dependency-empty">No other tasks match.</p>;
           return <ul className="dependency-candidates">
             {candidates.slice(0, 8).map((candidate) => (
@@ -645,11 +652,12 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
               <button type="button" className="icon-button" aria-label={`Remove linked task ${linkedTask.title}`} disabled={removeTaskLink.isPending} onClick={() => removeTaskLink.mutate(linkedTask.id)}><X size={12} /></button>
             </div>
           ))}
+          {removeTaskLink.error && <p className="error-message">Could not remove linked task: {removeTaskLink.error.message}</p>}
           {showAddTaskLink ? (
             <div className="reference-form">
               <input autoFocus value={taskLinkQuery} onChange={(event) => setTaskLinkQuery(event.target.value)} placeholder="Search tasks to link" aria-label="Search tasks to link" />
               {addTaskLink.error && <p className="error-message">Could not link task: {addTaskLink.error.message}</p>}
-              {normalizedTaskLinkQuery && (taskLinkCandidateQuery.isLoading ? <p className="muted">Loading tasks…</p> : taskLinkCandidates.length ? <ul className="dependency-candidates">{taskLinkCandidates.slice(0, 8).map((candidate) => <li key={candidate.id}><button type="button" disabled={addTaskLink.isPending} onClick={() => addTaskLink.mutate(candidate.id)}><Plus size={12} /><span>{candidate.title}</span><small>{candidate.projectName ?? 'Personal'}</small></button></li>)}</ul> : <p className="muted">No other tasks match.</p>)}
+              {normalizedTaskLinkQuery && (taskLinkCandidateQuery.isLoading ? <CandidateRowSkeleton /> : taskLinkCandidates.length ? <ul className="dependency-candidates">{taskLinkCandidates.slice(0, 8).map((candidate) => <li key={candidate.id}><button type="button" disabled={addTaskLink.isPending} onClick={() => addTaskLink.mutate(candidate.id)}><Plus size={12} /><span>{candidate.title}</span><small>{candidate.projectName ?? 'Personal'}</small></button></li>)}</ul> : <p className="muted">No other tasks match.</p>)}
               <div><button type="button" className="button secondary compact" onClick={() => { setTaskLinkQuery(''); setShowAddTaskLink(false); }}>Cancel</button></div>
             </div>
           ) : <button type="button" className="button secondary compact" onClick={() => setShowAddTaskLink(true)}><Plus size={13} /> Link another task</button>}
@@ -685,7 +693,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
             <div className="reference-form">
               <input autoFocus value={artifactLinkQuery} onChange={(event) => setArtifactLinkQuery(event.target.value)} placeholder="Search unlinked artifacts" aria-label="Search unlinked artifacts" />
               {addArtifactLink.error && <p className="error-message">Could not link artifact: {addArtifactLink.error.message}</p>}
-              {artifactLinkCandidateQuery.isLoading ? <p className="muted">Loading artifacts…</p> : normalizedArtifactLinkQuery && (artifactLinkCandidates.length ? <ul className="dependency-candidates">{artifactLinkCandidates.slice(0, 8).map((artifact) => <li key={artifact.id}><button type="button" disabled={addArtifactLink.isPending} onClick={() => addArtifactLink.mutate(artifact.id)}><FileText size={12} /><span>{artifact.title}</span><small>v{artifact.version}</small></button></li>)}</ul> : <p className="muted">No unlinked artifacts match.</p>)}
+              {artifactLinkCandidateQuery.isLoading ? <CandidateRowSkeleton /> : normalizedArtifactLinkQuery && (artifactLinkCandidates.length ? <ul className="dependency-candidates">{artifactLinkCandidates.slice(0, 8).map((artifact) => <li key={artifact.id}><button type="button" disabled={addArtifactLink.isPending} onClick={() => addArtifactLink.mutate(artifact.id)}><FileText size={12} /><span>{artifact.title}</span><small>v{artifact.version}</small></button></li>)}</ul> : <p className="muted">No unlinked artifacts match.</p>)}
               <div><button type="button" className="button secondary compact" onClick={() => { setArtifactLinkQuery(''); setShowAddArtifactLink(false); }}>Cancel</button></div>
             </div>
           ) : <button type="button" className="button secondary compact" onClick={() => setShowAddArtifactLink(true)}><Plus size={13} /> Link an artifact</button>}
@@ -700,6 +708,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
               {reference.source ? <em className="relationship-tag">source</em> : <button type="button" className="icon-button" aria-label="Remove reference" onClick={() => removeReference.mutate(reference.id)}><X size={12} /></button>}
             </div>
           ))}
+          {removeReference.error && <p className="error-message">Could not remove reference: {removeReference.error.message}</p>}
           {showAddReference ? (
             <form className="reference-form" onSubmit={(event) => { event.preventDefault(); if (referenceUrl.trim()) addReference.mutate(); }}>
               <select value={referenceType} onChange={(event) => setReferenceType(event.target.value as WorkItemReferenceType)}>
@@ -711,7 +720,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
               </select>
               <input autoFocus value={referenceUrl} onChange={(event) => setReferenceUrl(event.target.value)} placeholder="https://…" type="url" />
               <input value={referenceTitle} onChange={(event) => setReferenceTitle(event.target.value)} placeholder="Title (optional)" />
-              {addReference.error && <p className="error-message">{addReference.error.message}</p>}
+              {addReference.error && <p className="error-message">Could not add reference: {addReference.error.message}</p>}
               <div><button type="button" className="button secondary compact" onClick={() => setShowAddReference(false)}>Cancel</button><button className="button primary compact" disabled={!referenceUrl.trim() || addReference.isPending}>{addReference.isPending ? <LoaderCircle className="spin" size={13} /> : <Plus size={13} />} Link</button></div>
             </form>
           ) : (

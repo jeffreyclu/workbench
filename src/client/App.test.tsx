@@ -999,6 +999,27 @@ describe('shared room', () => {
     else delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
   });
 
+  it('keeps a completed structured report visible after replacing live stream text', async () => {
+    const conversationId = '00000000-0000-4000-8000-000000000031';
+    let messageFetches = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Summary transition', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages') && url.includes(`conversationId=${conversationId}`)) {
+        messageFetches += 1;
+        const completed = messageFetches > 1;
+        return new Response(JSON.stringify({ messages: [{ id: 'summary-transition', conversationId, author: 'codex', body: completed ? '## Decision\nThe completed report remains visible.\n\n## Verification\nThe virtualized row was remeasured.' : 'Working on the report…', pinned: false, status: completed ? 'completed' : 'running', error: '', createdAt: '2026-01-01T00:00:00Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'none' }] }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    await screen.findByText('Working on the report…');
+    expect(await screen.findByText('The virtualized row was remeasured.', {}, { timeout: 2_000 })).toBeInTheDocument();
+    expect(screen.getByLabelText('Agent response in 2 parts')).toBeInTheDocument();
+  });
+
   it('shows the selected recipient on Jeffrey messages', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000001';
@@ -1352,6 +1373,61 @@ describe('task linked items', () => {
     fireEvent.change(await screen.findByRole('textbox', { name: 'Search unlinked artifacts' }), { target: { value: 'notes' } });
     fireEvent.click(await screen.findByRole('button', { name: /Implementation notes/ }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url) === '/api/artifacts/artifact-1' && init?.method === 'PATCH' && init.body === JSON.stringify({ workItemId: taskId }))).toBe(true));
+  });
+
+  it('shows a distinct inline error for every failed relationship mutation', async () => {
+    const taskId = '00000000-0000-4000-8000-000000000052';
+    const linkedTaskId = '00000000-0000-4000-8000-000000000053';
+    const item = {
+      id: taskId, title: 'Current task', description: '', status: 'backlog', priority: 2, queuePosition: 0,
+      source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete', agentOutcome: null,
+      sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: 'Workbench', stack: 'attention', workspacePath: null, strategy: '', assignees: [], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [],
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', lastTouchedAt: '2026-01-01T00:00:00Z',
+    };
+    const linkedTask = { ...item, id: linkedTaskId, title: 'Related task' };
+    const taskCandidate = { ...item, id: '00000000-0000-4000-8000-000000000054', title: 'Task to link' };
+    const reference = { id: 'reference-1', workItemId: taskId, type: 'document' as const, url: 'https://example.com/reference', title: 'Reference', createdAt: item.createdAt };
+    const artifact = { id: 'artifact-1', title: 'Implementation notes', url: 'https://artifacts.example.com/notes', version: 1, workItemId: null, workItemTitle: null, conversationId: null, conversationTitle: null, publishedAt: item.createdAt, revokedAt: null, versionCount: 1, commentCount: 0, openCommentCount: 0 };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [taskCandidate], nextCursor: null, totalCount: 1, proposal: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/artifacts?view=published') return new Response(JSON.stringify({ artifacts: [artifact], counts: { published: 1, revoked: 0, openComments: 0 } }), { headers: { 'Content-Type': 'application/json' } });
+      if ((url === `/api/work-items/${taskId}/references` && init?.method === 'POST')
+        || (url === `/api/work-items/${taskId}/references/${reference.id}` && init?.method === 'DELETE')
+        || (url === `/api/work-items/${taskId}/linked-tasks` && init?.method === 'POST')
+        || (url === `/api/work-items/${taskId}/linked-tasks/${linkedTaskId}` && init?.method === 'DELETE')
+        || (url === `/api/artifacts/${artifact.id}` && init?.method === 'PATCH')) {
+        return new Response(JSON.stringify({ error: 'Relationship request failed.' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], linkedTasks: [linkedTask], references: [reference], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><TaskDetail id={taskId} onClose={vi.fn()} onOpenConversation={vi.fn()} onOpenTask={vi.fn()} onCreated={vi.fn()} /></QueryClientProvider>);
+
+    async function expectRelationshipError(action: () => void, message: string) {
+      action();
+      expect(await screen.findByText(`${message}: Relationship request failed.`)).toHaveClass('error-message');
+    }
+
+    await screen.findByText('Reference');
+    fireEvent.click(screen.getByRole('button', { name: 'Link Linear, PR, Slack, or a document' }));
+    fireEvent.change(screen.getByPlaceholderText('https://…'), { target: { value: 'https://example.com/new-reference' } });
+    await expectRelationshipError(() => fireEvent.click(screen.getByRole('button', { name: 'Link' })), 'Could not add reference');
+
+    await expectRelationshipError(() => fireEvent.click(screen.getByRole('button', { name: 'Remove reference' })), 'Could not remove reference');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Link another task' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search tasks to link' }), { target: { value: 'related' } });
+    const taskLinkCandidate = (await screen.findAllByRole('button', { name: /Task to link/ })).find((button) => button.closest('li'));
+    if (!taskLinkCandidate) throw new Error('Expected a task-link candidate.');
+    await expectRelationshipError(() => fireEvent.click(taskLinkCandidate), 'Could not link task');
+
+    await expectRelationshipError(() => fireEvent.click(screen.getByRole('button', { name: 'Remove linked task Related task' })), 'Could not remove linked task');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Link an artifact' }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Search unlinked artifacts' }), { target: { value: 'notes' } });
+    await expectRelationshipError(() => fireEvent.click(screen.getByRole('button', { name: /Implementation notes/ })), 'Could not link artifact');
   });
 });
 

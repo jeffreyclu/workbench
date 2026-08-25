@@ -93,7 +93,7 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
     {disconnect.error && <p className="error-message">Could not disconnect: {disconnect.error.message}</p>}
     {provider === 'figma' && connected && <div className="connection-form figma-scope-form">
       <label htmlFor="figma-scope">Discovery scope <span>One Figma file, page, or node URL per line.</span></label>
-      <textarea id="figma-scope" value={figmaRoots} onChange={(event) => setFigmaRoots(event.target.value)} placeholder="https://www.figma.com/design/..." rows={3} />
+      {figmaScope.isLoading ? <div className="figma-scope-skeleton" aria-hidden="true"><Skeleton width="100%" height="12px" /><Skeleton width="74%" height="12px" /><Skeleton width="58%" height="12px" /></div> : <textarea id="figma-scope" value={figmaRoots} onChange={(event) => setFigmaRoots(event.target.value)} placeholder="https://www.figma.com/design/..." rows={3} />}
       <div className="connection-form-actions"><button className="button secondary compact" onClick={() => saveFigmaScope.mutate()} disabled={saveFigmaScope.isPending}>{saveFigmaScope.isPending ? <LoaderCircle className="spin" size={14} /> : null} Save scope</button>{saveFigmaScope.isSuccess && <small className="muted">Saved.</small>}</div>
       <p className="muted">Figma cannot search your whole workspace. Discovery only inspects the URLs listed here.</p>
       {figmaScope.error && <p className="error-message">Could not load Figma scope: {figmaScope.error.message}</p>}

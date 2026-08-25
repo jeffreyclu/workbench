@@ -406,6 +406,17 @@ setter — grep for `= event.final` (or similar single-assignment patterns) as a
 smell whenever a "why did streaming cut off" bug resurfaces after a client-side
 rendering fix already shipped.
 
+### Summarizing a stream must invalidate its virtualized conversation-row measurement
+
+*Confirmed 2026-08-24.* A live agent message can turn into a multi-section
+completed report in a single poll. The thread virtualizer keeps the stable
+message ID as its row key, so its cached live-message height can leave later
+absolutely positioned rows covering the newly expanded report until a reload
+measures everything again. Re-measure the thread when each visible message's
+ID, status, or body changes; do not rely solely on the row's ResizeObserver
+for this content-shape transition. The regression must cover running text
+being replaced by a completed structured report without a page reload.
+
 ### Dialogs had no entrance animation; toasts had entrance but no exit animation
 
 *Confirmed 2026-08-24.* `.dialog-backdrop`/`.dialog` rendered instantly with no

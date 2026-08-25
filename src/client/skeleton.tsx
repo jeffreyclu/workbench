@@ -88,6 +88,42 @@ export function ListRowSkeleton({ count = 5, className = '' }: { count?: number;
   );
 }
 
+/** Mirrors grouped task cards, including their project marker, copy, and metadata. */
+export function TaskQueueSkeleton({ count = 6 }: { count?: number }) {
+  return <div className="task-queue-skeleton" aria-hidden="true">
+    <div className="stack-header skeleton-stack-header"><Skeleton width="76px" height="9px" /><Skeleton width="18px" height="18px" radius="99px" /></div>
+    {Array.from({ length: count }, (_, index) => <div className="queue-item task-queue-skeleton-card" key={index}>
+      <Skeleton width="18px" height="18px" radius="99px" />
+      <div className="task-queue-skeleton-copy"><Skeleton width={index % 3 === 0 ? '82%' : '68%'} height="13px" /><Skeleton width="48%" height="8px" /><div><Skeleton width="54px" height="16px" radius="99px" /><Skeleton width="42px" height="16px" radius="99px" /></div></div>
+    </div>)}
+  </div>;
+}
+
+/** Preserves the task detail panel's title, metadata, and section rhythm. */
+export function TaskDetailSkeleton() {
+  return <section className="detail-panel detail-skeleton" aria-hidden="true">
+    <div className="detail-skeleton-topline"><Skeleton width="88px" height="10px" /><Skeleton width="112px" height="30px" radius="7px" /></div>
+    <Skeleton width="min(680px, 88%)" height="42px" /><div className="detail-skeleton-meta"><Skeleton width="70px" height="20px" radius="99px" /><Skeleton width="88px" height="20px" radius="99px" /><Skeleton width="60px" height="20px" radius="99px" /></div>
+    {[3, 2, 3].map((lines, index) => <div className="detail-section detail-skeleton-section" key={index}><Skeleton width="96px" height="9px" />{Array.from({ length: lines }, (_, line) => <Skeleton key={line} width={line === lines - 1 ? '62%' : '100%'} height="11px" />)}</div>)}
+  </section>;
+}
+
+export function DiscoveryCardSkeleton({ count = 5 }: { count?: number }) {
+  return <div className="discovery-card-skeletons" aria-hidden="true">{Array.from({ length: count }, (_, index) => <article className="discovery-card discovery-card-skeleton" key={index}><div className="discovery-skeleton-source"><Skeleton width="84px" height="9px" /><Skeleton width="86px" height="9px" /></div><Skeleton width={index % 2 ? '66%' : '78%'} height="19px" /><SkeletonText lines={2} /><div className="discovery-skeleton-actions"><Skeleton width="80px" height="28px" radius="6px" /><Skeleton width="72px" height="28px" radius="6px" /><Skeleton width="96px" height="28px" radius="6px" /></div></article>)}</div>;
+}
+
+export function ArtifactCardSkeleton({ count = 5 }: { count?: number }) {
+  return <div className="artifact-card-skeletons" aria-hidden="true">{Array.from({ length: count }, (_, index) => <article className="artifact-card artifact-card-skeleton" key={index}><div className="artifact-skeleton-header"><Skeleton width="14px" height="14px" radius="3px" /><Skeleton width={index % 2 ? '52%' : '68%'} height="15px" /><Skeleton width="34px" height="18px" radius="4px" /></div><div className="artifact-meta"><Skeleton width="118px" height="10px" /><Skeleton width="64px" height="10px" /></div><Skeleton width="42%" height="38px" radius="6px" /><div className="artifact-skeleton-actions"><Skeleton width="74px" height="28px" radius="6px" /><Skeleton width="88px" height="28px" radius="6px" /></div></article>)}</div>;
+}
+
+export function ArtifactDetailSkeleton() {
+  return <div className="artifact-detail artifact-detail-skeleton" aria-hidden="true"><Skeleton width="74%" height="10px" />{[2, 3, 2].map((rows, index) => <div className="artifact-skeleton-section" key={index}><Skeleton width="100px" height="9px" />{Array.from({ length: rows }, (_, row) => <Skeleton key={row} width={row === rows - 1 ? '58%' : '100%'} height="12px" />)}</div>)}</div>;
+}
+
+export function CandidateRowSkeleton({ count = 3 }: { count?: number }) {
+  return <ul className="dependency-candidates candidate-row-skeleton" aria-hidden="true">{Array.from({ length: count }, (_, index) => <li key={index}><div><Skeleton width="12px" height="12px" radius="3px" /><Skeleton width={index === count - 1 ? '48%' : '68%'} height="11px" /><Skeleton width="56px" height="9px" /></div></li>)}</ul>;
+}
+
 /** Mirrors the grouped 88px cards in the conversation rail. */
 export function ConversationRailSkeleton({ count = 5 }: { count?: number }) {
   return (

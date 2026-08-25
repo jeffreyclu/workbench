@@ -294,8 +294,27 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     });
     expect(response.status).toBe(202);
     const { runs } = await response.json() as { runs: Array<{ id: string }> };
+    expect(repository.get(item.id)).toEqual(expect.objectContaining({ status: 'in_progress' }));
     // This route intentionally starts work in the background. End the test's
     // real run and wait for its process callback before closing its database.
+    expect(cancelAgentRun(repository, runs[0].id)).toBeTruthy();
+    await vi.waitFor(() => expect(isAgentRunActive(runs[0].id)).toBe(false));
+  });
+
+  it('promotes a task to in progress before its background execution claims a workspace', async () => {
+    // Keep the background run alive long enough to prove the request itself,
+    // rather than agent-runner timing, owns the visible status transition.
+    fakeAgentDirectory(`trap 'exit 143' TERM\nwhile true; do /bin/sleep 0.1; done`, 'exit 1');
+    const item = repository.create({ title: 'Promote immediately', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    repository.setClassification(item.id, { kind: 'execute', agent: 'codex', complex: false, instructions: 'Implement the task.' }, 'manual');
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}/execute`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+
+    expect(response.status).toBe(202);
+    const { runs } = await response.json() as { runs: Array<{ id: string }> };
+    expect(repository.get(item.id)).toEqual(expect.objectContaining({ status: 'in_progress' }));
     expect(cancelAgentRun(repository, runs[0].id)).toBeTruthy();
     await vi.waitFor(() => expect(isAgentRunActive(runs[0].id)).toBe(false));
   });

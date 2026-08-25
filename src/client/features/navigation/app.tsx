@@ -44,7 +44,7 @@ import { ArtifactLibraryView } from '../../artifacts';
 import { ConfirmationDialog } from '../../confirmation-dialog';
 import { InsightsView } from '../../insights';
 import { navigate, parseRoute, routePath, useRoute, type StackName } from '../../router';
-import { ListRowSkeleton } from '../../skeleton';
+import { TaskQueueSkeleton } from '../../skeleton';
 import { Toaster } from '../../toast';
 import { toast, toastError } from '../../toast-store';
 import { SortableQueueItem as TaskQueueItem, TaskClassificationSelect } from '../../task-queue';
@@ -585,7 +585,7 @@ export function App() {
           const element = event.currentTarget;
           if (element.scrollHeight - element.scrollTop - element.clientHeight < 500 && items.hasNextPage && !items.isFetchingNextPage) void items.fetchNextPage();
         }}>
-          {items.isLoading && <ListRowSkeleton count={8} />}
+          {items.isLoading && <TaskQueueSkeleton count={8} />}
           {items.isError && <div className="list-state error-message">Could not load work items. <button className="button secondary compact" onClick={() => items.refetch()}>Retry</button></div>}
           {!items.isLoading && !items.isError && filtered.length === 0 && <div className="list-state">{taskSearch.trim() ? `No tasks match “${taskSearch.trim()}”.` : view === 'active' ? 'No work items yet. Add one or connect Linear.' : view === 'workbench' ? 'No Workbench-project tasks yet.' : 'No archived tasks.'}</div>}
           <div className="queue-rows">
@@ -596,7 +596,7 @@ export function App() {
               </SortableContext>
             </Fragment>)}
           </div>
-          {items.isFetchingNextPage && <div className="page-state"><LoaderCircle className="spin" size={14} /> Loading more…</div>}
+          {items.isFetchingNextPage && <TaskQueueSkeleton count={2} />}
           {!items.hasNextPage && filtered.length > 0 && <div className="page-state">All {items.data?.pages[0]?.totalCount ?? filtered.length} items loaded</div>}
         </div>
         </DndContext>

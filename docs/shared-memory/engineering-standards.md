@@ -350,3 +350,22 @@ in Codex's own config surface suppresses it. When a PR already carries the trail
 rewritten with `git filter-branch --msg-filter` (strip the trailer line + trailing blank line) and
 force-pushed **only when the branch is unmerged, single-author, and not shared with other active
 collaborators** — treat merged branches or shared branches as out of scope for a rewrite.
+
+### A dominant activity-log entry can be a bug, not a usage signal — verify before "strengthening" it
+
+On 2026-08-24, asked to find Jeffrey's most-frequent action and strengthen that path, the top entry
+in `audit_log` by a wide margin — `POST /api/shared/conversations/:id/read` at 75% of all mutating
+calls — turned out to be a bug, not real usage: `src/client/features/conversation/view.tsx` marked a
+conversation read inside a `useEffect` keyed on the streamed message's `body.length`. Because
+`messages` polls every 750ms while a run is active and the streaming body grows on nearly every poll,
+the effect re-fired for the full duration of every run instead of once per new/completed message.
+
+Before treating any dominant log count as a real behavior pattern worth reinforcing, check the code
+path behind it — a count that's implausibly large relative to plausible user action (nobody re-marks
+one open conversation as read thousands of times) is itself the signal, and the fix is to remove the
+waste, not add capacity around it. The general anti-pattern to watch for elsewhere: a `useEffect`
+dependency array containing a value that changes on every poll tick (a streaming/growing field) will
+silently multiply that effect's side-effect frequency for as long as the poll runs. Prefer keying such
+effects on discrete signals (message count, status) rather than continuously-changing ones, reserving
+the continuous dependency for effects that genuinely need per-tick reaction (e.g. auto-scroll).
+See `docs/activity-log-frequency-analysis.md` for the full analysis.

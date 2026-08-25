@@ -1,9 +1,11 @@
 import '@testing-library/jest-dom/vitest';
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryInbox } from '../../../shared/contracts';
+import { Toaster } from '../../toast';
+import { toast } from '../../toast-store';
 import { DiscoveryInboxView } from './view';
 
 const candidateId = '00000000-0000-4000-8000-000000000001';
@@ -30,7 +32,7 @@ const inbox: DiscoveryInbox = {
   queueProposal: null,
 };
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); toast.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('DiscoveryInboxView bulk review failures', () => {
   it.each([
@@ -57,5 +59,35 @@ describe('DiscoveryInboxView bulk review failures', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not complete bulk review: Bulk review failed.');
     expect(screen.getByRole('checkbox', { name: /github/i })).toBeChecked();
+  });
+});
+
+describe('DiscoveryInboxView undo', () => {
+  it.each([
+    ['Tomorrow', 'snooze', 'Snoozed until tomorrow.'],
+    ['Dismiss', 'dismiss', 'Discovery dismissed.'],
+    ['Add to stack', 'convert', 'Added to stack.'],
+  ])('offers Undo after %s and restores the same card', async (buttonName, action, message) => {
+    const successToast = vi.spyOn(toast, 'success');
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/discovery/${candidateId}/${action}` && init?.method === 'POST') return new Response(JSON.stringify({ candidate: { ...inbox.candidates[0], status: action } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/discovery/${candidateId}/restore` && init?.method === 'POST') return new Response(JSON.stringify({ candidate: { ...inbox.candidates[0], status: 'pending' } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/discovery?view=pending')) return new Response(JSON.stringify(inbox), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [], nextCursor: null, totalCount: 0, proposal: null }), { headers: { 'Content-Type': 'application/json' } });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DiscoveryInboxView onOpenTask={vi.fn()} onOpenStack={vi.fn()} /><Toaster /></QueryClientProvider>);
+
+    const card = (await screen.findByText(inbox.candidates[0].title)).closest<HTMLElement>('.discovery-card');
+    expect(card).not.toBeNull();
+    fireEvent.click(within(card!).getByRole('button', { name: buttonName }));
+    const undo = await screen.findByRole('button', { name: `Undo: ${message}` });
+    expect(successToast).toHaveBeenCalledWith(message, expect.objectContaining({ actionLabel: 'Undo', duration: 5_000 }));
+    fireEvent.click(undo);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/discovery/${candidateId}/restore`, expect.objectContaining({ method: 'POST' })));
   });
 });

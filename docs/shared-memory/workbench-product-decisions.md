@@ -242,3 +242,14 @@ The task execution controls stay compact: keep model selection, account-profile
 selection, profile editing, and Execute in one row whenever the panel has room.
 At narrow widths, wrap the controls into compact rows; do not turn each control
 into a separate full-width row. Decision from Jeffrey, 2026-08-24.
+
+### Suppress toasts for the task/conversation already open
+
+*Decision from Jeffrey, 2026-08-24.* Do not show a toast for an update to the
+task or conversation the user is already viewing — the active view itself is
+the feedback; toasts exist to surface updates happening elsewhere. Realtime
+cache invalidation should still fire so the open view stays fresh; only the
+redundant toast is skipped. Implemented in `App`
+(`src/client/features/navigation/app.tsx`), which compares the notification's
+target route (`/tasks/:id` or `/conversations/:id`) against the currently
+viewed task/conversation before deciding whether to toast.

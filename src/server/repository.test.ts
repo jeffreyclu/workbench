@@ -1240,6 +1240,19 @@ describe('WorkItemRepository', () => {
     expect(repository.restoreDiscoveryCandidate(second.id)).toBeNull();
   });
 
+  it('undoes a converted discovery by restoring the card and soft-deleting its generated task', () => {
+    const run = repository.startDiscoveryRun();
+    repository.upsertDiscoveryCandidate({ fingerprint: 'undo-convert', provider: 'github', title: 'Undo converted discovery', description: 'Restore this card.', sourceUrl: null, occurredAt: null, runId: run.id, relevance: 1 });
+    repository.upsertDiscoveryCandidate({ fingerprint: 'keep-position', provider: 'github', title: 'Keep its position', description: '', sourceUrl: null, occurredAt: null, runId: run.id, relevance: 2 });
+    const initialOrder = repository.getDiscoveryInbox().candidates.map((item) => item.id);
+    const candidate = repository.getDiscoveryInbox().candidates.find((item) => item.title === 'Undo converted discovery')!;
+    const converted = repository.resolveDiscoveryCandidate(candidate.id, 'convert')!;
+
+    expect(repository.restoreDiscoveryCandidate(candidate.id)).toEqual(expect.objectContaining({ status: 'pending', workItemId: null }));
+    expect(repository.get(converted.workItemId!)).toBeNull();
+    expect(repository.getDiscoveryInbox().candidates.map((item) => item.id)).toEqual(initialOrder);
+  });
+
   describe('claim/retry primitives', () => {
     it('retries a failed task run in place without creating a second run or chat reply', () => {
       const item = repository.create({ title: 'Retry in place', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });

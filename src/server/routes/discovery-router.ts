@@ -17,7 +17,7 @@ export function createDiscoveryRouter({ repository }: RouteContext) {
   });
   router.post('/api/discovery/:id/restore', (request, response) => {
     const candidate = repository.restoreDiscoveryCandidate(request.params.id);
-    if (!candidate) return response.status(409).json({ error: 'Only dismissed or snoozed discoveries can be restored.' });
+    if (!candidate) return response.status(409).json({ error: 'Only recently resolved discoveries can be restored.' });
     response.json({ candidate });
   });
   router.post('/api/discovery/:id/:action', (request, response) => {

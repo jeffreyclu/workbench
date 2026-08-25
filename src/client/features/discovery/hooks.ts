@@ -6,6 +6,7 @@ import { discoveryData, discoveryQueryKeys } from './data';
 import { useDiscoveryInboxState } from './state';
 
 const ACTION_VERBS: Record<'convert' | 'dismiss' | 'snooze', string> = { convert: 'add', dismiss: 'dismiss', snooze: 'snooze' };
+const ACTION_MESSAGES: Record<'convert' | 'dismiss' | 'snooze', string> = { convert: 'Added to stack.', dismiss: 'Discovery dismissed.', snooze: 'Snoozed until tomorrow.' };
 
 function invalidateDiscovery(queryClient: ReturnType<typeof useQueryClient>, includeWorkItems = false) {
   void queryClient.invalidateQueries({ queryKey: discoveryQueryKeys.root });
@@ -31,7 +32,10 @@ export function useDiscoveryInbox() {
   });
   const resolveCandidate = useMutation({
     mutationFn: ({ candidate, action }: { candidate: DiscoveryCandidate; action: 'convert' | 'dismiss' | 'snooze' }) => discoveryData.resolve(candidate, action),
-    onSuccess: () => invalidateDiscovery(queryClient, true),
+    onSuccess: (_result, { candidate, action }) => {
+      invalidateDiscovery(queryClient, true);
+      toast.success(ACTION_MESSAGES[action], { action: () => restore.mutate(candidate.id), actionLabel: 'Undo', duration: 5_000 });
+    },
     onError: (error, { candidate, action }) => toastError(`Could not ${ACTION_VERBS[action]} "${candidate.title}".`, error),
   });
   const bulkResolve = useMutation({
@@ -47,14 +51,16 @@ export function useDiscoveryInbox() {
   });
   const restore = useMutation({
     mutationFn: discoveryData.restore,
-    onSuccess: () => invalidateDiscovery(queryClient),
+    onSuccess: () => invalidateDiscovery(queryClient, true),
     onError: (error) => toastError('Could not restore this discovery.', error),
   });
+  const resolveMerge = useMutation({
+    mutationFn: ({ id, workItemId }: { id: string; workItemId: string }) => discoveryData.resolveMerge(id, workItemId),
+    onSuccess: () => invalidateDiscovery(queryClient),
+    onError: (error) => toastError('Could not merge this discovery into the task.', error),
+  });
   return {
-    inboxView, setInboxView, selected, setSelected, inbox, activeTasks, scan, resolveCandidate, bulkResolve, restore,
-    resolveMerge: (id: string, workItemId: string) => discoveryData.resolveMerge(id, workItemId)
-      .then(() => invalidateDiscovery(queryClient))
-      .catch((error) => toastError('Could not merge this discovery into the task.', error)),
+    inboxView, setInboxView, selected, setSelected, inbox, activeTasks, scan, resolveCandidate, bulkResolve, restore, resolveMerge,
   };
 }
 

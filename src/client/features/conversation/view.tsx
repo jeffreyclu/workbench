@@ -332,9 +332,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const linkedWorkItemId = selectedConversation?.workItemId ?? null;
   const linkedWorkItem = useQuery({ queryKey: ['work-item', linkedWorkItemId], queryFn: () => api.getWorkItem(linkedWorkItemId!), enabled: Boolean(linkedWorkItemId), refetchInterval: 1_000 });
   const linkableTasks = useQuery({ queryKey: ['conversation-linkable-tasks'], queryFn: () => api.listWorkItems('active', ''), staleTime: 30_000 });
-  const linkedTaskCompleted = linkedWorkItem.data?.item.completionStatus === 'completed';
+  const linkedTaskCompleted = linkedWorkItem.data?.item?.completionStatus === 'completed';
   // A task Jeffrey has claimed keeps its owner: chatting here must not hand it to an agent.
-  const linkedTaskIsSelfAssigned = isSelfAssigned(linkedWorkItem.data?.item.assignees ?? []);
+  const linkedTaskIsSelfAssigned = isSelfAssigned(linkedWorkItem.data?.item?.assignees ?? []);
   const animateConversationExit = (id: string) => new Promise<void>((resolve) => {
     setExitingConversationIds((current) => new Set(current).add(id));
     window.setTimeout(resolve, 560);
@@ -395,6 +395,15 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const displayedThreadRows = threadRows.length
     ? threadRows
     : conversationMessages.map((_, index) => ({ index, start: index * 220 }));
+  // The final agent report can replace a small live update with a multi-section
+  // response in one polling tick. Its row key does not change, so relying only
+  // on ResizeObserver can leave the virtualizer positioned with the old height
+  // until a full reload. Clear its measurement cache for every visible content
+  // or lifecycle transition before the next paint.
+  const threadLayoutSignature = conversationMessages.map((message) => `${message.id}:${message.status}:${message.body}`).join('\u0000');
+  useEffect(() => {
+    threadVirtualizer.measure();
+  }, [threadLayoutSignature, threadVirtualizer]);
   useEffect(() => {
     if (!conversationId || dispatchInitializedConversationId.current === conversationId || !messages.data) return;
     setDispatchTo(dispatchTargetForConversation(messages.data.messages));
@@ -658,7 +667,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       void queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
     },
   });
-  const latestMessageLength = messages.data?.messages.at(-1)?.body.length ?? 0;
+  const latestMessage = messages.data?.messages.at(-1);
+  const latestMessageLength = latestMessage?.body.length ?? 0;
   const scrollThreadToLatest = (behavior: ScrollBehavior) => {
     const container = threadScrollRef.current;
     if (!container) return;
@@ -668,6 +678,11 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     else container.scrollTop = container.scrollHeight;
   };
   useEffect(() => {
+    // Re-marking read on every streamed token (via latestMessageLength) fired
+    // this call as often as every 750ms for the whole duration of a run — by
+    // far the single most frequent API call in the activity log. A message
+    // only becomes newly-unread when it's appended or finishes, so key off
+    // count + status instead of the constantly-growing streamed body length.
     if (!conversationId) return;
     setLocallyReadConversationIds((current) => current.has(conversationId) ? current : new Set(current).add(conversationId));
     void api.markSharedConversationRead(conversationId)
@@ -676,7 +691,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
         queryClient.invalidateQueries({ queryKey: ['conversation-unread-count'] }),
       ]))
       .catch(() => undefined);
-  }, [conversationId, latestMessageLength, queryClient]);
+  }, [conversationId, messages.data?.messages.length, latestMessage?.status, queryClient]);
   useEffect(() => {
     // Only follow new streaming output while the user is already near the
     // bottom; once they scroll up to read history, stop yanking them back

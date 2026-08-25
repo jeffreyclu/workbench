@@ -1,6 +1,6 @@
 # Loading-state audit
 
-Status: audit only. No loading UI was changed.
+Status: implemented 2026-08-24. All audited data-bearing surfaces now use their matching skeleton shell.
 
 ## Decision
 
@@ -14,11 +14,11 @@ initial and scoped loading states before implementing fixes. Prioritize the conv
 | Insights | `InsightsSkeleton` and `UsageDialSkeleton` | Uses the same sections, stat grid, and usage-card grid as the page. | Matches; inspect visual dimensions during implementation only. |
 | Sources dialog | `SourceConnectionCardSkeleton` | Preserves the connection-card summary, action, and metadata rows. | Matches. |
 | Global search | `GlobalSearchResultSkeleton` | Preserves source, title, and two-line snippet result rows. | Matches. |
-| Task rail | `ListRowSkeleton` | Loaded content is grouped, virtualized `TaskQueueItem` cards with project/state metadata. | Replace with task-queue-card skeletons, including group headers. |
-| Task detail | `ListRowSkeleton` | Loaded content is a detail workspace with title, metadata/actions, description, relationships, activity, and runs. | Replace with a task-detail skeleton that preserves its header and section layout. |
-| Discovery inbox | `ListRowSkeleton` | Loaded content is `DiscoveryCard` articles: source/time, title, description, and actions. | Replace with discovery-card skeletons. |
-| Artifact library | `ListRowSkeleton` | Loaded content is `ArtifactCard`: header, version/status tags, metadata, linked items, actions. | Replace with artifact-card skeletons. |
-| Artifact history panel | `ListRowSkeleton` | Loaded content is source status, version list, event list, and comment thread. | Replace with an artifact-detail skeleton. |
+| Task rail | `TaskQueueSkeleton` | Uses the queue card shell, group header, project marker slot, copy, and metadata chips. | Matched. |
+| Task detail | `TaskDetailSkeleton` | Uses the detail panel shell, title/metadata block, and section rhythm. | Matched. |
+| Discovery inbox | `DiscoveryCardSkeleton` | Uses discovery articles with source/time, title, description, and action row. | Matched. |
+| Artifact library | `ArtifactCardSkeleton` | Uses artifact card headers, metadata, link, and action rows. | Matched. |
+| Artifact history panel | `ArtifactDetailSkeleton` | Uses the artifact detail divider and version/history/feedback sections. | Matched. |
 | Conversation rail | `ListRowSkeleton` | Loaded content is grouped, virtualized conversation cards with origin, state, project marker, and metadata. | Replace with conversation-rail-card skeletons and group headers. |
 | Conversation detail header | Spinner plus `Loading conversation…` | Loaded content is the console header, optional task controls, thread-filter bar, thread, and composer. | Replace; this is the reported broken conversation-window state. |
 | Conversation message thread | `ListRowSkeleton` | Loaded content is author/time headers and variable-height message bodies, attachments, actions, and status. | Replace with message-card skeletons with varied body heights. |
@@ -27,12 +27,12 @@ initial and scoped loading states before implementing fixes. Prioritize the conv
 
 | Component | Missing state | Required treatment |
 | --- | --- | --- |
-| Task-link candidate menus | `Loading tasks…` text while searching dependencies or linked tasks | Candidate-row skeletons that preserve icon, title, and project metadata. |
-| Artifact-link candidate menu | `Loading artifacts…` text while searching | Artifact candidate-row skeletons that preserve icon, title, and version metadata. |
-| Conversation search results | Spinner plus `Searching…` | Conversation search-result skeletons matching title, context, and result metadata. |
-| Conversation/task rail pagination | Spinner plus `Loading more…` | Append matching card skeletons, not a page-state row. |
-| Navigation counts | Literal `…` while count queries resolve | Reserve the count-pill width with inline skeletons. |
-| Figma connection scope | The editable scope form renders before its query resolves, with an empty textarea | Add a scoped form skeleton or disable-and-skeletonize the field until its value is ready; avoid presenting an empty value as authoritative. |
+| Task-link candidate menus | `CandidateRowSkeleton` preserves icon, title, and project metadata. |
+| Artifact-link candidate menu | `CandidateRowSkeleton` preserves icon, title, and version metadata. |
+| Conversation search results | `ConversationSearchResultSkeleton` matches title, context, and result metadata. |
+| Conversation/task rail pagination | Matching card skeletons append in place. |
+| Navigation counts | Still use a fixed-width count placeholder; isolated inline polish, not a data-bearing component. |
+| Figma connection scope | A textarea-shaped skeleton now holds the field space until scope data arrives. |
 
 ## Not in scope for skeleton replacement
 

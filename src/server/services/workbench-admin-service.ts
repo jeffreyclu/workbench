@@ -80,6 +80,11 @@ export class WorkbenchAdminService {
       agentSource: input.target === 'auto' ? 'balanced' : 'assigned',
       requestedProfile: input.executionProfile,
     }));
+    // Persist the task lifecycle transition before yielding to the background
+    // runner. The runner can be delayed by workspace contention or process
+    // scheduling, but the task is already executing from the user's point of
+    // view as soon as this request creates its run.
+    this.repository.update(item.id, { status: 'in_progress' }, false, { actor: 'system', source: 'workbench_admin' });
     const sourceContext = await this.sourceContextFor(item);
     for (const run of runs) void executeAgentRun(this.repository, run, OWNER_ID, LEASE_MS, sourceContext);
     return { runs };
@@ -151,6 +156,10 @@ export class WorkbenchAdminService {
       agentSource: explicitlyAssigned.length ? 'assigned' : 'balanced',
       requestedProfile: executionProfile,
     }));
+    // This must happen here, not inside executeAgentRun. That function runs in
+    // the background and may wait to claim a workspace, leaving an already
+    // dispatched task incorrectly displayed as ready.
+    this.repository.update(item.id, { status: 'in_progress' }, false, { actor: 'system', source: 'workbench_admin' });
     const sourceContext = await this.sourceContextFor(item);
     for (const run of runs) void executeAgentRun(this.repository, run, OWNER_ID, LEASE_MS, sourceContext);
     return { run: runs[0], runs, classification, conversation, activity };

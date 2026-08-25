@@ -162,7 +162,7 @@ describe('useDiscoveryInbox error surfacing', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { result } = renderHook(() => useDiscoveryInbox(), { wrapper: wrapper(client) });
 
-    await act(async () => { await result.current.resolveMerge(candidateA, 'work-item-1'); });
+    await act(async () => { await result.current.resolveMerge.mutateAsync({ id: candidateA, workItemId: 'work-item-1' }).catch(() => {}); });
 
     await waitFor(() => expect(getToasts().map((entry) => entry.message)).toContain('Could not merge this discovery into the task.'));
   });

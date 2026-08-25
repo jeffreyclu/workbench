@@ -115,8 +115,9 @@ export class DiscoveryRepository {
     return changed ? this.getCandidate(id) : null;
   }
 
-  restoreCandidate(id: string): DiscoveryCandidate | null {
-    const changed = this.database.prepare("UPDATE discovery_candidates SET status = 'pending', snoozed_until = NULL, updated_at = ? WHERE id = ? AND status IN ('dismissed', 'snoozed')").run(new Date().toISOString(), id).changes;
+  restoreCandidate(id: string, includeConverted = false): DiscoveryCandidate | null {
+    const statuses = includeConverted ? "('converted', 'dismissed', 'snoozed')" : "('dismissed', 'snoozed')";
+    const changed = this.database.prepare(`UPDATE discovery_candidates SET status = 'pending', work_item_id = NULL, snoozed_until = NULL, updated_at = ? WHERE id = ? AND status IN ${statuses}`).run(new Date().toISOString(), id).changes;
     return changed ? this.getCandidate(id) : null;
   }
 }

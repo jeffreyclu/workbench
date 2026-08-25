@@ -257,3 +257,19 @@ separately ask for a commit/push after each promotion. This is implemented in
 successful build). Push failures are reported via the promotion's progress messages but must never
 fail the promotion itself — the runtime has already switched by that point. If you touch the promotion
 flow, keep this behavior intact.
+
+### "Executed task isn't promoted to in progress" can be workspace-lease queueing, not a promotion bug
+
+`MAX_CONCURRENT_RUNS` (default 6, `src/server/scheduler.ts`) is a global run-count ceiling, but it is
+not the real concurrency limit for `execute`-kind runs against the same repo. `MUTATING_RUN_KINDS`
+(`src/server/agent-runner.ts`) serializes every `execute` run on `repository.claimWorkspace(workspace,
+...)` — two `execute` runs whose `resolvedWorkspace` resolves to the same path (e.g. two tasks both
+targeting `/Users/jeffrey.lu/dev/workbench`) cannot run concurrently no matter how high the global
+ceiling is. A newly executed task's run sits `queued`, and its work item stays `ready`, until the
+in-flight run on that same workspace finishes — this can take several minutes and is indistinguishable
+in the UI from a broken in-progress promotion. Verified 2026-08-25: work item `739b19f6`'s run was
+created at `00:43:56.766Z` but did not start (and the item did not flip to `in_progress`) until
+`00:48:54.521Z`, exactly when the other run on the same workspace (`63340c54`) completed. Before
+diagnosing a "task not promoted" report as a realtime/status-flip bug, check whether another `execute`
+run already holds the lease on the same `resolvedWorkspace` — if so, the task is correctly queued, not
+stuck.

@@ -1,4 +1,4 @@
-import type { AgentRun, SharedMessage, UpdateWorkItemInput, WorkItemReferenceType } from '../shared/contracts';
+import type { AgentRun, ProviderSyncConflict, SharedMessage, UpdateWorkItemInput, WorkItemReferenceType } from '../shared/contracts';
 
 export function formatCostUsd(value: number | null): string {
   if (value === null) return '—';
@@ -45,6 +45,12 @@ export function taskDetailSaveFeedback(input: UpdateWorkItemInput): { success: s
   if ('assignees' in input) return { success: 'Owners saved.', error: 'Could not save the owners.' };
   if ('blockedByIds' in input) return { success: 'Prerequisites saved.', error: 'Could not save the prerequisites.' };
   return { success: 'Task details saved.', error: 'Could not save the task details.' };
+}
+
+export function providerConflictFieldLabel(field: ProviderSyncConflict['field']): string {
+  if (field === 'projectName') return 'Project';
+  if (field === 'dueDate') return 'Due date';
+  return field;
 }
 
 export function formatFileSize(bytes: number): string {
