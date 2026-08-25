@@ -8,11 +8,12 @@ The library tracks and resolves received comments, but must not duplicate the
 composer or present an internal Comment action. When `APP_API_ORIGIN` is public,
 published pages use it as the feedback endpoint unless explicitly overridden.
 
-*Correction from Jeffrey, 2026-08-25.* The public-page interaction is row-anchored,
-not a page-level feedback composer: every artifact table row has an inline comment
-control, selecting it highlights that row, and its thread opens in a side rail.
-Store the deterministic page-local row selector with each comment so the thread
-remains associated with the reviewed row across reads of that artifact version.
+*Correction from Jeffrey, 2026-08-25.* The public-page interaction is text-selection
+anchored, not a page-level composer or table-only UI. Any text in a published
+artifact can be selected to reveal the comment action; its thread opens in a side
+rail. Store a deterministic page-local text range with each comment so the thread
+remains associated with the reviewed text across reads of that immutable artifact
+version.
 
 ### Browser chrome signals actionable conversation work
 
@@ -479,6 +480,11 @@ Explicit Cancel remains the only termination action. The Codex app-server
 protocol exposes this as `turn/steer`; a one-shot `codex exec` process cannot
 implement the requirement.
 
+*Implementation guardrail, 2026-08-25.* Send an interjection as an explicit
+same-turn directive (acknowledge and apply it immediately), not a bare text
+fragment. Provider acceptance of `turn/steer` alone is not evidence that the
+active response visibly applied the direction.
+
 ### In-progress "thinking" activity is a log, not a finished report
 
 *Fix from Claude, 2026-08-25.* The huge-circle-and-missing-space bug Jeffrey
@@ -573,3 +579,17 @@ previously hover-tooltip-only via `formatRunTelemetry`, now visible at a
 glance. `compactTokenCount` was exported from `src/client/formatters.ts` to
 back the cache-reuse figure. Verified: `tsc --noEmit` clean; full
 `vitest run` 897/897 passing; production build clean.
+
+### Pinned-task reminder re-fires every 30 minutes, not once/day
+
+*Decision from Jeffrey, 2026-08-25.* The pinned-task toast in
+`src/client/features/navigation/app.tsx` previously gated on a
+`workbench:pinned-reminder-date` localStorage key, so it showed at most once
+per calendar day regardless of session length. Changed to a rolling 30-minute
+gate: the `pinned-reminder` query now sets `refetchInterval: 30 * 60_000`
+(`PINNED_REMINDER_INTERVAL_MS`), and the effect stores a
+`workbench:pinned-reminder-shown-at` timestamp, re-showing the toast whenever
+`Date.now()` has advanced 30+ minutes past the last showing (count of pinned
+items still gates it entirely — zero pinned means no toast). Verified:
+`tsc --noEmit` clean; `vitest run src/client/App.test.tsx` 85/85 passing,
+including the existing pinned-reminder-toast navigation test.

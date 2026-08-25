@@ -32,6 +32,19 @@ describe('artifact snapshots', () => {
     expect(page).toContain("script-src 'unsafe-inline' https://cdn.jsdelivr.net");
   });
 
+  it('lets readers comment on selected text in HTML artifacts without a pre-existing main element', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-'));
+    const path = join(directory, 'report.html');
+    writeFileSync(path, '<!doctype html><html><head></head><body><p>Important finding</p></body></html>');
+
+    const page = renderArtifactPage(path, 'Styled report', {
+      feedback: { artifactId: 'abc123', endpointOrigin: 'https://workbench.example.com' },
+    });
+
+    expect(page).toContain('<main data-wb-comment-root><p>Important finding</p></main>');
+    expect(page).toContain('Select text in this page to comment.');
+  });
+
   it('stamps the version and publication date without disturbing the artifact styling', () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-'));
     const path = join(directory, 'report.html');
@@ -57,7 +70,7 @@ describe('artifact snapshots', () => {
     expect(page).toContain('<a href="../">View the latest version</a>');
   });
 
-  it('adds row-anchored comments only when feedback is configured, and opens exactly one origin', () => {
+  it('adds text-selection comments only when feedback is configured, and opens exactly one origin', () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-'));
     const path = join(directory, 'report.md');
     writeFileSync(path, '# Rollout');
@@ -66,9 +79,9 @@ describe('artifact snapshots', () => {
       feedback: { artifactId: 'abc123', endpointOrigin: 'https://jeffrey.ngrok-free.app' },
     });
 
-    expect(page).toContain('Comment on this row');
+    expect(page).toContain('Select text in this page to comment.');
     expect(page).toContain('id="wb-comment-rail"');
-    expect(page).toContain('anchor:anchorFor(selected)');
+    expect(page).toContain("'text:'+before.toString().length");
     expect(page).toContain('https://jeffrey.ngrok-free.app/api/artifacts/abc123/comments');
     expect(page).toContain("connect-src https://jeffrey.ngrok-free.app");
     expect(page).toContain("script-src 'unsafe-inline'");
@@ -79,7 +92,7 @@ describe('artifact snapshots', () => {
     expect(withoutFeedback).not.toContain('<script');
   });
 
-  it('upgrades an existing public snapshot to row-anchored comments without changing the artifact content', () => {
+  it('upgrades an existing public snapshot to text-selection comments without changing the artifact content', () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-artifact-'));
     const path = join(directory, 'report.md');
     writeFileSync(path, '# Rollout');
@@ -89,7 +102,7 @@ describe('artifact snapshots', () => {
     expect(refreshed).toContain('<h1>Rollout</h1>');
     expect(refreshed).toContain('<strong>Version 2</strong>');
     expect(refreshed).toContain('id="wb-comment-rail"');
-    expect(refreshed).toContain('Comment on this row');
+    expect(refreshed).toContain('Select text in this page to comment.');
     expect(refreshed).toContain('https://workbench.example.com/api/artifacts/abc123/comments');
     expect(refreshed).toContain("connect-src https://workbench.example.com");
     expect(addFeedbackToPublishedPage(refreshed, { artifactId: 'abc123', endpointOrigin: 'https://workbench.example.com' })).toBe(refreshed);

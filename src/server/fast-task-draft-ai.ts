@@ -4,7 +4,7 @@ import { fastTaskDraft } from '../shared/task-draft.js';
 
 const SYSTEM_PROMPT = `You convert a rough work request into one agent-executable task. Return only minified JSON: {"title":"...","description":"..."}. The title must start with a concrete imperative verb that identifies the work type (for example Fix, Implement, Review, Research, Write, or Investigate). Keep it under 120 characters. The description must be concise and self-contained while preserving every supplied link, constraint, and expected outcome. Do not invent scope, requirements, files, or acceptance criteria.`;
 
-type Pending = { prompt: string; resolve: (draft: GeneratedTaskDraft) => void; reject: (error: Error) => void; timeout: NodeJS.Timeout };
+type Pending = { prompt: string; resolve: (draft: GeneratedTaskDraft) => void; reject: (error: Error) => void };
 let worker: ChildProcessWithoutNullStreams | null = null;
 let outputBuffer = '';
 let active: Pending | null = null;
@@ -29,8 +29,8 @@ function stopWorker(error: Error): void {
   worker?.kill('SIGTERM');
   worker = null;
   outputBuffer = '';
-  if (active) { clearTimeout(active.timeout); active.reject(error); active = null; }
-  while (queue.length) { const pending = queue.shift()!; clearTimeout(pending.timeout); pending.reject(error); }
+  if (active) { active.reject(error); active = null; }
+  while (queue.length) { const pending = queue.shift()!; pending.reject(error); }
 }
 
 function ensureWorker(): ChildProcessWithoutNullStreams {
@@ -51,7 +51,7 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
       try {
         const event = JSON.parse(line) as { type?: string; result?: string; is_error?: boolean };
         if (event.type !== 'result' || !active) continue;
-        const pending = active; active = null; clearTimeout(pending.timeout);
+        const pending = active; active = null;
         if (event.is_error || typeof event.result !== 'string') pending.reject(new Error('Fast task-draft AI failed.'));
         else {
           try { pending.resolve(parseDraft(event.result, pending.prompt)); }
@@ -69,16 +69,9 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
 export function generateFastAiTaskDraft(prompt: string): Promise<GeneratedTaskDraft> {
   ensureWorker();
   return new Promise((resolve, reject) => {
-    const pending: Pending = {
-      prompt, resolve, reject,
-      timeout: setTimeout(() => {
-        const error = new Error('Fast task-draft AI timed out.');
-        if (active === pending) stopWorker(error);
-        else { const index = queue.indexOf(pending); if (index >= 0) queue.splice(index, 1); reject(error); }
-      }, 10_000),
-    };
-    pending.timeout.unref();
-    queue.push(pending);
+    // Task drafting now happens in the background after the create-task modal
+    // closes, so there is no UI waiting on this call and nothing to time out.
+    queue.push({ prompt, resolve, reject });
     dispatchNext();
   });
 }

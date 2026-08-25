@@ -8,19 +8,33 @@ import { ModalDialog } from './modal-dialog';
 import { ProjectField } from './project-field';
 import { toast, toastError } from './toast-store';
 
-export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { onClose: () => void; onCreated: (item: WorkItem) => void; defaultProjectName?: string }) {
+export interface CreateTaskReopenState {
+  mode: 'ai' | 'link';
+  aiPrompt?: string;
+  sourceUrl?: string;
+  error: string;
+}
+
+async function buildAttachments(files: File[]) {
+  return Promise.all(files.map(async (file) => ({
+    name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size,
+    dataBase64: await new Promise<string>((resolveValue, reject) => { const reader = new FileReader(); reader.onerror = () => reject(reader.error); reader.onload = () => resolveValue(String(reader.result).split(',')[1] ?? ''); reader.readAsDataURL(file); }),
+  })));
+}
+
+export function CreateTask({ onClose, onCreated, onBackgroundError, initialState = null, defaultProjectName = '' }: { onClose: () => void; onCreated: (item: WorkItem) => void; onBackgroundError?: (state: CreateTaskReopenState) => void; initialState?: CreateTaskReopenState | null; defaultProjectName?: string }) {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<'search' | 'link' | 'ai' | 'manual'>('manual');
+  const [mode, setMode] = useState<'search' | 'link' | 'ai' | 'manual'>(initialState?.mode ?? 'manual');
   const [sourceQuery, setSourceQuery] = useState('');
   const [submittedSourceQuery, setSubmittedSourceQuery] = useState('');
-  const [sourceUrl, setSourceUrl] = useState('');
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [aiDraftReady, setAiDraftReady] = useState(false);
+  const [sourceUrl, setSourceUrl] = useState(initialState?.sourceUrl ?? '');
+  const [aiPrompt, setAiPrompt] = useState(initialState?.aiPrompt ?? '');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [projectName, setProjectName] = useState(defaultProjectName);
   const [classificationKind, setClassificationKind] = useState<AgentRun['kind']>('execute');
   const [files, setFiles] = useState<File[]>([]);
+  const [backgroundError, setBackgroundError] = useState(initialState?.error ?? '');
   const fileRef = useRef<HTMLInputElement>(null);
   const taskTypeField = <label>Task type<select aria-label="Task type" value={classificationKind} onChange={(event) => setClassificationKind(event.target.value as AgentRun['kind'])}>
     <option value="execute">Execute</option><option value="bugfix">Bug fix</option><option value="research">Research</option><option value="analysis">Analysis</option><option value="strategy">Strategy</option><option value="review">Review</option>
@@ -71,23 +85,75 @@ export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { on
     },
     onError: (error) => toastError('Could not add the task from search.', error),
   });
-  const resolveLink = useMutation({
-    mutationFn: api.resolveSourceUrl,
-    onSuccess: ({ draft }) => { setTitle(draft.title); setDescription(draft.description); setSourceUrl(draft.sourceUrl); },
-  });
-  const generateDraft = useMutation({
-    mutationFn: api.generateTaskDraft,
-    onSuccess: ({ draft }) => {
-      setTitle(draft.title); setDescription(draft.description); setProjectName(defaultProjectName || draft.projectName || ''); setAiDraftReady(true);
-    },
-  });
+  // Runs after the dialog has already closed, so it is a plain async function rather
+  // than a useMutation callback: the component may unmount before it settles, and the
+  // work (and any error toast/reopen) must still happen.
+  async function submitAiDraft() {
+    const prompt = aiPrompt;
+    const pendingFiles = files;
+    const currentClassificationKind = classificationKind;
+    onClose();
+    const toastId = toast.info('Writing your task…', { duration: 0 });
+    try {
+      const { draft } = await api.generateTaskDraft(prompt);
+      const attachments = await buildAttachments(pendingFiles);
+      const { item } = await api.createWorkItem({
+        title: draft.title,
+        description: draft.description,
+        projectName: defaultProjectName || draft.projectName || null,
+        status: 'backlog',
+        dueDate: null,
+        sourceUrl: null,
+        workspacePath: null,
+        classificationKind: currentClassificationKind,
+        attachments,
+      });
+      toast.dismiss(toastId);
+      toast.success('Task added to queue.', { description: item.title });
+      await queryClient.invalidateQueries({ queryKey: ['work-items'] });
+      onCreated(item);
+    } catch (error) {
+      toast.dismiss(toastId);
+      toastError('Could not create the task.', error);
+      onBackgroundError?.({ mode: 'ai', aiPrompt: prompt, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  async function submitLink() {
+    const url = sourceUrl;
+    const pendingFiles = files;
+    const currentProjectName = projectName;
+    const currentClassificationKind = classificationKind;
+    onClose();
+    const toastId = toast.info('Adding task from link…', { duration: 0 });
+    try {
+      const { draft } = await api.resolveSourceUrl(url);
+      const attachments = await buildAttachments(pendingFiles);
+      const { item } = await api.createWorkItem({
+        title: draft.title,
+        description: draft.description,
+        projectName: currentProjectName || null,
+        status: 'backlog',
+        dueDate: null,
+        sourceUrl: draft.sourceUrl,
+        workspacePath: null,
+        classificationKind: currentClassificationKind,
+        attachments,
+      });
+      toast.dismiss(toastId);
+      toast.success('Task added to queue.', { description: item.title });
+      await queryClient.invalidateQueries({ queryKey: ['work-items'] });
+      onCreated(item);
+    } catch (error) {
+      toast.dismiss(toastId);
+      toastError('Could not add the task from that link.', error);
+      onBackgroundError?.({ mode: 'link', sourceUrl: url, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const attachments = await Promise.all(files.map(async (file) => ({
-      name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size,
-      dataBase64: await new Promise<string>((resolveValue, reject) => { const reader = new FileReader(); reader.onerror = () => reject(reader.error); reader.onload = () => resolveValue(String(reader.result).split(',')[1] ?? ''); reader.readAsDataURL(file); }),
-    })));
+    const attachments = await buildAttachments(files);
     createManual.mutate({
       title,
       description,
@@ -139,28 +205,19 @@ export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { on
             </div>
           </div>
         ) : mode === 'link' ? (
-          <form onSubmit={submit}>
-            <label>Source URL<div className="resolve-row"><input autoFocus value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="Slack, GitHub, Linear, Confluence, or Gmail URL" /><button type="button" className="button secondary" onClick={() => resolveLink.mutate(sourceUrl)} disabled={!sourceUrl || resolveLink.isPending}>{resolveLink.isPending ? <LoaderCircle className="spin" size={14} /> : 'Resolve'}</button></div></label>
-            <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Generated from the source" /></label>
-            <label>Description<MarkdownComposer conversationId="create-task-link" value={description} onChange={setDescription} placeholder="Generated description remains editable" ariaLabel="Task description" /></label>{taskTypeField}{attachmentField}
-            {resolveLink.error && <p className="error-message">{resolveLink.error.message}</p>}
-            <div className="dialog-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button className="button primary" disabled={!title.trim() || createManual.isPending}><Plus size={16} /> Add to stack</button></div>
+          <form onSubmit={(event) => { event.preventDefault(); void submitLink(); }}>
+            <label>Source URL<input autoFocus value={sourceUrl} onChange={(event) => { setSourceUrl(event.target.value); setBackgroundError(''); }} placeholder="Slack, GitHub, Linear, Confluence, or Gmail URL" /></label>
+            {attachmentField}
+            {backgroundError && <p className="error-message">{backgroundError}</p>}
+            <div className="dialog-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button className="button primary" disabled={!sourceUrl.trim()}><ArrowUpRight size={16} /> Add to stack</button></div>
           </form>
         ) : mode === 'ai' ? (
-          <form onSubmit={submit} className="ai-task-form">
-            {!aiDraftReady ? <>
-              <label>Describe the task<MarkdownComposer conversationId="create-task-prompt" value={aiPrompt} onChange={setAiPrompt} placeholder="Paste rough notes, links, constraints, or the outcome you want…" ariaLabel="Describe the task" autoFocus /></label>
-              <p className="ai-draft-help">AI will turn this into one self-contained, executable task. You can edit everything before adding it.</p>
-              {generateDraft.error && <p className="error-message">{generateDraft.error.message}</p>}
-              <div className="dialog-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button type="button" className="button primary" onClick={() => generateDraft.mutate(aiPrompt)} disabled={aiPrompt.trim().length < 3 || generateDraft.isPending}>{generateDraft.isPending ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />} {generateDraft.isPending ? 'Writing task…' : 'Create draft'}</button></div>
-            </> : <>
-              <div className="ai-draft-banner"><Sparkles size={14} /><span><strong>AI draft</strong><small>Review and edit before adding it to the stack.</small></span><button type="button" onClick={() => setAiDraftReady(false)}>Start over</button></div>
-              <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-              <label>Description<MarkdownComposer conversationId="create-task-ai" value={description} onChange={setDescription} placeholder="Task description" ariaLabel="Task description" /></label>
-              <ProjectField value={projectName} onChange={setProjectName} placeholder="Optional" />{taskTypeField}{attachmentField}
-              {createManual.error && <p className="error-message">{createManual.error.message}</p>}
-              <div className="dialog-actions"><button type="button" className="button secondary" onClick={() => setAiDraftReady(false)}>Back</button><button className="button primary" disabled={!title.trim() || createManual.isPending}><Plus size={16} /> Add to stack</button></div>
-            </>}
+          <form onSubmit={(event) => { event.preventDefault(); void submitAiDraft(); }} className="ai-task-form">
+            <label>Describe the task<MarkdownComposer conversationId="create-task-prompt" value={aiPrompt} onChange={(value) => { setAiPrompt(value); setBackgroundError(''); }} placeholder="Paste rough notes, links, constraints, or the outcome you want…" ariaLabel="Describe the task" autoFocus /></label>
+            <p className="ai-draft-help">AI will turn this into one self-contained, executable task and add it to the stack.</p>
+            {attachmentField}
+            {backgroundError && <p className="error-message">{backgroundError}</p>}
+            <div className="dialog-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button className="button primary" disabled={aiPrompt.trim().length < 3}><Sparkles size={16} /> Create task</button></div>
           </form>
         ) : (
           <form onSubmit={submit}>

@@ -22,6 +22,11 @@ export function registerActiveReplySteering(messageId: string, steer: ActiveRepl
   activeReplySteering.set(messageId, steer);
 }
 
+/** Gives an active provider an unambiguous instruction to react in this turn. */
+export function interjectionSteeringPrompt(body: string): string {
+  return `The user is interjecting into your active response. Acknowledge and apply this direction immediately; do not wait for a later turn or start a separate response:\n\n${body}`;
+}
+
 /** Codex's app-server is the provider protocol that supports turn/steer. */
 function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void): Promise<string> {
   return new Promise((resolveOutput, reject) => {
@@ -38,7 +43,9 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
     const steer: ActiveReplySteering = (body) => {
       if (!threadId || !turnId || settled) return Promise.resolve(false);
       return new Promise((resolveSteer) => {
-        const id = request('turn/steer', { threadId, expectedTurnId: turnId, clientUserMessageId: randomUUID(), input: [{ type: 'text', text: body, text_elements: [] }] });
+        // `turn/steer` is delivered into the agent's current context, not as a
+        // separate response. Make the immediate, in-place behavior explicit.
+        const id = request('turn/steer', { threadId, expectedTurnId: turnId, clientUserMessageId: randomUUID(), input: [{ type: 'text', text: interjectionSteeringPrompt(body), text_elements: [] }] });
         pendingSteers.set(id, resolveSteer);
       });
     };

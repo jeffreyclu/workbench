@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync, rmSync } from 'node:fs';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
-import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, registerActiveReplySteering } from './shared-room.js';
+import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, interjectionSteeringPrompt, registerActiveReplySteering } from './shared-room.js';
 import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
@@ -1148,6 +1148,11 @@ describe('WorkItemRepository', () => {
     expect(repository.getSharedMessageById(running.id)).toEqual(expect.objectContaining({ status: 'running' }));
     expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'completed' }));
     expect(repository.listAllSharedMessages(conversation.id)).toHaveLength(2);
+  });
+
+  it('makes a live interjection an explicit immediate instruction while preserving its text', () => {
+    expect(interjectionSteeringPrompt('INTERJECTION!')).toContain('Acknowledge and apply this direction immediately');
+    expect(interjectionSteeringPrompt('INTERJECTION!')).toContain('INTERJECTION!');
   });
 
   it('keeps an interjection queued if the active reply ends before its acknowledgment returns', async () => {

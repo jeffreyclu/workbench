@@ -739,7 +739,7 @@ export interface ArtifactComment {
   version: number | null;
   author: string;
   body: string;
-  /** Stable, page-local selector for the row the coworker commented on. */
+  /** Stable, page-local range identifying the text the coworker commented on. */
   anchor: string | null;
   resolvedAt: string | null;
   createdAt: string;

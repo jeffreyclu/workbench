@@ -50,7 +50,7 @@ import { toast, toastError } from '../../toast-store';
 import { SortableQueueItem as TaskQueueItem, TaskClassificationSelect } from '../../task-queue';
 import { AgentMessageBody, LiveRunOutput } from '../../agent-message';
 import { ConversationOriginBadge, ModelProfileSelect, ReferenceTypeIcon } from '../../badges';
-import { CreateTask } from '../../create-task-dialog';
+import { CreateTask, type CreateTaskReopenState } from '../../create-task-dialog';
 import { DiscoveryInboxView } from '../../discovery';
 import { useNavigation } from '../../features/navigation/hooks';
 import { NavigationView } from '../../features/navigation/view';
@@ -78,6 +78,8 @@ type QueueReorderMutation = {
   queryKey: readonly ['work-items', string, string];
   previous: InfiniteData<WorkItemPage> | undefined;
 };
+
+const PINNED_REMINDER_INTERVAL_MS = 30 * 60_000;
 
 function PulseCount({ value, as: Tag = 'strong' }: { value: number; as?: 'strong' | 'span' }) {
   const pulse = useValuePulse(value);
@@ -112,6 +114,7 @@ export function App() {
   const [enteringTaskIds, setEnteringTaskIds] = useState<Set<string>>(new Set());
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [createTaskReopenState, setCreateTaskReopenState] = useState<CreateTaskReopenState | null>(null);
   const [showSources, setShowSources] = useState(false);
   const [showProposalDetail, setShowProposalDetail] = useState(false);
   const [taskSearch, setTaskSearch] = useState('');
@@ -202,7 +205,7 @@ export function App() {
     getNextPageParam: (page) => page.nextCursor ?? undefined,
     enabled: view === 'active' || view === 'workbench' || isArchiveView,
   });
-  const pinnedReminder = useQuery({ queryKey: ['pinned-reminder'], queryFn: () => api.listWorkItems('active', ''), staleTime: 60_000 });
+  const pinnedReminder = useQuery({ queryKey: ['pinned-reminder'], queryFn: () => api.listWorkItems('active', ''), staleTime: 60_000, refetchInterval: PINNED_REMINDER_INTERVAL_MS });
   const syncedConversationId = useRef<string | null>(route.name === 'conversations' ? route.conversationId : null);
   function openConversation(conversationId: string) {
     navigate({ name: 'conversations', conversationId });
@@ -250,10 +253,11 @@ export function App() {
   useEffect(() => {
     const count = pinnedReminder.data?.items.filter((item) => item.status === 'pinned').length ?? 0;
     if (!count) return;
-    const today = new Date().toLocaleDateString('en-CA');
-    const key = 'workbench:pinned-reminder-date';
-    if (window.localStorage.getItem(key) === today) return;
-    window.localStorage.setItem(key, today);
+    const key = 'workbench:pinned-reminder-shown-at';
+    const lastShown = Number(window.localStorage.getItem(key) ?? 0);
+    const now = Date.now();
+    if (now - lastShown < PINNED_REMINDER_INTERVAL_MS) return;
+    window.localStorage.setItem(key, String(now));
     toast.info(`${count} pinned task${count === 1 ? '' : 's'} waiting for you.`, {
       action: () => {
         setPendingPinnedNavigation(true);
@@ -568,7 +572,7 @@ export function App() {
             <button className="icon-button" onClick={() => planQueue.mutate()} disabled={planQueue.isPending} aria-label={planQueue.isPending ? 'Reordering stack' : 'Reorder stack'} title={planQueue.isPending ? 'Reordering stack' : 'Reorder stack'}>
               {planQueue.isPending ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}
             </button>
-            <button className="icon-button primary" onClick={() => setShowCreate(true)} aria-label="New task" title="New task"><Plus size={15} /></button>
+            <button className="icon-button primary" onClick={() => { setCreateTaskReopenState(null); setShowCreate(true); }} aria-label="New task" title="New task"><Plus size={15} /></button>
             </>}
           </div>
         </header>
@@ -622,7 +626,7 @@ export function App() {
       </main>
 
       {selectedId ? <TaskDetail key={selectedId} id={selectedId} onClose={() => navigate({ name: 'stack', stack: taskStack })} onCreated={revealCreatedTask} onRemoving={animateTaskExit} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : <section className="detail-empty"><Sparkles /><h2>Choose your next move</h2><p>Select an item or add something new.</p></section>}</>}
-      {showCreate && <CreateTask onClose={() => setShowCreate(false)} onCreated={revealCreatedTask} defaultProjectName={view === 'workbench' ? WORKBENCH_PROJECT_NAME : ''} />}
+      {showCreate && <CreateTask onClose={() => setShowCreate(false)} onCreated={revealCreatedTask} onBackgroundError={(state) => { setCreateTaskReopenState(state); setShowCreate(true); }} initialState={createTaskReopenState} defaultProjectName={view === 'workbench' ? WORKBENCH_PROJECT_NAME : ''} />}
       {showSources && <SourcesDialog onClose={() => setShowSources(false)} />}
     </div>
   );

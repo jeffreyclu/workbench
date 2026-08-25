@@ -248,6 +248,23 @@ set and verify the branch is clean. Do not salvage partial scaffolding or resume
 it. The clean branch is the starting point for a new, fully scoped design; it does not authorize live
 bench runs or provider spending.
 
+### Cite real evidence for every claim, not just the rationale
+
+On a Wells Fargo SteerCo connector-feasibility task, an initial answer gave a vendor-by-vendor
+feasibility verdict (Aprimo, Red Oak, Bloomberg, etc.) grounded in one real code citation but with
+the rest of the verdicts stated as assertions. Jeffrey's reaction was blunt: "where the fuck is your
+evidence for all this?"
+
+This is the same failure mode as "verify rationale, don't infer it" above, but broader: it applies to
+any factual or capability claim in a deliverable, not just "why a change is happening." Before stating
+that something is feasible, hard, or true, produce the citable source backing it — a real file path
+and code snippet fetched live (via `gh api`, not local guesswork, when the repo isn't checked out), or
+a real external source (WebSearch result with URL) confirming the claim. When a WebSearch is used, the
+mandatory "Sources:" section with linked URLs is not decoration — it is the evidence trail Jeffrey is
+checking for. A confident-sounding table with no citations reads as fabrication even when the
+underlying claims happen to be true; state plainly which claims are sourced and which are still
+inferred/unverified rather than presenting both the same way.
+
 ### Node toolchain: nvm, not mise
 
 Jeffrey manages Node with **nvm** plus the official nodejs.org `.pkg` installer. Offered mise — which
