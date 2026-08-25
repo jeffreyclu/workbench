@@ -39,6 +39,16 @@ describe('shared message layout', () => {
 });
 
 describe('conversation view controls', () => {
+  it('keeps queued agent actions icon-only and does not add them to queued system promotions', () => {
+    const systemQueuedRule = styles.match(/\.shared-message\.shared-system-queued\s*\{[^}]*\}/)?.[0] ?? '';
+    const queuedActionRule = styles.match(/\.queued-message-action\s*\{[^}]*\}/)?.[0] ?? '';
+
+    expect(systemQueuedRule).toContain('width: min(94%, 520px)');
+    expect(queuedActionRule).toContain('width: 28px');
+    expect(queuedActionRule).toContain('height: 28px');
+    expect(styles).not.toContain('min-height: 44px; padding: 2px 12px');
+  });
+
   it('pins the running-response cancel X to the bubble top-right', () => {
     const rule = styles.match(/\.shared-message \.cancel-response\s*\{[^}]*\}/)?.[0] ?? '';
 

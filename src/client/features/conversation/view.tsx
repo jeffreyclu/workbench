@@ -972,12 +972,14 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           )}
           <div className="thread-virtualizer thread-live-flow">
           {conversationMessages.map((message) => {
+            const isAgentMessage = message.author === 'codex' || message.author === 'claude';
+            const isQueuedAgentMessage = isAgentMessage && message.status === 'queued';
             return <div key={message.id} className="thread-virtual-row">
-            <article className={`shared-message shared-${message.author}`}>
+            <article className={`shared-message shared-${message.author}${message.author === 'system' && message.status === 'queued' ? ' shared-system-queued' : ''}`}>
               <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                 {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
                 {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyBadge(message)}</span>}
-                <button
+                {isAgentMessage && <button
                   type="button"
                   className={`memory-badge${typeof message.retrievedMemoryCount === 'number' ? '' : ' memory-badge-not-run'}`}
                   disabled={typeof message.retrievedMemoryCount !== 'number'}
@@ -989,18 +991,20 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                     : 'RAG memory retrieval did not run for this message'}
                 >
                   <Search size={11} /> {typeof message.retrievedMemoryCount === 'number' ? message.retrievedMemoryCount : '—'}
-                </button>
+                </button>}
                 {message.status === 'running' && <button type="button" className="cancel-response" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel response" title="Cancel response"><X size={12} /></button>}
               </header>
               {message.status === 'running' && <p className="thinking"><LoaderCircle className="spin" size={13} /> Live · {message.body ? 'receiving activity' : 'starting agent'}</p>}
-              {message.status === 'queued' && (
+              {isQueuedAgentMessage && (
                 <div className="queued-message">
-                  <LoaderCircle size={13} /> Queued · starts after the current agent finishes
-                  <button type="button" className="queued-message-action" onClick={() => interjectMessage.mutate(message.id)} disabled={interjectMessage.isPending} title="Interrupt the current agent and send this now">Interject now</button>
-                  <button type="button" className="queued-message-action" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} title="Cancel this queued message">Cancel</button>
+                  <span className="queued-message-status"><LoaderCircle size={13} /> Queued · starts after the current agent finishes</span>
+                  <span className="queued-message-actions">
+                    <button type="button" className="icon-button queued-message-action" onClick={() => interjectMessage.mutate(message.id)} disabled={interjectMessage.isPending} aria-label="Interrupt the current agent and send this queued message now" title="Interrupt the current agent and send this now"><ArrowUpRight size={14} /></button>
+                    <button type="button" className="icon-button queued-message-action danger" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel queued message" title="Cancel this queued message"><X size={14} /></button>
+                  </span>
                 </div>
               )}
-              {message.body && (message.author === 'codex' || message.author === 'claude'
+              {message.body && (isAgentMessage
                 ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} />
                 : <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: MarkdownCode, pre: MarkdownPre }}>{message.body}</ReactMarkdown></div>)}
               {message.status === 'canceled' && <p className="muted">Response canceled.</p>}

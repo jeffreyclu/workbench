@@ -317,6 +317,9 @@ describe('shared room', () => {
     await screen.findByText('Promotion queued. It will build once active agent work reaches a durable terminal state.');
     expect(document.querySelector('.thread-virtualizer')).toHaveClass('thread-live-flow');
     expect(document.querySelector('.thread-virtual-row')).not.toHaveAttribute('style');
+    expect(document.querySelector('.shared-system-queued')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Interrupt the current agent and send this queued message now' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Cancel queued message' })).toBeNull();
   });
 
   it('keeps task extraction on completed synthesis findings', async () => {
