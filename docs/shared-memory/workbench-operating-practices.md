@@ -184,6 +184,16 @@ shared-memory evidence automatically, and persist useful outcomes back to the sh
 solve cost or token overruns by creating agent-private context, withholding shared context, or
 discarding durable history.
 
+### Retrieval is adaptive, and compaction preserves key points
+
+*Decision from Jeffrey, 2026-08-25.* The retrieval limit is a ceiling, never a
+target. A room or task prompt may inspect up to 40 candidates, but must inject
+only the relevant, non-duplicative evidence that clears its score threshold and
+fits the prompt budget. Do not silently make every turn inject a fixed maximum
+of 8 or 40 memories. Before prompt injection, summarize/compact long shared
+briefs and conversation history around durable decisions, blockers, evidence,
+and current requests; raw head/tail truncation alone loses the useful middle.
+
 ### Automate it; don't add a button **(always)**
 
 Jeffrey pushed back on a "Sync" button that required clicking to pull fresh data: "i don't want a

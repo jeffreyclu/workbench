@@ -530,7 +530,7 @@ export class WorkItemRepository {
    * the request path (a poller keyed off a watermark) rather than doing it
    * here.
    */
-  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string }>> {
+  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number }>> {
     if (query.trim().length < 2) return [];
     if (options.refresh !== false) {
       try {
@@ -547,6 +547,7 @@ export class WorkItemRepository {
       title: result.title,
       body: result.snippet.slice(0, 4_000),
       createdAt: result.createdAt,
+      score: result.score,
     }));
   }
 

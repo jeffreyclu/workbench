@@ -1,5 +1,5 @@
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
-import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classifyExecution, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile } from './agent-runner.js';
+import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classifyExecution, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -64,32 +64,55 @@ export function compactConversationHistory(messages: SharedMessage[], budget = 1
   recent.reverse();
   const older = messages.slice(0, firstIncluded);
   const olderHeader = older.length ? `Earlier conversation (${older.length} messages, compacted):\n` : '';
-  const olderSummary = older.length ? older.slice(-4).map((message) => {
-    const oneLine = message.body.replace(/\s+/g, ' ').trim();
-    return `- ${message.author}: ${oneLine.slice(0, 140)}${oneLine.length > 140 ? '…' : ''}`;
-  }).join('\n').slice(0, Math.max(0, reserveForOlder - olderHeader.length - 2)) : '';
+  const olderSummary = older.length ? older.slice(-8).map((message) => `- ${message.author}: ${compactKeyPoints(message.body, 140)}`).join('\n').slice(0, Math.max(0, reserveForOlder - olderHeader.length - 2)) : '';
   return [olderSummary ? `${olderHeader}${olderSummary}` : '', recent.join('\n\n')].filter(Boolean).join('\n\n');
+}
+
+/** Extractive summary: preserve decisions/evidence before generic prose. */
+export function compactKeyPoints(text: string, budget: number): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= budget) return normalized;
+  const candidates = text.split(/\n+/).map((line) => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const keyLines = candidates.filter((line) => /\b(?:decid\w*|decis\w*|must|should|will |do not|don't|blocked|blocker|failed|error|verified|test(?:ed|s)?|passed|changed|fixed)\b/i.test(line));
+  const unique = [...new Set([...keyLines, ...candidates.slice(-3)])];
+  const summary = unique.join(' · ');
+  if (summary && summary.length <= budget) return summary;
+  // A recognised decision or blocker is more valuable than the surrounding
+  // prose. Keep it even when the newest raw lines would otherwise consume the
+  // whole compacted section.
+  if (keyLines.length) {
+    const kept: string[] = [];
+    let remaining = budget;
+    for (const line of unique) {
+      const separator = kept.length ? 3 : 0;
+      if (remaining <= separator + 20) break;
+      const compacted = line.length + separator <= remaining ? line : `${line.slice(0, remaining - separator - 1)}…`;
+      kept.push(compacted);
+      remaining -= compacted.length + separator;
+    }
+    return kept.join(' · ');
+  }
+  const head = Math.floor((budget - 35) * 0.65);
+  const tail = Math.max(0, budget - 35 - head);
+  return `${normalized.slice(0, head)} [… key points compacted …] ${normalized.slice(-tail)}`;
 }
 
 /** Keep current handoff state cheap; the full historical record arrives through retrieval. */
 export function compactSharedBrief(sharedContext: string, budget = 700): string {
   if (sharedContext.length <= budget) return sharedContext;
-  const head = Math.floor(budget * 0.65);
-  const tail = Math.floor(budget * 0.25);
-  const omitted = sharedContext.length - head - tail;
-  return `${sharedContext.slice(0, head)}\n\n[… ${omitted.toLocaleString()} characters compacted; use retrieved memory for older detail …]\n\n${sharedContext.slice(-tail)}`;
+  const summary = compactKeyPoints(sharedContext, budget - 80);
+  return `Key points from shared brief:\n${summary}\n\n[… ${Math.max(0, sharedContext.length - summary.length).toLocaleString()} characters compacted; use retrieved memory for older detail …]`;
 }
 
 /**
  * Keep every room turn grounded without turning retrieval into the dominant
  * prompt payload. The full index remains available through /api/activity-memory.
  */
-const SHARED_REPLY_RETRIEVAL_LIMIT = 8;
-
-function formatRetrievedMemory(matches: Array<{ source: string; title: string; body: string; createdAt: string }>): string {
+function formatRetrievedMemory(matches: RetrievedMemory[]): string {
   if (!matches.length) return 'Retrieved memory: no indexed match. Query /api/activity-memory with focused terms if needed.';
-  const focused = matches.slice(0, SHARED_REPLY_RETRIEVAL_LIMIT);
-  return `Retrieved memory (top ${focused.length} matches, same index as /api/activity-memory — docs, messages, activities, run output). Settled; don't re-derive.\n${focused.map((match) => `- [${match.source}, ${match.createdAt}] ${match.title}: ${match.body.slice(0, 200).replace(/\s+/g, ' ')}`).join('\n')}`;
+  const focused = selectRelevantMemoryForPrompt(matches);
+  if (!focused.length) return 'Retrieved memory: no match cleared this query’s relevance threshold.';
+  return `Retrieved memory (${focused.length} relevant matches, selected from up to ${matches.length}; same index as /api/activity-memory — docs, messages, activities, run output). Settled; don't re-derive.\n${focused.map((match) => `- [${match.source}, ${match.createdAt}] ${match.title}: ${match.body.slice(0, 420).replace(/\s+/g, ' ')}`).join('\n')}`;
 }
 
 export function buildSharedReplyPrompt(
@@ -98,7 +121,7 @@ export function buildSharedReplyPrompt(
   connectionContext: string,
   thread: SharedMessage[],
   linked?: { item: WorkItem; run: AgentRun },
-  retrievedMemory?: Array<{ source: string; title: string; body: string; createdAt: string }>,
+  retrievedMemory?: RetrievedMemory[],
 ): string {
   const roleContext = linked
     ? buildPrompt(linked.item, linked.run, sharedContext)
@@ -256,13 +279,14 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const linkedItem = linkedRun ? repository.get(linkedRun.workItemId) : null;
     const cwd = resolveSharedReplyWorkingDirectory(linkedItem);
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}.`);
-    const retrievedMemory = await repository.searchActivityMemory(memoryQuery, SHARED_REPLY_RETRIEVAL_LIMIT).catch((error) => {
+    const retrievedMemory = await repository.searchActivityMemory(memoryQuery, PROMPT_MEMORY_CANDIDATE_LIMIT).catch((error) => {
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
     });
+    const injectedMemory = selectRelevantMemoryForPrompt(retrievedMemory);
     repository.updateSharedMessage(messageId, {
-      retrievedMemoryCount: retrievedMemory.length,
-      retrievedMemoryDetail: { query: memoryQuery, items: retrievedMemory },
+      retrievedMemoryCount: injectedMemory.length,
+      retrievedMemoryDetail: { query: memoryQuery, items: injectedMemory },
     });
     const prompt = buildSharedReplyPrompt(
       agent,
@@ -270,7 +294,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       connectionContext,
       thread,
       linkedRun && linkedItem ? { item: linkedItem, run: linkedRun } : undefined,
-      retrievedMemory,
+      injectedMemory,
     );
     repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
     const guardedPrompt = prompt;

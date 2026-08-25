@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { accountProfileForSharedReply, buildSharedReplyPrompt, classificationForLinkedItem, compactConversationHistory, compactSharedBrief, hasUntrackedContinuationClaim, memoryQueryForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
+import { accountProfileForSharedReply, buildSharedReplyPrompt, classificationForLinkedItem, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, memoryQueryForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
 
 function message(index: number, body: string): SharedMessage {
   return {
@@ -62,6 +62,12 @@ describe('compactConversationHistory', () => {
     expect(compacted).toContain('end');
   });
 
+  it('preserves a buried decision when compacting a shared brief', () => {
+    const compacted = compactKeyPoints(`Opening detail\n${'x'.repeat(2_000)}\nDecision: retrieve only relevant memories, up to 40.\n${'y'.repeat(2_000)}`, 250);
+
+    expect(compacted).toContain('Decision: retrieve only relevant memories, up to 40.');
+  });
+
   it('grounds a short follow-up retrieval query in the preceding user decision', () => {
     const messages = [
       message(0, 'Cut prompt tokens, but do not lose durable decisions.'),
@@ -72,16 +78,16 @@ describe('compactConversationHistory', () => {
     expect(memoryQueryForSharedReply(messages)).toBe('Cut prompt tokens, but do not lose durable decisions.\nYes, do it.');
   });
 
-  it('keeps up to eight retrieved memory matches in a shared reply prompt', () => {
+  it('injects only memory matches that clear the query-relative relevance threshold', () => {
     const retrieved = Array.from({ length: 9 }, (_, index) => ({
-      source: 'message', title: `Memory ${index + 1}`, body: `Detail ${index + 1}`, createdAt: '2026-08-25T00:00:00.000Z',
+      source: 'message', title: `Memory ${index + 1}`, body: `Detail ${index + 1}`, createdAt: '2026-08-25T00:00:00.000Z', score: index < 3 ? 0.03 - index * 0.001 : 0.01,
     }));
 
     const prompt = buildSharedReplyPrompt('codex', 'Shared context.', '', [], undefined, retrieved);
 
-    expect(prompt).toContain('Retrieved memory (top 8 matches');
-    expect(prompt).toContain('Memory 8');
-    expect(prompt).not.toContain('Memory 9');
+    expect(prompt).toContain('Retrieved memory (3 relevant matches');
+    expect(prompt).toContain('Memory 3');
+    expect(prompt).not.toContain('Memory 4');
   });
 
   it('uses frontend-reviewer for a review-linked reply with no stored classification', () => {

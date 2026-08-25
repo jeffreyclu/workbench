@@ -112,6 +112,76 @@ function replyBadge(message: SharedMessage): string {
   return `${agent} · ${profile} · ${cost}`;
 }
 
+type ConversationTaskPickerProps = {
+  tasks: WorkItem[];
+  isLoading: boolean;
+  isError: boolean;
+  isPending: boolean;
+  onRetry: () => void;
+  onSelect: (workItemId: string) => void;
+};
+
+function ConversationTaskPicker({ tasks, isLoading, isError, isPending, onRetry, onSelect }: ConversationTaskPickerProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const matchingTasks = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    return normalizedQuery ? tasks.filter((task) => task.title.toLocaleLowerCase().includes(normalizedQuery)) : tasks;
+  }, [query, tasks]);
+  const listboxId = 'conversation-task-results';
+
+  const selectTask = (task: WorkItem) => {
+    setOpen(false);
+    setQuery('');
+    setActiveIndex(-1);
+    onSelect(task.id);
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setQuery('');
+      setOpen(false);
+      setActiveIndex(-1);
+      return;
+    }
+    if (event.key === 'Enter' && activeIndex >= 0 && matchingTasks[activeIndex]) {
+      event.preventDefault();
+      selectTask(matchingTasks[activeIndex]);
+      return;
+    }
+    if (!matchingTasks.length || !['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+    event.preventDefault();
+    setActiveIndex((current) => event.key === 'ArrowDown'
+      ? Math.min(current + 1, matchingTasks.length - 1)
+      : Math.max(current === -1 ? matchingTasks.length - 1 : current - 1, 0));
+  };
+
+  return (
+    <div className="conversation-task-picker" onBlur={(event) => {
+      if (!event.currentTarget.contains(event.relatedTarget)) {
+        setOpen(false);
+        setActiveIndex(-1);
+      }
+    }}>
+      <button type="button" className="icon-button" aria-label="Link conversation to task" aria-expanded={open} aria-controls={open ? listboxId : undefined} disabled={isLoading || isPending} title={isLoading ? 'Loading tasks…' : 'Link conversation to task'} onClick={() => setOpen((current) => !current)}>
+        {isPending ? <LoaderCircle className="spin" size={14} /> : <Link2 size={14} />}
+      </button>
+      {open && <div className="conversation-task-popover">
+        <label className="visually-hidden" htmlFor="conversation-task-search">Search tasks to link</label>
+        <input id="conversation-task-search" autoFocus role="combobox" aria-autocomplete="list" aria-controls={listboxId} aria-activedescendant={activeIndex >= 0 ? `conversation-task-result-${activeIndex}` : undefined} aria-expanded placeholder="Search tasks…" value={query} onChange={(event) => { setQuery(event.target.value); setActiveIndex(-1); }} onFocus={() => setOpen(true)} onKeyDown={handleKeyDown} />
+        <div id={listboxId} className="conversation-task-results" role="listbox" aria-busy={isLoading}>
+          {isLoading && <div className="conversation-task-result-skeleton" aria-label="Loading tasks"><Skeleton width="100%" height="14px" /></div>}
+          {isError && <div className="page-state error-message">Could not load tasks. <button type="button" className="button secondary compact" onClick={onRetry}>Retry</button></div>}
+          {!isLoading && !isError && matchingTasks.length === 0 && <div className="page-state">No tasks match “{query.trim()}”.</div>}
+          {!isLoading && !isError && matchingTasks.map((task, index) => <button key={task.id} id={`conversation-task-result-${index}`} type="button" className="conversation-task-result" role="option" aria-selected={index === activeIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => selectTask(task)}>{task.title}</button>)}
+        </div>
+      </div>}
+    </div>
+  );
+}
+
 export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectConversation, view, onViewChange }: { initialConversationId?: string | null; onOpenTask?: (taskId: string) => void; onSelectConversation?: (conversationId: string | null) => void; view?: 'active' | 'archive'; onViewChange?: (view: 'active' | 'archive') => void }) {
   const queryClient = useQueryClient();
   const [body, setBody] = useState(() => initialConversationId ? readConversationDrafts()[initialConversationId] ?? '' : '');
@@ -904,7 +974,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               ?? (pendingSelectedConversation?.id === conversationId ? pendingSelectedConversation.title
                   : conversationDetail.isLoading ? <span className="conversation-title-skeleton"><Skeleton width="240px" height="19px" /></span>
                   : selectedConversationMissing ? 'Conversation not found'
-                    : 'New conversation')}</h2>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={12} /> Back to task</button>}</div>{conversationId && selectedConversation && <div className="conversation-window-actions">{!selectedConversation.workItemId && <label className="conversation-task-picker" title="Link this conversation to a task"><Link2 size={13} /><select aria-label="Link conversation to task" defaultValue="" disabled={linkableTasks.isLoading || setConversationTask.isPending} onChange={(event) => { if (event.target.value) setConversationTask.mutate(event.target.value); event.currentTarget.value = ''; }}><option value="">Link task…</option>{(linkableTasks.data?.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}{selectedConversation.workItemId && <button type="button" className="icon-button conversation-unlink-task" onClick={() => setConversationTask.mutate(null)} disabled={setConversationTask.isPending} aria-label="Unlink task" title="Unlink task"><Link2Off size={14} /></button>}{linkedWorkItem.data?.item && <button type="button" className="icon-button complete-task-button" disabled={linkedTaskCompleted || completeLinkedTask.isPending} onClick={() => completeLinkedTask.mutate()} aria-label={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'} title={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'}>{completeLinkedTask.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}</button>}<button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<span className={`conversation-delete-control ${selectedConversation.workItemId ? 'is-disabled' : ''}`} tabIndex={selectedConversation.workItemId ? 0 : undefined}><button className="icon-button delete-conversation-button" disabled={Boolean(selectedConversation.workItemId)} onClick={() => setDeleteConversationPromptOpen(true)} aria-label="Delete conversation" aria-describedby={selectedConversation.workItemId ? 'linked-conversation-delete-help' : undefined} title={selectedConversation.workItemId ? undefined : 'Delete permanently'}><Trash2 size={14} /></button>{selectedConversation.workItemId && <span id="linked-conversation-delete-help" className="action-tooltip" role="tooltip">Delete the related task to delete this conversation.</span>}</span></div>}</header>
+                    : 'New conversation')}</h2>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={12} /> Back to task</button>}</div>{conversationId && selectedConversation && <div className="conversation-window-actions">{!selectedConversation.workItemId && <ConversationTaskPicker tasks={linkableTasks.data?.items ?? []} isLoading={linkableTasks.isLoading} isError={linkableTasks.isError} isPending={setConversationTask.isPending} onRetry={() => void linkableTasks.refetch()} onSelect={(workItemId) => setConversationTask.mutate(workItemId)} />}{selectedConversation.workItemId && <button type="button" className="icon-button conversation-unlink-task" onClick={() => setConversationTask.mutate(null)} disabled={setConversationTask.isPending} aria-label="Unlink task" title="Unlink task"><Link2Off size={14} /></button>}{linkedWorkItem.data?.item && <button type="button" className="icon-button complete-task-button" disabled={linkedTaskCompleted || completeLinkedTask.isPending} onClick={() => completeLinkedTask.mutate()} aria-label={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'} title={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'}>{completeLinkedTask.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}</button>}<button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<span className={`conversation-delete-control ${selectedConversation.workItemId ? 'is-disabled' : ''}`} tabIndex={selectedConversation.workItemId ? 0 : undefined}><button className="icon-button delete-conversation-button" disabled={Boolean(selectedConversation.workItemId)} onClick={() => setDeleteConversationPromptOpen(true)} aria-label="Delete conversation" aria-describedby={selectedConversation.workItemId ? 'linked-conversation-delete-help' : undefined} title={selectedConversation.workItemId ? undefined : 'Delete permanently'}><Trash2 size={14} /></button>{selectedConversation.workItemId && <span id="linked-conversation-delete-help" className="action-tooltip" role="tooltip">Delete the related task to delete this conversation.</span>}</span></div>}</header>
         {linkedWorkItem.data?.item && <div className="thread-filter-bar"><TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} /><button type="button" className={`icon-button${linkedWorkItem.data.item.status === 'pinned' ? ' icon-button-active' : ''}`} onClick={() => toggleLinkedTaskPin.mutate()} disabled={toggleLinkedTaskPin.isPending} aria-pressed={linkedWorkItem.data.item.status === 'pinned'} aria-label={linkedWorkItem.data.item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'} title={linkedWorkItem.data.item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'}><Pin size={13} fill={linkedWorkItem.data.item.status === 'pinned' ? 'currentColor' : 'none'} /></button></div>}
         <div className="shared-thread" ref={threadScrollRef}>
           {conversationDetail.isLoading && <ConversationThreadSkeleton />}

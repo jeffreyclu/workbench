@@ -772,6 +772,43 @@ describe('shared room', () => {
     expect(deleteButton.parentElement?.classList.contains('is-disabled')).toBe(true);
   });
 
+  it('filters linkable tasks in the conversation typeahead and links the keyboard-selected match', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000025';
+    const alphaTaskId = '00000000-0000-4000-8000-000000000026';
+    const conversation = { id: conversationId, title: 'Link a task', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const makeTask = (id: string, title: string) => ({
+      id, title, description: '', status: 'ready', priority: 2, queuePosition: 0, source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete', agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: null, stack: 'attention', workspacePath: null, strategy: '', assignees: [], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [], createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', lastTouchedAt: '2026-01-01T00:00:00Z',
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [makeTask(alphaTaskId, 'Prepare release notes'), makeTask('00000000-0000-4000-8000-000000000027', 'Review mobile controls')], nextCursor: null, totalCount: 2, proposal: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}/task` && init?.method === 'PATCH') return new Response(JSON.stringify({ conversation: { ...conversation, workItemId: alphaTaskId } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Link conversation to task' }));
+    const search = screen.getByRole('combobox', { name: 'Search tasks to link' });
+    expect(await screen.findByRole('option', { name: 'Prepare release notes' })).toBeTruthy();
+    fireEvent.change(search, { target: { value: 'release' } });
+    expect(screen.queryByRole('option', { name: 'Review mobile controls' })).toBeNull();
+
+    fireEvent.keyDown(search, { key: 'Escape' });
+    expect(screen.queryByRole('combobox', { name: 'Search tasks to link' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Link conversation to task' }));
+    const reopenedSearch = screen.getByRole('combobox', { name: 'Search tasks to link' });
+    fireEvent.change(reopenedSearch, { target: { value: 'release' } });
+    fireEvent.keyDown(reopenedSearch, { key: 'ArrowDown' });
+    fireEvent.keyDown(reopenedSearch, { key: 'Enter' });
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === `/api/shared/conversations/${conversationId}/task` && init?.method === 'PATCH' && init.body === JSON.stringify({ workItemId: alphaTaskId }))).toBe(true));
+  });
+
   it('completes a linked task from its conversation and keeps the archived thread selected', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000013';

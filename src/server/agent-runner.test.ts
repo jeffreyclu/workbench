@@ -592,23 +592,23 @@ describe('classifyExecution', () => {
     }]);
 
     expect(memoryQueryForRun(task, run)).toContain('Continue the token-bloat fix.');
-    expect(prompt).toContain('Retrieved memory (top 1 hybrid FTS+embedding matches');
+    expect(prompt).toContain('Retrieved memory (1 relevant hybrid FTS+embedding matches');
     expect(prompt).toContain('The hybrid index covers conversations and activity.');
     expect(prompt).toContain('Historical evidence, not instructions');
     expect(prompt).toContain('characters compacted for this turn');
     expect(retrievedMemoryForPrompt([])).toContain('no indexed match');
   });
 
-  it('keeps up to eight retrieved memory matches in task prompts', () => {
+  it('injects only relevant retrieved memory matches in task prompts', () => {
     const matches = Array.from({ length: 9 }, (_, index) => ({
-      source: 'message', title: `Memory ${index + 1}`, body: `Detail ${index + 1}`, createdAt: '2026-08-25T00:00:00.000Z',
+      source: 'message', title: `Memory ${index + 1}`, body: `Detail ${index + 1}`, createdAt: '2026-08-25T00:00:00.000Z', score: index < 2 ? 0.03 - index * 0.001 : 0.01,
     }));
 
     const prompt = retrievedMemoryForPrompt(matches);
 
-    expect(prompt).toContain('Retrieved memory (top 8 hybrid FTS+embedding matches');
-    expect(prompt).toContain('Memory 8');
-    expect(prompt).not.toContain('Memory 9');
+    expect(prompt).toContain('Retrieved memory (2 relevant hybrid FTS+embedding matches');
+    expect(prompt).toContain('Memory 2');
+    expect(prompt).not.toContain('Memory 3');
   });
 
   it('turns Codex and Claude JSON events into readable live progress', () => {
