@@ -15,7 +15,7 @@ export function startRuntimePromotionWorker(
   let dispatching = false;
   const dispatch = async () => {
     repository.requeueExpiredPromotionMessages();
-    if (dispatching || repository.hasLiveWork()) return;
+    if (dispatching) return;
     const id = repository.listQueuedPromotionMessageIds()[0];
     if (!id) return;
     dispatching = true;
