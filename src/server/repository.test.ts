@@ -1122,7 +1122,7 @@ describe('WorkItemRepository', () => {
     const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);
     const earlier = repository.createSharedMessage('jeffrey', 'Do this afterward', 'queued', conversation.id, [], 'codex');
     const interjected = repository.createSharedMessage('jeffrey', 'Do this next', 'queued', conversation.id, [], 'codex');
-    const replies = interjectQueuedSharedMessage(repository, interjected.id);
+    const replies = await interjectQueuedSharedMessage(repository, interjected.id);
     expect(replies).not.toBeNull();
     if (!replies) throw new Error('Interjection was not dispatched.');
     expect(replies).toEqual([]);
@@ -1133,22 +1133,34 @@ describe('WorkItemRepository', () => {
       expect(repository.getSharedMessageById(earlier.id)).toEqual(expect.objectContaining({ status: 'queued' }));
   });
 
-  it('delivers an interjection to the existing reply without creating or canceling a reply', () => {
+  it('delivers an acknowledged interjection to the existing reply without creating or canceling a reply', async () => {
     const conversation = repository.createConversation('Live steering');
     const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);
     const interjected = repository.createSharedMessage('jeffrey', 'Use this direction', 'queued', conversation.id, [], 'codex');
     let delivered = '';
-    registerActiveReplySteering(running.id, (body, onAccepted) => {
+    registerActiveReplySteering(running.id, async (body) => {
       delivered = body;
-      onAccepted();
       return true;
     });
 
-    expect(interjectQueuedSharedMessage(repository, interjected.id)).toEqual([expect.objectContaining({ id: running.id })]);
+    await expect(interjectQueuedSharedMessage(repository, interjected.id)).resolves.toEqual([expect.objectContaining({ id: running.id })]);
     expect(delivered).toBe('Use this direction');
     expect(repository.getSharedMessageById(running.id)).toEqual(expect.objectContaining({ status: 'running' }));
     expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'completed' }));
     expect(repository.listAllSharedMessages(conversation.id)).toHaveLength(2);
+  });
+
+  it('keeps an interjection queued if the active reply ends before its acknowledgment returns', async () => {
+    const conversation = repository.createConversation('Steer acknowledgment race');
+    const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);
+    const interjected = repository.createSharedMessage('jeffrey', 'Redirect this', 'queued', conversation.id, [], 'codex');
+    registerActiveReplySteering(running.id, async () => {
+      repository.updateSharedMessage(running.id, { status: 'canceled' });
+      return true;
+    });
+
+    await expect(interjectQueuedSharedMessage(repository, interjected.id)).resolves.toEqual([]);
+    expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'queued' }));
   });
 
   it('does not promote a message that is not queued', () => {

@@ -554,6 +554,13 @@ during `releaseWorkspace`) that reproduces intermittently on full-suite runs
 but passes in isolation — unrelated to auth-gate backoff work on this
 branch, not to comments.
 
+*Operational correction, 2026-08-25.* Runtime promotion alone does not update
+already-published artifact URLs: they serve immutable rendered snapshots. After
+shipping a public-artifact UI change, call `POST /api/artifacts/refresh-feedback`
+to redeploy the current snapshot set. This was run successfully for 49
+snapshots; direct fetches of the public Pages URLs confirmed the inline
+`Comment on this row` control and side rail were present.
+
 Reply badge content expansion (2026-08-25): once the model/RAG badge row was
 moved to its own line on both desktop and mobile (freeing horizontal room),
 Jeffrey asked to add more info to the blue reply badge. `replyBadge`

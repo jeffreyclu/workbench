@@ -232,9 +232,10 @@ export function createConversationRouter({ repository, database, capabilities }:
     response.status(202).json({ reply });
   });
 
-  router.post('/api/shared/messages/:id/interject', (request, response) => {
-    const replies = interjectQueuedSharedMessage(repository, request.params.id);
+  router.post('/api/shared/messages/:id/interject', async (request, response) => {
+    const replies = await interjectQueuedSharedMessage(repository, request.params.id);
     if (!replies) return response.status(404).json({ error: 'Queued message not found.' });
+    if (!replies.length) return response.status(409).json({ error: 'The active response ended before it accepted this interjection. Your message is still queued.' });
     response.json({ replies });
   });
 

@@ -13,7 +13,7 @@ const replyRunIds = new Map<string, string>();
  * A live provider session owns this callback for the life of its reply.  An
  * interjection is input to that session, never a second reply/run.
  */
-type ActiveReplySteering = (body: string, onAccepted: () => void) => boolean;
+type ActiveReplySteering = (body: string) => Promise<boolean>;
 const activeReplySteering = new Map<string, ActiveReplySteering>();
 export const isSharedReplyActive = (id: string) => activeReplies.has(id);
 
@@ -27,7 +27,7 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
   return new Promise((resolveOutput, reject) => {
     const child = spawn('codex', ['app-server', '--stdio'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     let buffered = ''; let output = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
-    const pendingSteers = new Map<number, () => void>();
+    const pendingSteers = new Map<number, (accepted: boolean) => void>();
     const request = (method: string, params: Record<string, unknown>) => {
       const id = ++sequence;
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
@@ -35,11 +35,12 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
     };
     const fail = (error: Error) => { if (!settled) { settled = true; reject(error); } };
     const stop = () => { try { process.kill(child.pid ? -child.pid : child.pid!, 'SIGTERM'); } catch { child.kill('SIGTERM'); } };
-    const steer: ActiveReplySteering = (body, onAccepted) => {
-      if (!threadId || !turnId || settled) return false;
-      const id = request('turn/steer', { threadId, expectedTurnId: turnId, clientUserMessageId: randomUUID(), input: [{ type: 'text', text: body, text_elements: [] }] });
-      pendingSteers.set(id, onAccepted);
-      return true;
+    const steer: ActiveReplySteering = (body) => {
+      if (!threadId || !turnId || settled) return Promise.resolve(false);
+      return new Promise((resolveSteer) => {
+        const id = request('turn/steer', { threadId, expectedTurnId: turnId, clientUserMessageId: randomUUID(), input: [{ type: 'text', text: body, text_elements: [] }] });
+        pendingSteers.set(id, resolveSteer);
+      });
     };
     signal.addEventListener('abort', stop, { once: true });
     child.on('error', fail);
@@ -52,11 +53,13 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
         else if (event.result?.thread?.id && !threadId) { threadId = event.result.thread.id; request('turn/start', { threadId, cwd, effort: 'medium', input: [{ type: 'text', text: prompt, text_elements: [] }] }); }
         else if (event.result?.turn?.id && !turnId) { turnId = event.result.turn.id; onReady(steer); }
         if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
-          const accepted = pendingSteers.get(event.id)!;
+          const resolveSteer = pendingSteers.get(event.id)!;
           pendingSteers.delete(event.id);
           if (event.result?.turnId) {
             turnId = event.result.turnId;
-            accepted();
+            resolveSteer(true);
+          } else {
+            resolveSteer(false);
           }
           // A rejected steer leaves the human message queued. The active turn
           // keeps streaming and no second reply is started.
@@ -64,7 +67,12 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
         }
         if (event.method === 'item/agentMessage/delta' && typeof event.params?.delta === 'string') { output += event.params.delta; onProgress(output); }
         if (event.method === 'turn/completed') { settled = true; resolveOutput(output.trim()); child.stdin.end(); }
-        if (event.error) fail(new Error(String(event.error.message ?? 'Codex app-server request failed.')));
+        if (event.error) {
+          if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
+            pendingSteers.get(event.id)!(false);
+            pendingSteers.delete(event.id);
+          } else fail(new Error(String(event.error.message ?? 'Codex app-server request failed.')));
+        }
       }
     });
     child.on('close', (code) => { if (!settled) fail(signal.aborted ? new Error('Agent run canceled.') : new Error(`Codex app-server exited with code ${code}.`)); });
@@ -496,7 +504,7 @@ export function cancelSharedReply(repository: WorkItemRepository, messageId: str
   return { ...message, status: 'canceled' as const };
 }
 
-export function interjectQueuedSharedMessage(repository: WorkItemRepository, messageId: string): SharedMessage[] | null {
+export async function interjectQueuedSharedMessage(repository: WorkItemRepository, messageId: string): Promise<SharedMessage[] | null> {
   const message = repository.getSharedMessageById(messageId);
   if (!message || message.status !== 'queued') return null;
   const targets = message.dispatchTarget === 'both' ? ['codex', 'claude'] : [message.dispatchTarget];
@@ -505,12 +513,20 @@ export function interjectQueuedSharedMessage(repository: WorkItemRepository, mes
   // Do not silently degrade into a second process. A provider that has not
   // exposed its live session yet remains queued and the UI can retry once the
   // active reply reaches the steering-ready point.
-  const steered = running.filter((reply) => activeReplySteering.get(reply.id)?.(message.body, () => {
-    // Acknowledgment is the delivery boundary. Before this, keep the queued
-    // message retryable; after it, there is still only the original reply.
+  const attempted = await Promise.all(running.map(async (reply) => ({
+    reply,
+    accepted: await activeReplySteering.get(reply.id)?.(message.body),
+  })));
+  // The request must be acknowledged while the same reply remains live. This
+  // closes the observed race where a canceled reply made the queued human
+  // message appear delivered even though no active turn could receive it.
+  const steered = attempted
+    .filter(({ reply, accepted }) => accepted && activeReplySteering.has(reply.id) && repository.getSharedMessageById(reply.id)?.status === 'running')
+    .map(({ reply }) => reply);
+  if (steered.length) {
     repository.updateSharedMessage(messageId, { status: 'completed' });
     publishRealtimeEvent('shared');
-  }));
+  }
   if (!steered.length) return [];
   return steered;
 }
