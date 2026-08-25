@@ -801,13 +801,21 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     const container = threadScrollRef.current;
     if (!container) return;
     lastThreadScrollTopRef.current = container.scrollTop;
-    const revealThreshold = 8;
+    const revealThreshold = 24;
+    // Mobile momentum scrolling delivers dozens of 'scroll' events per
+    // gesture with noisy sub-pixel deltas, and rubber-band overscroll at the
+    // top/bottom can momentarily report scrollTop outside the real content
+    // range. Reacting to every raw event (as before) let that noise flip the
+    // hidden state back and forth within a single gesture, reading as the
+    // whole thread jittering up and down. Sampling once per animation frame
+    // and requiring a larger cumulative delta before committing a flip
+    // absorbs that noise.
+    let queued = false;
     const updateHeaderVisibility = () => {
-      const { scrollTop } = container;
+      queued = false;
+      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+      const scrollTop = Math.min(Math.max(container.scrollTop, 0), maxScrollTop);
       const delta = scrollTop - lastThreadScrollTopRef.current;
-      // Only re-anchor the baseline when the header actually flips state;
-      // re-anchoring on every scroll event (as before) collapsed delta to
-      // near-zero per-frame velocity and made momentum scrolling flicker.
       if (scrollTop <= revealThreshold) {
         setConsoleHeaderHidden(false);
         lastThreadScrollTopRef.current = scrollTop;
@@ -819,8 +827,13 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
         lastThreadScrollTopRef.current = scrollTop;
       }
     };
-    container.addEventListener('scroll', updateHeaderVisibility, { passive: true });
-    return () => container.removeEventListener('scroll', updateHeaderVisibility);
+    const onScroll = () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(updateHeaderVisibility);
+    };
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => container.removeEventListener('scroll', onScroll);
   }, [conversationId]);
   const jumpToLatest = () => {
     isNearThreadBottomRef.current = true;
