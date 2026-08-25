@@ -932,8 +932,12 @@ nav { display: grid; gap: 3px; }
   .agent-console .composer-tool { justify-content: center; width: 34px; padding: 7px; font-size: 0; }
   .agent-console .attach-button { grid-area: attach; }.agent-console .model-target { grid-area: model; }.agent-console .account-target { grid-area: account; }.agent-console .dispatch-target { grid-area: dispatch; }.agent-console .composer-send { grid-area: send; }
   .agent-console .model-target, .agent-console .agent-target { width: 100%; min-width: 0; height: 34px; padding: 7px 4px; font-size: 9px; }
-  .shared-message header { flex-wrap: wrap; }
-  .shared-message header .model-badge { flex: 1 1 100%; max-width: 100%; margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .shared-message header strong,
+  .shared-message header time,
+  .shared-message header .recipient-badge,
+  .shared-message header .memory-badge,
+  .shared-message header button { flex: 0 0 auto; }
+  .shared-message header .model-badge { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .queued-message-action { width: 44px; height: 44px; }
   .reply-group-columns { flex-direction: column; }
 }
