@@ -73,6 +73,15 @@ export class ConversationService {
         const task = this.collaborators.getWorkItem(existing.workItemId);
         if (task && !task.archivedAt) this.collaborators.archiveWorkItem(task.id, false, true, { actor: 'jeffrey', reason: 'its conversation was archived' });
       }
+      // An archived thread cannot accept another turn. Leaving a queued reply
+      // behind makes the global release guard see permanent live work, which
+      // blocks every preview promotion after this conversation has disappeared
+      // from the active rail.
+      if (archived) {
+        this.database.prepare(`UPDATE shared_messages
+          SET status = 'canceled', completed_at = COALESCE(completed_at, ?)
+          WHERE conversation_id = ? AND status = 'queued'`).run(new Date().toISOString(), id);
+      }
       return this.conversations.setArchived(id, archived) ? this.collaborators.getConversation(id) : null;
     });
   }

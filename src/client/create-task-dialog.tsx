@@ -1,6 +1,6 @@
 import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query';
-import { ArrowUpRight, LoaderCircle, Plus, Search, Sparkles, X } from 'lucide-react';
-import { type FormEvent, useState } from 'react';
+import { ArrowUpRight, LoaderCircle, Paperclip, Plus, Search, Sparkles, X } from 'lucide-react';
+import { type FormEvent, useRef, useState } from 'react';
 import type { AgentRun, BrokerSourceId, WorkItem } from '../shared/contracts';
 import { api } from './api';
 import { MarkdownComposer } from './markdown-composer.js';
@@ -20,9 +20,12 @@ export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { on
   const [description, setDescription] = useState('');
   const [projectName, setProjectName] = useState(defaultProjectName);
   const [classificationKind, setClassificationKind] = useState<AgentRun['kind']>('execute');
+  const [files, setFiles] = useState<File[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
   const taskTypeField = <label>Task type<select aria-label="Task type" value={classificationKind} onChange={(event) => setClassificationKind(event.target.value as AgentRun['kind'])}>
     <option value="execute">Execute</option><option value="bugfix">Bug fix</option><option value="research">Research</option><option value="analysis">Analysis</option><option value="strategy">Strategy</option><option value="review">Review</option>
   </select></label>;
+  const attachmentField = <div className="task-attachment-picker"><span className="section-label">Files for the agent</span><p className="muted">Saved with this task and available when it executes.</p>{files.length > 0 && <div className="pending-files">{files.map((file) => <button type="button" key={`${file.name}-${file.size}`} onClick={() => setFiles((current) => current.filter((entry) => entry !== file))}><Paperclip size={11} /> {file.name} <X size={10} /></button>)}</div>}<input ref={fileRef} className="visually-hidden" type="file" multiple onChange={(event) => setFiles((current) => [...current, ...Array.from(event.target.files ?? [])].slice(0, 10))} /><button type="button" className="button secondary compact" onClick={() => fileRef.current?.click()}><Paperclip size={13} /> Attach files</button></div>;
   const closeBeforeShowingCreatedTask = async () => {
     // Let the dialog leave the tree before invalidating the list. Otherwise the
     // new card begins its enter animation behind the dialog and it is invisible.
@@ -79,8 +82,12 @@ export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { on
     },
   });
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
+    const attachments = await Promise.all(files.map(async (file) => ({
+      name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size,
+      dataBase64: await new Promise<string>((resolveValue, reject) => { const reader = new FileReader(); reader.onerror = () => reject(reader.error); reader.onload = () => resolveValue(String(reader.result).split(',')[1] ?? ''); reader.readAsDataURL(file); }),
+    })));
     createManual.mutate({
       title,
       description,
@@ -90,6 +97,7 @@ export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { on
       sourceUrl: sourceUrl || null,
       workspacePath: null,
       classificationKind,
+      attachments,
     });
   }
 
@@ -134,7 +142,7 @@ export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { on
           <form onSubmit={submit}>
             <label>Source URL<div className="resolve-row"><input autoFocus value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="Slack, GitHub, Linear, Confluence, or Gmail URL" /><button type="button" className="button secondary" onClick={() => resolveLink.mutate(sourceUrl)} disabled={!sourceUrl || resolveLink.isPending}>{resolveLink.isPending ? <LoaderCircle className="spin" size={14} /> : 'Resolve'}</button></div></label>
             <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Generated from the source" /></label>
-            <label>Description<MarkdownComposer conversationId="create-task-link" value={description} onChange={setDescription} placeholder="Generated description remains editable" ariaLabel="Task description" /></label>{taskTypeField}
+            <label>Description<MarkdownComposer conversationId="create-task-link" value={description} onChange={setDescription} placeholder="Generated description remains editable" ariaLabel="Task description" /></label>{taskTypeField}{attachmentField}
             {resolveLink.error && <p className="error-message">{resolveLink.error.message}</p>}
             <div className="dialog-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button className="button primary" disabled={!title.trim() || createManual.isPending}><Plus size={16} /> Add to stack</button></div>
           </form>
@@ -149,7 +157,7 @@ export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { on
               <div className="ai-draft-banner"><Sparkles size={14} /><span><strong>AI draft</strong><small>Review and edit before adding it to the stack.</small></span><button type="button" onClick={() => setAiDraftReady(false)}>Start over</button></div>
               <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
               <label>Description<MarkdownComposer conversationId="create-task-ai" value={description} onChange={setDescription} placeholder="Task description" ariaLabel="Task description" /></label>
-              <ProjectField value={projectName} onChange={setProjectName} placeholder="Optional" />{taskTypeField}
+              <ProjectField value={projectName} onChange={setProjectName} placeholder="Optional" />{taskTypeField}{attachmentField}
               {createManual.error && <p className="error-message">{createManual.error.message}</p>}
               <div className="dialog-actions"><button type="button" className="button secondary" onClick={() => setAiDraftReady(false)}>Back</button><button className="button primary" disabled={!title.trim() || createManual.isPending}><Plus size={16} /> Add to stack</button></div>
             </>}
@@ -165,7 +173,7 @@ export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { on
               <MarkdownComposer conversationId="create-task-manual" value={description} onChange={setDescription} placeholder="Notes, constraints, links…" ariaLabel="Task description" />
             </label>
             <ProjectField value={projectName} onChange={setProjectName} />
-            {taskTypeField}
+            {taskTypeField}{attachmentField}
             {createManual.error && <p className="error-message">{createManual.error.message}</p>}
             <div className="dialog-actions">
               <button type="button" className="button secondary" onClick={onClose}>Cancel</button>

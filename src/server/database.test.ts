@@ -51,6 +51,7 @@ const EXPECTED_MIGRATIONS = [
   '038_machine_discovery_proposals',
   '039_shared_message_retrieved_memory_count',
   '040_shared_messages_conversation_author_created_index',
+  '041_work_item_attachments',
 ];
 
 describe('openDatabase', () => {
@@ -180,6 +181,20 @@ describe('openDatabase', () => {
 
     const upgraded = openDatabase(path);
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_shared_messages_conv_author_created'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds task attachments when upgrading from migration 040', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE work_items DROP COLUMN attachments_json;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '041_work_item_attachments'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toContain('attachments_json');
     upgraded.close();
   });
 

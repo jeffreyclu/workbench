@@ -88,6 +88,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const [showAddTaskLink, setShowAddTaskLink] = useState(false);
   const [taskLinkQuery, setTaskLinkQuery] = useState('');
   const [showAddArtifactLink, setShowAddArtifactLink] = useState(false);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const [artifactLinkQuery, setArtifactLinkQuery] = useState('');
   const [dependencyQuery, setDependencyQuery] = useState('');
   const normalizedDependencyQuery = useDebouncedValue(dependencyQuery.trim(), 300);
@@ -115,6 +116,19 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       ]);
     },
     onError: (error, input) => toastError(taskDetailSaveFeedback(input).error, error),
+  });
+  const addAttachments = useMutation({
+    mutationFn: async (files: File[]) => api.addWorkItemAttachments(id, await Promise.all(files.map(async (file) => ({
+      name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size,
+      dataBase64: await new Promise<string>((resolveValue, reject) => { const reader = new FileReader(); reader.onerror = () => reject(reader.error); reader.onload = () => resolveValue(String(reader.result).split(',')[1] ?? ''); reader.readAsDataURL(file); }),
+    })))),
+    onSuccess: async () => { toast.success('Task files attached.'); await queryClient.invalidateQueries({ queryKey: ['work-item', id] }); },
+    onError: (error) => toastError('Could not attach task files.', error),
+  });
+  const removeAttachment = useMutation({
+    mutationFn: (path: string) => api.removeWorkItemAttachment(id, path),
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['work-item', id] }); },
+    onError: (error) => toastError('Could not remove the task file.', error),
   });
   const resolveProviderConflict = useMutation({
     mutationFn: ({ field, resolution }: { field: ProviderSyncConflict['field']; resolution: 'keep_local' | 'use_provider' }) => api.resolveProviderConflict(id, field, resolution),
@@ -256,7 +270,8 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       if (action === 'delete') setDeleteTaskPromptOpen(false);
       if (action === 'complete') celebrate();
       onClose();
-      toast.success(lifecycleSuccessMessage[action]);
+      const undoable = action === 'archive' || action === 'complete';
+      toast.success(lifecycleSuccessMessage[action], undoable ? { action: () => lifecycle.mutate('restore'), actionLabel: 'Undo', duration: 10_000 } : undefined);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['work-items'] }),
         queryClient.invalidateQueries({ queryKey: ['archived-work-items'] }),
@@ -343,6 +358,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   if (detail.isLoading) return <TaskDetailSkeleton />;
   if (!detail.data) return <div className="detail-empty">Unable to load this item.</div>;
   const { item, activity } = detail.data;
+  const taskAttachments = item.attachments ?? [];
   const decisionCount = activity.filter((entry) => agentDecisionKinds.has(entry.kind)).length;
   const dependencies = item.blockedBy ?? [];
   const openDependencies = dependencies.filter((dependency) => dependency.isOpen);
@@ -446,6 +462,11 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         <span className="section-label">Description</span>
         {editingField === 'description' ? <MarkdownComposer conversationId={`task-description-${item.id}`} value={editDescription} onChange={setEditDescription} onBlur={() => { if (editDescription !== item.description) update.mutate({ description: editDescription }); setEditingField(null); }} placeholder="Notes, constraints, links…" ariaLabel="Task description" autoFocus className="inline-description-editor" />
           : item.description ? <div className="inline-editable task-description-markdown" onClick={() => setEditingField('description')} title="Click to edit description"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: MarkdownCode, pre: MarkdownPre }}>{item.description}</ReactMarkdown></div> : <p className="inline-editable muted" onClick={() => setEditingField('description')} title="Click to edit description">No description has been added yet.</p>}
+      </div>
+      <div className="detail-section task-attachments">
+        <span className="section-label">Files for the agent</span>
+        {taskAttachments.length > 0 ? <div className="message-files">{taskAttachments.map((file) => <span key={file.path}><a href={`/api/work-items/${item.id}/attachments/${encodeURIComponent(file.path)}`} target="_blank" rel="noreferrer" title={`${file.mimeType} · ${formatFileSize(file.size)}`}><Paperclip size={11} /> {file.name} <span className="message-file-meta">{formatFileSize(file.size)}</span></a>{!hasBeenExecuted && <button type="button" className="icon-button" aria-label={`Remove ${file.name}`} onClick={() => removeAttachment.mutate(file.path)} disabled={removeAttachment.isPending}><X size={12} /></button>}</span>)}</div> : <p className="muted">No files attached.</p>}
+        {!hasBeenExecuted && <><input ref={attachmentInputRef} className="visually-hidden" type="file" multiple onChange={(event) => { const files = Array.from(event.target.files ?? []); if (files.length) addAttachments.mutate(files); event.currentTarget.value = ''; }} /><button type="button" className="button secondary compact" onClick={() => attachmentInputRef.current?.click()} disabled={addAttachments.isPending || taskAttachments.length >= 10}><Paperclip size={13} /> {addAttachments.isPending ? 'Attaching…' : 'Attach files'}</button></>}
       </div>
       <div className="detail-section">
         <span className="section-label">Owners</span>

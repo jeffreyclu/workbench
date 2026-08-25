@@ -1,4 +1,4 @@
-import type { Assignee, WorkItem, WorkItemFilter } from '../../shared/contracts.js';
+import type { Assignee, SharedAttachment, WorkItem, WorkItemFilter } from '../../shared/contracts.js';
 import { WORKBENCH_PROJECT_KEY, WORKBENCH_PROJECT_NAME } from '../../shared/project-name.js';
 import { localCalendarDate } from '../../shared/due-date.js';
 import type { UnitOfWork } from '../unit-of-work.js';
@@ -37,6 +37,7 @@ export interface WorkItemRow {
   project_name: string | null;
   stack: WorkItem['stack'];
   workspace_path: string | null;
+  attachments_json: string | null;
   strategy: string;
   assignees_json: string;
   labels_json: string;
@@ -92,6 +93,7 @@ export function mapWorkItemRow(row: WorkItemRow): WorkItem {
     projectName: row.project_name,
     stack: row.stack,
     workspacePath: row.workspace_path,
+    attachments: JSON.parse(row.attachments_json ?? '[]') as SharedAttachment[],
     strategy: row.strategy,
     assignees: JSON.parse(row.assignees_json) as Assignee[],
     labels: JSON.parse(row.labels_json) as string[],
@@ -128,6 +130,7 @@ export interface ManualWorkItemInsert extends WorkItemInsertBase {
   dueDate: string | null;
   sourceUrl: string | null;
   parentWorkItemId: string | null;
+  attachments: SharedAttachment[];
 }
 
 export interface MachineProposalWorkItemInsert extends ManualWorkItemInsert {
@@ -320,12 +323,12 @@ export class WorkItemRepository {
       .prepare(`
         INSERT INTO work_items (
           id, title, description, status, priority, queue_position, source, is_queued,
-          project_name, project_key, stack, workspace_path, due_date, source_url, parent_work_item_id, created_at, updated_at, last_touched_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          project_name, project_key, stack, workspace_path, due_date, source_url, parent_work_item_id, attachments_json, created_at, updated_at, last_touched_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         input.id, input.title, input.description, input.status, input.priority, input.position,
-        input.projectName, input.projectKey, input.stack, input.workspacePath, input.dueDate, input.sourceUrl, input.parentWorkItemId,
+        input.projectName, input.projectKey, input.stack, input.workspacePath, input.dueDate, input.sourceUrl, input.parentWorkItemId, JSON.stringify(input.attachments),
         input.createdAt, input.createdAt, input.createdAt,
       );
   }

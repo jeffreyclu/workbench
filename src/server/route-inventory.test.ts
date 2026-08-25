@@ -97,6 +97,9 @@ const baselineInventory = [
   'DELETE /api/work-items/:id/linked-tasks/:linkedTaskId',
   'DELETE /api/work-items/:id/references/:referenceId',
   'POST /api/work-items/:id/classify',
+  'POST /api/work-items/:id/attachments',
+  'DELETE /api/work-items/:id/attachments/:attachmentPath',
+  'GET /api/work-items/:id/attachments/:attachmentPath',
   'POST /api/work-items',
   'POST /api/work-items/:id/follow-ups',
   'POST /api/work-items/bulk',
@@ -146,7 +149,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(114);
+    expect(baselineInventory).toHaveLength(117);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

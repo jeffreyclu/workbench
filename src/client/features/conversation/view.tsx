@@ -31,7 +31,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { type CSSProperties, type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type FormEvent, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from '../../markdown-composer.js';
@@ -124,6 +124,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   // re-render the component.
   const [dispatchInitializedFor, setDispatchInitializedFor] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(initialConversationId ?? null);
+  const isCreatingConversationRef = useRef(false);
   const [locallyReadConversationIds, setLocallyReadConversationIds] = useState<Set<string>>(new Set());
   const conversationIdRef = useRef(conversationId);
   const sentDraftRef = useRef<{ conversationId: string; body: string } | null>(null);
@@ -409,12 +410,19 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   // The final agent report can replace a small live update with a multi-section
   // response in one polling tick. Its row key does not change, so relying only
   // on ResizeObserver can leave the virtualizer positioned with the old height
-  // until a full reload. Clear its measurement cache for every visible content
-  // or lifecycle transition before the next paint.
+  // until a full reload. Do not clear the cache while live-flow is rendering:
+  // those measurements are exactly what the virtualized layout needs when the
+  // running -> completed transition switches modes.
   const threadLayoutSignature = conversationMessages.map((message) => `${message.id}:${message.status}:${message.body}`).join('\u0000');
-  useEffect(() => {
+  // useLayoutEffect (not useEffect): the running -> completed transition
+  // switches this list from live document flow to absolute-positioned
+  // transforms in the very next render. Clearing the stale cache must
+  // happen before that frame paints, or the transforms briefly use heights
+  // from before live-flow started and rows visibly overlap.
+  useLayoutEffect(() => {
+    if (hasRunningMessage) return;
     threadVirtualizer.measure();
-  }, [threadLayoutSignature, threadVirtualizer]);
+  }, [hasRunningMessage, threadLayoutSignature, threadVirtualizer]);
   useEffect(() => {
     if (!conversationId || dispatchInitializedConversationId.current === conversationId || !messages.data) return;
     setDispatchTo(dispatchTargetForConversation(messages.data.messages));
@@ -479,9 +487,20 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       // silently disappears from the list you're looking at.
       if (conversationView !== 'active') setConversationView('active');
       setConversationId(conversation.id);
+      // Selecting it is not enough on phone: the rail otherwise remains over
+      // the console, making a successful creation look like a no-op.
+      setRailOpen(false);
       await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
     },
+    onSettled: () => { isCreatingConversationRef.current = false; },
   });
+  function createNewConversation() {
+    // React Query's pending state renders on the next paint. Keep this
+    // synchronous guard too, so two rapid taps can never issue two creates.
+    if (isCreatingConversationRef.current) return;
+    isCreatingConversationRef.current = true;
+    createConversation.mutate();
+  }
   const setConversationTask = useMutation({
     mutationFn: (workItemId: string | null) => api.setSharedConversationTask(conversationId!, workItemId),
     onSuccess: async ({ conversation }) => {
@@ -746,7 +765,6 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     }
   }
 
-  const latestAgentMessageId = [...conversationMessages].reverse().find((message) => message.author === 'codex' || message.author === 'claude')?.id ?? null;
   const previewStatus = useQuery({ queryKey: ['runtime-preview-status'], queryFn: api.getRuntimePreviewStatus, refetchInterval: 2_000 });
   const promotionInFlight = conversationMessages.some((message) =>
     message.author === 'system' && message.status === 'running' && /approval received|promot/i.test(message.body));
@@ -780,7 +798,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   return (
     <main className={`shared-workspace ${railOpen ? 'rail-open' : ''}`}>
       <aside id="conversation-rail" className="conversation-rail" aria-label="Conversations">
-        <header className="stack-toolbar"><div className="stack-toolbar-copy"><span className="eyebrow">Conversations</span><h2>Conversations</h2></div><div className="conversation-header-actions"><button className="icon-button" onClick={() => createConversation.mutate()} aria-label="New conversation"><Plus size={15} /></button></div></header>
+        <header className="stack-toolbar"><div className="stack-toolbar-copy"><span className="eyebrow">Conversations</span><h2>Conversations</h2></div><div className="conversation-header-actions"><button className="icon-button" onClick={createNewConversation} disabled={createConversation.isPending} aria-label="New conversation" title={createConversation.isPending ? 'Creating conversation…' : 'New conversation'}><Plus size={15} /></button></div></header>
         <div className="search-box">
           <Search size={15} />
           <input
@@ -887,16 +905,16 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                 {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
                 {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyBadge(message)}</span>}
-                {typeof message.retrievedMemoryCount === 'number' && (
-                  <span
-                    className="memory-badge"
-                    title={message.retrievedMemoryCount > 0
+                <span
+                  className={`memory-badge${typeof message.retrievedMemoryCount === 'number' ? '' : ' memory-badge-not-run'}`}
+                  title={typeof message.retrievedMemoryCount === 'number'
+                    ? message.retrievedMemoryCount > 0
                       ? `Retrieved ${message.retrievedMemoryCount} memory match${message.retrievedMemoryCount === 1 ? '' : 'es'} from RAG for this reply`
-                      : 'RAG memory search ran but found no matches'}
-                  >
-                    <Search size={11} /> {message.retrievedMemoryCount}
-                  </span>
-                )}
+                      : 'RAG memory search ran but found no matches'
+                    : 'RAG memory retrieval did not run for this message'}
+                >
+                  <Search size={11} /> {typeof message.retrievedMemoryCount === 'number' ? message.retrievedMemoryCount : '—'}
+                </span>
                 {message.status === 'running' && <button onClick={() => cancelReply.mutate(message.id)} title="Cancel response"><X size={12} /></button>}
               </header>
               {message.status === 'running' && <p className="thinking"><LoaderCircle className="spin" size={13} /> Live · {message.body ? 'receiving activity' : 'starting agent'}</p>}
@@ -911,7 +929,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                 ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} />
                 : <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: MarkdownCode, pre: MarkdownPre }}>{message.body}</ReactMarkdown></div>)}
               {message.status === 'canceled' && <p className="muted">Response canceled.</p>}
-              {message.id === latestAgentMessageId && (message.status === 'failed' || message.status === 'canceled') && <div className="message-actions"><button onClick={() => retryReply.mutate(message)} disabled={retryReply.isPending}><RefreshCw size={12} /> Retry / continue</button></div>}
+              {(message.author === 'codex' || message.author === 'claude') && (message.status === 'failed' || message.status === 'canceled') && <div className="message-actions"><button onClick={() => retryReply.mutate(message)} disabled={retryReply.isPending}><RefreshCw size={12} /> Retry / continue</button></div>}
               {message.attachments.length > 0 && <div className="message-files">{message.attachments.map((file) => (
                 <a key={file.path} href={`/api/artifacts/raw?path=${encodeURIComponent(file.path)}&conversationId=${encodeURIComponent(message.conversationId)}`} target="_blank" rel="noreferrer" title={`${file.mimeType} · ${formatFileSize(file.size)}`}>
                   <Paperclip size={11} /> {file.name} <span className="message-file-meta">{formatFileSize(file.size)}</span>

@@ -1,5 +1,21 @@
 ## Workbench product decisions
 
+### Parallel agent replies remain individually retryable
+
+*Decision from Jeffrey, 2026-08-25.* When a conversation dispatches to both Codex and Claude,
+each failed or canceled agent reply keeps its own **Retry / continue** control. Do not restrict
+retry to the chronologically latest agent message: its sibling may have already failed and must
+not become unrecoverable merely because another parallel reply exists.
+
+### Task attachments are part of pre-execution task context
+
+*Decision from Jeffrey, 2026-08-25.*
+
+Jeffrey must be able to attach one or more files to a task before execution.
+Attachments are durable task context: show them while creating and editing a task,
+store them with the task, and include their safe, local paths in every resulting
+agent execution prompt. This is distinct from conversation-message attachments.
+
 ### Angriest day is the calendar day with the most curses, not a rolling window
 
 On 2026-08-25, Jeffrey first asked for a rolling-24-hour reading, then corrected that on the same day: **Angriest day must show the calendar day with the highest curse count**, not a 24-hour rolling window and not a "last 24h" label. `summarizeCursing` computes `angriestDay: { day, count } | null` as the max entry of `byDay` (ties broken by earliest day); the Insights card renders it as `YYYY-MM-DD · count`. Do not reintroduce a rolling-window interpretation for this metric.
@@ -121,6 +137,15 @@ agent and model choice recorded in that conversation; it must never inherit a
 load-balancing fallback or a choice from another conversation. A genuinely empty
 new conversation starts with **Ask both** and model **Auto**.
 
+### Creating a conversation opens it immediately
+
+*Decision from Jeffrey, 2026-08-25.*
+
+After **New conversation** succeeds, open the new thread immediately, including
+closing the mobile conversation rail so its composer is visible. Disable the
+control while the create request is pending; one tap must never look like a
+no-op or produce duplicate empty conversations.
+
 ### Project color is one system
 
 *Jeffrey corrected this on 2026-08-23 after repeated partial fixes.*
@@ -193,6 +218,10 @@ Task-stack header actions and task-detail lifecycle actions are icon-only. Prese
 with accessible names and hover titles; retain the green primary treatment for create/complete and
 the red destructive treatment for delete. Keep 44px targets at phone width. Decision from Jeffrey,
 2026-08-24.
+
+On phone layouts, the conversation close control belongs at the same right-side header position as
+the task-detail close control. Do not place it before the conversation title or create a
+conversation-only back-button position. Decision from Jeffrey, 2026-08-25.
 
 ### Workbench is a mobile target
 
@@ -337,4 +366,12 @@ surface already has an activity feed. Verified: `tsc --noEmit` clean;
 `toHaveAttribute` matcher error, is pre-existing in already-uncommitted
 `artifacts.tsx`/`artifacts.test.tsx` changes unrelated to this work —
 confirmed it also fails with these RAG-visibility changes stashed out).
+
+RAG badge coverage and cardinality (2026-08-25): show a RAG badge on every
+conversation detail bubble. A numeric count means retrieval ran for that
+reply; `—` means it did not run (normally a human-authored message or an older
+record), never an implied zero. Shared-room replies and task-run reply bubbles
+both retrieve and present up to eight bounded matches, replacing the prior
+shared-room cap of three that made the badge uninformative. Decision from
+Jeffrey, 2026-08-25.
 `vitest run` 837/837 passing.

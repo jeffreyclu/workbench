@@ -151,6 +151,7 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
       <DiscoveryNav active={view === 'discovery'} onClick={onOpenDiscovery} />
       <button className={`nav-item ${view === 'context' ? 'active' : ''}`} onClick={onOpenConversations}><MessageCircle size={16} /> Conversations <span className={conversationPulse}>{conversationCount ?? '…'}</span></button>
       <div id="mobile-nav-more" className="mobile-nav-secondary" aria-label="More destinations">
+        <div className="mobile-global-search"><GlobalSearch onSelectResult={onSelectGlobalSearchResult} /></div>
         <ArtifactNav active={view === 'artifacts'} onClick={onOpenArtifacts} />
         <InsightsNav active={view === 'insights'} onClick={onOpenInsights} />
         <button className="nav-item" onClick={onOpenSources}><Cloud size={16} /> Sources</button>

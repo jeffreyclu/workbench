@@ -107,6 +107,8 @@ export const workItemSchema = z.object({
   projectName: z.string().nullable(),
   stack: workItemStackSchema,
   workspacePath: z.string().nullable(),
+  /** Files Jeffrey attached as durable context before task execution. */
+  attachments: z.array(z.object({ name: z.string(), path: z.string(), mimeType: z.string(), size: z.number().int().nonnegative() })).optional(),
   strategy: z.string(),
   assignees: z.array(assigneeSchema),
   labels: z.array(z.string()),
@@ -282,6 +284,12 @@ export const createWorkItemSchema = z.object({
   dueDate: calendarDateSchema.nullable().default(null),
   sourceUrl: z.string().url().nullable().default(null),
   classificationKind: runKindSchema.optional(),
+  attachments: z.array(z.object({
+    name: z.string().trim().min(1).max(255),
+    mimeType: z.string().max(200).default('application/octet-stream'),
+    size: z.number().int().min(0).max(10_000_000),
+    dataBase64: z.string().max(14_000_000),
+  })).max(10).default([]),
 });
 
 export const generateTaskDraftSchema = z.object({ prompt: z.string().trim().min(3).max(50_000) });

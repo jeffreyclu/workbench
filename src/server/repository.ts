@@ -1068,6 +1068,7 @@ export class WorkItemRepository {
     dueDate: string | null;
     sourceUrl?: string | null;
     parentWorkItemId?: string | null;
+    attachments?: SharedAttachment[];
   }): WorkItem {
     // Callers that predate the explicit field still express intent through the
     // project name, so it seeds the stack once here. After this insert the
@@ -1087,7 +1088,7 @@ export class WorkItemRepository {
       this.workItems.insertManual({
         id, title: input.title, description: input.description, status: input.status, priority: input.priority, position,
         projectName: project?.name ?? null, projectKey: project?.key ?? null, stack, workspacePath: input.workspacePath,
-        dueDate: input.dueDate, sourceUrl: input.sourceUrl ?? null, parentWorkItemId: input.parentWorkItemId ?? null, createdAt: now,
+        dueDate: input.dueDate, sourceUrl: input.sourceUrl ?? null, parentWorkItemId: input.parentWorkItemId ?? null, attachments: input.attachments ?? [], createdAt: now,
       });
       this.addActivity(id, 'system', 'created', 'Manual work item created.');
       this.recordLifecycleEvent({ workItemId: id, transition: 'created', fromStatus: null, toStatus: input.status, isInitial: true, actor: 'system', source: 'manual', occurredAt: now });
@@ -1118,7 +1119,7 @@ export class WorkItemRepository {
       this.workItems.insertMachineProposal({
         id, title: input.title, description: input.description, status: 'backlog', priority: input.suggestedPriority,
         position: this.workItems.nextQueuePosition(), projectName: null, projectKey: null, stack: 'attention',
-        workspacePath: null, dueDate: null, sourceUrl: input.sourceUrl, parentWorkItemId: null, createdAt,
+        workspacePath: null, dueDate: null, sourceUrl: input.sourceUrl, parentWorkItemId: null, attachments: [], createdAt,
         runId: input.runId, windowStart: input.windowStart, suggestedPriority: input.suggestedPriority,
         suggestedQueuePosition: input.suggestedQueuePosition, rationale: input.rationale,
       });
@@ -1154,7 +1155,7 @@ export class WorkItemRepository {
     if (!parent) return null;
     const followUp = this.create({
       title, description, priority: 2, status: 'ready', projectName: parent.projectName, stack: parent.stack,
-      workspacePath: parent.workspacePath, dueDate: null, sourceUrl: null, parentWorkItemId: parent.id,
+      workspacePath: parent.workspacePath, dueDate: null, sourceUrl: null, parentWorkItemId: parent.id, attachments: [],
     });
     const stack = parent.stack;
     const activeIds = (stack === 'workbench' ? this.listWorkbench() : this.list()).map((item) => item.id);
@@ -1274,7 +1275,7 @@ export class WorkItemRepository {
     }
   }
 
-  update(id: string, changes: Partial<Pick<WorkItem, 'title' | 'description' | 'priority' | 'status' | 'projectName' | 'stack' | 'workspacePath' | 'dueDate' | 'labels' | 'strategy' | 'assignees' | 'queuePosition'>> & { blockedByIds?: string[]; expectedVersion?: number }, withinTransaction = false, context: StatusTransitionContext = {}): WorkItem | null {
+  update(id: string, changes: Partial<Pick<WorkItem, 'title' | 'description' | 'priority' | 'status' | 'projectName' | 'stack' | 'workspacePath' | 'dueDate' | 'attachments' | 'labels' | 'strategy' | 'assignees' | 'queuePosition'>> & { blockedByIds?: string[]; expectedVersion?: number }, withinTransaction = false, context: StatusTransitionContext = {}): WorkItem | null {
     const before = this.get(id);
     if (!before) return null;
     // Canonicalise before anything reads the change set, so a re-typed
@@ -1294,6 +1295,7 @@ export class WorkItemRepository {
       ['stack', undefined],
       ['workspace_path', resolved.workspacePath],
       ['due_date', resolved.dueDate],
+      ['attachments_json', resolved.attachments !== undefined ? JSON.stringify(resolved.attachments) : undefined],
       ['labels_json', resolved.labels !== undefined ? JSON.stringify(normalizeLabels(resolved.labels)) : undefined],
       ['strategy', resolved.strategy],
       ['assignees_json', resolved.assignees ? JSON.stringify(resolved.assignees) : undefined],

@@ -529,15 +529,17 @@ describe('WorkItemRepository', () => {
     const conversation = repository.createConversation('Original thread', task.id);
     repository.createSharedMessage('jeffrey', 'Investigate this', 'completed', conversation.id);
     repository.createSharedMessage('codex', 'Here are the findings', 'completed', conversation.id);
+    const queued = repository.createSharedMessage('codex', 'Queued follow-up', 'queued', conversation.id);
 
     expect(repository.setConversationArchived(conversation.id, true)?.archivedAt).toEqual(expect.any(String));
+    expect(repository.getSharedMessageById(queued.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
     expect(repository.get(task.id)).toEqual(expect.objectContaining({ archivedAt: expect.any(String), completionStatus: 'incomplete' }));
     expect(repository.listConversationPage(30, null, 'archive').conversations.map((item) => item.id)).toContain(conversation.id);
     expect(repository.listConversationPage(30, null, 'active').conversations.map((item) => item.id)).not.toContain(conversation.id);
 
     const fork = repository.forkConversation(conversation.id)!;
     expect(fork).toEqual(expect.objectContaining({ workItemId: task.id, forkedFromConversationId: conversation.id, archivedAt: null }));
-    expect(repository.listSharedMessages(100, null, fork.id).messages.map((message) => message.body)).toEqual(['Investigate this', 'Here are the findings']);
+    expect(repository.listSharedMessages(100, null, fork.id).messages.map((message) => message.body)).toEqual(['Investigate this', 'Here are the findings', 'Queued follow-up']);
     expect(repository.setConversationArchived(conversation.id, false)?.archivedAt).toBeNull();
   });
 

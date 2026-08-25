@@ -72,6 +72,18 @@ describe('compactConversationHistory', () => {
     expect(memoryQueryForSharedReply(messages)).toBe('Cut prompt tokens, but do not lose durable decisions.\nYes, do it.');
   });
 
+  it('keeps up to eight retrieved memory matches in a shared reply prompt', () => {
+    const retrieved = Array.from({ length: 9 }, (_, index) => ({
+      source: 'message', title: `Memory ${index + 1}`, body: `Detail ${index + 1}`, createdAt: '2026-08-25T00:00:00.000Z',
+    }));
+
+    const prompt = buildSharedReplyPrompt('codex', 'Shared context.', '', [], undefined, retrieved);
+
+    expect(prompt).toContain('Retrieved memory (top 8 matches');
+    expect(prompt).toContain('Memory 8');
+    expect(prompt).not.toContain('Memory 9');
+  });
+
   it('uses frontend-reviewer for a review-linked reply with no stored classification', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);

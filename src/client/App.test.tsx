@@ -159,6 +159,34 @@ describe('primary navigation', () => {
 });
 
 describe('shared room', () => {
+  it('opens a newly created conversation and prevents duplicate creates while it is pending', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000097';
+    let finishCreate: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/shared/conversations' && init?.method === 'POST') {
+        return new Promise<Response>((resolve) => { finishCreate = resolve; });
+      }
+      const body = url.includes('/api/shared/conversations')
+        ? { conversations: [], nextCursor: null }
+        : { messages: [] };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace /></QueryClientProvider>);
+
+    const newConversation = await screen.findByRole('button', { name: 'New conversation' });
+    fireEvent.click(newConversation);
+    await waitFor(() => expect(newConversation).toBeDisabled());
+    fireEvent.click(newConversation);
+    expect(fetchMock.mock.calls.filter(([input, init]) => String(input) === '/api/shared/conversations' && init?.method === 'POST')).toHaveLength(1);
+
+    finishCreate?.(new Response(JSON.stringify({ conversation: { id: conversationId, title: 'New conversation', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' } }), { status: 201, headers: { 'Content-Type': 'application/json' } }));
+    expect(await screen.findByRole('heading', { name: 'New conversation' })).toBeTruthy();
+  });
+
   it('uses the app dialog before permanently deleting a manual conversation', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000099';
@@ -260,6 +288,28 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     expect(await screen.findByRole('button', { name: 'Approve preview' })).toBeTruthy();
+  });
+
+  it('keeps task extraction on completed synthesis findings', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000096';
+    const synthesis = { id: 'synthesis-1', conversationId, author: 'system', body: 'Synthesis:\n\n1. Fix the missing control.', pinned: false, status: 'completed', error: '', createdAt: '2026-01-01T00:00:00Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'none' };
+    let extractionStarted = false;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/shared/messages/${synthesis.id}/create-tasks` && init?.method === 'POST') {
+        extractionStarted = true;
+        return new Response(JSON.stringify({ plan: null }), { status: 202, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Findings', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages: [synthesis] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Turn findings into tasks' }));
+    await waitFor(() => expect(extractionStarted).toBe(true));
   });
 
   it('shows only the agent, account profile, and cost on an agent reply', async () => {
@@ -1114,6 +1164,29 @@ describe('shared room', () => {
     expect((screen.getByLabelText('Model choice') as HTMLSelectElement).value).toBe('auto');
   });
 
+  it('keeps retry available for each failed parallel agent reply', async () => {
+    const conversationId = '00000000-0000-4000-8000-000000000033';
+    const timestamp = '2026-01-01T00:00:00Z';
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Parallel retry', workItemId: null, createdAt: timestamp, updatedAt: timestamp }], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages/') && url.endsWith('/retry')) return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [
+        { id: 'codex-failed', conversationId, author: 'codex', body: 'Codex stopped.', pinned: false, status: 'failed', error: 'stopped', createdAt: timestamp, attachments: [], model: null, executionProfile: 'auto', dispatchTarget: 'none' },
+        { id: 'claude-canceled', conversationId, author: 'claude', body: 'Claude stopped.', pinned: false, status: 'canceled', error: '', createdAt: timestamp, attachments: [], model: null, executionProfile: 'auto', dispatchTarget: 'none' },
+      ] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    const retryButtons = await screen.findAllByRole('button', { name: 'Retry / continue' });
+    expect(retryButtons).toHaveLength(2);
+    fireEvent.click(retryButtons[0]);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === '/api/shared/messages/codex-failed/retry' && init?.method === 'POST')).toBe(true));
+  });
+
   it('searches conversations, selects a result, and restores the list on clear', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const firstId = '00000000-0000-4000-8000-000000000001';
@@ -1301,6 +1374,37 @@ describe('task prerequisites', () => {
     expect(await screen.findByText('Could not save the owners.')).toBeTruthy();
     expect(screen.getByText('Owner is already assigned.')).toBeTruthy();
     expect(screen.queryByText(/Could not save changes:/)).toBeNull();
+  });
+
+  it('offers an Undo action on the archive and complete toasts that restores the task', async () => {
+    const taskId = '00000000-0000-4000-8000-000000000042';
+    const timestamp = '2026-01-01T00:00:00Z';
+    let item = {
+      id: taskId, title: 'Archivable task', description: '', status: 'backlog', priority: 2, queuePosition: 0,
+      source: 'manual', isQueued: true, archivedAt: null as string | null, completedAt: null as string | null, parentWorkItemId: null, completionStatus: 'incomplete',
+      agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: 'Workbench', stack: 'attention', workspacePath: null,
+      strategy: '', assignees: [] as string[], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [] as Array<{ id: string; title: string; status: string; isOpen: boolean }>,
+      createdAt: timestamp, updatedAt: timestamp, lastTouchedAt: timestamp,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/work-items/${taskId}/archive` && init?.method === 'POST') { item = { ...item, archivedAt: timestamp, completionStatus: 'incomplete' }; return new Response(JSON.stringify({ item }), { status: 200, headers: { 'Content-Type': 'application/json' } }); }
+      if (url === `/api/work-items/${taskId}/restore` && init?.method === 'POST') { item = { ...item, archivedAt: null, completionStatus: 'incomplete' }; return new Response(JSON.stringify({ item }), { status: 200, headers: { 'Content-Type': 'application/json' } }); }
+      return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [], providerConflicts: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const onClose = vi.fn();
+    render(<QueryClientProvider client={client}><Toaster /><TaskDetail id={taskId} onClose={onClose} onOpenConversation={vi.fn()} onOpenTask={vi.fn()} onCreated={vi.fn()} /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive task' }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === `/api/work-items/${taskId}/archive` && init?.method === 'POST')).toBe(true));
+
+    const undoButton = await screen.findByRole('button', { name: 'Undo: Task archived.' });
+    fireEvent.click(undoButton);
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === `/api/work-items/${taskId}/restore` && init?.method === 'POST')).toBe(true));
+    expect(await screen.findByText('Task restored.')).toBeTruthy();
   });
 
   it('only loads addable tasks after an explicit search', async () => {

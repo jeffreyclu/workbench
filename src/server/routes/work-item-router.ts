@@ -1,4 +1,7 @@
 import { Router } from 'express';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { basename, resolve } from 'node:path';
 import { ZodError, z } from 'zod';
 import {
   bulkWorkItemActionSchema,
@@ -29,6 +32,16 @@ import type { RouteContext } from '../route-context.js';
 
 export function createWorkItemRouter({ repository }: RouteContext) {
   const router = Router();
+  const persistAttachments = (attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }>) => {
+    const directory = resolve('data/attachments');
+    mkdirSync(directory, { recursive: true });
+    return attachments.map((attachment) => {
+      const safeName = basename(attachment.name).replace(/[^a-zA-Z0-9._-]/g, '_');
+      const path = resolve(directory, `${randomUUID()}-${safeName}`);
+      writeFileSync(path, Buffer.from(attachment.dataBase64, 'base64'));
+      return { name: attachment.name, path, mimeType: attachment.mimeType, size: attachment.size };
+    });
+  };
   router.get('/api/work-items', (request, response) => {
     const view = request.query.view === 'workbench-archive' ? 'workbench-archive' : request.query.view === 'archive' ? 'archive' : request.query.view === 'workbench' ? 'workbench' : 'active';
     const limit = Number(request.query.limit ?? 50);
@@ -157,8 +170,8 @@ export function createWorkItemRouter({ repository }: RouteContext) {
 
   router.post('/api/work-items', (request, response) => {
     const input = createWorkItemSchema.parse(request.body);
-    const { classificationKind, ...workItemInput } = input;
-    const item = repository.create(workItemInput);
+    const { classificationKind, attachments, ...workItemInput } = input;
+    const item = repository.create({ ...workItemInput, attachments: persistAttachments(attachments) });
     if (classificationKind) {
       repository.setClassification(item.id, classificationForKind(item, classificationKind), 'manual');
       repository.addActivity(item.id, 'jeffrey', 'classification', `Set task type to ${classificationKind}.`);
@@ -171,6 +184,37 @@ export function createWorkItemRouter({ repository }: RouteContext) {
     const item = repository.createFollowUp(request.params.id, input.title, input.description);
     if (!item) return response.status(404).json({ error: 'Parent task not found.' });
     response.status(201).json({ item });
+  });
+
+  router.post('/api/work-items/:id/attachments', (request, response) => {
+    const item = repository.get(request.params.id);
+    if (!item) return response.status(404).json({ error: 'Work item not found.' });
+    const attachments = createWorkItemSchema.shape.attachments.parse(request.body.attachments);
+    const existingAttachments = item.attachments ?? [];
+    if (existingAttachments.length + attachments.length > 10) return response.status(400).json({ error: 'A task can have at most 10 attachments.' });
+    const updated = repository.update(item.id, { attachments: [...existingAttachments, ...persistAttachments(attachments)] }, false, { actor: 'jeffrey', source: 'http' })!;
+    repository.addActivity(item.id, 'jeffrey', 'attachment_added', `Added ${attachments.length} task attachment${attachments.length === 1 ? '' : 's'}.`);
+    response.status(201).json({ item: updated });
+  });
+
+  router.delete('/api/work-items/:id/attachments/:attachmentPath', (request, response) => {
+    const item = repository.get(request.params.id);
+    if (!item) return response.status(404).json({ error: 'Work item not found.' });
+    const existingAttachments = item.attachments ?? [];
+    const attachments = existingAttachments.filter((attachment) => attachment.path !== request.params.attachmentPath);
+    if (attachments.length === existingAttachments.length) return response.status(404).json({ error: 'Attachment not found.' });
+    const updated = repository.update(item.id, { attachments }, false, { actor: 'jeffrey', source: 'http' })!;
+    repository.addActivity(item.id, 'jeffrey', 'attachment_removed', 'Removed a task attachment.');
+    response.json({ item: updated });
+  });
+
+  router.get('/api/work-items/:id/attachments/:attachmentPath', (request, response) => {
+    const item = repository.get(request.params.id);
+    const attachment = item?.attachments?.find((entry) => entry.path === request.params.attachmentPath);
+    if (!attachment) return response.status(404).json({ error: 'Attachment not found.' });
+    response.type(attachment.mimeType);
+    response.setHeader('Content-Disposition', `inline; filename="${basename(attachment.name).replace(/["\\]/g, '_')}"`);
+    response.sendFile(attachment.path);
   });
 
   router.post('/api/work-items/bulk', (request, response) => {

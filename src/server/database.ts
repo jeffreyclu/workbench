@@ -24,6 +24,7 @@ const baseSchemaStatements = [
       project_name TEXT,
       stack TEXT NOT NULL DEFAULT 'attention' CHECK (stack IN ('attention', 'workbench')),
       workspace_path TEXT,
+      attachments_json TEXT NOT NULL DEFAULT '[]',
       strategy TEXT NOT NULL DEFAULT '',
       assignees_json TEXT NOT NULL DEFAULT '[]',
       agent_assignment_mode TEXT NOT NULL DEFAULT 'manual',
@@ -1383,6 +1384,17 @@ const schemaMigrations: readonly Migration[] = [
       database.exec(
         'CREATE INDEX IF NOT EXISTS idx_shared_messages_conv_author_created ON shared_messages(conversation_id, author, created_at DESC);',
       );
+    },
+  },
+  {
+    // Task files are durable, pre-execution context. Existing databases need
+    // this forward migration; changing only the base schema would skip them.
+    id: '041_work_item_attachments',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'attachments_json')) {
+        database.exec("ALTER TABLE work_items ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]';");
+      }
     },
   },
 ];

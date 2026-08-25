@@ -80,9 +80,11 @@ export function compactSharedBrief(sharedContext: string, budget = 700): string 
   return `${sharedContext.slice(0, head)}\n\n[… ${omitted.toLocaleString()} characters compacted; use retrieved memory for older detail …]\n\n${sharedContext.slice(-tail)}`;
 }
 
+const SHARED_REPLY_RETRIEVAL_LIMIT = 40;
+
 function formatRetrievedMemory(matches: Array<{ source: string; title: string; body: string; createdAt: string }>): string {
   if (!matches.length) return 'Retrieved memory: no indexed match. Query /api/activity-memory with focused terms if needed.';
-  const focused = matches.slice(0, 3);
+  const focused = matches.slice(0, SHARED_REPLY_RETRIEVAL_LIMIT);
   return `Retrieved memory (top ${focused.length} matches, same index as /api/activity-memory — docs, messages, activities, run output). Settled; don't re-derive.\n${focused.map((match) => `- [${match.source}, ${match.createdAt}] ${match.title}: ${match.body.slice(0, 200).replace(/\s+/g, ' ')}`).join('\n')}`;
 }
 
@@ -250,7 +252,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const linkedItem = linkedRun ? repository.get(linkedRun.workItemId) : null;
     const cwd = resolveSharedReplyWorkingDirectory(linkedItem);
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}.`);
-    const retrievedMemory = await repository.searchActivityMemory(memoryQuery, 3).catch((error) => {
+    const retrievedMemory = await repository.searchActivityMemory(memoryQuery, SHARED_REPLY_RETRIEVAL_LIMIT).catch((error) => {
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
     });

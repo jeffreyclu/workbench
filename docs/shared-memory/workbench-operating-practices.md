@@ -298,3 +298,39 @@ suspect a synchronous, unindexed query on a hot path (anything reachable from po
 than a client-side rendering or state issue — Node's single-threaded event loop means any blocking
 server-side scan presents as a global freeze. `EXPLAIN QUERY PLAN` against a copy of the live db is the
 fastest way to confirm `SCAN` vs `SEARCH` before writing a fix.
+
+### An orphaned queued `shared_messages` row from a disposable e2e test conversation blocked every runtime promotion
+
+Jeffrey reported (2026-08-25): "regression: preview promotions are fucking blocked." All new
+`promote_runtime` calls returned "Promotion queued. It will build once active agent work reaches a
+durable terminal state." and every conversation stayed stuck at `waiting_promotion` — five or more
+of them. The actual promotion job (`shared_messages.dispatch_target = 'promotion'`) was not dead: its
+lease (`lease_expires_at`) kept renewing, proving the worker process was alive and looping inside
+`waitForPromotionSlot()` in `src/server/orchestrator.ts`, which only exits once
+`repository.hasLiveWork()` returns false. `hasLiveWork()` counts any `agent_runs` or `shared_messages`
+row with `status IN ('queued', 'running')` where `author IN ('codex', 'claude')` — with no timeout, so
+one permanently-queued row blocks it forever.
+
+The culprit was a message in a conversation explicitly titled `[test] overlap repro - safe to delete`
+(created by `e2e/streaming-overlap-repro.spec.ts`-style tooling): `author: 'claude'`,
+`dispatch_target: 'codex'`, `status: 'queued'`, body literally instructing the agent to "stay running
+for a while" to simulate a long streaming turn. It was created but never dispatched/claimed, so it sat
+`queued` indefinitely — with no other agent activity, `hasLiveWork()` never went false, so the one
+promotion holding the lease could never proceed past the wait, and every later promotion queued behind
+it.
+
+Immediate recovery: `cancel_conversation_message` on the stuck row flips it to `canceled` and lets
+`hasLiveWork()` clear. The stale row exposed a code defect too: archiving a conversation previously
+hid its queued replies without settling them. `ConversationService.setArchived()` now cancels queued
+messages in the same transaction, with a repository regression test. This preserves the running-turn
+cancellation path while ensuring an archived thread cannot leave a permanent promotion blocker.
+
+General lesson: when promotions report "queued" but never build and the promotion message's lease
+keeps renewing (not expired), don't assume the promotion worker itself is broken — check
+`hasLiveWork()`'s inputs directly: `SELECT id, status, author, dispatch_target, created_at FROM
+shared_messages WHERE status IN ('queued','running')`. A long-idle `queued` row authored by `codex` or
+`claude` (especially in a conversation named like a disposable repro/test) is the usual cause, and
+canceling it unblocks the whole promotion queue immediately. `waitForPromotionSlot()` has no timeout on
+`hasLiveWork()`, so a single orphaned test message can wedge every future promotion indefinitely —
+e2e specs that intentionally create long-"running" messages to test streaming/overlap UI should clean
+them up (or cancel/complete them) in an `afterEach`/`afterAll`, not leave them queued forever.

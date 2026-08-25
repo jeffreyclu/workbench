@@ -109,3 +109,91 @@ test('repro: bubbles overlap during running -> completed transition', async ({ p
   }
   expect(overlapping, `found ${overlapping} overlapping bubble-pair-frames; first at ${overlapDetail}`).toBe(0);
 });
+
+test('repro: large gap appears after interjecting a message while another is streaming', async ({ page }) => {
+  // Mirrors the "interject repro message while running" scenario: a short
+  // prior message, then a reply that streams in over several chunks (each
+  // chunk changes the row's threadLayoutSignature), then settles.
+  await page.setViewportSize({ width: 800, height: 500 });
+  const created = await page.request.post('/api/shared/conversations', { data: { title: 'Gap repro' } });
+  const { conversation } = await created.json();
+
+  // Enough tall prior messages (and a small viewport) that the virtualizer's
+  // own "in range" window is narrow, so clearing its whole itemSizeCache on
+  // every streamed chunk leaves rows outside that window stuck at the 220px
+  // estimate instead of their real (much taller) heights.
+  const priorSeeds = Array.from({ length: 10 }, (_, i) => ({
+    author: i % 2 === 0 ? 'jeffrey' : 'claude',
+    status: 'completed',
+    body: `filler message ${i} ` + 'x'.repeat(600),
+  }));
+  priorSeeds.push({ author: 'jeffrey', status: 'completed', body: 'interject repro message while running' });
+  for (const seed of priorSeeds) {
+    const posted = await page.request.post('/api/e2e/seed-message', { data: { conversationId: conversation.id, ...seed } });
+    expect(posted.ok()).toBeTruthy();
+  }
+
+  const runningSeed = await page.request.post('/api/e2e/seed-message', {
+    data: { conversationId: conversation.id, author: 'claude', status: 'running', body: 'Working on it' },
+  });
+  expect(runningSeed.ok()).toBeTruthy();
+  const { message: runningMessage } = await runningSeed.json();
+
+  await page.goto(`/conversations/${conversation.id}`);
+  await expect(page.locator('.shared-message').first()).toBeVisible();
+  await page.locator('.shared-thread').evaluate((thread) => thread.scrollTo(0, thread.scrollHeight));
+
+  // Simulate several streamed chunks arriving while the message is running,
+  // which repeatedly changes threadLayoutSignature before it settles.
+  let streamedBody = 'Working on it';
+  for (let i = 0; i < 8; i++) {
+    streamedBody += ` chunk-${i} ` + 'a'.repeat(40);
+    const chunkUpdate = await page.request.post('/api/e2e/update-message', {
+      data: { id: runningMessage.id, status: 'running', body: streamedBody },
+    });
+    expect(chunkUpdate.ok()).toBeTruthy();
+    await page.waitForTimeout(50);
+  }
+
+  const finalUpdate = await page.request.post('/api/e2e/update-message', {
+    data: { id: runningMessage.id, status: 'completed', body: streamedBody + ' final chunk' },
+  });
+  expect(finalUpdate.ok()).toBeTruthy();
+
+  // Sample across several frames right after the running -> completed
+  // transition (the flow-mode -> virtualized-mode switch): if the
+  // itemSizeCache is stale/corrupted for the interjected row at the instant
+  // the switch happens, the gap should show up transiently even if a
+  // subsequent `.measure()` self-corrects it a frame or two later.
+  const samples = await page.evaluate(async () => {
+    const results = [];
+    for (let i = 0; i < 20; i++) {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const boxes = Array.from(document.querySelectorAll('.shared-message')).map((el) => {
+        const r = el.getBoundingClientRect();
+        return { text: el.textContent?.slice(0, 60), top: r.top, bottom: r.bottom };
+      });
+      results.push(boxes);
+    }
+    return results;
+  });
+
+  let worstGap = -Infinity;
+  let worstFrame = -1;
+  let worstDetail = '';
+  for (let f = 0; f < samples.length; f++) {
+    const sorted = [...samples[f]].sort((a, b) => a.top - b.top);
+    const interjectedIndex = sorted.findIndex((box) => box.text?.includes('interject repro message'));
+    if (interjectedIndex === -1 || interjectedIndex + 1 >= sorted.length) continue;
+    const interjected = sorted[interjectedIndex];
+    const streamed = sorted[interjectedIndex + 1];
+    const gap = streamed.top - interjected.bottom;
+    if (gap > worstGap) {
+      worstGap = gap;
+      worstFrame = f;
+      worstDetail = JSON.stringify(sorted, null, 2);
+    }
+  }
+  expect(worstFrame, 'never found both the interjected message and a following message rendered together').toBeGreaterThanOrEqual(0);
+  expect(worstGap, `largest gap between the interjected message and the streamed reply was ${worstGap}px at frame ${worstFrame}:\n${worstDetail}`).toBeLessThan(60);
+});

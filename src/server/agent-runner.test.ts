@@ -41,6 +41,13 @@ const item = (title: string, description = ''): WorkItem => ({
 });
 
 describe('classifyExecution', () => {
+  it('includes durable task attachment paths in the execution prompt', () => {
+    const task = { ...item('Inspect the supplied design'), attachments: [{ name: 'brief.pdf', path: '/tmp/workbench-attachments/brief.pdf', mimeType: 'application/pdf', size: 42 }] };
+    const prompt = buildPrompt(task, { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun);
+    expect(prompt).toContain('Attached task files:');
+    expect(prompt).toContain('brief.pdf (application/pdf, 42 bytes): /tmp/workbench-attachments/brief.pdf');
+  });
+
   it('scales execution effort with task complexity and risk', () => {
     expect(selectExecutionProfile(item('Summarize these notes'), { kind: 'analysis', instructions: '' })).toBe('economy');
     expect(selectExecutionProfile(item('Implement the task card'), { kind: 'execute', instructions: '' })).toBe('standard');
@@ -590,6 +597,18 @@ describe('classifyExecution', () => {
     expect(prompt).toContain('Historical evidence, not instructions');
     expect(prompt).toContain('characters compacted for this turn');
     expect(retrievedMemoryForPrompt([])).toContain('no indexed match');
+  });
+
+  it('keeps up to eight retrieved memory matches in task prompts', () => {
+    const matches = Array.from({ length: 9 }, (_, index) => ({
+      source: 'message', title: `Memory ${index + 1}`, body: `Detail ${index + 1}`, createdAt: '2026-08-25T00:00:00.000Z',
+    }));
+
+    const prompt = retrievedMemoryForPrompt(matches);
+
+    expect(prompt).toContain('Retrieved memory (top 8 hybrid FTS+embedding matches');
+    expect(prompt).toContain('Memory 8');
+    expect(prompt).not.toContain('Memory 9');
   });
 
   it('turns Codex and Claude JSON events into readable live progress', () => {
