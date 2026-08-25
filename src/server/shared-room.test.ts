@@ -63,9 +63,9 @@ describe('compactConversationHistory', () => {
   });
 
   it('preserves a buried decision when compacting a shared brief', () => {
-    const compacted = compactKeyPoints(`Opening detail\n${'x'.repeat(2_000)}\nDecision: retrieve only relevant memories, up to 40.\n${'y'.repeat(2_000)}`, 250);
+    const compacted = compactKeyPoints(`Opening detail\n${'x'.repeat(2_000)}\nDecision: retrieve only relevant memories, up to 100.\n${'y'.repeat(2_000)}`, 250);
 
-    expect(compacted).toContain('Decision: retrieve only relevant memories, up to 40.');
+    expect(compacted).toContain('Decision: retrieve only relevant memories, up to 100.');
   });
 
   it('grounds a short follow-up retrieval query in the preceding user decision', () => {

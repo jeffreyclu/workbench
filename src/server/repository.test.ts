@@ -149,6 +149,17 @@ describe('WorkItemRepository', () => {
     expect(results.map((result) => result.source)).toEqual(expect.arrayContaining(['message', 'activity', 'run']));
   });
 
+  it('excludes a just-sent query echo before prompt retrieval ranks results', async () => {
+    const conversation = repository.createConversation('Exclude current prompt echo');
+    const query = 'Why did retrieval only return the message I just sent?';
+    repository.createSharedMessage('jeffrey', 'Durable retrieval decision: preserve relevant historical memories.', 'completed', conversation.id);
+    repository.createSharedMessage('jeffrey', query, 'completed', conversation.id);
+
+    const results = await repository.searchActivityMemory(query, 100, { excludeExactBody: query });
+
+    expect(results.some((result) => result.body === query)).toBe(false);
+  });
+
   it('backfills cost for historical runs that recorded tokens but no cost, and does not overwrite an existing cost', () => {
     const item = repository.create({ title: 'Backfill cost', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const priced = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');
@@ -1063,7 +1074,7 @@ describe('WorkItemRepository', () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       expect(retrieval).toHaveBeenCalledOnce();
-      expect(retrieval).toHaveBeenCalledWith('Continue the durable fact investigation.', 40);
+      expect(retrieval).toHaveBeenCalledWith('Continue the durable fact investigation.', 100, { excludeExactBody: 'Continue the durable fact investigation.' });
       expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(expect.arrayContaining(['claude', 'codex']));
       const expectedTitles = matches.map((match) => match.title);
       expect(replies.map((reply) => repository.getRetrievedMemoryDetail(reply.id)?.items.map((item) => item.title))).toEqual([

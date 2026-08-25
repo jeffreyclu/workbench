@@ -89,10 +89,12 @@ function CommentThread({ artifactId, comments }: { artifactId: string; comments:
   const resolve = useMutation({
     mutationFn: ({ commentId, resolved }: { commentId: string; resolved: boolean }) => api.resolveArtifactComment(artifactId, commentId, resolved),
     onSuccess: invalidate,
+    onError: (error) => toastError('Could not update that comment.', error),
   });
   const add = useMutation({
     mutationFn: () => api.addArtifactComment(artifactId, { author: 'Jeffrey', body: body.trim() }),
     onSuccess: async () => { setBody(''); await invalidate(); },
+    onError: (error) => toastError('Could not add that note.', error),
   });
 
   function submit(event: FormEvent) {

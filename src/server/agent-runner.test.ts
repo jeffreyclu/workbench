@@ -584,8 +584,8 @@ describe('classifyExecution', () => {
     expect(buildPrompt(item('Build it'), run)).toContain('no permission prompts or dialogs exist to approve');
   });
 
-  it('uses forty as a candidate ceiling, not an injection target', () => {
-    expect(PROMPT_MEMORY_CANDIDATE_LIMIT).toBe(40);
+  it('uses one hundred as a candidate ceiling, not an injection target', () => {
+    expect(PROMPT_MEMORY_CANDIDATE_LIMIT).toBe(100);
   });
 
   it('injects bounded, untrusted historical retrieval into task prompts', () => {

@@ -312,7 +312,7 @@ vitest suite:
 - `formatRetrievedMemory`'s header/no-match copy in `src/server/shared-room.ts`
   trimmed (158 → 136 chars for the match-found header; 102 → 92 chars for the
   no-match line) — same meaning, fewer static tokens resent every turn. The
-  injected subset remains relevance- and token-budgeted from up to 40
+  injected subset remains relevance- and token-budgeted from up to 100
   candidates; cutting useful retrieved content further is counterproductive.
 
 Verified: typecheck clean; 57/57 tests pass (7 shared-room, 50 agent-runner).
@@ -370,7 +370,7 @@ RAG badge coverage and cardinality (2026-08-25): show a RAG badge on every
 conversation detail bubble. A numeric count means retrieval ran for that
 reply; `—` means it did not run (normally a human-authored message or an older
 record), never an implied zero. Shared-room replies and task-run reply bubbles
-both retrieve from up to 40 candidates and present only the relevance- and
+both retrieve from up to 100 candidates and present only the relevance- and
 token-budgeted subset, replacing the prior shared-room cap of three that made
 the badge uninformative. Decision from
 Jeffrey, 2026-08-25. The retrieval query is the latest complete user request
@@ -382,7 +382,7 @@ production build. The full suite has one unrelated existing failure in
 `src/client/App.test.tsx` where "Turn findings into tasks" is absent.
 
 Concurrent-recipient retrieval (correction from Jeffrey, 2026-08-25): when a
-turn is sent to both agents, fetch exactly one 40-candidate retrieval snapshot
+turn is sent to both agents, fetch exactly one 100-candidate retrieval snapshot
 before either reply starts, then give that snapshot to both. Independent
 per-reply refreshes allow the first agent's streamed output to enter the
 index while the second search is waiting, so it can displace the prior context
@@ -390,6 +390,18 @@ and leave the second recipient with only one memory. The injected result is
 still selected by query-relative relevance and prompt budget, never a fixed
 count. Regression coverage dispatches both fake agents and asserts one search
 and identical four-memory details on both replies.
+
+Retrieval candidate budget (2026-08-25): Jeffrey increased the candidate
+ceiling to 100. This expands the pool considered by both shared-room replies
+and task runs; it does not require injecting 100 memories. Selection remains
+query-relative, non-duplicative, and constrained by the prompt token budget.
+
+Current-turn echo exclusion (2026-08-25): shared-room retrieval must exclude
+an indexed message whose body is exactly the current retrieval query before
+relevance selection. Otherwise that just-created self-match can become the
+strongest result and make the relative threshold discard the historical context
+entirely. The read-only activity-memory endpoint retains the raw result so
+diagnosis can still see it.
 
 ### Agent cancellation must be visible and authoritative
 

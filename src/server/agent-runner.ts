@@ -196,7 +196,7 @@ Execution integrity: this is one foreground, tracked run — no detached/backgro
 
 Before acting, name the relevant decision, handoff, or blocker from the shared brief you're continuing, and flag any conflict with the task or observed repo state.
 
-Full activity memory (shared, read-only) is searchable when prior work may matter: curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=40'. Do not claim history you did not retrieve.
+Full activity memory (shared, read-only) is searchable when prior work may matter: curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=100'. Do not claim history you did not retrieve.
 
 Durable memory is shared, never per-agent: read docs/shared-memory.md's index, open only relevant topic file(s), and append anything durable there in the same turn.
 
@@ -207,7 +207,7 @@ Complete the requested capability. Report decisions, evidence, risks, files chan
 
 export type RetrievedMemory = { source: string; title: string; body: string; createdAt: string; score?: number };
 /** Candidate ceiling, not an injection target. Selection is relevance- and budget-driven. */
-export const PROMPT_MEMORY_CANDIDATE_LIMIT = 40;
+export const PROMPT_MEMORY_CANDIDATE_LIMIT = 100;
 const PROMPT_MEMORY_BUDGET = 6_000;
 const PROMPT_MEMORY_ITEM_BUDGET = 420;
 

@@ -140,7 +140,7 @@ ${formatRetrievedMemory(retrievedMemory ?? [])}
 Current conversation:
 ${compactConversationHistory(thread)}
 
-Answer Jeffrey concisely. State the decision, handoff, or blocker you are continuing and any conflict with observed state. Retrieved memory covers the latest message only; query more via curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=40'. Record durable facts in docs/shared-memory/*.md, never private memory. Workbench is non-interactive: use tools directly and report exact missing access. Finish foreground work now; never detach work or promise a later result.`;
+Answer Jeffrey concisely. State the decision, handoff, or blocker you are continuing and any conflict with observed state. Retrieved memory covers the latest message only; query more via curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=100'. Record durable facts in docs/shared-memory/*.md, never private memory. Workbench is non-interactive: use tools directly and report exact missing access. Finish foreground work now; never detach work or promise a later result.`;
 }
 
 /**
@@ -216,7 +216,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   const retrievalQuery = memoryQueryForSharedReply(retrievalThread);
   const retrieval: SharedReplyRetrieval = {
     query: retrievalQuery,
-    matches: repository.searchActivityMemory(retrievalQuery, PROMPT_MEMORY_CANDIDATE_LIMIT).catch((error) => {
+    matches: repository.searchActivityMemory(retrievalQuery, PROMPT_MEMORY_CANDIDATE_LIMIT, { excludeExactBody: retrievalQuery }).catch((error) => {
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
     }),
@@ -314,7 +314,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const linkedItem = linkedRun ? repository.get(linkedRun.workItemId) : null;
     const cwd = resolveSharedReplyWorkingDirectory(linkedItem);
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}.`);
-    const retrievedMemory = await (retrievalSnapshot?.matches ?? repository.searchActivityMemory(memoryQuery, PROMPT_MEMORY_CANDIDATE_LIMIT).catch((error) => {
+    const retrievedMemory = await (retrievalSnapshot?.matches ?? repository.searchActivityMemory(memoryQuery, PROMPT_MEMORY_CANDIDATE_LIMIT, { excludeExactBody: memoryQuery }).catch((error) => {
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
     }));

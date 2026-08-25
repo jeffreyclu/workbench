@@ -250,6 +250,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
       ]);
     },
+    onError: (error) => toastError('Could not resolve the plan.', error),
   });
   const lifecycleSuccessMessage: Record<'archive' | 'restore' | 'complete' | 'delete', string> = {
     archive: 'Task archived.', restore: 'Task restored.', complete: 'Task completed.', delete: 'Task deleted.',
@@ -297,6 +298,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       await Promise.all([queryClient.invalidateQueries({ queryKey: ['work-items'] }), queryClient.invalidateQueries({ queryKey: ['work-item', id] })]);
       onCreated(item);
     },
+    onError: (error) => toastError('Could not create the follow-up task.', error),
   });
   const addReference = useMutation({
     mutationFn: () => api.addWorkItemReference(id, { type: referenceType, url: referenceUrl.trim(), title: referenceTitle.trim() }),
@@ -304,10 +306,12 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       setReferenceUrl(''); setReferenceTitle(''); setReferenceType('other'); setShowAddReference(false);
       await queryClient.invalidateQueries({ queryKey: ['work-item', id] });
     },
+    onError: (error) => toastError('Could not add the reference.', error),
   });
   const removeReference = useMutation({
     mutationFn: (referenceId: string) => api.removeWorkItemReference(id, referenceId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
+    onError: (error) => toastError('Could not remove the reference.', error),
   });
   const addTaskLink = useMutation({
     mutationFn: (linkedWorkItemId: string) => api.addTaskLink(id, linkedWorkItemId),
@@ -318,6 +322,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         queryClient.invalidateQueries({ queryKey: ['work-item', linkedTask.id] }),
       ]);
     },
+    onError: (error) => toastError('Could not link that task.', error),
   });
   const removeTaskLink = useMutation({
     mutationFn: (linkedWorkItemId: string) => api.removeTaskLink(id, linkedWorkItemId),
@@ -327,6 +332,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         queryClient.invalidateQueries({ queryKey: ['work-item', linkedWorkItemId] }),
       ]);
     },
+    onError: (error) => toastError('Could not unlink that task.', error),
   });
   const addArtifactLink = useMutation({
     mutationFn: (artifactId: string) => api.updateArtifact(artifactId, { workItemId: id }),
@@ -337,6 +343,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         queryClient.invalidateQueries({ queryKey: ['artifacts'] }),
       ]);
     },
+    onError: (error) => toastError('Could not attach that artifact.', error),
   });
 
   useEffect(() => {

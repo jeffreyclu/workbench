@@ -83,6 +83,7 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
   const saveFigmaScope = useMutation({
     mutationFn: () => sourceData.updateFigmaScope(figmaRoots.split('\n').map((root) => root.trim()).filter(Boolean)),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: sourceQueryKeys.figmaScope }),
+    onError: (error) => toastError('Could not save the Figma scope.', error),
   });
   return <div className={`connection-card ${connected ? 'connected' : ''} ${disabled ? 'unavailable' : ''}`}>
     <div className="connection-summary"><span><strong>{connection.name}</strong><small>{connection.detail}</small></span>

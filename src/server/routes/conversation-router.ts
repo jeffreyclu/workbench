@@ -112,7 +112,7 @@ export function createConversationRouter({ repository, database, capabilities }:
   // durable Workbench record instead of relying on their private chat memory.
   router.get('/api/activity-memory', async (request, response) => {
     const query = z.string().trim().min(2).max(500).parse(request.query.q);
-    const limit = z.coerce.number().int().min(1).max(100).default(40).parse(request.query.limit);
+    const limit = z.coerce.number().int().min(1).max(100).default(100).parse(request.query.limit);
     response.json({ results: await repository.searchActivityMemory(query, limit) });
   });
 
