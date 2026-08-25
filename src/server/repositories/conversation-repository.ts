@@ -6,7 +6,7 @@ import type { UnitOfWork } from '../unit-of-work.js';
 function mapConversationRow(row: Record<string, string | number | null>): SharedConversation {
   return {
     id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
-    linkedProjectName: row.linked_project_name ? String(row.linked_project_name) : null, forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, isUnread: Boolean(row.is_unread), linkedWorkItemPinned: Boolean(row.linked_work_item_pinned), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
+    linkedProjectName: row.linked_project_name ? String(row.linked_project_name) : null, forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, preferredAccountProfile: row.preferred_account_profile ? String(row.preferred_account_profile) : null, preferredDispatchTarget: row.preferred_dispatch_target as SharedConversation['preferredDispatchTarget'] ?? null, isUnread: Boolean(row.is_unread), linkedWorkItemPinned: Boolean(row.linked_work_item_pinned), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
   };
 }
 
@@ -94,7 +94,7 @@ export class ConversationRepository {
   create(title = 'New conversation', workItemId: string | null = null): SharedConversation {
     const id = randomUUID(); const now = new Date().toISOString();
     this.database.prepare('INSERT INTO shared_conversations (id, title, work_item_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, title, workItemId, now, now);
-    return { id, title, workItemId, forkedFromConversationId: null, archivedAt: null, sharedBrief: '', preferredExecutionProfile: null, isUnread: false, createdAt: now, updatedAt: now, isActive: false };
+    return { id, title, workItemId, forkedFromConversationId: null, archivedAt: null, sharedBrief: '', preferredExecutionProfile: null, preferredAccountProfile: null, preferredDispatchTarget: null, isUnread: false, createdAt: now, updatedAt: now, isActive: false };
   }
 
   markRead(id: string): boolean {
@@ -125,6 +125,12 @@ export class ConversationRepository {
 
   setExecutionProfile(id: string, profile: SharedConversation['preferredExecutionProfile']): boolean {
     return Number(this.database.prepare('UPDATE shared_conversations SET preferred_execution_profile = ?, updated_at = ? WHERE id = ?').run(profile ?? null, new Date().toISOString(), id).changes) > 0;
+  }
+
+  setComposerPreferences(id: string, preferences: Pick<SharedConversation, 'preferredExecutionProfile' | 'preferredAccountProfile' | 'preferredDispatchTarget'>): boolean {
+    return Number(this.database.prepare(`UPDATE shared_conversations
+      SET preferred_execution_profile = ?, preferred_account_profile = ?, preferred_dispatch_target = ?, updated_at = ?
+      WHERE id = ?`).run(preferences.preferredExecutionProfile ?? null, preferences.preferredAccountProfile ?? null, preferences.preferredDispatchTarget ?? null, new Date().toISOString(), id).changes) > 0;
   }
 
   updateWorkItemId(id: string, workItemId: string | null): boolean {

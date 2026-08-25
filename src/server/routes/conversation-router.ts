@@ -73,8 +73,16 @@ export function createConversationRouter({ repository, database, capabilities }:
   });
 
   router.patch('/api/shared/conversations/:id/preferences', (request, response) => {
-    const { executionProfile } = z.object({ executionProfile: z.enum(['economy', 'standard', 'deep']).nullable() }).parse(request.body);
-    const conversation = repository.setConversationExecutionProfile(request.params.id, executionProfile);
+    const preferences = z.object({
+      executionProfile: z.enum(['economy', 'standard', 'deep']).nullable(),
+      accountProfile: z.string().trim().min(1).max(120).nullable(),
+      dispatchTarget: z.enum(['both', 'codex', 'claude']).nullable(),
+    }).parse(request.body);
+    const conversation = repository.setConversationComposerPreferences(request.params.id, {
+      preferredExecutionProfile: preferences.executionProfile,
+      preferredAccountProfile: preferences.accountProfile,
+      preferredDispatchTarget: preferences.dispatchTarget,
+    });
     if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
     response.json({ conversation });
   });

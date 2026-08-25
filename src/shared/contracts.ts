@@ -778,7 +778,7 @@ export const updateArtifactSchema = z.object({
 });
 
 export const artifactLibraryViewSchema = z.enum(['published', 'revoked', 'all']).catch('published');
-export interface SharedConversation { id: string; title: string; workItemId: string | null; linkedProjectName?: string | null; forkedFromConversationId: string | null; archivedAt: string | null; sharedBrief?: string; preferredExecutionProfile?: AgentRun['executionProfile']; state?: 'working' | 'needs_attention' | 'waiting_approval' | 'promoting' | 'waiting_promotion' | 'finished' | null; isUnread?: boolean; linkedWorkItemPinned?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
+export interface SharedConversation { id: string; title: string; workItemId: string | null; linkedProjectName?: string | null; forkedFromConversationId: string | null; archivedAt: string | null; sharedBrief?: string; preferredExecutionProfile?: AgentRun['executionProfile']; preferredAccountProfile?: string | null; preferredDispatchTarget?: 'both' | 'codex' | 'claude' | null; state?: 'working' | 'needs_attention' | 'waiting_approval' | 'promoting' | 'waiting_promotion' | 'finished' | null; isUnread?: boolean; linkedWorkItemPinned?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
 
 export const setConversationTaskSchema = z.object({ workItemId: z.string().uuid().nullable() });
 export const updateSharedBriefSchema = z.object({ brief: z.string().trim().max(12_000) });

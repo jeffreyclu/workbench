@@ -305,6 +305,16 @@ export class WorkItemRepository {
     return this.getConversation(id);
   }
 
+  setConversationComposerPreferences(id: string, preferences: Pick<SharedConversation, 'preferredExecutionProfile' | 'preferredAccountProfile' | 'preferredDispatchTarget'>): SharedConversation | null {
+    const before = this.getConversation(id);
+    if (!before) return null;
+    if (!this.conversations.setComposerPreferences(id, preferences)) return null;
+    if (before.workItemId && before.preferredExecutionProfile !== preferences.preferredExecutionProfile) {
+      this.addActivity(before.workItemId, 'jeffrey', 'model_preference', preferences.preferredExecutionProfile ? `Set the model tier preference to ${preferences.preferredExecutionProfile}.` : 'Cleared the model tier preference (back to auto).');
+    }
+    return this.getConversation(id);
+  }
+
   setConversationWorkItem(id: string, workItemId: string | null): SharedConversation | null {
     return this.conversationService.setWorkItem(id, workItemId);
   }
@@ -1539,7 +1549,7 @@ export class WorkItemRepository {
     `).all(workItemId, workItemId) as Array<Record<string, string | number | null>>;
     return rows.map((row) => ({
       id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
-      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
+      forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, preferredAccountProfile: row.preferred_account_profile ? String(row.preferred_account_profile) : null, preferredDispatchTarget: row.preferred_dispatch_target as SharedConversation['preferredDispatchTarget'] ?? null, createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
     }));
   }
 

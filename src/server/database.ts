@@ -1409,6 +1409,21 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // Composer choices are conversation state, not a byproduct of the last
+    // message. Persist all three so a selection survives a reload or another
+    // Workbench device before Jeffrey sends the next turn.
+    id: '043_shared_conversation_composer_preferences',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'preferred_account_profile')) {
+        database.exec('ALTER TABLE shared_conversations ADD COLUMN preferred_account_profile TEXT;');
+      }
+      if (!columns.some((column) => column.name === 'preferred_dispatch_target')) {
+        database.exec('ALTER TABLE shared_conversations ADD COLUMN preferred_dispatch_target TEXT;');
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

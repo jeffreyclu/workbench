@@ -56,7 +56,7 @@ import { useNavigation } from '../../features/navigation/hooks';
 import { NavigationView } from '../../features/navigation/view';
 import { FollowUpArchiveDialog } from '../../follow-up-archive-dialog';
 import { activityKindLabel, agentDecisionKinds, formatCostUsd, formatFileSize, formatRunTelemetry, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
-import { clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
+import { clearSentConversationDraft, readConversationDrafts, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
 import { QueueExplanationList } from '../../queue-explanations';
 import { RetrievedMemoryDialog } from '../../retrieved-memory-dialog';
 import { ProjectColorDot, projectTheme } from '../../project-color';
@@ -188,7 +188,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const [body, setBody] = useState(() => initialConversationId ? readConversationDrafts()[initialConversationId] ?? '' : '');
   const [dispatchTo, setDispatchTo] = useState<ConversationDispatchTarget>('both');
   const [accountProfile, setAccountProfile] = useState(DEFAULT_ACCOUNT_PROFILE);
-  const [conversationModelProfiles, setConversationModelProfiles] = useState(readConversationModelProfiles);
+  const [composerPreferenceOverrides, setComposerPreferenceOverrides] = useState<Record<string, Pick<SharedConversation, 'preferredExecutionProfile' | 'preferredAccountProfile' | 'preferredDispatchTarget'>>>({});
   const dispatchInitializedConversationId = useRef<string | null>(null);
   // Mirrors dispatchInitializedConversationId as render-visible state: the ref
   // alone doesn't trigger a re-render, so the send button could stay
@@ -201,28 +201,24 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const conversationIdRef = useRef(conversationId);
   const sentDraftRef = useRef<{ conversationId: string; body: string } | null>(null);
   const updateConversationPreferences = useMutation({
-    mutationFn: ({ conversationId, profile }: { conversationId: string; profile: AgentRun['executionProfile'] }) => api.updateSharedConversationPreferences(conversationId, profile),
-    onMutate: ({ conversationId }) => ({ conversationId, previousProfile: conversationModelProfiles[conversationId] ?? null }),
+    mutationFn: ({ conversationId, preferences }: { conversationId: string; preferences: { executionProfile: AgentRun['executionProfile']; accountProfile: string | null; dispatchTarget: ConversationDispatchTarget | null } }) => api.updateSharedConversationPreferences(conversationId, preferences),
+    onMutate: ({ conversationId }) => ({ conversationId, previousPreferences: composerPreferenceOverrides[conversationId] }),
     onSuccess: async ({ conversation }) => {
-      setConversationModelProfiles((current) => {
-        const next = { ...current };
-        if (conversation.preferredExecutionProfile) next[conversation.id] = conversation.preferredExecutionProfile;
-        else delete next[conversation.id];
-        writeConversationModelProfiles(next);
-        return next;
-      });
+      setComposerPreferenceOverrides((current) => ({ ...current, [conversation.id]: {
+        preferredExecutionProfile: conversation.preferredExecutionProfile,
+        preferredAccountProfile: conversation.preferredAccountProfile,
+        preferredDispatchTarget: conversation.preferredDispatchTarget,
+      } }));
       await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
     },
-    // The optimistic write in setExecutionProfile can outlive a failed save —
-    // roll it back to what the server actually has, or the UI keeps showing a
-    // choice that was never persisted and reappears every time it desyncs.
+    // Roll an optimistic choice back if the server rejects it. Keeping a
+    // browser-only value here would recreate the original persistence bug.
     onError: (error, { conversationId }, context) => {
-      toastError('Could not save the model choice.', error);
-      setConversationModelProfiles((current) => {
+      toastError('Could not save the composer preferences.', error);
+      setComposerPreferenceOverrides((current) => {
         const next = { ...current };
-        if (context?.previousProfile) next[conversationId] = context.previousProfile;
+        if (context?.previousPreferences) next[conversationId] = context.previousPreferences;
         else delete next[conversationId];
-        writeConversationModelProfiles(next);
         return next;
       });
     },
@@ -244,17 +240,25 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     setBody(nextBody);
     if (conversationId) writeConversationDraft(conversationId, nextBody);
   }
-  function setExecutionProfile(profile: AgentRun['executionProfile']) {
+  function updateComposerPreferences(updates: Partial<{ executionProfile: AgentRun['executionProfile']; accountProfile: string | null; dispatchTarget: ConversationDispatchTarget | null }>) {
     if (!conversationId) return;
     const targetConversationId = conversationId;
-    setConversationModelProfiles((current) => {
-      const next = { ...current };
-      if (profile) next[targetConversationId] = profile;
-      else delete next[targetConversationId];
-      writeConversationModelProfiles(next);
-      return next;
-    });
-    updateConversationPreferences.mutate({ conversationId: targetConversationId, profile });
+    const current = composerPreferenceOverrides[targetConversationId] ?? selectedConversation;
+    const preferences = {
+      executionProfile: current?.preferredExecutionProfile ?? executionProfileForConversation(allConversationMessages),
+      accountProfile: current?.preferredAccountProfile ?? accountProfileForConversation(allConversationMessages),
+      dispatchTarget: current?.preferredDispatchTarget ?? dispatchTargetForConversation(allConversationMessages),
+      ...updates,
+    };
+    setComposerPreferenceOverrides((existing) => ({ ...existing, [targetConversationId]: {
+      preferredExecutionProfile: preferences.executionProfile,
+      preferredAccountProfile: preferences.accountProfile,
+      preferredDispatchTarget: preferences.dispatchTarget,
+    } }));
+    updateConversationPreferences.mutate({ conversationId: targetConversationId, preferences });
+  }
+  function setExecutionProfile(profile: AgentRun['executionProfile']) {
+    updateComposerPreferences({ executionProfile: profile });
   }
   // The rail's Active/Archive selection is owned by the caller when it supplies
   // one, so it survives the workspace being remounted onto a conversation from
@@ -391,22 +395,6 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     if (actualView !== conversationView) setConversationView(actualView);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedConversation, conversationId]);
-  useEffect(() => {
-    // Seed the local cache from the server's saved preference the first time
-    // a conversation is opened. Once a choice exists locally (picked here, or
-    // seeded already), it wins over background list refetches — the server
-    // list polls every second and racing that against an in-flight save was
-    // the "model choice keeps reverting" bug.
-    if (!selectedConversation || selectedConversation.id in conversationModelProfiles) return;
-    const profile = selectedConversation.preferredExecutionProfile;
-    if (!profile) return;
-    setConversationModelProfiles((current) => {
-      if (selectedConversation.id in current) return current;
-      const next = { ...current, [selectedConversation.id]: profile };
-      writeConversationModelProfiles(next);
-      return next;
-    });
-  }, [selectedConversation, conversationModelProfiles]);
   const linkedWorkItemId = selectedConversation?.workItemId ?? null;
   const linkedWorkItem = useQuery({ queryKey: ['work-item', linkedWorkItemId], queryFn: () => api.getWorkItem(linkedWorkItemId!), enabled: Boolean(linkedWorkItemId), refetchInterval: 1_000 });
   const linkableTasks = useQuery({ queryKey: ['conversation-linkable-tasks'], queryFn: () => api.listWorkItems('active', ''), staleTime: 30_000 });
@@ -454,8 +442,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   }, [accountProfile, agentAccounts.data?.accounts]);
   // Conversation preferences are canonical once saved. Message history fills
   // in older conversations whose last model choice predates that preference.
+  const composerPreferences = conversationId ? composerPreferenceOverrides[conversationId] ?? selectedConversation : null;
   const executionProfile = conversationId
-    ? conversationModelProfiles[conversationId] ?? selectedConversation?.preferredExecutionProfile ?? executionProfileForConversation(allConversationMessages)
+    ? composerPreferences?.preferredExecutionProfile ?? executionProfileForConversation(allConversationMessages)
     : null;
   // Keep the thread bounded to a handful of recent messages instead of an
   // endless scroll; older history is revealed a page at a time on request.
@@ -487,11 +476,11 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   // time without another bubble ever reusing its vertical space.
   useEffect(() => {
     if (!conversationId || dispatchInitializedConversationId.current === conversationId || !messages.data) return;
-    setDispatchTo(dispatchTargetForConversation(messages.data.messages));
-    setAccountProfile(accountProfileForConversation(messages.data.messages));
+    setDispatchTo(composerPreferences?.preferredDispatchTarget ?? dispatchTargetForConversation(messages.data.messages));
+    setAccountProfile(composerPreferences?.preferredAccountProfile ?? accountProfileForConversation(messages.data.messages));
     dispatchInitializedConversationId.current = conversationId;
     setDispatchInitializedFor(conversationId);
-  }, [conversationId, messages.data]);
+  }, [conversationId, messages.data, composerPreferences?.preferredAccountProfile, composerPreferences?.preferredDispatchTarget]);
   const send = useMutation({
     mutationFn: async () => {
       const attachments = await Promise.all(files.map(async (file) => ({
@@ -1111,10 +1100,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
             <button type="button" className="composer-tool attach-button" onClick={() => fileRef.current?.click()} aria-label="Attach files" title="Attach files"><Paperclip size={14} /></button>
             <span className="composer-hint">Files, screenshots, or context</span>
             <ModelProfileSelect className="model-target" value={executionProfile} onChange={setExecutionProfile} />
-            <select className="agent-target account-target" value={accountProfile} onChange={(event) => setAccountProfile(event.target.value)} aria-label="Account profile" disabled={agentAccounts.isLoading}>
+            <select className="agent-target account-target" value={accountProfile} onChange={(event) => { const profile = event.target.value; setAccountProfile(profile); updateComposerPreferences({ accountProfile: profile }); }} aria-label="Account profile" disabled={agentAccounts.isLoading}>
               {accountProfiles.map((account) => <option key={account.name} value={account.name}>{account.name === 'default' ? 'Default' : account.name}</option>)}
             </select>
-            <select className="agent-target dispatch-target" value={dispatchTo} onChange={(event) => { const target = event.target.value as typeof dispatchTo; setDispatchTo(target); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond">
+            <select className="agent-target dispatch-target" value={dispatchTo} onChange={(event) => { const target = event.target.value as typeof dispatchTo; setDispatchTo(target); updateComposerPreferences({ dispatchTarget: target }); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond">
               <option value="codex">Codex</option><option value="claude">Claude</option><option value="both">Both</option>
             </select>
             <button className="icon-button primary composer-send" aria-label="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>

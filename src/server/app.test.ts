@@ -574,6 +574,28 @@ describe('GET /api/shared/conversations/:id', () => {
     expect(unlinked.status).toBe(200);
     expect(await unlinked.json()).toEqual({ conversation: expect.objectContaining({ workItemId: null }) });
   });
+
+  it('persists all composer dropdown choices before a message is sent', async () => {
+    const conversation = repository.createConversation('Remember composer choices');
+
+    const saved = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/preferences`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ executionProfile: 'deep', accountProfile: 'personal', dispatchTarget: 'claude' }),
+    });
+
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toEqual({ conversation: expect.objectContaining({
+      id: conversation.id,
+      preferredExecutionProfile: 'deep',
+      preferredAccountProfile: 'personal',
+      preferredDispatchTarget: 'claude',
+    }) });
+    const reopened = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}`);
+    expect(await reopened.json()).toEqual({ conversation: expect.objectContaining({
+      preferredExecutionProfile: 'deep', preferredAccountProfile: 'personal', preferredDispatchTarget: 'claude',
+    }) });
+  });
 });
 
 describe('queue explainability and undo routes', () => {
