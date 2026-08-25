@@ -120,7 +120,7 @@ export function LiveRunOutput({ output, interjections = [] }: { output: string; 
       )}
       <ol aria-live="polite">
         {visibleBlocks.flatMap((block, index) => [
-          <li key={`activity-${hiddenCount + index}-${block}`}>{block.replace(/^●\s*/, '')}</li>,
+          <li key={`activity-${hiddenCount + index}-${block}`}>{block.replace(/^●\s*/, '').replace(/^Decision:\s*/i, '')}</li>,
           ...interjectionsAt(index + 1).map((interjection) => (
             <li key={interjection.id} className={`live-run-interjection${interjection.pending ? ' pending' : ''}`}>
               <span>{interjection.pending ? 'You interjected (sending)' : 'You interjected'}</span>

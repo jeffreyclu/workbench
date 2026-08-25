@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, memoryQueryForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexFinalReply, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, memoryQueryForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
 
 function message(index: number, body: string): SharedMessage {
   return {
@@ -180,5 +180,12 @@ describe('isCodexDecisionPreamble', () => {
     expect(isCodexDecisionPreamble('Decision: Inspect the route before editing.')).toBe(true);
     expect(isCodexDecisionPreamble('  Decision: Run the focused test.')).toBe(true);
     expect(isCodexDecisionPreamble('Fixed the route.')).toBe(false);
+  });
+
+  it('keeps decision preambles out of the completed answer without requiring the live feed to hide them', () => {
+    expect(codexFinalReply([
+      'Decision: Inspect the failing route before editing.',
+      'Fixed the route and verified the focused test.',
+    ])).toBe('Fixed the route and verified the focused test.');
   });
 });

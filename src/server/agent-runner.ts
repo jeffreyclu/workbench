@@ -682,7 +682,10 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
           if (name === 'Read') return [attribute(`● Reading ${String(input.file_path ?? input.file ?? 'a project file')}`)];
           if (name === 'Edit' || name === 'Write') return [attribute(`● Editing ${String(input.file_path ?? input.file ?? 'project files')}`)];
           if (name === 'Glob' || name === 'Grep') return [attribute('● Searching the codebase')];
-          if (name === 'Bash') return [attribute('● Running a workspace command')];
+          if (name === 'Bash') {
+            const command = typeof input.command === 'string' ? input.command : '';
+            return [attribute(command ? `● Running a workspace command: ${command.slice(0, 100)}` : '● Running a workspace command')];
+          }
           return [attribute(`● Using ${name}`)];
         }
         return [];

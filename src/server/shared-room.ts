@@ -63,6 +63,14 @@ export function isCodexDecisionPreamble(text: string): boolean {
   return /^\s*Decision:\s*/i.test(text);
 }
 
+/** The completed reply is authored answer text; the live feed also includes decisions. */
+export function codexFinalReply(itemTexts: Iterable<string>): string {
+  return Array.from(itemTexts)
+    .filter((text) => !isCodexDecisionPreamble(text))
+    .join('\n\n')
+    .trim();
+}
+
 export function codexTurnStartParams(threadId: string, cwd: string, prompt: string): Record<string, unknown> {
   return {
     threadId,
@@ -79,7 +87,7 @@ export function codexTurnStartParams(threadId: string, cwd: string, prompt: stri
 function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void): Promise<string> {
   return new Promise((resolveOutput, reject) => {
     const child = spawn('codex', ['app-server', '--stdio'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
-    let buffered = ''; let output = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
+    let buffered = ''; let output = ''; let liveOutput = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
     const pendingSteers = new Map<number, (accepted: boolean) => void>();
     // A steered turn emits a separate `agentMessage` item per exchange (the
     // pre-interjection reply, then the reply to the steer). Deltas carry an
@@ -88,6 +96,20 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
     // landed correctly in the same turn.
     const itemOrder: string[] = [];
     const itemText = new Map<string, string>();
+    const liveBlocks: string[] = [];
+    const publishLiveOutput = () => {
+      // The debugger contract requires a literal "Decision: " preamble in the
+      // model's own text so the audit trail can capture it, but the live feed
+      // is user-facing prose, not an audit log — strip the label there.
+      const messageBlocks = itemOrder.map((id) => (itemText.get(id) ?? '').replace(/^\s*Decision:\s*/i, ''));
+      liveOutput = [...liveBlocks, ...messageBlocks].filter(Boolean).join('\n\n');
+      onProgress(liveOutput);
+    };
+    const appendLiveEvent = (detail: string) => {
+      if (!detail || liveBlocks.at(-1) === detail) return;
+      liveBlocks.push(detail);
+      publishLiveOutput();
+    };
     const request = (method: string, params: Record<string, unknown>) => {
       const id = ++sequence;
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
@@ -142,22 +164,35 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
           if (itemId) {
             if (!itemText.has(itemId)) itemOrder.push(itemId);
             itemText.set(itemId, `${itemText.get(itemId) ?? ''}${event.params.delta}`);
-            output = itemOrder
-              .map((id) => itemText.get(id) ?? '')
-              .filter((text) => !isCodexDecisionPreamble(text))
-              .join('\n\n');
+            output = codexFinalReply(itemOrder.map((id) => itemText.get(id) ?? ''));
           } else {
             const next = `${output}${event.params.delta}`;
             output = isCodexDecisionPreamble(next) ? '' : next;
+            if (event.params.delta) {
+              const fallbackItemId = '__unidentified-agent-message__';
+              if (!itemText.has(fallbackItemId)) itemOrder.push(fallbackItemId);
+              itemText.set(fallbackItemId, `${itemText.get(fallbackItemId) ?? ''}${event.params.delta}`);
+            }
           }
-          onProgress(output);
+          publishLiveOutput();
         }
         const item = event.params?.item as Record<string, unknown> | undefined;
         // Reasoning items begin before their summary text is available. Capture
         // the completed item so each subsequent tool call has the actual
         // decision that preceded it rather than an empty placeholder.
         const agentEvent = agentStreamEventForCodexAppServerItem(event.method, item);
-        if (agentEvent) onEvent(agentEvent);
+        if (agentEvent) {
+          onEvent(agentEvent);
+          // The debugger is an audit trail, not the only place the user gets
+          // to see work in progress. Keep provider-recorded decisions and
+          // tool starts in the running activity feed too.
+          // Agent-message decisions already arrive in delta form. Reasoning
+          // summaries and tool starts do not, so surface those explicitly.
+          const itemType = String(item?.type ?? '');
+          if (itemType === 'reasoning' || agentEvent.kind === 'tool') {
+            appendLiveEvent(agentEvent.kind === 'tool' ? `● ${agentEvent.detail}` : agentEvent.detail);
+          }
+        }
         if (event.method === 'turn/completed') {
           settled = true;
           rejectPendingSteers();

@@ -39,14 +39,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .app-shell { display: grid; grid-template-columns: 220px var(--stack-column-width) minmax(0, 1fr); min-height: 100vh; min-height: 100dvh; transition: grid-template-columns var(--motion-emphasized) var(--motion-ease); }
 .sidebar { display: flex; flex-direction: column; padding: 22px 14px; background: #0a0a09; border-right: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 16px; font-weight: 700; letter-spacing: -.02em; }
-.promotion-status-wrap { position: fixed; top: 12px; right: 16px; z-index: 60; }
-.promotion-status { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 0; border-radius: 7px; font-size: 12px; font-weight: 600; font-family: inherit; cursor: pointer; box-shadow: 0 8px 20px #0006; }
-.promotion-status-queue { font: 10px 'DM Mono'; opacity: .8; }
-.promotion-status-running { color: #f4f3ec; background: #1b1b18; }
-.promotion-status-queued { color: var(--muted); background: #151514; }
-.promotion-status-failed { color: #ffb4a8; background: #2a1512; }
-.promotion-status-succeeded { color: var(--acid); background: #151514; }
-.promotion-status-popover { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; width: min(300px, calc(100vw - 28px)); padding: 10px; display: flex; flex-direction: column; gap: 8px; color: #eeede6; background: #1b1c19; border: 1px solid #484840; border-radius: 8px; box-shadow: 0 14px 32px #000b; }
+.promotion-status-wrap { position: relative; display: inline-flex; margin-left: auto; }
+.promotion-status-led { width: 9px; height: 9px; padding: 0; border: 0; border-radius: 50%; cursor: pointer; box-shadow: 0 0 0 3px transparent; transition: box-shadow .15s ease; }
+.promotion-status-led:hover, .promotion-status-led:focus-visible { box-shadow: 0 0 0 3px #ffffff14; }
+.promotion-status-led-blue { background: #4da3ff; box-shadow: 0 0 6px #4da3ff99; }
+.promotion-status-led-green { background: var(--acid); }
+.promotion-status-led-red { background: #ff6b5e; box-shadow: 0 0 6px #ff6b5e99; }
+.promotion-status-popover { position: absolute; z-index: 30; top: calc(100% + 8px); left: 0; width: min(300px, calc(100vw - 28px)); padding: 10px; display: flex; flex-direction: column; gap: 8px; color: #eeede6; background: #1b1c19; border: 1px solid #484840; border-radius: 8px; box-shadow: 0 14px 32px #000b; }
 .promotion-status-popover-row { display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
 .promotion-status-popover-row strong { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
 .brand-mark { display: grid; place-items: center; width: 27px; height: 27px; color: #10110d; background: var(--acid); border-radius: 7px 7px 7px 2px; font-size: 13px; }

@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Cloud, Command, LoaderCircle, MessageCircle, MoreHorizontal, Search, Wrench, X } from 'lucide-react';
+import { Cloud, Command, MessageCircle, MoreHorizontal, Search, Wrench, X } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { MemorySearchResult } from '../../../shared/contracts';
@@ -118,32 +118,28 @@ export function PromotionQueueStatus() {
   const data = status.data;
   if (!data) return null;
 
-  let className = 'promotion-status';
-  let icon = <Command size={14} />;
-  let label = '';
-  if (data.running) {
-    className += ' promotion-status-running';
-    icon = <LoaderCircle size={14} className="spin" />;
-    label = 'Promoting…';
-  } else if (data.queueLength > 0) {
-    className += ' promotion-status-queued';
-    label = `${data.queueLength} promotion${data.queueLength === 1 ? '' : 's'} queued`;
-  } else if (data.lastBuild?.status === 'failed') {
-    className += ' promotion-status-failed';
-    icon = <AlertTriangle size={14} />;
-    label = 'Last build failed';
-  } else if (data.lastBuild?.status === 'succeeded') {
-    className += ' promotion-status-succeeded';
-    icon = <Check size={14} />;
-    label = 'Build promoted';
-  } else {
-    return null;
-  }
+  let color: 'green' | 'blue' | 'red' | null = null;
+  if (data.running) color = 'blue';
+  else if (data.queueLength > 0) color = 'blue';
+  else if (data.lastBuild?.status === 'failed') color = 'red';
+  else if (data.lastBuild?.status === 'succeeded') color = 'green';
+  if (!color) return null;
 
-  return <div className="promotion-status-wrap" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
-    <button type="button" className={className} aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen((current) => !current)}>
-      {icon} {label} {data.running && data.queueLength > 0 && <span className="promotion-status-queue">+{data.queueLength} queued</span>}
-    </button>
+  return <div
+    className="promotion-status-wrap"
+    onMouseEnter={() => setOpen(true)}
+    onMouseLeave={() => setOpen(false)}
+    onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}
+  >
+    <button
+      type="button"
+      className={`promotion-status-led promotion-status-led-${color}`}
+      aria-expanded={open}
+      aria-haspopup="dialog"
+      aria-label="Promotion status"
+      onClick={() => setOpen((current) => !current)}
+      onFocus={() => setOpen(true)}
+    />
     {open && <div className="promotion-status-popover" role="dialog" aria-label="Promotion status">
       <div className="promotion-status-popover-row">
         <strong>Queue</strong>
@@ -197,7 +193,7 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
   const workbenchPulse = useValuePulse(counts?.workbench);
   const conversationPulse = useValuePulse(conversationCount);
   return <aside id="primary-nav" className="sidebar">
-    <div className="brand"><span className="brand-mark">W</span><span>Workbench</span></div>
+    <div className="brand"><span className="brand-mark">W</span><span>Workbench</span><PromotionQueueStatus /></div>
     <nav onClick={releasePointerFocus}>
       <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={onOpenActive}><Command size={16} /> Attention stack <span className={activePulse}>{counts?.active ?? '…'}</span></button>
       <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={onOpenWorkbench}><Wrench size={16} /> Workbench <span className={workbenchPulse}>{counts?.workbench ?? '…'}</span></button>
