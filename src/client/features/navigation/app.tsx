@@ -32,7 +32,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { Fragment, type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, type FormEvent, type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from '../../markdown-composer.js';
@@ -85,18 +85,6 @@ function PulseCount({ value, as: Tag = 'strong' }: { value: number; as?: 'strong
 
 export function App() {
   const queryClient = useQueryClient();
-  const handleRealtimeNotification = useMemo(() => (notification: RealtimeNotification) => {
-    const options = {
-      description: notification.description,
-      duration: notification.duration,
-      ...(notification.action ? {
-        action: () => navigate(parseRoute(notification.action!.route)),
-        actionLabel: notification.action.label,
-      } : {}),
-    };
-    toast[notification.tone](notification.message, options);
-  }, []);
-  const realtimeConnectionState = useRealtimeNotifications(handleRealtimeNotification);
   const health = useQuery({ queryKey: ['health'], queryFn: api.getHealth, refetchInterval: 15_000 });
   const loadedBuildId = useRef<string | null>(null);
   useEffect(() => {
@@ -156,6 +144,26 @@ export function App() {
   };
   useEffect(() => () => taskEnterTimers.current.forEach((timer) => clearTimeout(timer)), []);
   const agentConversationId = route.name === 'conversations' ? route.conversationId ?? readLastOpenedItem('conversation') : null;
+  const handleRealtimeNotification = useCallback((notification: RealtimeNotification) => {
+    if (notification.action) {
+      const target = parseRoute(notification.action.route);
+      const alreadyViewing = (target.name === 'task' && route.name === 'task' && route.taskId === target.taskId)
+        || (target.name === 'conversations' && target.conversationId !== null && agentConversationId === target.conversationId);
+      // Jeffrey is already looking at the task or conversation the update is
+      // about, so a toast would just duplicate what's already on screen.
+      if (alreadyViewing) return;
+    }
+    const options = {
+      description: notification.description,
+      duration: notification.duration,
+      ...(notification.action ? {
+        action: () => navigate(parseRoute(notification.action!.route)),
+        actionLabel: notification.action.label,
+      } : {}),
+    };
+    toast[notification.tone](notification.message, options);
+  }, [route, agentConversationId]);
+  const realtimeConnectionState = useRealtimeNotifications(handleRealtimeNotification);
   const view = route.name === 'stack' ? route.stack : route.name === 'task' ? taskStack : route.name === 'conversations' ? 'context' : route.name;
   const { mobileNavOpen, setMobileNavOpen, isCompactNav, workItems: workItemCounts, conversations: totalConversationCount } = useNavigation();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));

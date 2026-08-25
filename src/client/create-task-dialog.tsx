@@ -4,6 +4,7 @@ import { type FormEvent, useState } from 'react';
 import type { AgentRun, BrokerSourceId, WorkItem } from '../shared/contracts';
 import { api } from './api';
 import { MarkdownComposer } from './markdown-composer.js';
+import { ModalDialog } from './modal-dialog';
 import { ProjectField } from './project-field';
 import { toast, toastError } from './toast-store';
 
@@ -93,12 +94,11 @@ export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { on
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <div className="dialog add-task-dialog" onMouseDown={(event) => event.stopPropagation()}>
+    <ModalDialog className="add-task-dialog" labelledBy="create-task-dialog-title" onClose={onClose}>
         <div className="dialog-header">
           <div>
             <span className="eyebrow">Add to queue</span>
-            <h2>Choose your next task</h2>
+            <h2 id="create-task-dialog-title">Choose your next task</h2>
           </div>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
             <X size={17} />
@@ -176,7 +176,6 @@ export function CreateTask({ onClose, onCreated, defaultProjectName = '' }: { on
             </div>
           </form>
         )}
-      </div>
-    </div>
+    </ModalDialog>
   );
 }

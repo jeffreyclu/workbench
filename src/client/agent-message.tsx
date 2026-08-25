@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MarkdownCode, MarkdownPre } from './markdown-code.js';
@@ -100,6 +100,7 @@ export function LiveRunOutput({ output }: { output: string }) {
 }
 
 export function AgentMessageBody({ body, running, conversationId, workItemId }: { body: string; running: boolean; conversationId?: string; workItemId?: string }) {
+  const sectionIdPrefix = useId();
   const visibleBody = hideWorkbenchControlBlocks(running ? humanizeRunOutput(body) : body);
   if (!visibleBody) return null;
   const sections = splitAgentResponse(visibleBody);
@@ -117,14 +118,17 @@ export function AgentMessageBody({ body, running, conversationId, workItemId }: 
   if (!structured) return <div className={`agent-markdown${running ? ' streaming' : ''}`}><StreamingMarkdown content={visibleBody} streaming={running} renderMarkdown={renderMarkdown} /></div>;
 
   const lastIndex = sections.length - 1;
-  return <div className="agent-response" aria-label={`Agent response in ${sections.length} parts`}>
+  return <div className="agent-response" role="group" aria-label={`Agent response in ${sections.length} parts`}>
     <div className="agent-response-deck">
-      {sections.map((section, index) => <section key={`${section.title}-${index}`} className="agent-response-section" style={{ '--section-index': index } as CSSProperties}>
-        <div className="agent-response-section-heading"><h3>{section.title}</h3></div>
-        <div className={`agent-markdown${running && index === lastIndex ? ' streaming' : ''}`}>
-          <StreamingMarkdown content={section.body} streaming={running && index === lastIndex} renderMarkdown={renderMarkdown} />
-        </div>
-      </section>)}
+      {sections.map((section, index) => {
+        const headingId = `${sectionIdPrefix}-${index}`;
+        return <section key={`${section.title}-${index}`} className="agent-response-section" role="region" aria-labelledby={headingId} style={{ '--section-index': index } as CSSProperties}>
+          <div className="agent-response-section-heading"><h3 id={headingId}>{section.title}</h3></div>
+          <div className={`agent-markdown${running && index === lastIndex ? ' streaming' : ''}`}>
+            <StreamingMarkdown content={section.body} streaming={running && index === lastIndex} renderMarkdown={renderMarkdown} />
+          </div>
+        </section>;
+      })}
     </div>
   </div>;
 }

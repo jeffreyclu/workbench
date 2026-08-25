@@ -12,6 +12,16 @@ Genuinely new, unlinked conversations default to the provider `default` account
 profile, never `personal`. Existing conversations continue restoring the last
 selected profile from their own message history.
 
+### Usage calibration stays out of the Workbench UI
+
+*Decision confirmed from Jeffrey's 2026-08-23 direction to remove the calibration UI.*
+
+The weekly-usage view must not render a calibration form or calibration history for Claude or
+Codex. Calibration is agent-owned through `npm run usage:calibrate`; provider data has different
+semantics, and Codex's live `rateLimit.usedPercent` is a short rate-limit window, not a weekly
+ceiling observation. Keep the cards visually consistent while showing each provider's truthful
+usage data. Do not add a Codex form merely because the calibration API supports that provider.
+
 ### Celebrate task completion and taskless conversation archiving
 
 *Decision from Jeffrey, 2026-08-24.*
@@ -124,6 +134,11 @@ must render them directly rather than inferring them from polling state. REST
 remains the source of truth: do not put full records or agent text on the
 socket. Keep polling only as a data-refresh fallback until process-to-process
 event delivery is durable.
+
+*Decision from Jeffrey, 2026-08-24.* Suppress a toast whose update concerns
+the task or conversation the user is currently viewing. The active surface
+already provides the relevant context; avoid duplicating that update as an
+interruptive notification. Toasts remain appropriate for updates elsewhere.
 
 ### Project color is one system
 

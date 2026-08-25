@@ -222,6 +222,9 @@ describe('InsightsView', () => {
     expect(screen.getByText('3M SET')).toBeTruthy();
     // Codex has no ceiling estimate yet.
     expect(screen.getByText(/No Codex ceiling estimate yet/)).toBeTruthy();
+    // Calibration is agent-owned; the usage view does not expose manual controls for either provider.
+    expect(screen.queryByRole('button', { name: 'Calibrate' })).toBeNull();
+    expect(screen.queryByText('Calibration history')).toBeNull();
   });
 
   it('labels the ceiling as an uncalibrated estimate until a /usage observation is recorded', async () => {

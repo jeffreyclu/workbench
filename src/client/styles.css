@@ -227,6 +227,22 @@ nav { display: grid; gap: 3px; }
 .skeleton-text { display: flex; flex-direction: column; gap: 6px; }
 .skeleton-list-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 20px; }
 .list-state-skeleton { display: flex; flex-direction: column; }
+.conversation-rail-skeleton { display: grid; gap: 6px; padding: 0 5px; }
+.conversation-rail-skeleton .skeleton-stack-header { margin-bottom: 2px; }
+.skeleton-stack-header { background: #171714; border: 1px solid #292925; }
+.conversation-skeleton-card { display: grid; gap: 10px; min-height: 88px; padding: 12px 10px; background: #121318; border: 1px solid #292d3d; border-radius: 8px; }
+.conversation-skeleton-title, .conversation-skeleton-meta { display: flex; align-items: center; gap: 7px; }
+.conversation-skeleton-meta { justify-content: space-between; }
+.conversation-title-skeleton { display: inline-flex; width: min(240px, 100%); }
+.conversation-thread-skeleton { display: flex; flex-direction: column; gap: 10px; }
+.conversation-thread-skeleton .conversation-skeleton-message { display: grid; gap: 8px; min-height: 74px; }
+.conversation-thread-skeleton .conversation-skeleton-message.shared-jeffrey { margin-left: auto; }
+.conversation-composer-skeleton { flex: 0 0 auto; }
+.conversation-composer-skeleton-body { display: grid; align-content: start; gap: 9px; min-height: 121px; padding: 17px 18px 10px; }
+.conversation-composer-skeleton-toolbar { justify-content: flex-end; }
+.conversation-composer-skeleton-toolbar .skeleton:first-child { margin-right: auto; }
+.conversation-search-skeleton { display: grid; gap: 6px; padding: 0 5px; }
+.conversation-search-skeleton-row { display: grid; align-content: center; gap: 8px; min-height: 88px; padding: 12px 10px; background: #121318; border: 1px solid #292d3d; border-radius: 8px; }
 .inline-error, .error-message { color: #ff9384; font-size: 11px; }
 .sync-result { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .inline-error { margin: 8px 20px; padding: 9px; background: #2b1715; border-radius: 6px; }
@@ -1032,15 +1048,6 @@ nav { display: grid; gap: 3px; }
 .usage-dial-calibration-calibrated { color: #8fd0a0; }
 .usage-dial-section-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
 .usage-dial-last-refreshed { color: var(--soft); font-size: 11px; }
-.calibration-form { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; gap: 9px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #292925; }
-.calibration-form label { display: flex; flex-direction: column; gap: 4px; margin: 0; color: var(--soft); font-size: 11px; }
-.calibration-form .error-message { grid-column: 1 / -1; }
-.calibration-history { margin-top: 12px; }
-.calibration-history h4 { margin: 0 0 6px; color: var(--soft); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-.calibration-history ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.calibration-history li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; color: var(--soft); font: 500 11px 'DM Mono'; }
-.calibration-history-flagged { color: #d9a35c; }
-.calibration-history-flag-note { color: #d9a35c; font-family: inherit; }
 
 @media (max-width: 820px) {
   .artifact-workspace {
@@ -1081,7 +1088,6 @@ nav { display: grid; gap: 3px; }
   .usage-dial-grid { grid-template-columns: 1fr; }
   .usage-dial-section-header { flex-direction: column; align-items: flex-start; gap: 2px; }
   .usage-dial-marker-legend { gap: 4px 10px; }
-  .calibration-form { grid-template-columns: 1fr; }
   .usage-dial-reset-note { overflow-wrap: anywhere; }
 }
 

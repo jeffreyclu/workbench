@@ -87,3 +87,53 @@ export function ListRowSkeleton({ count = 5, className = '' }: { count?: number;
     </div>
   );
 }
+
+/** Mirrors the grouped 88px cards in the conversation rail. */
+export function ConversationRailSkeleton({ count = 5 }: { count?: number }) {
+  return (
+    <div className="conversation-rail-skeleton" aria-hidden="true">
+      <div className="stack-header conversation-stack-header skeleton-stack-header"><Skeleton width="72px" height="9px" /><Skeleton width="22px" height="20px" radius="99px" /></div>
+      {Array.from({ length: count }, (_, index) => (
+        <div className="conversation-skeleton-card" key={index}>
+          <div className="conversation-skeleton-title"><Skeleton width="14px" height="14px" radius="99px" /><Skeleton width={index % 2 ? '64%' : '78%'} height="13px" /></div>
+          <div className="conversation-skeleton-meta"><Skeleton width="58px" height="16px" radius="99px" /><Skeleton width="48px" height="8px" /></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Mirrors author/time headers and the alternating message-card widths in a thread. */
+export function ConversationThreadSkeleton() {
+  return (
+    <div className="conversation-thread-skeleton" aria-hidden="true">
+      {[0, 1, 2, 3].map((index) => {
+        const isJeffrey = index === 1 || index === 3;
+        return (
+          <article className={`shared-message conversation-skeleton-message${isJeffrey ? ' shared-jeffrey' : ''}`} key={index}>
+            <header><Skeleton width={isJeffrey ? '26px' : '40px'} height="9px" /><Skeleton width="42px" height="8px" /></header>
+            <SkeletonText lines={index === 2 ? 4 : index === 0 ? 3 : 2} width={index === 2 ? '92%' : '78%'} />
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Reserves the same editable area and toolbar as the shared conversation composer. */
+export function ConversationComposerSkeleton() {
+  return (
+    <div className="shared-composer conversation-composer-skeleton" aria-hidden="true">
+      <div className="conversation-composer-skeleton-body"><Skeleton width="46%" height="13px" /><Skeleton width="72%" height="13px" /></div>
+      <div className="composer-toolbar conversation-composer-skeleton-toolbar"><Skeleton width="34px" height="34px" radius="6px" /><Skeleton width="112px" height="34px" radius="7px" /><Skeleton width="92px" height="34px" radius="7px" /><Skeleton width="92px" height="34px" radius="7px" /><Skeleton width="34px" height="34px" radius="7px" /></div>
+    </div>
+  );
+}
+
+export function ConversationSearchResultSkeleton() {
+  return (
+    <div className="conversation-search-skeleton" aria-hidden="true">
+      {[0, 1, 2].map((index) => <div className="conversation-search-skeleton-row" key={index}><Skeleton width={index === 1 ? '58%' : '76%'} height="13px" /><Skeleton width="88%" height="8px" /></div>)}
+    </div>
+  );
+}

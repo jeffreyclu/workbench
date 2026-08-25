@@ -1,7 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
-import { api } from './api';
-import type { UsageCalibrationHistoryEntry, WeeklyUsageReport } from '../shared/contracts';
+import type { WeeklyUsageReport } from '../shared/contracts';
 import { daysRemaining, percentOfCeiling } from './usage-dial-logic';
 
 function formatSet(setTokens: number): string {
@@ -86,77 +83,6 @@ function ProviderDial({ label, manualSet, autonomousSet, extraSet, extraLabel, c
   );
 }
 
-/** Relative-time-ish drift note: how far apart two ceilings solved, for the flagged entry's tooltip. */
-function formatCeilingDelta(entry: UsageCalibrationHistoryEntry, previous: UsageCalibrationHistoryEntry | undefined): string | null {
-  if (!previous || previous.computedCeilingSet === 0) return null;
-  const change = ((entry.computedCeilingSet - previous.computedCeilingSet) / previous.computedCeilingSet) * 100;
-  return `${change >= 0 ? '+' : ''}${change.toFixed(0)}% vs previous reading`;
-}
-
-/** Short history of `/usage` readings with drift flagged, so a bad transcription is visible rather than silently blended in. */
-export function CalibrationHistory({ provider }: { provider: 'claude' | 'codex' }) {
-  const history = useQuery({ queryKey: ['usage', 'calibration', provider], queryFn: () => api.getUsageCalibrationHistory(provider) });
-  const calibrations = history.data?.calibrations ?? [];
-  if (history.isLoading || calibrations.length === 0) return null;
-  return (
-    <div className="calibration-history">
-      <h4>Calibration history</h4>
-      <ul>
-        {calibrations.map((entry, index) => {
-          const delta = formatCeilingDelta(entry, calibrations[index + 1]);
-          return (
-            <li key={entry.id} className={entry.flagged ? 'calibration-history-flagged' : undefined}>
-              <span>{shortDateFormat.format(new Date(entry.observedAt))}</span>
-              <span>{entry.observedPercentage}%</span>
-              <span>{formatSet(entry.computedCeilingSet)} SET ceiling</span>
-              {entry.flagged && <span className="calibration-history-flag-note">Inconsistent{delta ? ` (${delta})` : ''}</span>}
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
-
-/** Mobile-friendly input for a `/usage` reading — the only way Workbench's Claude ceiling gets calibrated (docs/autonomy-strategy.md "Calibration"). */
-export function CalibrationForm({ provider }: { provider: 'claude' | 'codex' }) {
-  const queryClient = useQueryClient();
-  const [observedPercentage, setObservedPercentage] = useState('');
-  const [resetsAt, setResetsAt] = useState('');
-  const mutation = useMutation({
-    mutationFn: (input: { observedPercentage: number; resetsAt: string | null }) =>
-      api.submitUsageCalibration({ provider, observedAt: new Date().toISOString(), observedPercentage: input.observedPercentage, resetsAt: input.resetsAt }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['usage', 'weekly'] });
-      queryClient.invalidateQueries({ queryKey: ['usage', 'calibration', provider] });
-      setObservedPercentage('');
-      setResetsAt('');
-    },
-  });
-
-  function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    const percentage = Number(observedPercentage);
-    if (!Number.isFinite(percentage) || percentage <= 0 || percentage > 100) return;
-    mutation.mutate({ observedPercentage: percentage, resetsAt: resetsAt ? new Date(resetsAt).toISOString() : null });
-  }
-
-  return (
-    <form className="calibration-form" onSubmit={handleSubmit}>
-      <label>
-        /usage %
-        <input type="number" inputMode="decimal" min="0.1" max="100" step="0.1" placeholder="e.g. 42" value={observedPercentage} onChange={(event) => setObservedPercentage(event.target.value)} required />
-      </label>
-      <label>
-        Resets
-        <input type="date" value={resetsAt} onChange={(event) => setResetsAt(event.target.value)} />
-      </label>
-      <button type="submit" className="button primary compact" disabled={mutation.isPending}>{mutation.isPending ? 'Saving…' : 'Calibrate'}</button>
-      {mutation.isError && <span className="error-message">Couldn't save that reading.</span>}
-    </form>
-  );
-}
-
 export function UsageDial({ report, lastRefreshedAt }: { report: WeeklyUsageReport; lastRefreshedAt?: number }) {
   const now = new Date();
   return (
@@ -193,8 +119,6 @@ export function UsageDial({ report, lastRefreshedAt }: { report: WeeklyUsageRepo
           now={now}
         />
       </div>
-      <CalibrationForm provider="claude" />
-      <CalibrationHistory provider="claude" />
     </div>
   );
 }

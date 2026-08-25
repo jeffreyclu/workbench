@@ -5,16 +5,33 @@ import type { BrokerConnection } from '../../../shared/contracts';
 import { sourceData, sourceQueryKeys } from './data';
 import { useSourceConnections } from './hooks';
 import { canAuthorizeSource, sourceDisconnectProvider } from './state';
+import { ModalDialog } from '../../modal-dialog';
+import { ConfirmationDialog } from '../../confirmation-dialog';
+import { Skeleton } from '../../skeleton';
+import { toastError } from '../../toast-store';
+
+function SourceConnectionCardSkeleton() {
+  return (
+    <div className="connection-card" data-testid="connection-card-skeleton" aria-hidden="true">
+      <div className="connection-summary">
+        <span><Skeleton width="96px" height="14px" /><Skeleton width="180px" height="11px" /></span>
+        <Skeleton width="82px" height="28px" radius="6px" />
+      </div>
+      <div className="connection-meta"><Skeleton width="120px" height="10px" /></div>
+    </div>
+  );
+}
 
 function SourceConnectionCard({ connection }: { connection: BrokerConnection }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [disconnectPromptOpen, setDisconnectPromptOpen] = useState(false);
   const provider = connection.id;
   const reconnecting = connection.state === 'error' || connection.state === 'reauth_required';
   const disconnect = useMutation({
     mutationFn: () => sourceData.disconnect(sourceDisconnectProvider(provider)),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: sourceQueryKeys.connections }),
-    onError: (error) => console.error('Failed to disconnect source', error),
+    onSuccess: () => { setDisconnectPromptOpen(false); queryClient.invalidateQueries({ queryKey: sourceQueryKeys.connections }); },
+    onError: (error) => toastError(`Could not disconnect ${connection.name}.`, error),
   });
   const mcpConnect = useMutation({
     mutationFn: async () => {
@@ -69,7 +86,7 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
   });
   return <div className={`connection-card ${connected ? 'connected' : ''} ${disabled ? 'unavailable' : ''}`}>
     <div className="connection-summary"><span><strong>{connection.name}</strong><small>{connection.detail}</small></span>
-      {canAuthorize && connected && provider !== 'slack' ? <button className="button secondary compact" onClick={() => disconnect.mutate()} disabled={disconnect.isPending}>{disconnect.isPending ? <LoaderCircle className="spin" size={14} /> : null} Disconnect</button> : canAuthorize ? <button className="button secondary compact" onClick={() => setOpen((value) => !value)}>{open ? 'Cancel' : provider === 'slack' ? 'Manage connection' : reconnecting ? 'Reconnect MCP' : 'Connect MCP'}</button> : <span className="mcp-required">{disabled ? 'Awaiting IT approval' : connected ? 'Connected' : 'Not connected'}</span>}
+      {canAuthorize && connected && provider !== 'slack' ? <button className="button secondary compact danger" onClick={() => setDisconnectPromptOpen(true)} disabled={disconnect.isPending}>{disconnect.isPending ? <LoaderCircle className="spin" size={14} /> : null} Disconnect</button> : canAuthorize ? <button className="button secondary compact" onClick={() => setOpen((value) => !value)}>{open ? 'Cancel' : provider === 'slack' ? 'Manage connection' : reconnecting ? 'Reconnect MCP' : 'Connect MCP'}</button> : <span className="mcp-required">{disabled ? 'Awaiting IT approval' : connected ? 'Connected' : 'Not connected'}</span>}
     </div>
     <div className="connection-meta">{connection.host === 'workbench' ? 'Workbench' : 'Managed connector'}<span>·</span>{connection.capabilities.map((capability) => capability.replace('_', ' ')).join(' · ') || 'Unavailable'}</div>
     {connection.lastError && <p className="error-message">{connection.lastError}</p>}
@@ -87,6 +104,14 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
       {mcpConnect.isSuccess && mcpConnect.data && <p className="muted">Approve access in the {connection.name} window that just opened. If it did not appear, <a href={mcpConnect.data} target="_blank" rel="noreferrer">open the authorization page</a> in this browser — it must be this Mac, because the callback returns to 127.0.0.1.</p>}
       {mcpConnect.error && <p className="error-message">Connection failed: {mcpConnect.error.message}</p>}
     </div>}
+    {disconnectPromptOpen && <ConfirmationDialog
+      title={`Disconnect ${connection.name}?`}
+      description="Workbench will lose access to this source until you reconnect it."
+      confirmLabel="Disconnect"
+      pending={disconnect.isPending}
+      onClose={() => setDisconnectPromptOpen(false)}
+      onConfirm={() => disconnect.mutate()}
+    />}
   </div>;
 }
 
@@ -96,22 +121,27 @@ export function SourcesDialog({ onClose }: { onClose: () => void }) {
   const linearConfigured = linearConnection?.state === 'connected';
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="dialog sources-dialog" onMouseDown={(event) => event.stopPropagation()} aria-label="Workbench connections">
+    <ModalDialog className="sources-dialog" labelledBy="sources-dialog-title" onClose={onClose}>
         <div className="dialog-header">
-          <div><span className="eyebrow">Workbench</span><h2>Connections</h2></div>
+          <div><span className="eyebrow">Workbench</span><h2 id="sources-dialog-title">Connections</h2></div>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={17} /></button>
         </div>
         <p className="dialog-description">Workbench uses these connections to resolve links and give agents source context without sending you through their authentication dialogs.</p>
         <div className="connection-list">
-          <div className={`connection-card ${linearConfigured ? 'connected' : ''}`}>
-            <div className="connection-summary"><span><strong>Linear</strong><small>{linearConfigured ? 'Connected · issues and project context' : 'Add LINEAR_API_KEY to .env to connect'}</small></span>
-              <span className="mcp-required">{linearConfigured ? 'Connected' : 'Not connected'}</span>
+          {connections.isLoading ? <>
+            <SourceConnectionCardSkeleton />
+            <SourceConnectionCardSkeleton />
+          </> : connections.isError ? (
+            <div className="list-state error-message">Could not load connections. Check your network and try again. <button type="button" className="button secondary compact" onClick={() => connections.refetch()}>Retry</button></div>
+          ) : <>
+            <div className={`connection-card ${linearConfigured ? 'connected' : ''}`}>
+              <div className="connection-summary"><span><strong>Linear</strong><small>{linearConfigured ? 'Connected · issues and project context' : 'Add LINEAR_API_KEY to .env to connect'}</small></span>
+                <span className="mcp-required">{linearConfigured ? 'Connected' : 'Not connected'}</span>
+              </div>
             </div>
-          </div>
-          {connections.data?.connections.filter((connection) => connection.id !== 'linear').map((connection) => <SourceConnectionCard key={connection.id} connection={connection} />)}
+            {connections.data?.connections.filter((connection) => connection.id !== 'linear').map((connection) => <SourceConnectionCard key={connection.id} connection={connection} />)}
+          </>}
         </div>
-      </section>
-    </div>
+    </ModalDialog>
   );
 }

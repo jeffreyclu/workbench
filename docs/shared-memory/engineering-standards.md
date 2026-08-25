@@ -19,6 +19,17 @@ loading state in Workbench's client should reuse or extend these primitives rath
 a bare `<LoaderCircle className="spin" />` + text row — the placeholder's shape should already look
 like the content that's about to replace it, so nothing shifts when it arrives.
 
+**Audit before implementation (2026-08-24):** when correcting loading UX, first inventory every
+loading state, compare each placeholder's actual DOM/layout against its loaded component, and identify
+data-bearing components with no loading state at all. Do not start by fixing the most visibly broken
+placeholder in isolation. The conversation window is a priority example: its existing generic list
+rows and spinner must be evaluated against the real message-thread/header/composer structure.
+
+**CSS fidelity is part of the match (2026-08-24):** matching the DOM alone is insufficient. A loading
+skeleton must inherit or deliberately reproduce the loaded UI's container width, padding, minimum
+height, surfaces, borders, radius, spacing, and narrow-viewport behavior. Do not use a generic
+shimmer row inside a component whose loaded CSS is card-, panel-, or composer-shaped.
+
 ### Frontend implementation standards
 
 *Jeffrey's standing rules for how frontend code should be written — layer separation, preferred stack, plan-before-code, and full acceptance-criteria test coverage.*
