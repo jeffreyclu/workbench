@@ -53,7 +53,7 @@ import { ConversationOriginBadge, ModelProfileSelect, ReferenceTypeIcon } from '
 import { CreateTask, type CreateTaskReopenState } from '../../create-task-dialog';
 import { DiscoveryInboxView } from '../../discovery';
 import { useNavigation } from '../../features/navigation/hooks';
-import { NavigationView } from '../../features/navigation/view';
+import { NavigationView, PromotionQueueStatus } from '../../features/navigation/view';
 import { FollowUpArchiveDialog } from '../../follow-up-archive-dialog';
 import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
 import { clearLastOpenedItem, clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
@@ -543,6 +543,7 @@ export function App() {
           <LoaderCircle className="spin" size={13} /> Reconnecting… showing cached data
         </div>
       )}
+      <PromotionQueueStatus />
       <NavigationView
         view={view === 'workbench-archive' ? 'workbench' : view}
         mobileNavOpen={mobileNavOpen}

@@ -31,9 +31,20 @@ describe('DecisionTreeVisualizer', () => {
       { id: 'tool', messageId: 'stream', runId: null, kind: 'tool', detail: 'command_execution: npm test', createdAt: '2026-08-25T12:00:02.000Z' },
     ]} isLoadingEvents={false} onClose={onClose} />);
 
-    expect(screen.getByRole('dialog', { name: 'Decisions and tools' })).toHaveTextContent('Why: Check the existing tests before changing behavior.');
-    expect(screen.getByRole('dialog')).toHaveTextContent('Decision: Ran the test suite.');
-    expect(screen.getByLabelText('Details: command_execution: npm test')).toHaveAttribute('title', 'command_execution: npm test');
+    expect(screen.getByRole('columnheader', { name: 'Decision' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Why' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Details' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'Ran the test suite.' })).toHaveAttribute('title', 'Ran the test suite.');
+    expect(screen.getByRole('cell', { name: 'Check the existing tests before changing behavior.' })).toHaveAttribute('title', 'Check the existing tests before changing behavior.');
+    const details = screen.getByRole('button', { name: 'Details' });
+    expect(details).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.mouseEnter(details);
+    expect(screen.getByText('command_execution: npm test')).toBeInTheDocument();
+    expect(details).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.mouseLeave(details);
+    expect(screen.queryByText('command_execution: npm test')).not.toBeInTheDocument();
+    fireEvent.click(details);
+    expect(screen.getByText('command_execution: npm test')).toBeInTheDocument();
     expect(screen.queryByText('Recorded the approach.')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close decision tree' }));
     expect(onClose).toHaveBeenCalledOnce();
@@ -82,6 +93,6 @@ describe('DecisionTreeVisualizer', () => {
 
     expect(screen.getByText('Inspect the route before editing it.')).toBeInTheDocument();
     expect(screen.getByText('Read src/routes.ts.')).toBeInTheDocument();
-    expect(screen.getByLabelText('Details: src/routes.ts')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Details' })).toBeInTheDocument();
   });
 });

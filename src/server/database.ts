@@ -1493,6 +1493,17 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // An accepted interjection is part of the active reply's activity feed.
+    // Persist its boundary so reopening the conversation keeps it in place.
+    id: '049_shared_message_interjection_stream_offset',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'interjection_stream_offset')) {
+        database.exec('ALTER TABLE shared_messages ADD COLUMN interjection_stream_offset INTEGER;');
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

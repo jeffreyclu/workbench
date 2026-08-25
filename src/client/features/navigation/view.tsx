@@ -198,7 +198,6 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
   const conversationPulse = useValuePulse(conversationCount);
   return <aside id="primary-nav" className="sidebar">
     <div className="brand"><span className="brand-mark">W</span><span>Workbench</span></div>
-    <PromotionQueueStatus />
     <nav onClick={releasePointerFocus}>
       <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={onOpenActive}><Command size={16} /> Attention stack <span className={activePulse}>{counts?.active ?? '…'}</span></button>
       <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={onOpenWorkbench}><Wrench size={16} /> Workbench <span className={workbenchPulse}>{counts?.workbench ?? '…'}</span></button>

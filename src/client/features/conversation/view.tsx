@@ -523,7 +523,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
         }),
       })));
       const created = await api.createSharedMessage(conversationId!, body, dispatchTo, attachments, executionProfile, accountProfile);
-      if (intent !== 'interject' || created.message.status !== 'queued') return { intent, pending: false };
+      // A normal send can be dispatched synchronously by the create endpoint.
+      // `replies` is definitive even if a stale API response labels the human
+      // turn queued, so never try to interject a turn that is already claimed.
+      if (intent !== 'interject' || created.replies.length > 0 || created.message.status !== 'queued') return { intent, pending: false };
       const interjection = await api.interjectSharedMessage(created.message.id);
       return { intent, pending: interjection.pending };
     },
@@ -925,7 +928,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     event.preventDefault();
     if ((body.trim() || files.length) && conversationId && !send.isPending && conversationReadyToSend) {
       sentDraftRef.current = { conversationId, body };
-      send.mutate({ intent: 'interject' });
+      send.mutate({ intent: 'queue' });
     }
   }
 
@@ -1090,7 +1093,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                     && (candidate.status === 'queued' || candidate.status === 'completed')
                     && candidate.createdAt >= message.createdAt
                     && (candidate.dispatchTarget === 'auto' || candidate.dispatchTarget === 'both' || candidate.dispatchTarget === message.author))
-                  .map((candidate) => ({ id: candidate.id, body: candidate.body, pending: candidate.status === 'queued' }))
+                  .map((candidate) => ({ id: candidate.id, body: candidate.body, pending: candidate.status === 'queued', streamOffset: candidate.interjectionStreamOffset }))
                 : [];
               return <div key={message.id} className={`thread-virtual-row${inGroup ? ' reply-group-message' : ''}`}>
               <article className={`shared-message shared-${message.author}${message.author === 'system' && message.status === 'queued' ? ' shared-system-queued' : ''}`}>
@@ -1165,7 +1168,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} placeholder="Message Codex or Claude…" ariaLabel="Message Codex or Claude" onSubmit={() => {
             if ((body.trim() || files.length) && conversationId && !send.isPending && conversationReadyToSend) {
               sentDraftRef.current = { conversationId, body };
-              send.mutate({ intent: 'interject' });
+              send.mutate({ intent: 'queue' });
             }
           }} disabled={send.isPending} />
           <div className="composer-toolbar">
@@ -1180,7 +1183,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               <option value="codex">Codex</option><option value="claude">Claude</option><option value="both">Both</option>
             </select>
             <button type="button" className="icon-button composer-queue" onClick={queueMessage} aria-label="Queue message for the next turn" title="Queue for the next turn" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}><Clock size={14} /></button>
-            <button className="icon-button primary composer-send" aria-label="Interject into the current response" title="Interject into the current response" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
+            <button className="icon-button primary composer-send" aria-label="Send message" title="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
           </div>
           {send.error && <p className="error-message">{send.error.message}</p>}
         </form>}

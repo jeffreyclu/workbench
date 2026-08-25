@@ -528,6 +528,12 @@ the matching running agent's live activity stream, with Jeffrey's actual text
 and a clear “You interjected” label. A standalone badge on Jeffrey's message is
 not sufficient; it obscures where the live provider received the direction.
 
+*Persistence correction, 2026-08-25.* The inline interjection is a durable
+event at the activity-feed boundary where the provider accepted it. As later
+activity arrives, it must retain that chronological position; switching away
+from and back to the conversation must not append it at the live stream's
+current bottom.
+
 ### In-progress "thinking" activity is a log, not a finished report
 
 *Fix from Claude, 2026-08-25.* The huge-circle-and-missing-space bug Jeffrey
@@ -628,9 +634,13 @@ record only its explicit, agent-authored `Decision:` preamble before a tool
 call. Existing runs cannot be backfilled, but newly started agent streams show
 the actual recorded decision and command sequence.
 
-*UI cleanup from Jeffrey, 2026-08-25.* Render each recorded tool call as one
-compact row only: `Why: <recorded rationale> Decision: <readable tool call>
-(Details)`. The Details pill exposes the raw recorded call on hover/focus.
+*UI cleanup from Jeffrey, 2026-08-25; revised the same day.* Render recorded
+tool calls in a compact three-column table: `Decision | Why | Details`.
+Decision and Why stay to one line and truncate rather than changing row height.
+The Details trigger stays in the far-right column and reveals its raw recorded
+call in one fixed Details panel, including on hover, keyboard focus, and click.
+The table spans the modal's full content width; the Details panel sits below it
+instead of reserving a desktop sidebar.
 Decision records are association data, not standalone visible rows. Codex and
 Claude use the same renderer and the same explicit-rationale-only rule.
 
@@ -691,3 +701,11 @@ succeeded, cloning back and running `cat part* | gzip -t` and reassembling
 into a `.db` confirmed a valid, queryable SQLite file. Restore procedure
 (`docs/backup-management.md`) updated to
 `cat latest.db.gz.part* > latest.db.gz && gzip -dk latest.db.gz`.
+### Finished Codex streams do not turn paragraph breaks into detail bubbles
+
+*Decision from Jeffrey, 2026-08-25.* When a Codex stream completes, a long
+blank-line-separated response (including the agent-debugger `Decision:`
+updates) must remain in one response bubble, not a wall of one-line `Detail`
+bubbles. Short unstructured replies may retain their existing restrained
+multi-beat treatment; authored Markdown headings remain the explicit way to
+request a titled report section.

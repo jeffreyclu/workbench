@@ -193,6 +193,17 @@ describe('classifyExecution', () => {
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['codex']);
   });
 
+  it('uses the final Codex agent message instead of saving the live transcript as the reply', async () => {
+    const progress = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Decision: Inspect the renderer before changing it.' } });
+    const interim = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'I found the completed-message boundary.' } });
+    const final = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Fixed the final response renderer and verified the focused test.' } });
+    const { directory } = fakeAgentDirectory(`printf '%s\\n%s\\n%s\\n' '${progress}' '${interim}' '${final}'`, 'exit 1');
+
+    const result = await runAgentCommandWithFallback('codex', directory, 'Fix the completed reply.');
+
+    expect(result.output).toBe('Fixed the final response renderer and verified the focused test.');
+  });
+
   it('falls back on a non-zero 429 diagnostic and preserves requested and executing agents', async () => {
     const { directory, log } = fakeAgentDirectory(
       `printf '%s\\n' 'HTTP 429: usage limit reached' >&2\nexit 1`,
@@ -674,6 +685,15 @@ describe('classifyExecution', () => {
     expect(multiLineClaudeText.audit).toEqual([]);
 
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'system', subtype: 'init' })).audit).toEqual([]);
+  });
+
+  it('keeps a codex Decision preamble out of the composed final reply while still streaming it live', () => {
+    const decisionEvent = readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Decision: Confirm the focused test still passes.' } }));
+    expect(decisionEvent.final).toBeNull();
+    expect(decisionEvent.progress).toBe('Decision: Confirm the focused test still passes.');
+
+    const replyEvent = readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Fixed the failing test.' } }));
+    expect(replyEvent.final).toBe('Fixed the failing test.');
   });
 
   it('spawns agent subprocesses with an allowlisted environment, never Workbench secrets', () => {

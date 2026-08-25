@@ -1,5 +1,13 @@
 ## Workbench frontend lessons
 
+### Interactive details need an in-app tooltip, not a native `title`
+
+*Confirmed 2026-08-25.* Browser-native `title` text is not a reliable details
+surface in Workbench and has no touch/click fallback. For compact controls that
+must reveal recorded data, use an explicit focusable control and render an
+in-app `role="tooltip"` on hover, keyboard focus, and click. Cover all of
+those entry paths in the component regression test.
+
 ### Promote UI/behavior fixes immediately instead of asking
 
 When a fix changes what Jeffrey sees in the Workbench UI (a rail section, a filter, a rendered
@@ -83,6 +91,16 @@ reload, reopening the conversation, or switching devices before the next send
 then loses the choice. All three fields are saved together through
 `PATCH /api/shared/conversations/:id/preferences`; message history is only the
 legacy fallback for conversations created before these preferences existed.
+
+### A dispatch response must describe the turn after dispatch
+
+*Confirmed 2026-08-25.* Creating a shared message can synchronously claim its
+queued human turn and start agent replies before the HTTP response returns. The
+create endpoint must return the persisted post-dispatch message state, not its
+pre-claim `queued` object. Composer code must also treat returned agent replies
+as definitive evidence that delivery already occurred. Otherwise an ordinary
+send incorrectly makes a follow-up `/interject` request against a completed
+human turn and surfaces `Queued message not found.` on every message.
 
 
 ### Execution account status is a compact status surface, not a login-button strip
@@ -553,3 +571,40 @@ the countdown timer, and cleared/reset if the same toast is re-pushed mid-exit.
 Every test that asserts a toast is gone after a dismiss now needs an extra
 `vi.advanceTimersByTime(200)` past the moment dismissal is triggered, or the
 assertion runs mid-exit-animation and sees a stale "still present" DOM node.
+
+### A finished Codex reply fragmented into a "Detail" bubble per line, each starting with "Decision:"
+
+*Confirmed 2026-08-25, root cause corrected same day.* Two separate bugs
+compounded into this symptom — fixing only the frontend split made it worse,
+because it hid the real cause instead of removing it.
+
+1. **Server-side (the actual cause of the "Decision:" text and the
+   proliferation of bubbles):** `readableAgentEvent` in `src/server/agent-runner.ts`
+   treated every Codex `agent_message` item as reply content, including
+   standalone `Decision: <rationale>` preambles that `AGENT_DEBUGGER_CONTRACT`
+   requires before each tool call. Each preamble is its own tiny
+   `agent_message`, and the code set `final: item.text` unconditionally, so
+   every one of those one-line rationales got appended into the composed final
+   reply — the same text that should only ever reach the live progress stream
+   and the audit-log debugger. Fixed by returning `final: null` whenever
+   `recordedDecision(text)` matches (i.e. the whole message is a `Decision:`
+   line), while still returning it as `progress` so it keeps streaming live.
+2. **Client-side (real, but secondary):** `splitAgentResponse`
+   (`src/client/agent-message-logic.ts`) falls back to splitting an unheaded
+   reply on blank lines when there are no `##` headings, producing a deck of
+   section cards. Once the server-side leak above is producing dozens of
+   one-line blocks, that fallback turns each into its own "Detail NN" bubble.
+   Jeffrey's explicit correction: **don't collapse the fallback split into one
+   card when there are many blocks** — he wants the detail-bubble treatment,
+   just not "a billion" of them. So `MAX_FALLBACK_SECTIONS = 4` now caps the
+   fallback by *grouping* excess blank-line blocks into at most 4 bubbles
+   (merging adjacent blocks with `Math.ceil(blocks.length / MAX)` per group)
+   rather than bailing out to a single unsplit card. Genuine short
+   multi-paragraph replies (2-4 blocks) are unaffected.
+
+Lesson: when a rendering symptom traces back to unexpected repeated short
+blocks, check the server-side event pipeline for a "this text serves two
+purposes" leak (progress vs. final, debugger vs. reply) before tuning the
+client-side splitting heuristic — the heuristic can mask the leak instead of
+fixing it, and over-correcting the heuristic (collapsing instead of capping)
+removes a feature the user explicitly wanted.

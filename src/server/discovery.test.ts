@@ -28,12 +28,14 @@ describe('runDiscovery proposal cycle', () => {
   let repository: WorkItemRepository;
 
   beforeEach(() => {
+    vi.stubEnv('LINEAR_API_KEY', '');
     database = openDatabase(':memory:');
     repository = new WorkItemRepository(database);
   });
 
   afterEach(() => {
     database.close();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 

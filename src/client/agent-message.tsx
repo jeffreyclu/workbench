@@ -81,12 +81,31 @@ function StreamingMarkdown({ content, streaming, renderMarkdown }: { content: st
   return renderMarkdown(revealed);
 }
 
-export function LiveRunOutput({ output, interjections = [] }: { output: string; interjections?: Array<{ id: string; body: string; pending: boolean }> }) {
+export function LiveRunOutput({ output, interjections = [] }: { output: string; interjections?: Array<{ id: string; body: string; pending: boolean; streamOffset?: number | null }> }) {
   const [visibleCount, setVisibleCount] = useState(LIVE_RUN_OUTPUT_PAGE_SIZE);
   const blocks = humanizeRunOutputBlocks(output);
+  // Pending interjections need a local boundary briefly. Accepted ones use the
+  // server-captured boundary, which survives a conversation remount.
+  const interjectionBoundariesRef = useRef(new Map<string, number>());
+  for (const interjection of interjections) {
+    if (interjection.streamOffset == null && !interjectionBoundariesRef.current.has(interjection.id)) {
+      interjectionBoundariesRef.current.set(interjection.id, blocks.length);
+    }
+  }
   if (blocks.length === 0 && interjections.length === 0) return null;
-  const hiddenCount = Math.max(0, blocks.length - visibleCount);
+  const defaultHiddenCount = Math.max(0, blocks.length - visibleCount);
+  // Do not page an interjection out of its own live timeline. Once one is
+  // present, retain the activity from that boundary onward.
+  const earliestInterjectionBoundary = interjections.reduce((earliest, interjection) => Math.min(
+    earliest,
+    interjection.streamOffset ?? interjectionBoundariesRef.current.get(interjection.id) ?? blocks.length,
+  ), blocks.length);
+  const hiddenCount = Math.min(defaultHiddenCount, earliestInterjectionBoundary);
   const visibleBlocks = blocks.slice(hiddenCount);
+  const interjectionsAt = (boundary: number) => interjections.filter((interjection) => {
+    const storedBoundary = interjection.streamOffset ?? interjectionBoundariesRef.current.get(interjection.id) ?? blocks.length;
+    return boundary === visibleBlocks.length ? storedBoundary >= hiddenCount + visibleBlocks.length : storedBoundary === hiddenCount + boundary;
+  });
   return (
     <div className="live-run-output" aria-label="Live agent activity">
       {hiddenCount > 0 && (
@@ -95,8 +114,16 @@ export function LiveRunOutput({ output, interjections = [] }: { output: string; 
         </button>
       )}
       <ol aria-live="polite">
-        {visibleBlocks.map((block, index) => <li key={`${block}-${index}`}>{block.replace(/^●\s*/, '')}</li>)}
-        {interjections.map((interjection) => (
+        {visibleBlocks.flatMap((block, index) => [
+          <li key={`activity-${hiddenCount + index}-${block}`}>{block.replace(/^●\s*/, '')}</li>,
+          ...interjectionsAt(index + 1).map((interjection) => (
+            <li key={interjection.id} className={`live-run-interjection${interjection.pending ? ' pending' : ''}`}>
+              <span>{interjection.pending ? 'You interjected (sending)' : 'You interjected'}</span>
+              <strong>{interjection.body}</strong>
+            </li>
+          )),
+        ])}
+        {visibleBlocks.length === 0 && interjectionsAt(0).map((interjection) => (
           <li key={interjection.id} className={`live-run-interjection${interjection.pending ? ' pending' : ''}`}>
             <span>{interjection.pending ? 'You interjected (sending)' : 'You interjected'}</span>
             <strong>{interjection.body}</strong>
@@ -107,7 +134,7 @@ export function LiveRunOutput({ output, interjections = [] }: { output: string; 
   );
 }
 
-export function AgentMessageBody({ body, running, conversationId, workItemId, interjections }: { body: string; running: boolean; conversationId?: string; workItemId?: string; interjections?: Array<{ id: string; body: string; pending: boolean }> }) {
+export function AgentMessageBody({ body, running, conversationId, workItemId, interjections }: { body: string; running: boolean; conversationId?: string; workItemId?: string; interjections?: Array<{ id: string; body: string; pending: boolean; streamOffset?: number | null }> }) {
   const sectionIdPrefix = useId();
   const humanized = running ? humanizeRunOutput(body) : body;
   const visibleBody = hideWorkbenchControlBlocks(humanized);

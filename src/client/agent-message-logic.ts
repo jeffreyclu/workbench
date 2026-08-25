@@ -3,6 +3,11 @@ export interface AgentResponseSection {
   body: string;
 }
 
+// Above this many blank-line-separated blocks, the reply reads as a plain
+// list rather than distinct paragraphs, so keep it as one card instead of a
+// deck of one-line "Detail" bubbles.
+const MAX_FALLBACK_SECTIONS = 4;
+
 function headingTitle(line: string): string {
   return line.replace(/^#{1,6}\s+/, '').replace(/[*_`]/g, '').trim();
 }
@@ -59,5 +64,16 @@ export function splitAgentResponse(body: string): AgentResponseSection[] {
   pushBlock();
 
   if (blocks.length < 2) return sections;
-  return blocks.map((content, index) => ({ title: index === 0 ? 'Brief' : `Detail ${String(index + 1).padStart(2, '0')}`, body: content }));
+
+  // Codex-style replies often put a blank line after every line (a plain list
+  // read out loud rather than prose paragraphs). Treating each of those as its
+  // own titled section turns the reply into a wall of one-line detail bubbles,
+  // so group the overflow into at most MAX_FALLBACK_SECTIONS beats instead of
+  // dropping the split entirely.
+  const grouped: string[] = [];
+  const groupSize = Math.ceil(blocks.length / MAX_FALLBACK_SECTIONS);
+  for (let i = 0; i < blocks.length; i += groupSize) {
+    grouped.push(blocks.slice(i, i + groupSize).join('\n\n'));
+  }
+  return grouped.map((content, index) => ({ title: index === 0 ? 'Brief' : `Detail ${String(index + 1).padStart(2, '0')}`, body: content }));
 }

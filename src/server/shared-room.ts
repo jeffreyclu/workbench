@@ -7,6 +7,7 @@ import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
+import { humanizeRunOutputBlocks } from '../client/run-output.js';
 
 const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
@@ -639,7 +640,7 @@ export async function interjectQueuedSharedMessage(repository: WorkItemRepositor
     .filter(({ reply, accepted }) => accepted && activeReplySteering.has(reply.id) && repository.getSharedMessageById(reply.id)?.status === 'running')
     .map(({ reply }) => reply);
   if (steered.length) {
-    repository.updateSharedMessage(messageId, { status: 'completed' });
+    repository.updateSharedMessage(messageId, { status: 'completed', interjectionStreamOffset: humanizeRunOutputBlocks(steered[0].body).length });
     publishRealtimeEvent('shared');
   }
   if (!steered.length) return [];

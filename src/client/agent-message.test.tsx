@@ -34,6 +34,15 @@ describe('splitAgentResponse', () => {
     ]);
   });
 
+  it('groups a plain line-per-block reply into a bounded number of detail bubbles instead of one per line', () => {
+    const lines = ['Line one.', 'Line two.', 'Line three.', 'Line four.', 'Line five.', 'Line six.'];
+    expect(splitAgentResponse(lines.join('\n\n'))).toEqual([
+      { title: 'Brief', body: 'Line one.\n\nLine two.' },
+      { title: 'Detail 02', body: 'Line three.\n\nLine four.' },
+      { title: 'Detail 03', body: 'Line five.\n\nLine six.' },
+    ]);
+  });
+
   it('keeps structured replies focused on their content instead of rendering a response map', () => {
     render(<AgentMessageBody body={'## Decision\nShip it.\n\n## Verification\nTests pass.'} running={false} />);
 
@@ -75,6 +84,42 @@ describe('splitAgentResponse', () => {
     expect(container.querySelectorAll('.live-run-output li')).toHaveLength(2);
     expect(container.textContent).toContain('Inspecting repository');
     expect(container.textContent).toContain('Running tests');
+  });
+
+  it('keeps an interjection at the activity boundary where it arrived', () => {
+    const { container, rerender } = render(<AgentMessageBody body={'● Inspecting\n\n● Reading files'} running />);
+    rerender(<AgentMessageBody
+      body={'● Inspecting\n\n● Reading files'}
+      running
+      interjections={[{ id: 'interjection-1', body: 'Focus on the failure.', pending: false }]}
+    />);
+    rerender(<AgentMessageBody
+      body={'● Inspecting\n\n● Reading files\n\n● Running tests'}
+      running
+      interjections={[{ id: 'interjection-1', body: 'Focus on the failure.', pending: false }]}
+    />);
+
+    expect(Array.from(container.querySelectorAll('.live-run-output li')).map((item) => item.textContent)).toEqual([
+      'Inspecting',
+      'Reading files',
+      'You interjectedFocus on the failure.',
+      'Running tests',
+    ]);
+  });
+
+  it('uses the persisted interjection boundary after remounting the live stream', () => {
+    const { container } = render(<AgentMessageBody
+      body={'● Inspecting\n\n● Reading files\n\n● Running tests'}
+      running
+      interjections={[{ id: 'interjection-1', body: 'Focus on the failure.', pending: false, streamOffset: 2 }]}
+    />);
+
+    expect(Array.from(container.querySelectorAll('.live-run-output li')).map((item) => item.textContent)).toEqual([
+      'Inspecting',
+      'Reading files',
+      'You interjectedFocus on the failure.',
+      'Running tests',
+    ]);
   });
 
   it('snaps streamed text to full once the message finishes running', async () => {

@@ -197,7 +197,10 @@ export function createConversationRouter({ repository, database, capabilities }:
       : input.dispatchTo === 'none' ? [] : [input.dispatchTo];
     const message = repository.createSharedMessage('jeffrey', input.body, agents.length ? 'queued' : 'completed', input.conversationId, attachments, input.dispatchTo, input.executionProfile, input.accountProfile ?? null);
     const replies = agents.length ? dispatchNextSharedTurn(repository, input.conversationId) : [];
-    response.status(202).json({ message, replies });
+    // Dispatch claims the queued human turn synchronously. Return the
+    // persisted post-dispatch state rather than the pre-claim object; callers
+    // use this status to decide whether an explicit interjection is needed.
+    response.status(202).json({ message: repository.getSharedMessageById(message.id) ?? message, replies });
   });
 
   router.patch('/api/shared/messages/:id', (request, response) => {

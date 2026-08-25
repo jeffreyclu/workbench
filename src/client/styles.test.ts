@@ -115,6 +115,17 @@ describe('phone dialogs', () => {
   });
 });
 
+describe('agent debugger layout', () => {
+  it('uses the dialog content width for the decision table and keeps Details below it', () => {
+    const wrapperRule = styles.match(/^\.decision-tree-table-wrap\s*\{[^}]*\}/m)?.[0] ?? '';
+    const tableRule = styles.match(/^\.decision-tree\s*\{[^}]*\}/m)?.[0] ?? '';
+
+    expect(wrapperRule).toContain('grid-template-columns: minmax(0, 1fr)');
+    expect(wrapperRule).not.toContain('190px');
+    expect(tableRule).toContain('width: 100%');
+  });
+});
+
 describe('interaction motion', () => {
   it('animates the requested interaction surfaces and honors reduced motion', () => {
     expect(styles).toContain('transition: grid-template-columns var(--motion-emphasized) var(--motion-ease)');

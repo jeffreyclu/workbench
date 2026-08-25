@@ -1164,6 +1164,7 @@ describe('WorkItemRepository', () => {
     expect(delivered).toBe('Use this direction');
     expect(repository.getSharedMessageById(running.id)).toEqual(expect.objectContaining({ status: 'running' }));
     expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'completed' }));
+    expect(repository.getSharedMessageById(interjected.id)?.interjectionStreamOffset).toBe(1);
     expect(repository.listAllSharedMessages(conversation.id)).toHaveLength(2);
   });
 

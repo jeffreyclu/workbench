@@ -29,7 +29,7 @@ const PROGRESS_FLUSH_MS = 250;
  * footprint proportional to the actual task rather than multiplying it across
  * fresh subagent contexts. */
 export const CLAUDE_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Report a command as passing only if it ran in this run and its output was observed.`;
-export const AGENT_DEBUGGER_CONTRACT = 'Before each tool call, emit a separate, concise `Decision: <why this tool is the next correct action>` message. This is recorded in the agent debugger, so use only an explicit, human-readable rationale; never expose or claim hidden reasoning.';
+export const AGENT_DEBUGGER_CONTRACT = 'Before each tool call, prefix that same turn with one concise `Decision: <why this tool is the next correct action>` line, then make the call — do not spend an extra turn on it. This is recorded in the agent debugger, so use only an explicit, human-readable rationale; never expose or claim hidden reasoning.';
 const activeRunControllers = new Map<string, AbortController>();
 export const isAgentRunActive = (id: string) => activeRunControllers.has(id);
 
@@ -586,7 +586,10 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
       if (item?.type === 'agent_message' && typeof item.text === 'string') {
         const decision = event.type === 'item.completed' ? recordedDecision(item.text) : null;
         const audit = decision ? [{ category: 'agent_tool_use' as const, streamKind: 'decision' as const, detail: decision }] : [];
-        return { progress: item.text, final: item.text, audit };
+        // Decision preambles are debugger-only rationale, not reply content:
+        // they still stream live (progress) but must never land in the
+        // composed final message, or every tool call becomes its own bubble.
+        return { progress: item.text, final: decision ? null : item.text, audit };
       }
       if (item?.type === 'reasoning' && typeof item.text === 'string') {
         const audit = event.type === 'item.completed' ? [{ category: 'agent_tool_use' as const, streamKind: 'decision' as const, detail: item.text.slice(0, 2_000) }] : [];
@@ -751,14 +754,12 @@ ${CLAUDE_EXECUTION_CONTRACT}` : instrumentedPrompt;
     let finalOutput = '';
     let terminalError = '';
     let lastProgressEvent = '';
-    let lastFinalEvent = '';
-    // Codex can emit more than one terminal `agent_message` item in a single run
-    // (e.g. an interim note followed by the real answer); replacing finalOutput on
-    // each one silently dropped every chunk but the last. Accumulate like progress does.
-    const appendFinal = (text: string) => {
-      if (!text || text === lastFinalEvent) return;
-      finalOutput += finalOutput ? `\n\n${text}` : text;
-      lastFinalEvent = text;
+    // Codex emits an `item.completed` event for every visible agent message,
+    // including its live status updates. The last non-debugger message is the
+    // completed reply; accumulating them turns the final bubble into a copy of
+    // the entire live transcript.
+    const setFinal = (text: string) => {
+      if (text) finalOutput = text;
     };
     const eventContext: AgentEventContext = { subagents: new Map() };
     const runModel = modelOverride ?? modelFor(agent, profile);
@@ -876,7 +877,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : instrumentedPrompt;
           progress += `${progress ? '\n\n' : ''}${event.progress}`;
           lastProgressEvent = event.progress;
         }
-        if (event.final) appendFinal(event.final);
+        if (event.final) setFinal(event.final);
         if (event.audit.length) onAudit?.(event.audit, agent);
       }
       if (progress) flushProgress();
@@ -899,7 +900,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : instrumentedPrompt;
         try { const usage = usageFromEvent(agent, JSON.parse(buffered.trim())); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
         const event = readableAgentEvent(agent, buffered.trim(), eventContext);
         if (event.progress && event.progress !== lastProgressEvent) progress += `${progress ? '\n\n' : ''}${event.progress}`;
-        if (event.final) appendFinal(event.final);
+        if (event.final) setFinal(event.final);
         if (event.audit.length) onAudit?.(event.audit, agent);
       }
       // The tokens written inside the last throttle window still belong to the
