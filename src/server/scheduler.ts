@@ -22,8 +22,11 @@ import type { WorkItemRepository } from './repository.js';
  * a process only ever renews leases on work it itself claimed.
  */
 export const OWNER_ID = randomUUID();
-export const LEASE_MS = 120_000;
-export const HEARTBEAT_MS = 20_000;
+// The lease itself is the recovery grace period. A 45-second lease with a
+// 10-second heartbeat detects a crashed runtime promptly without mistaking a
+// normal slow tool call for an abandoned run.
+export const LEASE_MS = 45_000;
+export const HEARTBEAT_MS = 10_000;
 export const TICK_MS = 5_000;
 export const RETENTION_MS = 24 * 60 * 60 * 1000;
 export const LIFECYCLE_REPORT_MS = (() => {
@@ -57,7 +60,7 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
   }, HEARTBEAT_MS);
   heartbeat.unref();
 
-  const tick = setInterval(() => {
+  const runTick = () => {
     const start = Date.now();
     try {
       const { recoveredRunIds, failedRunIds } = repository.reclaimExpired();
@@ -110,7 +113,8 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
     } catch (error) {
       repository.logDiagnostic('scheduler_error', 'scheduler', 'failure', `Tick failed: ${String(error)}`, Date.now() - start, 'tick_error');
     }
-  }, TICK_MS);
+  };
+  const tick = setInterval(runTick, TICK_MS);
   tick.unref();
 
   const retention = setInterval(() => {

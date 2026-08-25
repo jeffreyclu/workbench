@@ -1740,6 +1740,17 @@ describe('WorkItemRepository', () => {
       expect(repository.getSharedMessageById(rider.id)?.body).toBe('Combined into the release that just promoted.');
     });
 
+    it('coalesces concurrent promotion approvals into one active control-plane message', () => {
+      const firstConversation = repository.createConversation('First approval');
+      const secondConversation = repository.createConversation('Second approval');
+
+      const first = repository.queueRuntimePromotion(firstConversation.id);
+      const second = repository.queueRuntimePromotion(secondConversation.id);
+
+      expect(second.id).toBe(first.id);
+      expect(repository.listQueuedPromotionMessageIds()).toEqual([first.id]);
+    });
+
     it('hasLiveWork is true for a queued or running agent run or shared message, and false once both settle', () => {
       const conversation = repository.createConversation();
       expect(repository.hasLiveWork()).toBe(false);

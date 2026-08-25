@@ -58,6 +58,11 @@ export function agentStreamEventForCodexAppServerItem(method: string, item: Reco
   return null;
 }
 
+/** App-server sends debugger-only decision preambles as ordinary text deltas. */
+export function isCodexDecisionPreamble(text: string): boolean {
+  return /^\s*Decision:\s*/i.test(text);
+}
+
 export function codexTurnStartParams(threadId: string, cwd: string, prompt: string): Record<string, unknown> {
   return {
     threadId,
@@ -137,9 +142,13 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
           if (itemId) {
             if (!itemText.has(itemId)) itemOrder.push(itemId);
             itemText.set(itemId, `${itemText.get(itemId) ?? ''}${event.params.delta}`);
-            output = itemOrder.map((id) => itemText.get(id) ?? '').join('\n\n');
+            output = itemOrder
+              .map((id) => itemText.get(id) ?? '')
+              .filter((text) => !isCodexDecisionPreamble(text))
+              .join('\n\n');
           } else {
-            output += event.params.delta;
+            const next = `${output}${event.params.delta}`;
+            output = isCodexDecisionPreamble(next) ? '' : next;
           }
           onProgress(output);
         }

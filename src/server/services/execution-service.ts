@@ -150,11 +150,11 @@ export class ExecutionService {
    * `UnitOfWork` transaction so a whole reclamation pass commits or rolls
    * back together.
    */
-  reclaimExpired(graceMs = 3 * 60_000): { recoveredRunIds: string[]; failedRunIds: string[]; recoveredMessageIds: string[] } {
+  reclaimExpired(graceMs = 0): { recoveredRunIds: string[]; failedRunIds: string[]; recoveredMessageIds: string[] } {
     return this.unitOfWork.transaction(() => {
       const now = new Date().toISOString();
-      // A missed heartbeat is not proof of a restart. Wait through a grace period
-      // before recovery changes user-visible state.
+      // A lease remains valid until its expiry. Once it has expired, its owner
+      // has already missed multiple heartbeats and the collector can recover it.
       const recoveryCutoff = new Date(Date.now() - graceMs).toISOString();
       const { recoveredRunIds, failedRunIds } = this.runs.reclaimExpired(recoveryCutoff, now);
       // Shared messages with expired leases are interrupted (not retried). This also

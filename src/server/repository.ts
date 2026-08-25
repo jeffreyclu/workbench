@@ -597,6 +597,21 @@ export class WorkItemRepository {
     return message;
   }
 
+  /** Promotion is a global control-plane action: concurrent approvals share
+   * the same pending record rather than creating an unbounded FIFO. */
+  queueRuntimePromotion(conversationId: string): SharedMessage {
+    return this.unitOfWork.transaction(() => {
+      const active = this.database.prepare(`SELECT id FROM shared_messages
+        WHERE author = 'system' AND dispatch_target = 'promotion' AND status IN ('queued', 'running')
+        ORDER BY created_at ASC LIMIT 1`).get() as { id: string } | undefined;
+      if (active) {
+        const message = this.getSharedMessageById(active.id);
+        if (message) return message;
+      }
+      return this.createSharedMessage('system', 'Promotion queued. It will build once active agent work reaches a durable terminal state.', 'queued', conversationId, [], 'promotion');
+    });
+  }
+
   nextQueuedSharedTurn(conversationId: string, busyAgents: ReadonlySet<AgentRun['agent']> = new Set()): { message: SharedMessage; dispatchTarget: 'auto' | 'codex' | 'claude' | 'both' } | null {
     const rows = this.database.prepare(`SELECT id, dispatch_target FROM shared_messages
       WHERE conversation_id = ? AND author = 'jeffrey' AND status = 'queued'

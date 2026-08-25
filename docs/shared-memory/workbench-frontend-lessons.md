@@ -608,3 +608,11 @@ purposes" leak (progress vs. final, debugger vs. reply) before tuning the
 client-side splitting heuristic — the heuristic can mask the leak instead of
 fixing it, and over-correcting the heuristic (collapsing instead of capping)
 removes a feature the user explicitly wanted.
+
+**Follow-up confirmed 2026-08-25:** the first correction covered Codex CLI
+events in `readableAgentEvent`, but shared-room Codex runs use the app-server
+delta path in `runSteerableCodex`. That path composed final reply text directly
+from `item/agentMessage/delta`, so it bypassed the completed-item filter and
+still persisted every `Decision:` preamble. Filter standalone decision
+preambles while accumulating app-server delta text as well. Both transports
+must keep the preamble in the debugger audit only, never in the reply body.

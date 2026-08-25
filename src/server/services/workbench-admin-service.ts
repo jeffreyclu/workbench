@@ -297,7 +297,7 @@ export class WorkbenchAdminService {
       },
       promoteRuntime: (conversationId) => {
         if (!this.repository.getConversation(conversationId)) return { status: 404, body: { error: 'Conversation not found.' } };
-        const reply = this.repository.createSharedMessage('system', 'Promotion queued. It will build once active agent work reaches a durable terminal state.', 'queued', conversationId, [], 'promotion');
+        const reply = this.repository.queueRuntimePromotion(conversationId);
         return { message: reply };
       },
       listSourceConnections: this.listSourceConnections,

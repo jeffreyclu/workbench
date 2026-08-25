@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, memoryQueryForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, memoryQueryForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
 
 function message(index: number, body: string): SharedMessage {
   return {
@@ -172,5 +172,13 @@ describe('agentStreamEventForCodexAppServerItem', () => {
     expect(agentStreamEventForCodexAppServerItem('item/completed', {
       type: 'agentMessage', text: 'I updated the route and the test passes.',
     })).toBeNull();
+  });
+});
+
+describe('isCodexDecisionPreamble', () => {
+  it('recognizes the debugger-only message that must not become reply content', () => {
+    expect(isCodexDecisionPreamble('Decision: Inspect the route before editing.')).toBe(true);
+    expect(isCodexDecisionPreamble('  Decision: Run the focused test.')).toBe(true);
+    expect(isCodexDecisionPreamble('Fixed the route.')).toBe(false);
   });
 });
