@@ -615,9 +615,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       toast.success(linkedWorkItemId ? 'Conversation and related task archived.' : 'Conversation archived.');
       await queryClient.cancelQueries({ queryKey: ['shared-conversations'] });
       removeConversationFromCachedRails(archivedConversationId);
-      const successorId = nextConversationIdAfterRemoval(archivedConversationId, 'active');
       setConversationView('active');
-      setConversationId((current) => current === archivedConversationId ? successorId : current);
+      setConversationId((current) => current === archivedConversationId ? null : current);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['work-items'] }),
         queryClient.invalidateQueries({ queryKey: ['work-item-counts'] }),
@@ -656,8 +655,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
         removeConversationFromCachedRails(completedConversationId);
       }
       setConversationView('active');
-      const successorId = completedConversationId ? nextConversationIdAfterRemoval(completedConversationId, 'active') : null;
-      setConversationId((current) => current === completedConversationId ? successorId : current);
+      setConversationId((current) => current === completedConversationId ? null : current);
       void queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
     },
     onError: (error) => toastError('Could not complete the task.', error),
@@ -745,8 +743,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
         await queryClient.cancelQueries({ queryKey: ['shared-conversations'] });
         removeConversationFromCachedRails(archivedConversationId);
         setConversationView('active');
-        const successorId = nextConversationIdAfterRemoval(archivedConversationId, 'active');
-        setConversationId((current) => current === archivedConversationId ? successorId : current);
+        setConversationId((current) => current === archivedConversationId ? null : current);
       }
       void queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
     },
