@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { accountProfileForSharedReply, buildSharedReplyPrompt, classificationForLinkedItem, compactConversationHistory, compactSharedBrief, hasUntrackedContinuationClaim, resolveSharedReplyWorkingDirectory } from './shared-room.js';
+import { accountProfileForSharedReply, buildSharedReplyPrompt, classificationForLinkedItem, compactConversationHistory, compactSharedBrief, hasUntrackedContinuationClaim, memoryQueryForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
 
 function message(index: number, body: string): SharedMessage {
   return {
@@ -59,6 +59,16 @@ describe('compactConversationHistory', () => {
     expect(compacted).toContain('characters compacted; use retrieved memory');
     expect(compacted).toContain('start');
     expect(compacted).toContain('end');
+  });
+
+  it('grounds a short follow-up retrieval query in the preceding user decision', () => {
+    const messages = [
+      message(0, 'Cut prompt tokens, but do not lose durable decisions.'),
+      message(1, 'I found the shared-room history budget is 3,000 characters.'),
+      message(2, 'Yes, do it.'),
+    ];
+
+    expect(memoryQueryForSharedReply(messages)).toBe('Cut prompt tokens, but do not lose durable decisions.\nYes, do it.');
   });
 
   it('uses frontend-reviewer for a review-linked reply with no stored classification', () => {

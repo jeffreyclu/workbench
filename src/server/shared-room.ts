@@ -46,7 +46,7 @@ export function accountProfileForSharedReply(linkedItem: WorkItem | null, reques
   return requestedProfile?.trim() || (linkedItem ? defaultAccountProfileForTask(linkedItem) : DEFAULT_ACCOUNT_PROFILE);
 }
 
-export function compactConversationHistory(messages: SharedMessage[], budget = 3_000): string {
+export function compactConversationHistory(messages: SharedMessage[], budget = 1_500): string {
   const reserveForOlder = messages.length > 4 ? Math.min(900, Math.floor(budget * 0.15)) : 0;
   let remaining = Math.max(0, budget - reserveForOlder);
   const recent: string[] = [];
@@ -81,9 +81,9 @@ export function compactSharedBrief(sharedContext: string, budget = 700): string 
 }
 
 function formatRetrievedMemory(matches: Array<{ source: string; title: string; body: string; createdAt: string }>): string {
-  if (!matches.length) return 'Retrieved memory: no indexed match for the latest message. This does not mean nothing relevant exists — query /api/activity-memory directly with different terms before concluding history is silent on this.';
+  if (!matches.length) return 'Retrieved memory: no indexed match. Query /api/activity-memory with focused terms if needed.';
   const focused = matches.slice(0, 3);
-  return `Retrieved memory (top ${focused.length} hybrid FTS+embedding matches for the latest message, pulled automatically from the same index that backs /api/activity-memory — durable docs, past messages, activities, and agent-run output together): do not re-derive facts these already settle.\n${focused.map((match) => `- [${match.source}, ${match.createdAt}] ${match.title}: ${match.body.slice(0, 200).replace(/\s+/g, ' ')}`).join('\n')}`;
+  return `Retrieved memory (top ${focused.length} matches, same index as /api/activity-memory — docs, messages, activities, run output). Settled; don't re-derive.\n${focused.map((match) => `- [${match.source}, ${match.createdAt}] ${match.title}: ${match.body.slice(0, 200).replace(/\s+/g, ' ')}`).join('\n')}`;
 }
 
 export function buildSharedReplyPrompt(
@@ -106,7 +106,13 @@ ${formatRetrievedMemory(retrievedMemory ?? [])}
 Current conversation:
 ${compactConversationHistory(thread)}
 
-Respond directly to Jeffrey's latest message. Be concise and useful. Build on the shared context, but do not impersonate or wait for the other agent. Start by naming the relevant decision, handoff, or blocker from the structured shared brief that you are continuing; if it conflicts with observed state, say so before acting. The retrieved-memory block above is auto-pulled from the full durable Workbench history (docs, messages, activities, run output) for the latest message only — if you need a different angle, query it yourself: curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<focused terms>' --data 'limit=40'. Append anything durable you learn (a standing preference or correction) to the right docs/shared-memory/*.md topic file in the same turn instead of writing a private per-agent memory; consult docs/shared-memory.md's index only if the retrieved block didn't surface the topic you need to update. This is a non-interactive environment: use tools directly and never tell Jeffrey to grant a permission, approve a terminal prompt, or look at a dialog. If access is missing, name the exact unavailable integration or credential. Never launch detached/background work (including &, nohup, tmux, screen, or a subagent you will report on later): Workbench cannot track it after this CLI turn exits. Keep every command and delegated action foreground until its observed result is available, then report it in this response. If that is not possible, state that the work is blocked or incomplete.`;
+Answer Jeffrey concisely. State the decision, handoff, or blocker you are continuing and any conflict with observed state. Retrieved memory covers the latest message only; query more via curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=40'. Record durable facts in docs/shared-memory/*.md, never private memory. Workbench is non-interactive: use tools directly and report exact missing access. Finish foreground work now; never detach work or promise a later result.`;
+}
+
+/** A short follow-up needs the preceding user turn to retrieve the right decision. */
+export function memoryQueryForSharedReply(thread: SharedMessage[]): string {
+  const userTurns = thread.filter((message) => message.author === 'jeffrey' && message.body.trim());
+  return userTurns.slice(-2).map((message) => message.body.trim()).join('\n').slice(0, 2_000);
 }
 
 export function linearContextForPrompt(repository: WorkItemRepository, message: string): string {
@@ -237,13 +243,14 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
   try {
     const thread = repository.listSharedMessages(100, null, target.conversationId).messages.filter((message) => message.id !== messageId);
     const latestUserMessage = [...thread].reverse().find((message) => message.author === 'jeffrey')?.body ?? '';
+    const memoryQuery = memoryQueryForSharedReply(thread);
     const recentSourceReferences = thread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body);
     const connectionContext = await connectionContextForPrompt(repository, [latestUserMessage, ...recentSourceReferences].join('\n'));
     const linkedRun = runId ? repository.getRun(runId) : null;
     const linkedItem = linkedRun ? repository.get(linkedRun.workItemId) : null;
     const cwd = resolveSharedReplyWorkingDirectory(linkedItem);
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}.`);
-    const retrievedMemory = await repository.searchActivityMemory(latestUserMessage, 6).catch((error) => {
+    const retrievedMemory = await repository.searchActivityMemory(memoryQuery, 3).catch((error) => {
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
     });

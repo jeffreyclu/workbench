@@ -53,6 +53,15 @@ describe('conversation view controls', () => {
 
     expect(desktopNavigationRule).not.toContain('position: fixed');
   });
+
+  it('keeps the phone composer in normal flex flow and the jump control above it', () => {
+    const phoneRules = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.agent-console \.shared-thread \.jump-to-latest-button\s*\{[^}]*\}/)?.[0] ?? '';
+
+    expect(phoneRules).toContain('.agent-console .shared-composer {\n    /* This is a flex item below the scrolling thread. Sticky positioning made');
+    expect(phoneRules).toContain('position: relative; z-index: 2; flex: 0 0 auto;');
+    expect(phoneRules).toContain('.agent-console .shared-thread .jump-to-latest-button');
+    expect(phoneRules).toContain('position: sticky; bottom: 12px;');
+  });
 });
 
 describe('interaction motion', () => {

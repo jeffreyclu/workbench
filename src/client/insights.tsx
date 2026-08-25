@@ -142,10 +142,6 @@ function TokenUsageRows({ rows }: { rows: RunInsightsTokenUsage[] }) {
 }
 
 function CursingInsight({ data }: { data: RunInsights['cursing'] }) {
-  const angriestDay = data.byDay.reduce<{ day: string; count: number } | null>((current, day) => {
-    if (!current || day.count > current.count || (day.count === current.count && day.day > current.day)) return day;
-    return current;
-  }, null);
   const censorTerm = (term: string) => {
     const characters = [...term];
     return characters.length < 2 ? '*' : `${characters[0]}${'*'.repeat(characters.length - 1)}`;
@@ -159,7 +155,7 @@ function CursingInsight({ data }: { data: RunInsights['cursing'] }) {
     <div className="cursing-insight-stats">
       <div><span>Messages with curses</span><b>{data.messagesWithCurses}/{data.messagesAnalyzed}</b></div>
       <div><span>Frequency</span><b>{data.instancesPer100Messages.toFixed(1)} per 100</b></div>
-      <div><span>Angriest day</span><b>{angriestDay ? `${angriestDay.count} · ${angriestDay.day}` : '—'}</b></div>
+      <div><span>Angriest day</span><b>{data.last24Hours} · last 24h</b></div>
     </div>
     {cursedModels.length > 0 && <div className="cursing-model-list" aria-label="Curse count by responding model">
       {cursedModels.map(({ model, count, instancesPer100Messages }) => <span key={model}><b>{model}</b><em>{count} · {instancesPer100Messages.toFixed(1)}/100</em></span>)}

@@ -1,5 +1,9 @@
 ## Workbench product decisions
 
+### Angriest day is a rolling 24-hour metric
+
+On 2026-08-25, Jeffrey corrected the Insights definition: **Angriest day must reset every 24 hours.** It is not the historical maximum calendar day in the selected 7- or 30-day Insights range. Display the rolling 24-hour curse-instance count, ending at the time Insights is requested.
+
 ### Awaiting status and new-conversation account default
 
 *Decision from Jeffrey, 2026-08-24.*
@@ -253,3 +257,38 @@ redundant toast is skipped. Implemented in `App`
 (`src/client/features/navigation/app.tsx`), which compares the notification's
 target route (`/tasks/:id` or `/conversations/:id`) against the currently
 viewed task/conversation before deciding whether to toast.
+
+### Shared-room prompt token minimization
+
+*Decision from Jeffrey, 2026-08-24/25, executed 2026-08-25.* Durable shared
+facts must never be dropped from prompts (mandatory constraint,
+`docs/engineering-standards.md:179-185`), but redundant, invariant, or
+recoverable-via-RAG content should be trimmed aggressively, since retrieved
+memory (the same index backing `/api/activity-memory`) now reliably surfaces
+older context. Changes so far, each verified with typecheck + the relevant
+vitest suite:
+
+- Shared-room per-turn static instruction preamble trimmed (~500 static
+  characters removed) in `src/server/shared-room.ts`.
+- `agent-runner.ts`'s `buildPrompt` static instruction block (non-interactive/
+  execution-integrity/shared-brief/activity-memory/shared-memory/
+  live-progress) trimmed from 2,031 → 1,532 chars (~25%), same operating
+  constraints retained.
+- `compactConversationHistory`'s default raw-history budget in
+  `src/server/shared-room.ts` halved from 3,000 to 1,500 characters — older
+  turns beyond that budget are covered by the retrieved-memory block, not
+  raw history. The function's `budget` parameter remains overridable; only
+  the default (used at the real call site) changed.
+
+- `formatRetrievedMemory`'s header/no-match copy in `src/server/shared-room.ts`
+  trimmed (158 → 136 chars for the match-found header; 102 → 92 chars for the
+  no-match line) — same meaning, fewer static tokens resent every turn. Match
+  count (top 3) and per-match body truncation (200 chars) left unchanged;
+  cutting those further risks losing the actual retrieved content, which is
+  the opposite of what this optimization is for.
+
+Verified: typecheck clean; 57/57 tests pass (7 shared-room, 50 agent-runner).
+
+Next candidate identified but not yet executed: the `connectionContext` block
+(`contextForPrompt` from `connection-broker.ts`) hasn't been audited for
+static-text bloat the way the other three prompt sections have.

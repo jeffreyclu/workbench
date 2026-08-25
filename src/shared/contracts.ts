@@ -867,6 +867,8 @@ export interface RunInsights {
 
 export interface CurseInsight {
   total: number;
+  /** Curse instances in the rolling 24 hours ending when Insights is requested. */
+  last24Hours: number;
   messagesAnalyzed: number;
   messagesWithCurses: number;
   instancesPer100Messages: number;

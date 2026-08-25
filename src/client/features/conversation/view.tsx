@@ -404,6 +404,22 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   useEffect(() => {
     threadVirtualizer.measure();
   }, [threadLayoutSignature, threadVirtualizer]);
+  // While a message is streaming, its body reveals character-by-character on a
+  // rAF loop (see useTypewriter in agent-message.tsx) independent of the body
+  // text itself changing, so threadLayoutSignature never re-fires during the
+  // reveal. ResizeObserver alone can lag a frame or more behind that growth on
+  // slower mobile browsers, leaving later rows' translateY stuck at a stale
+  // offset and visibly overlapping the growing card. Re-measure every frame
+  // while anything is live to keep offsets in lockstep with the animation.
+  const hasRunningMessage = conversationMessages.some((message) => message.status === 'running');
+  useEffect(() => {
+    if (!hasRunningMessage) return;
+    let frame = requestAnimationFrame(function tick() {
+      threadVirtualizer.measure();
+      frame = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [hasRunningMessage, threadVirtualizer]);
   useEffect(() => {
     if (!conversationId || dispatchInitializedConversationId.current === conversationId || !messages.data) return;
     setDispatchTo(dispatchTargetForConversation(messages.data.messages));
@@ -920,8 +936,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           {createTasks.isPending && createTasks.variables?.conversationId === conversationId && <div className="finding-progress"><LoaderCircle className="spin" size={15} /><span><strong>Turning findings into tasks</strong><small>Reading the report and producing self-contained queue items…</small></span></div>}
           {createTasks.error && createTasks.variables?.conversationId === conversationId && <div className="finding-progress error-message"><X size={15} /><span><strong>Could not create tasks</strong><small>{createTasks.error.message}</small></span></div>}
           <div ref={endRef} />
+          {hasNewActivityBelow && <button type="button" className="jump-to-latest-button" onClick={jumpToLatest}><ArrowDown size={13} /> New activity · Jump to latest</button>}
         </div>
-        {hasNewActivityBelow && <button type="button" className="jump-to-latest-button" onClick={jumpToLatest}><ArrowDown size={13} /> New activity · Jump to latest</button>}
         {conversationDetail.isLoading ? <ConversationComposerSkeleton /> : conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <form className="shared-composer" onSubmit={submit}>
           {files.length > 0 && <div className="pending-files">{files.map((file) => <button type="button" key={`${file.name}-${file.size}`} onClick={() => setFiles((current) => current.filter((item) => item !== file))}><Paperclip size={11} /> {file.name} <X size={10} /></button>)}</div>}
           <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} placeholder="Message Codex or Claude…" ariaLabel="Message Codex or Claude" onSubmit={() => {

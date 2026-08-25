@@ -1,4 +1,5 @@
 import type { CurseInsight } from '../shared/contracts.js';
+import { localCalendarDate } from '../shared/due-date.js';
 import { MASKED_PROFANITY_PATTERNS, PROFANITY_TERMS } from './profanity-terms.js';
 
 const escapedTerms = [...PROFANITY_TERMS]
@@ -60,10 +61,12 @@ function canonicalTerm(match: string): string {
 }
 
 /** Counts whole-word profanity in Jeffrey's submitted messages without storing a second copy of the source text. */
-export function summarizeCursing(messages: Array<{ body: string; createdAt: string }>): CurseInsight {
+export function summarizeCursing(messages: Array<{ body: string; createdAt: string }>, now = new Date()): CurseInsight {
   const byTerm = new Map<string, number>();
   const byDay = new Map<string, number>();
+  const rollingWindowStart = now.getTime() - 24 * 60 * 60 * 1000;
   let total = 0;
+  let last24Hours = 0;
   let messagesWithCurses = 0;
 
   for (const message of messages) {
@@ -75,7 +78,8 @@ export function summarizeCursing(messages: Array<{ body: string; createdAt: stri
     if (matches.length === 0) continue;
     messagesWithCurses += 1;
     total += matches.length;
-    const day = message.createdAt.slice(0, 10);
+    if (new Date(message.createdAt).getTime() >= rollingWindowStart) last24Hours += matches.length;
+    const day = localCalendarDate(Date.parse(message.createdAt));
     byDay.set(day, (byDay.get(day) ?? 0) + matches.length);
     for (const term of matches) {
       byTerm.set(term, (byTerm.get(term) ?? 0) + 1);
@@ -84,6 +88,7 @@ export function summarizeCursing(messages: Array<{ body: string; createdAt: stri
 
   return {
     total,
+    last24Hours,
     messagesAnalyzed: messages.length,
     messagesWithCurses,
     instancesPer100Messages: messages.length === 0 ? 0 : total / messages.length * 100,

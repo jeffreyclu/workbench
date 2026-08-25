@@ -7,10 +7,11 @@ describe('summarizeCursing', () => {
       { body: 'This is fucking shit. Damn.', createdAt: '2026-08-20T09:00:00.000Z' },
       { body: 'A shitty handoff, but not assassin.', createdAt: '2026-08-20T10:00:00.000Z' },
       { body: 'Hell yeah.', createdAt: '2026-08-21T09:00:00.000Z' },
-    ]);
+    ], new Date('2026-08-21T10:00:00.000Z'));
 
     expect(summary).toEqual({
       total: 5,
+      last24Hours: 2,
       messagesAnalyzed: 3,
       messagesWithCurses: 3,
       instancesPer100Messages: 5 / 3 * 100,
@@ -27,8 +28,31 @@ describe('summarizeCursing', () => {
     });
   });
 
+  it('buckets by the local Workbench calendar day, not raw UTC, so late-night messages do not roll into the next day', () => {
+    // 2026-08-20T02:30 UTC is still 2026-08-19 in America/New_York (UTC-4 in August).
+    const summary = summarizeCursing([
+      { body: 'Fuck this.', createdAt: '2026-08-20T02:30:00.000Z' },
+      { body: 'Shit happens.', createdAt: '2026-08-20T12:00:00.000Z' },
+    ]);
+    expect(summary.byDay).toEqual([
+      { day: '2026-08-19', count: 1 },
+      { day: '2026-08-20', count: 1 },
+    ]);
+  });
+
   it('returns an explicit zero state when no messages are available', () => {
-    expect(summarizeCursing([])).toEqual({ total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] });
+    expect(summarizeCursing([])).toEqual({ total: 0, last24Hours: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] });
+  });
+
+  it('resets the angriest-day count after 24 hours instead of retaining the selected Insights window', () => {
+    const now = new Date('2026-08-25T12:00:00.000Z');
+    const summary = summarizeCursing([
+      { body: 'Fuck this old result.', createdAt: '2026-08-24T11:59:59.999Z' },
+      { body: 'This is shit right now.', createdAt: '2026-08-24T12:00:00.000Z' },
+    ], now);
+
+    expect(summary.total).toBe(2);
+    expect(summary.last24Hours).toBe(1);
   });
 
   it('uses the disk-backed comprehensive list while preserving whole-word boundaries', () => {
