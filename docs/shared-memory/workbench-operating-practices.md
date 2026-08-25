@@ -247,3 +247,13 @@ silently attributing someone else's failure to your own diff), `git stash` every
 check, then `git stash pop`. If the same failures appear with the change fully removed, they predate
 it and are out of scope — say so explicitly rather than blurring "my change is clean" with "the
 branch is clean."
+
+### Runtime promotions auto-commit and push the working tree (always)
+
+Jeffrey's standing instruction (2026-08-24): every runtime promotion must automatically `git add -A`,
+commit, and push the working tree in the background once the build succeeds — he does not want to
+separately ask for a commit/push after each promotion. This is implemented in
+`src/server/runtime-promotion.ts` (`commitAndPushAfterPromotion`, called from `promoteRuntime` after a
+successful build). Push failures are reported via the promotion's progress messages but must never
+fail the promotion itself — the runtime has already switched by that point. If you touch the promotion
+flow, keep this behavior intact.
