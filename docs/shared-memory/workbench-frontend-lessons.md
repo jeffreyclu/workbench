@@ -195,6 +195,15 @@ promotion system message before the runner marks it running; treating only
 bubble overlap on desktop. Any status that can be inserted or mutate its
 rendered content before a stable terminal measurement must use live flow.
 
+### A running agent reply needs a visible startup state
+
+*Confirmed 2026-08-25.* Server dispatch creates the agent reply as `running`
+with an empty body before the first progress chunk arrives. Do not conditionally
+omit the live-output component on that empty body: render a compact skeleton in
+the agent bubble immediately, then replace it with live activity as soon as
+text arrives. This keeps the active stream visible without changing dispatch or
+interjection behavior.
+
 ### The bounded conversation thread must not virtualize message rows
 
 *Confirmed 2026-08-25.* The conversation view intentionally renders only a

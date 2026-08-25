@@ -730,6 +730,8 @@ nav { display: grid; gap: 3px; }
 .shared-message p { margin: 8px 0 0; color: #c7c6bf; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .message-markdown { margin-top: 8px; min-width: 0; max-width: 100%; color: #c7c6bf; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; word-break: break-word; }.message-markdown > :first-child { margin-top: 0; }.message-markdown > :last-child { margin-bottom: 0; }.message-markdown p { white-space: normal; }.message-markdown ul, .message-markdown ol { padding-left: 22px; }.message-markdown li { margin: 3px 0; }.message-markdown code { padding: 1px 4px; color: #d9ed9b; background: #24251f; border-radius: 3px; font: 10px 'DM Mono'; }.message-markdown pre { position: relative; max-width: 100%; padding: 9px; overflow-x: auto; background: #0c0c0b; border: 1px solid #30302c; border-radius: 6px; }.message-markdown pre code { padding: 0; background: none; }
 .live-run-output { min-width: 0; max-width: 100%; margin-top: 9px; padding: 2px 0 2px 10px; border-left: 1px solid #3a4028; }
+.live-run-output-starting { min-height: 15px; }
+.live-run-output-skeleton { display: block; width: min(42%, 148px); height: 10px; border-radius: 3px; background: linear-gradient(90deg, #2a2d23 20%, #454a35 45%, #2a2d23 70%); background-size: 220% 100%; animation: loading-shimmer 1.25s ease-in-out infinite; }
 .live-run-output ol { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
 .live-run-output li { position: relative; padding-left: 11px; color: #aaa9a1; font: 10px/1.5 'DM Mono'; overflow-wrap: anywhere; word-break: break-word; }
 .live-run-output li::before { content: ''; position: absolute; top: .55em; left: 0; width: 4px; height: 4px; background: #778152; border-radius: 50%; }
@@ -831,6 +833,7 @@ nav { display: grid; gap: 3px; }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .spin { animation: spin .8s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes thinking-pulse { 0% { box-shadow: 0 0 0 0 #c6f43277; } 70% { box-shadow: 0 0 0 8px #c6f43200; } 100% { box-shadow: 0 0 0 0 #c6f43200; } }
+@keyframes loading-shimmer { to { background-position: -220% 0; } }
 @keyframes streaming-caret { 50% { opacity: .18; } }
 
 @media (max-width: 1200px) {

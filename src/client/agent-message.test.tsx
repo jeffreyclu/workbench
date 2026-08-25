@@ -66,6 +66,15 @@ describe('splitAgentResponse', () => {
     expect(screen.getByText('Receiving output')).toBeInTheDocument();
   });
 
+  it('keeps the live activity surface visible while a reply starts with no text', () => {
+    const { container } = render(<AgentMessageBody body="" running />);
+
+    expect(container.querySelector('[aria-label="Live agent activity"]')).toBeInTheDocument();
+    expect(container.textContent).toContain('Agent is starting');
+    expect(container.querySelector('.live-run-output-starting')).toBeInTheDocument();
+    expect(container.querySelector('.live-run-output-skeleton')).toBeInTheDocument();
+  });
+
   it('renders live activity immediately instead of treating it as a typed final reply', async () => {
     const { container, rerender } = render(<AgentMessageBody body="Hello" running />);
     await waitForFrame();

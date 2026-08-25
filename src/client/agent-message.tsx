@@ -92,7 +92,12 @@ export function LiveRunOutput({ output, interjections = [] }: { output: string; 
       interjectionBoundariesRef.current.set(interjection.id, blocks.length);
     }
   }
-  if (blocks.length === 0 && interjections.length === 0) return null;
+  if (blocks.length === 0 && interjections.length === 0) {
+    return <div className="live-run-output live-run-output-starting" aria-label="Live agent activity" aria-live="polite">
+      <span className="visually-hidden">Agent is starting</span>
+      <span className="live-run-output-skeleton" aria-hidden="true" />
+    </div>;
+  }
   const defaultHiddenCount = Math.max(0, blocks.length - visibleCount);
   // Do not page an interjection out of its own live timeline. Once one is
   // present, retain the activity from that boundary onward.
@@ -138,7 +143,7 @@ export function AgentMessageBody({ body, running, conversationId, workItemId, in
   const sectionIdPrefix = useId();
   const humanized = running ? humanizeRunOutput(body) : body;
   const visibleBody = hideWorkbenchControlBlocks(humanized);
-  if (!visibleBody && (!running || !interjections?.length)) return null;
+  if (!visibleBody && !running && !interjections?.length) return null;
   // Progress is operational context, not an authored reply. Keep its compact
   // activity feed distinct from the section-card treatment for final answers.
   if (running) return <LiveRunOutput output={visibleBody} interjections={interjections} />;
