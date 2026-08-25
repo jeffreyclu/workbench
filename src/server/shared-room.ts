@@ -33,6 +33,13 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
     const child = spawn('codex', ['app-server', '--stdio'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     let buffered = ''; let output = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
     const pendingSteers = new Map<number, (accepted: boolean) => void>();
+    // A steered turn emits a separate `agentMessage` item per exchange (the
+    // pre-interjection reply, then the reply to the steer). Deltas carry an
+    // `itemId`; concatenating them flat without an item boundary runs the two
+    // messages together, which reads as garbled/broken even though the steer
+    // landed correctly in the same turn.
+    const itemOrder: string[] = [];
+    const itemText = new Map<string, string>();
     const request = (method: string, params: Record<string, unknown>) => {
       const id = ++sequence;
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
@@ -72,7 +79,17 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
           // keeps streaming and no second reply is started.
           continue;
         }
-        if (event.method === 'item/agentMessage/delta' && typeof event.params?.delta === 'string') { output += event.params.delta; onProgress(output); }
+        if (event.method === 'item/agentMessage/delta' && typeof event.params?.delta === 'string') {
+          const itemId = typeof event.params?.itemId === 'string' ? event.params.itemId : null;
+          if (itemId) {
+            if (!itemText.has(itemId)) itemOrder.push(itemId);
+            itemText.set(itemId, `${itemText.get(itemId) ?? ''}${event.params.delta}`);
+            output = itemOrder.map((id) => itemText.get(id) ?? '').join('\n\n');
+          } else {
+            output += event.params.delta;
+          }
+          onProgress(output);
+        }
         if (event.method === 'turn/completed') { settled = true; resolveOutput(output.trim()); child.stdin.end(); }
         if (event.error) {
           if (typeof event.id === 'number' && pendingSteers.has(event.id)) {

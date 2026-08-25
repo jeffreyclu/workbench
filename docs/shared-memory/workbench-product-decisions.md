@@ -122,6 +122,16 @@ render but are not clickable, since the rail can only navigate to a conversation
 `api.searchShared` and `/api/shared/search` still exist server-side for anything that
 wants FTS-only conversation search, but nothing in the client calls it anymore.
 
+Corpus boundary clarification (2026-08-25): the hybrid index is materially
+stronger for Workbench questions because it only ingests Workbench's durable
+record (shared messages/conversations, activities, work items, agent-run
+instructions/output/errors, audit entries, and this repository's `docs/`). It
+does not index arbitrary external repositories, their files, or terminal
+history. For non-Workbench work, useful results therefore depend on that work
+having been recorded back into Workbench; this is an ingestion-coverage gap,
+not evidence of a different retrieval algorithm or a Workbench-only ranking
+path.
+
 ### Agent conversations are visual, not text walls
 
 *Decision from Jeffrey, 2026-08-23.*
@@ -529,43 +539,22 @@ correct there. Regression test:
 `src/server/app.test.ts` — "retrying one of two independent agent threads on
 the same task does not block the other".
 
-### Status: Google-Docs-style row comments on the public artifact page — done
+### Status: artifact comments — removed
 
-*Verified by Claude, 2026-08-25, per Jeffrey's decisions "comments should be
-on the PUBLIC page" then "google doc style... highlight rows and leave
-comments that appear off to the side".* Implementation was already complete
-from a prior handoff; this pass only verified and fixed test drift. The
-public artifact HTML (`renderCommentingLayer` in
-`src/server/artifact-publisher.ts`) injects a per-row comment button, a
-`box-shadow`-highlighted selected row, and a fixed side rail
-(`.wb-comment-rail`) with a thread + form, keyed off a page-local CSS-selector
-anchor (`main table:nth-of-type(n) tr:nth-of-type(n)`) computed client-side
-and persisted via `ArtifactComment.anchor`. Backed by
-`POST/GET /api/artifacts/:id/comments` and
-`PATCH /api/artifacts/:id/comments/:commentId`
-(`src/server/routes/artifact-router.ts`), a rate limiter
-(`createCommentRateLimiter`), and migration `046_artifact_comment_anchors`
-(additive column + index, forward-only per the DB-safety rule). The internal
-artifact drawer (`src/client/artifacts.tsx`) still shows the same comment
-thread read-only/resolve view for triage; it is not where coworkers leave
-feedback. Found and fixed one unrelated pre-existing bug while verifying:
-`src/server/database.test.ts`'s `EXPECTED_MIGRATIONS` list was missing
-`047_shared_message_dispatch_group` (an unrelated migration from other
-in-progress work on this branch), which failed `openDatabase` migration-count
-assertions — added the entry. Verification: `tsc --noEmit` clean; focused
-artifact/database/client suites (85 tests) pass; full suite passes except a
-pre-existing flaky teardown failure in `src/server/app.test.ts` ("lets an
-unblocked task past the gate", `ERR_INVALID_STATE` / "database is not open"
-during `releaseWorkspace`) that reproduces intermittently on full-suite runs
-but passes in isolation — unrelated to auth-gate backoff work on this
-branch, not to comments.
+*Decision from Jeffrey, 2026-08-25.* Artifact commenting is removed completely,
+including the public-page layer and the Artifacts-page UI. Do not restore it
+without an explicit new product decision.
 
-*Operational correction, 2026-08-25.* Runtime promotion alone does not update
-already-published artifact URLs: they serve immutable rendered snapshots. After
-shipping a public-artifact UI change, call `POST /api/artifacts/refresh-feedback`
-to redeploy the current snapshot set. This was run successfully for 49
-snapshots; direct fetches of the public Pages URLs confirmed the inline
-`Comment on this row` control and side rail were present.
+*Operational cleanup, 2026-08-25.* Published artifact pages are immutable
+Cloudflare Pages snapshots, so a runtime promotion does not update their HTML.
+The two legacy `BpTiwkt10jUFhuWF` snapshots (`/` and `/v1/`) were cleaned and
+the complete 94-page artifact tree was redeployed to
+`workbench-artifacts-jeffrey`. Direct fetches verified neither live URL contains
+the legacy comment markup. The superseded production deployment
+`212646d2-9542-4480-a486-d05bc5f348de`, which still served that markup on its
+deployment-specific hostname, was deleted and now returns 404. Future public
+artifact UI removals need the same snapshot rebuild/redeploy plus stale
+deployment cleanup.
 
 Reply badge content expansion (2026-08-25): once the model/RAG badge row was
 moved to its own line on both desktop and mobile (freeing horizontal room),
@@ -593,3 +582,30 @@ gate: the `pinned-reminder` query now sets `refetchInterval: 30 * 60_000`
 items still gates it entirely — zero pinned means no toast). Verified:
 `tsc --noEmit` clean; `vitest run src/client/App.test.tsx` 85/85 passing,
 including the existing pinned-reminder-toast navigation test.
+
+### RAG memory index now also ingests the shared ~/notes knowledge base
+
+*Fix from Jeffrey, 2026-08-25.* Root cause of "Workbench topics retrieve much
+better than non-Workbench work": `collectMemoryDocuments`
+(`src/server/memory-index.ts`) only ever ingested Workbench's own SQLite
+tables plus one hardcoded doc root (`docs/` in this repo). Durable knowledge
+recorded elsewhere — e.g. `~/notes/knowledge/*.md`, the tool-agnostic
+knowledge base Claude and Codex both write Writer/engineering facts into per
+`~/AGENTS.md` — was structurally invisible to search, no matter how good the
+ranking was. Changed `collectMemoryDocuments` to accept a `docRoots` list
+(defaults to `[workbench-docs: <cwd>/docs, notes: ~/notes]`), with each doc's
+`source_id` now namespaced by root label (`<label>:<relative path>`) to avoid
+collisions across roots. `docsRoot` (singular) is still accepted for
+backwards compat with the one caller that only wants the repo's own docs.
+Backfilled the live `data/workbench.db` by running `collectMemoryDocuments` +
+`indexPendingMemory` directly via `tsx` against the running DB — no server
+restart needed, since both `index.ts` startup and `repository.ts` search
+already re-run these before every query. Result: 60 new documents / 423
+chunks from `~/notes`, confirmed retrievable via
+`/api/activity-memory` (e.g. a query about Connectors' org/user permission
+model now surfaces `writer-connectors-permission-model.md`). This is still an
+ingestion-coverage fix, not a ranking fix — anything recorded only in a
+terminal session, another repo not scoped here, or a tool with no write-back
+to Workbench or `~/notes` remains unindexed by design. Verified: `tsc
+--noEmit` clean; `vitest run src/server/memory-index.test.ts` 15/15 passing;
+backfill + live retrieval confirmed against the running server on :5180.

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, relative, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { pipeline } from '@huggingface/transformers';
 import type { WorkbenchDatabase } from './database.js';
 import { buildFtsMatchQuery } from './fts-query.js';
@@ -178,12 +179,15 @@ function listMarkdownFiles(root: string): string[] {
   return found;
 }
 
-function collectDocCandidates(docsRoot: string): CandidateDocument[] {
+function collectDocCandidates(label: string, docsRoot: string): CandidateDocument[] {
   const candidates: CandidateDocument[] = [];
   for (const file of listMarkdownFiles(docsRoot)) {
     const body = readFileSync(file, 'utf8');
     if (!nonEmpty(body)) continue;
-    const sourceId = relative(docsRoot, file);
+    // Namespaced by root label: two roots (e.g. this repo's docs/ and the
+    // shared ~/notes knowledge base) can otherwise share a relative path and
+    // collide on the same (source, source_id) key.
+    const sourceId = `${label}:${relative(docsRoot, file)}`;
     const heading = body.match(/^#\s+(.+)$/m)?.[1]?.trim();
     candidates.push({
       source: 'doc', sourceId, conversationId: null, workItemId: null, actor: null,
@@ -198,13 +202,18 @@ function collectDocCandidates(docsRoot: string): CandidateDocument[] {
  * Jeffrey wants captured: shared messages, shared conversations, task
  * activity, agent-run prompts/responses/errors (as three independent
  * documents so a prompt is retrievable without its response), the audit log,
- * work items, and repo markdown under docs/. Skips null/empty bodies.
+ * work items, repo markdown under docs/, and the shared cross-tool knowledge
+ * base under ~/notes (durable facts recorded outside Workbench's own tables,
+ * e.g. by Codex). Skips null/empty bodies.
  *
  * Existing (source, source_id) hashes are fetched once up front so this is a
  * handful of full-table scans plus writes only for rows that are new or whose
  * content actually changed -- not a write per row on every call.
  */
-export function collectMemoryDocuments(database: WorkbenchDatabase, options: { docsRoot?: string } = {}): { upserted: number } {
+export function collectMemoryDocuments(
+  database: WorkbenchDatabase,
+  options: { docsRoot?: string; docRoots?: Array<{ label: string; path: string }> } = {},
+): { upserted: number } {
   const candidates: CandidateDocument[] = [];
 
   const messageRows = database.prepare(`
@@ -283,7 +292,11 @@ export function collectMemoryDocuments(database: WorkbenchDatabase, options: { d
     });
   }
 
-  candidates.push(...collectDocCandidates(options.docsRoot ?? resolve(process.cwd(), 'docs')));
+  const roots = options.docRoots ?? [
+    { label: 'workbench-docs', path: options.docsRoot ?? resolve(process.cwd(), 'docs') },
+    { label: 'notes', path: resolve(homedir(), 'notes') },
+  ];
+  for (const root of roots) candidates.push(...collectDocCandidates(root.label, root.path));
 
   return upsertMemoryDocuments(database, candidates);
 }
