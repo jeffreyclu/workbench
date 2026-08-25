@@ -6,9 +6,9 @@ const token = 'test-secret-token';
 function call(
   url: string,
   headers: Record<string, string | string[] | undefined> = {},
-  options: { gateToken?: string | null; remoteAddress?: string | null; env?: NodeJS.ProcessEnv } = {},
+  options: { gate?: ReturnType<typeof createAuthGate>; gateToken?: string | null; remoteAddress?: string | null; env?: NodeJS.ProcessEnv } = {},
 ) {
-  const { gateToken = token, remoteAddress = '127.0.0.1', env = {} } = options;
+  const { gate, gateToken = token, remoteAddress = '127.0.0.1', env = {} } = options;
   const sent: { status: number; headers: Record<string, string>; body?: string; nexted: boolean } = { status: 200, headers: {}, nexted: false };
   const response = {
     get statusCode() { return sent.status; },
@@ -16,7 +16,7 @@ function call(
     setHeader(name: string, value: string) { sent.headers[name] = value; },
     end(body?: string) { sent.body = body; },
   };
-  createAuthGate(gateToken, env)({ url, headers, socket: { remoteAddress } }, response, () => { sent.nexted = true; });
+  (gate ?? createAuthGate(gateToken, env))({ url, headers, socket: { remoteAddress } }, response, () => { sent.nexted = true; });
   return sent;
 }
 
@@ -86,6 +86,59 @@ describe('workbench auth gate', () => {
 
   it('rejects a wrong token of the same length', () => {
     expect(call('/api/work-items', { authorization: `Bearer ${'x'.repeat(token.length)}` }, { remoteAddress: '203.0.113.7' }).nexted).toBe(false);
+  });
+
+  it('backs off a client after five failed attempts', () => {
+    const gate = createAuthGate(token, {});
+    const options = { gate, remoteAddress: '203.0.113.7' };
+    for (let attempt = 0; attempt < 4; attempt++) {
+      expect(call('/api/work-items', { authorization: 'Bearer wrong' }, options).status).toBe(401);
+    }
+
+    const limited = call('/api/work-items', { authorization: 'Bearer wrong' }, options);
+    expect(limited.status).toBe(429);
+    expect(limited.headers['retry-after']).toBe('1');
+    expect(JSON.parse(limited.body!).error).toContain('Too many failed authentication attempts');
+    expect(call('/api/work-items', { authorization: 'Bearer wrong' }, options).status).toBe(429);
+  });
+
+  it('increases the backoff after another failed attempt', () => {
+    let timestamp = 0;
+    const gate = createAuthGate(token, {}, () => timestamp);
+    const options = { gate, remoteAddress: '203.0.113.7' };
+    for (let attempt = 0; attempt < 5; attempt++) call('/api/work-items', { authorization: 'Bearer wrong' }, options);
+
+    timestamp += 1_000;
+    const limited = call('/api/work-items', { authorization: 'Bearer wrong' }, options);
+    expect(limited.status).toBe(429);
+    expect(limited.headers['retry-after']).toBe('2');
+  });
+
+  it('isolates failed-attempt backoff by verified client address', () => {
+    const gate = createAuthGate(token, {});
+    const blockedClient = { gate, remoteAddress: '203.0.113.7' };
+    for (let attempt = 0; attempt < 5; attempt++) call('/api/work-items', { authorization: 'Bearer wrong' }, blockedClient);
+
+    expect(call('/api/work-items', { authorization: 'Bearer wrong' }, { gate, remoteAddress: '203.0.113.8' }).status).toBe(401);
+  });
+
+  it('does not treat requests without a token as failed attempts', () => {
+    const gate = createAuthGate(token, {});
+    const options = { gate, remoteAddress: '203.0.113.7' };
+    for (let attempt = 0; attempt < 5; attempt++) call('/api/work-items', { authorization: 'Bearer wrong' }, options);
+
+    expect(call('/api/work-items', {}, options).status).toBe(401);
+  });
+
+  it('clears a client failure count after successful authentication', () => {
+    const gate = createAuthGate(token, {});
+    const options = { gate, remoteAddress: '203.0.113.7' };
+    for (let attempt = 0; attempt < 4; attempt++) call('/api/work-items', { authorization: 'Bearer wrong' }, options);
+    expect(call('/api/work-items', { authorization: `Bearer ${token}` }, options).nexted).toBe(true);
+    for (let attempt = 0; attempt < 4; attempt++) {
+      expect(call('/api/work-items', { authorization: 'Bearer wrong' }, options).status).toBe(401);
+    }
+    expect(call('/api/work-items', { authorization: 'Bearer wrong' }, options).status).toBe(429);
   });
 
   it('exchanges a query token for a cookie and redirects the token out of the URL', () => {

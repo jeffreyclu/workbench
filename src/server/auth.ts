@@ -3,6 +3,11 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 export const authCookieName = 'workbench_token';
 const openPaths = new Set(['/api/health']);
 const artifactCommentPath = /^\/api\/artifacts\/[A-Za-z0-9_-]{1,64}\/comments$/;
+const failedAttemptsBeforeBackoff = 5;
+const initialBackoffMs = 1_000;
+const maxBackoffMs = 60_000;
+const failedAttemptStateTtlMs = 10 * 60_000;
+const maxTrackedClients = 10_000;
 
 export interface GateRequest {
   url?: string;
@@ -11,6 +16,60 @@ export interface GateRequest {
   socket?: { remoteAddress?: string | null } | null;
 }
 interface GateResponse { statusCode: number; setHeader(name: string, value: string): unknown; end(body?: string): unknown }
+
+interface FailedAuthAttempt {
+  failures: number;
+  blockedUntil: number;
+  updatedAt: number;
+}
+
+function createFailedAttemptLimiter(now = () => Date.now()) {
+  const attempts = new Map<string, FailedAuthAttempt>();
+
+  function removeExpired(timestamp: number): void {
+    for (const [client, attempt] of attempts) {
+      if (attempt.updatedAt + failedAttemptStateTtlMs > timestamp) continue;
+      attempts.delete(client);
+    }
+  }
+
+  return {
+    retryAfterSeconds(client: string): number | null {
+      const timestamp = now();
+      removeExpired(timestamp);
+      const attempt = attempts.get(client);
+      if (!attempt || attempt.blockedUntil <= timestamp) return null;
+      return Math.ceil((attempt.blockedUntil - timestamp) / 1_000);
+    },
+    recordFailure(client: string): number | null {
+      const timestamp = now();
+      removeExpired(timestamp);
+      const prior = attempts.get(client);
+      const failures = prior && prior.updatedAt + failedAttemptStateTtlMs > timestamp ? prior.failures + 1 : 1;
+      const backoffMs = failures < failedAttemptsBeforeBackoff
+        ? 0
+        : Math.min(initialBackoffMs * 2 ** (failures - failedAttemptsBeforeBackoff), maxBackoffMs);
+      attempts.set(client, { failures, blockedUntil: timestamp + backoffMs, updatedAt: timestamp });
+      while (attempts.size > maxTrackedClients) attempts.delete(attempts.keys().next().value!);
+      return backoffMs ? Math.ceil(backoffMs / 1_000) : null;
+    },
+    clear(client: string): void {
+      attempts.delete(client);
+    },
+  };
+}
+
+function respondWithAuthBackoff(response: GateResponse, pathname: string, retryAfter: number): void {
+  response.statusCode = 429;
+  response.setHeader('retry-after', String(retryAfter));
+  if (pathname.startsWith('/api/') || pathname === '/mcp') {
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ error: 'Too many failed authentication attempts. Try again shortly.' }));
+    return;
+  }
+  response.setHeader('content-type', 'text/html; charset=utf-8');
+  response.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workbench</title><body style="font:16px/1.5 system-ui;margin:3rem auto;max-width:28rem;padding:0 1rem"><h1>Try again shortly</h1><p>Too many failed authentication attempts came from this address.</p>');
+}
 
 export function generateToken(): string {
   return randomBytes(24).toString('base64url');
@@ -224,7 +283,8 @@ export function isRequestAuthorized(request: GateRequest, token: string | null |
  * proxy reporting a non-loopback client — e.g. a tunnel forwarding from an
  * external caller — stays gated like any other remote request.
  */
-export function createAuthGate(token: string | null | undefined, env: NodeJS.ProcessEnv = process.env) {
+export function createAuthGate(token: string | null | undefined, env: NodeJS.ProcessEnv = process.env, now: () => number = Date.now) {
+  const failedAttempts = createFailedAttemptLimiter(now);
   return function authGate(request: GateRequest, response: GateResponse, next: () => void): void {
     const expected = token === undefined ? configuredToken() : token;
     if (!expected) return next();
@@ -235,7 +295,18 @@ export function createAuthGate(token: string | null | undefined, env: NodeJS.Pro
     if (isOpenRequest(url.pathname, request.method)) return next();
 
     const offered = url.searchParams.get('token');
+    const presented = offered || bearerToken(request) || readCookie(request.headers.cookie as string | undefined, authCookieName);
+
+    if (client && presented) {
+      const retryAfter = failedAttempts.retryAfterSeconds(client);
+      if (retryAfter !== null) {
+        respondWithAuthBackoff(response, url.pathname, retryAfter);
+        return;
+      }
+    }
+
     if (offered && tokensMatch(expected, offered)) {
+      if (client) failedAttempts.clear(client);
       url.searchParams.delete('token');
       const attributes = ['Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=31536000'];
       if (isSecure(request, trustedProxies)) attributes.push('Secure');
@@ -246,7 +317,16 @@ export function createAuthGate(token: string | null | undefined, env: NodeJS.Pro
       return;
     }
 
-    if (isRequestAuthorized(request, expected, env)) return next();
+    if (isRequestAuthorized(request, expected, env)) {
+      if (client) failedAttempts.clear(client);
+      return next();
+    }
+
+    const retryAfter = client && presented ? failedAttempts.recordFailure(client) : null;
+    if (retryAfter !== null) {
+      respondWithAuthBackoff(response, url.pathname, retryAfter);
+      return;
+    }
 
     response.statusCode = 401;
     if (url.pathname.startsWith('/api/') || url.pathname === '/mcp') {
