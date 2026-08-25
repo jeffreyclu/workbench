@@ -52,6 +52,24 @@ function acquirePromotionLock(): () => void {
   }
 }
 
+function runGit(args: string[]): string {
+  const result = spawnSync('git', args, { cwd: root, env: process.env, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(`Promotion requires git ${args.join(' ')} to succeed.\n\n${result.stderr || result.stdout}`);
+  return result.stdout;
+}
+
+/** The release being copied must already be the exact commit on origin/main.
+ * The higher-level approval worker can create that commit; this final gate
+ * prevents manual/scripted promotion from bypassing the same invariant. */
+function assertMainIsPushed(): void {
+  const branch = runGit(['branch', '--show-current']).trim();
+  if (branch !== 'main') throw new Error(`Promotion requires main. Current branch: ${branch || 'detached HEAD'}.`);
+  if (runGit(['status', '--porcelain']).trim()) throw new Error('Promotion requires a clean worktree. Commit and push main first.');
+  runGit(['fetch', 'origin', 'main']);
+  if (runGit(['rev-list', 'origin/main..HEAD']).trim()) throw new Error('Promotion requires HEAD to be pushed to origin/main.');
+}
+
+assertMainIsPushed();
 const releaseLock = acquirePromotionLock();
 try {
 
