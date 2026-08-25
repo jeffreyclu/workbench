@@ -897,12 +897,9 @@ nav { display: grid; gap: 3px; }
   .agent-console-header .mobile-detail-close { position: absolute; top: 12px; right: 14px; }
   .agent-console-title { flex: 1 1 100%; min-width: 0; max-width: calc(100% - 44px); }
   .agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* A compact, always-visible dock: one non-wrapping row that scrolls
-     horizontally instead of stacking into extra vertical rows. Every action
-     stays a direct tap (44px targets, no overflow menu) while costing a
-     single row of height rather than however many a wrapped row would need. */
-  .conversation-window-actions { flex: 1 1 100%; flex-wrap: nowrap; margin: 8px 0 0; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
-  .conversation-window-actions::-webkit-scrollbar { display: none; }
+  /* Matches the task header's action row: wrap into extra rows rather than
+     cramming every action into one horizontally-scrolling line. */
+  .conversation-window-actions { flex: 1 1 100%; flex-wrap: wrap; justify-content: flex-start; gap: 8px; margin: 8px 0 0; }
   .conversation-window-actions .icon-button { flex: 0 0 auto; width: 44px; height: 44px; }
   .conversation-window-actions .conversation-task-picker { flex: 0 0 auto; min-height: 44px; }
   .conversation-window-actions .conversation-delete-control { flex: 0 0 auto; }

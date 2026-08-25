@@ -95,11 +95,11 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }');
   });
 
-  it('keeps mobile task-linked conversation controls in one scrollable dock instead of an overflow menu', () => {
+  it('wraps mobile task-linked conversation controls into extra rows like the task header, instead of an overflow menu', () => {
     const rule = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.conversation-window-actions \{[^}]*\}/)?.[0].match(/\.conversation-window-actions \{[^}]*\}/)?.[0] ?? '';
 
-    expect(rule).toContain('flex-wrap: nowrap');
-    expect(rule).toContain('overflow-x: auto');
+    expect(rule).toContain('flex-wrap: wrap');
+    expect(rule).not.toContain('overflow-x: auto');
     expect(styles).toContain('.conversation-window-actions .icon-button { flex: 0 0 auto; width: 44px; height: 44px; }');
   });
 });

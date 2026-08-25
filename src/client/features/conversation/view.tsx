@@ -522,6 +522,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
         queryClient.invalidateQueries({ queryKey: ['runtime-preview-status'] }),
       ]);
     },
+    onError: (error) => toastError('Could not approve the preview.', error),
   });
   const createConversation = useMutation({
     mutationFn: () => api.createSharedConversation(),
@@ -535,6 +536,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       setRailOpen(false);
       await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
     },
+    onError: (error) => toastError('Could not create a new conversation.', error),
     onSettled: () => { isCreatingConversationRef.current = false; },
   });
   function createNewConversation() {
@@ -717,6 +719,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       }
       await Promise.all([queryClient.invalidateQueries({ queryKey: ['shared-messages', variables.conversationId] }), queryClient.invalidateQueries({ queryKey: ['shared-conversations'] })]);
     },
+    onError: (error) => toastError('Could not turn those findings into tasks.', error),
   });
   const resolvePlan = useMutation({
     mutationFn: ({ resolution, archiveParent = false }: { resolution: 'accepted' | 'rejected'; archiveParent?: boolean }) =>
@@ -739,6 +742,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       }
       void queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
     },
+    onError: (error) => toastError('Could not resolve the plan.', error),
   });
   const latestMessage = messages.data?.messages.at(-1);
   const latestMessageLength = latestMessage?.body.length ?? 0;
@@ -811,19 +815,38 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     // and requiring a larger cumulative delta before committing a flip
     // absorbs that noise.
     let queued = false;
+    // Collapsing/expanding the header animates its height, which resizes this
+    // flex sibling mid-transition and can genuinely shift scrollTop as
+    // scrollHeight changes — a real, large-magnitude scroll event that clears
+    // the noise threshold above and reads as the reader reversing direction,
+    // flipping the header right back. Lock out flips for the transition's
+    // duration and re-anchor the baseline once layout has settled so the
+    // transition's own reflow never gets mistaken for reader intent.
+    let transitionLockTimer: ReturnType<typeof setTimeout> | undefined;
+    const settleDelayMs = 260;
     const updateHeaderVisibility = () => {
       queued = false;
+      if (transitionLockTimer) return;
       const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
       const scrollTop = Math.min(Math.max(container.scrollTop, 0), maxScrollTop);
       const delta = scrollTop - lastThreadScrollTopRef.current;
+      let flipped = false;
       if (scrollTop <= revealThreshold) {
         setConsoleHeaderHidden(false);
-        lastThreadScrollTopRef.current = scrollTop;
+        flipped = true;
       } else if (delta > revealThreshold) {
         setConsoleHeaderHidden(true);
-        lastThreadScrollTopRef.current = scrollTop;
+        flipped = true;
       } else if (delta < -revealThreshold) {
         setConsoleHeaderHidden(false);
+        flipped = true;
+      }
+      if (flipped) {
+        transitionLockTimer = setTimeout(() => {
+          transitionLockTimer = undefined;
+          lastThreadScrollTopRef.current = Math.min(Math.max(container.scrollTop, 0), Math.max(0, container.scrollHeight - container.clientHeight));
+        }, settleDelayMs);
+      } else {
         lastThreadScrollTopRef.current = scrollTop;
       }
     };
@@ -833,7 +856,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       requestAnimationFrame(updateHeaderVisibility);
     };
     container.addEventListener('scroll', onScroll, { passive: true });
-    return () => container.removeEventListener('scroll', onScroll);
+    return () => {
+      container.removeEventListener('scroll', onScroll);
+      if (transitionLockTimer) clearTimeout(transitionLockTimer);
+    };
   }, [conversationId]);
   const jumpToLatest = () => {
     isNearThreadBottomRef.current = true;
