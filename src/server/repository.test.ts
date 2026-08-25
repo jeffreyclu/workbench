@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync, rmSync } from 'node:fs';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
-import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, interjectionSteeringPrompt, registerActiveReplySteering } from './shared-room.js';
+import { cancelSharedReply, deliverPendingSharedInterjections, dispatchNextSharedTurn, interjectQueuedSharedMessage, interjectionSteeringPrompt, registerActiveReplySteering } from './shared-room.js';
 import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
@@ -158,6 +158,18 @@ describe('WorkItemRepository', () => {
     const results = await repository.searchActivityMemory(query, 100, { excludeExactBody: query });
 
     expect(results.some((result) => result.body === query)).toBe(false);
+  });
+
+  it('updates indexed conversation memory scope when the conversation is linked to a project task', async () => {
+    const task = repository.create({ title: 'Connectors task', description: '', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Unlinked history');
+    repository.createSharedMessage('jeffrey', 'The connector gateway has a project-scoped retrieval marker.', 'completed', conversation.id);
+
+    await repository.searchActivityMemory('project-scoped retrieval marker');
+    repository.setConversationWorkItem(conversation.id, task.id);
+    const scoped = await repository.searchActivityMemory('project-scoped retrieval marker', 100, { projectKey: 'connectors' });
+
+    expect(scoped.map((result) => result.body)).toContain('The connector gateway has a project-scoped retrieval marker.');
   });
 
   it('backfills cost for historical runs that recorded tokens but no cost, and does not overwrite an existing cost', () => {
@@ -1057,7 +1069,8 @@ describe('WorkItemRepository', () => {
   });
 
   it('shares one retrieval snapshot between concurrent Codex and Claude replies', async () => {
-    const conversation = repository.createConversation('Concurrent retrieval');
+    const task = repository.create({ title: 'Connectors retrieval', description: '', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Concurrent retrieval', task.id);
     repository.createSharedMessage('jeffrey', 'The durable fact has several relevant details.', 'completed', conversation.id);
     repository.createSharedMessage('jeffrey', 'Continue the durable fact investigation.', 'queued', conversation.id, [], 'both');
     const matches = Array.from({ length: 12 }, (_, index) => ({
@@ -1075,7 +1088,10 @@ describe('WorkItemRepository', () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       expect(retrieval).toHaveBeenCalledOnce();
-      expect(retrieval).toHaveBeenCalledWith('Continue the durable fact investigation.', 100, { excludeExactBody: 'Continue the durable fact investigation.' });
+      expect(retrieval).toHaveBeenCalledWith('Continue the durable fact investigation.', 400, {
+        excludeExactBody: 'Continue the durable fact investigation.',
+        projectKey: 'connectors',
+      });
       expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(expect.arrayContaining(['claude', 'codex']));
       const expectedTitles = matches.map((match) => match.title);
       expect(replies.map((reply) => repository.getRetrievedMemoryDetail(reply.id)?.items.map((item) => item.title))).toEqual([
@@ -1129,6 +1145,7 @@ describe('WorkItemRepository', () => {
       expect(repository.getSharedMessageById(running.id)).toEqual(expect.objectContaining({ status: 'running' }));
       expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({
         status: 'queued',
+        queuePriority: expect.any(Number),
       }));
       expect(repository.getSharedMessageById(earlier.id)).toEqual(expect.objectContaining({ status: 'queued' }));
   });
@@ -1148,6 +1165,37 @@ describe('WorkItemRepository', () => {
     expect(repository.getSharedMessageById(running.id)).toEqual(expect.objectContaining({ status: 'running' }));
     expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'completed' }));
     expect(repository.listAllSharedMessages(conversation.id)).toHaveLength(2);
+  });
+
+  it('automatically delivers an explicitly interjected message once Codex becomes steering-ready', async () => {
+    const conversation = repository.createConversation('Steering startup race');
+    const running = repository.createSharedMessage('codex', 'Starting…', 'running', conversation.id);
+    const interjected = repository.createSharedMessage('jeffrey', 'Stop exploring and implement it.', 'queued', conversation.id, [], 'codex');
+
+    // The click happens before app-server has returned the turn id.
+    await expect(interjectQueuedSharedMessage(repository, interjected.id)).resolves.toEqual([]);
+    expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'queued', queuePriority: 1 }));
+
+    let delivered = '';
+    registerActiveReplySteering(running.id, async (body) => {
+      delivered = body;
+      return true;
+    });
+    await deliverPendingSharedInterjections(repository, running.id);
+
+    expect(delivered).toBe('Stop exploring and implement it.');
+    expect(repository.getSharedMessageById(running.id)).toEqual(expect.objectContaining({ status: 'running' }));
+    expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'completed' }));
+  });
+
+  it('can interject an auto-routed message into the active Codex session', async () => {
+    const conversation = repository.createConversation('Auto steering');
+    const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);
+    const interjected = repository.createSharedMessage('jeffrey', 'Focus on the repro.', 'queued', conversation.id, [], 'auto');
+    registerActiveReplySteering(running.id, async () => true);
+
+    await expect(interjectQueuedSharedMessage(repository, interjected.id)).resolves.toEqual([expect.objectContaining({ id: running.id })]);
+    expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'completed' }));
   });
 
   it('makes a live interjection an explicit immediate instruction while preserving its text', () => {

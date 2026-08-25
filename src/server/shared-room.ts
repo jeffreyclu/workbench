@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
-import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classifyExecution, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type RetrievedMemory } from './agent-runner.js';
+import { projectKey } from '../shared/project-name.js';
+import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classifyExecution, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type AgentInputSteering, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -13,7 +14,7 @@ const replyRunIds = new Map<string, string>();
  * A live provider session owns this callback for the life of its reply.  An
  * interjection is input to that session, never a second reply/run.
  */
-type ActiveReplySteering = (body: string) => Promise<boolean>;
+type ActiveReplySteering = AgentInputSteering;
 const activeReplySteering = new Map<string, ActiveReplySteering>();
 export const isSharedReplyActive = (id: string) => activeReplies.has(id);
 
@@ -45,7 +46,17 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
       return id;
     };
-    const fail = (error: Error) => { if (!settled) { settled = true; reject(error); } };
+    const rejectPendingSteers = () => {
+      for (const resolveSteer of pendingSteers.values()) resolveSteer(false);
+      pendingSteers.clear();
+    };
+    const fail = (error: Error) => {
+      if (!settled) {
+        settled = true;
+        rejectPendingSteers();
+        reject(error);
+      }
+    };
     const stop = () => { try { process.kill(child.pid ? -child.pid : child.pid!, 'SIGTERM'); } catch { child.kill('SIGTERM'); } };
     const steer: ActiveReplySteering = (body) => {
       if (!threadId || !turnId || settled) return Promise.resolve(false);
@@ -90,7 +101,12 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
           }
           onProgress(output);
         }
-        if (event.method === 'turn/completed') { settled = true; resolveOutput(output.trim()); child.stdin.end(); }
+        if (event.method === 'turn/completed') {
+          settled = true;
+          rejectPendingSteers();
+          resolveOutput(output.trim());
+          child.stdin.end();
+        }
         if (event.error) {
           if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
             pendingSteers.get(event.id)!(false);
@@ -313,7 +329,10 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   const retrievalQuery = memoryQueryForSharedReply(retrievalThread);
   const retrieval: SharedReplyRetrieval = {
     query: retrievalQuery,
-    matches: repository.searchActivityMemory(retrievalQuery, PROMPT_MEMORY_CANDIDATE_LIMIT, { excludeExactBody: retrievalQuery }).catch((error) => {
+    matches: repository.searchActivityMemory(retrievalQuery, PROMPT_MEMORY_CANDIDATE_LIMIT, {
+      excludeExactBody: retrievalQuery,
+      projectKey: linkedItem ? projectKey(linkedItem.projectName) || undefined : undefined,
+    }).catch((error) => {
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
     }),
@@ -408,10 +427,16 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const recentSourceReferences = thread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body);
     const connectionContext = await connectionContextForPrompt(repository, [latestUserMessage, ...recentSourceReferences].join('\n'));
     const linkedRun = runId ? repository.getRun(runId) : null;
-    const linkedItem = linkedRun ? repository.get(linkedRun.workItemId) : null;
+    const linkedConversation = repository.getConversation(target.conversationId);
+    const linkedItem = linkedRun
+      ? repository.get(linkedRun.workItemId)
+      : linkedConversation?.workItemId ? repository.get(linkedConversation.workItemId) : null;
     const cwd = resolveSharedReplyWorkingDirectory(linkedItem);
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}.`);
-    const retrievedMemory = await (retrievalSnapshot?.matches ?? repository.searchActivityMemory(memoryQuery, PROMPT_MEMORY_CANDIDATE_LIMIT, { excludeExactBody: memoryQuery }).catch((error) => {
+    const retrievedMemory = await (retrievalSnapshot?.matches ?? repository.searchActivityMemory(memoryQuery, PROMPT_MEMORY_CANDIDATE_LIMIT, {
+      excludeExactBody: memoryQuery,
+      projectKey: linkedItem ? projectKey(linkedItem.projectName) || undefined : undefined,
+    }).catch((error) => {
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
     }));
@@ -440,7 +465,13 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       ? await runSteerableCodex(guardedPrompt, cwd, controller.signal, (partial) => {
         repository.updateSharedMessage(messageId, { body: partial });
         if (runId) repository.updateRun(runId, { output: partial });
-      }, (steer) => registerActiveReplySteering(messageId, steer)).then((output) => ({ output, agent: 'codex' as const, usage: { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null }, fallbackFrom: null, fallbackReason: null }))
+      }, (steer) => {
+        registerActiveReplySteering(messageId, steer);
+        // A click can arrive while the app-server is still creating its turn.
+        // Keep that explicitly promoted human message queued, then deliver it
+        // as soon as the same live session exposes turn/steer.
+        void deliverPendingSharedInterjections(repository, messageId);
+      }).then((output) => ({ output, agent: 'codex' as const, usage: { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null }, fallbackFrom: null, fallbackReason: null }))
       : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       repository.updateSharedMessage(messageId, { body: partial });
       if (runId) repository.updateRun(runId, { output: partial });
@@ -451,7 +482,10 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
       repository.updateSharedMessage(messageId, telemetry);
       if (runId) repository.updateRun(runId, telemetry);
-    }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE);
+    }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, agent === 'claude' ? (steer) => {
+      registerActiveReplySteering(messageId, steer);
+      void deliverPendingSharedInterjections(repository, messageId);
+    } : undefined);
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the turn to Codex.';
       if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'agent_fallback', reason);
@@ -529,9 +563,16 @@ export function cancelSharedReply(repository: WorkItemRepository, messageId: str
 }
 
 export async function interjectQueuedSharedMessage(repository: WorkItemRepository, messageId: string): Promise<SharedMessage[] | null> {
-  const message = repository.getSharedMessageById(messageId);
-  if (!message || message.status !== 'queued') return null;
-  const targets = message.dispatchTarget === 'both' ? ['codex', 'claude'] : [message.dispatchTarget];
+  // Priority is durable intent: if the provider session is still starting, its
+  // onReady callback will retry this message instead of making the user click
+  // Interject again. Only explicit Interject uses queuePriority.
+  const message = repository.promoteQueuedSharedMessage(messageId);
+  if (!message) return null;
+  const targets = message.dispatchTarget === 'both'
+    ? ['codex', 'claude']
+    : message.dispatchTarget === 'auto'
+      ? ['codex', 'claude']
+      : [message.dispatchTarget];
   const running = repository.listAllSharedMessages(message.conversationId)
     .filter((candidate) => candidate.status === 'running' && targets.includes(candidate.author));
   // Do not silently degrade into a second process. A provider that has not
@@ -553,6 +594,23 @@ export async function interjectQueuedSharedMessage(repository: WorkItemRepositor
   }
   if (!steered.length) return [];
   return steered;
+}
+
+/** Deliver explicitly interjected messages that arrived before Codex was ready. */
+export async function deliverPendingSharedInterjections(repository: WorkItemRepository, replyId: string): Promise<void> {
+  const reply = repository.getSharedMessageById(replyId);
+  if (!reply || reply.status !== 'running' || (reply.author !== 'codex' && reply.author !== 'claude')) return;
+  const pending = repository.listAllSharedMessages(reply.conversationId)
+    .filter((message) => message.author === 'jeffrey' && message.status === 'queued' && (message.queuePriority ?? 0) > 0)
+    .filter((message) => message.dispatchTarget === 'auto' || message.dispatchTarget === 'both' || message.dispatchTarget === reply.author)
+    .sort((left, right) => (right.queuePriority ?? 0) - (left.queuePriority ?? 0));
+  for (const message of pending) {
+    const steered = await interjectQueuedSharedMessage(repository, message.id);
+    // The session ended or rejected input. Leave this and any older
+    // interjections queued for the normal dispatcher; do not start a parallel
+    // provider turn or cancel the current one.
+    if (!steered?.length) break;
+  }
 }
 
 function synthesisSource(repository: WorkItemRepository, conversationId: string, replyCreatedAt: string): { prompt: string; codex: SharedMessage; claude: SharedMessage } | null {

@@ -3,6 +3,7 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type WorkItem } from '../shared/contracts.js';
+import { projectKey } from '../shared/project-name.js';
 import { AUTONOMOUS_MODEL_ALLOWLIST } from './autonomy-governor.js';
 
 const AUTONOMOUS_MODELS = new Set<string>(AUTONOMOUS_MODEL_ALLOWLIST);
@@ -207,7 +208,7 @@ Complete the requested capability. Report decisions, evidence, risks, files chan
 
 export type RetrievedMemory = { source: string; title: string; body: string; createdAt: string; score?: number };
 /** Candidate ceiling, not an injection target. Selection is relevance- and budget-driven. */
-export const PROMPT_MEMORY_CANDIDATE_LIMIT = 100;
+export const PROMPT_MEMORY_CANDIDATE_LIMIT = 400;
 const PROMPT_MEMORY_BUDGET = 6_000;
 const PROMPT_MEMORY_ITEM_BUDGET = 420;
 
@@ -466,6 +467,8 @@ export function effortFor(profile: ExecutionProfile): 'low' | 'medium' | 'high' 
   return profile === 'economy' ? 'low' : profile === 'standard' ? 'medium' : 'high';
 }
 
+export type AgentInputSteering = (body: string) => Promise<boolean>;
+
 export function commandFor(agent: AgentRun['agent'], cwd: string, profile: ExecutionProfile, modelOverride?: string): { command: string; args: string[] } {
   const effort = effortFor(profile);
   if (agent === 'codex') {
@@ -495,7 +498,9 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
     // CLI's most aggressive setting; these are bounded single-purpose tasks, not
     // long interactive chats, so trading a bit of far-back coherence for a hard
     // ceiling on runaway context growth is the right tradeoff here.
-    args: ['-p', '--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--disallowedTools', 'Task', '--output-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, '--no-session-persistence', '--disable-slash-commands', '--autocompact', '100k', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
+    // Keep stdin open for shared-room interjections. They become another user
+    // turn in this Claude process instead of canceling it or spawning another.
+    args: ['-p', '--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--disallowedTools', 'Task', '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, '--no-session-persistence', '--disable-slash-commands', '--autocompact', '100k', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
   };
 }
 
@@ -679,7 +684,7 @@ function terminalAgentError(agent: AgentRun['agent'], line: string): string | nu
   return null;
 }
 
-async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void, accountProfile = DEFAULT_ACCOUNT_PROFILE, modelOverride?: string): Promise<AgentCommandResult> {
+async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void, accountProfile = DEFAULT_ACCOUNT_PROFILE, modelOverride?: string, onSteeringReady?: (steer: AgentInputSteering) => void): Promise<AgentCommandResult> {
   const { command, args } = commandFor(agent, cwd, profile, modelOverride);
   return new Promise<AgentCommandResult>((resolveOutput, reject) => {
     const child = spawn(command, args, {
@@ -889,7 +894,24 @@ ${CLAUDE_EXECUTION_CONTRACT}` : prompt;
     // producing an EPIPE on this write that the `child.on('close'/'error', ...)`
     // handlers above already account for via cancellationRequested/terminationError.
     child.stdin.on('error', () => {});
-    child.stdin.end(efficientPrompt);
+    if (agent !== 'claude') {
+      child.stdin.end(efficientPrompt);
+      return;
+    }
+    const sendClaudeInput: AgentInputSteering = (body) => new Promise((resolve) => {
+      if (stopping || cancellationRequested || child.exitCode !== null || !child.stdin.writable) {
+        resolve(false);
+        return;
+      }
+      child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: body }] } })}\n`, (error) => {
+        resolve(!error && !stopping && !cancellationRequested && child.exitCode === null);
+      });
+    });
+    // Initial task input must be first; then a live interjection may append to
+    // the same provider session.
+    void sendClaudeInput(efficientPrompt).then((accepted) => {
+      if (accepted) onSteeringReady?.(sendClaudeInput);
+    });
   });
 }
 
@@ -935,10 +957,11 @@ export async function runAgentCommandWithFallback(
   kind: AgentRun['kind'] = 'analysis',
   accountProfile = DEFAULT_ACCOUNT_PROFILE,
   modelOverride?: string,
+  onSteeringReady?: (steer: AgentInputSteering) => void,
 ): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null }> {
   void kind;
   try {
-    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride);
+    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady);
     return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
   } catch (error) {
     // An autonomous reservation is provider+model specific. Crossing providers
@@ -1059,7 +1082,10 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // a broad handoff and manually discover related conversations or earlier
     // work. Retrieval failure is non-fatal: the task's own context remains
     // sufficient to run, and the prompt says exactly what was unavailable.
-    const retrievedMemory = await repository.searchActivityMemory(memoryQueryForRun(item, run), PROMPT_MEMORY_CANDIDATE_LIMIT, { refresh: false }).catch((error) => {
+    const retrievedMemory = await repository.searchActivityMemory(memoryQueryForRun(item, run), PROMPT_MEMORY_CANDIDATE_LIMIT, {
+      refresh: false,
+      projectKey: projectKey(item.projectName) || undefined,
+    }).catch((error) => {
       console.error('[agent-runner] memory retrieval failed for prompt injection', error);
       return [];
     });

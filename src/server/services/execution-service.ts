@@ -217,6 +217,40 @@ export class ExecutionService {
       ORDER BY created_at ASC`).all() as Array<{ id: string }>).map(({ id }) => id);
   }
 
+  /** Aggregate view of the promotion control plane so it can be surfaced
+   * prominently in the UI without every caller re-deriving it from
+   * `shared_messages` rows. Queue depth, the in-flight build's live progress
+   * text, and the most recent terminal build outcome. */
+  getPromotionQueueStatus(): {
+    queueLength: number;
+    oldestQueuedAt: string | null;
+    running: { conversationId: string | null; progress: string; startedAt: string } | null;
+    lastBuild: { status: 'succeeded' | 'failed'; at: string; summary: string } | null;
+  } {
+    const queued = this.database.prepare(`
+      SELECT COUNT(*) as count, MIN(created_at) as oldest FROM shared_messages
+      WHERE author = 'system' AND dispatch_target = 'promotion' AND status = 'queued'
+    `).get() as { count: number; oldest: string | null };
+    const running = this.database.prepare(`
+      SELECT conversation_id as conversationId, body as progress, created_at as startedAt FROM shared_messages
+      WHERE author = 'system' AND dispatch_target = 'promotion' AND status = 'running'
+      ORDER BY created_at ASC LIMIT 1
+    `).get() as { conversationId: string | null; progress: string; startedAt: string } | undefined;
+    const lastCompleted = this.database.prepare(`
+      SELECT status, body, error, completed_at as at FROM shared_messages
+      WHERE author = 'system' AND dispatch_target = 'promotion' AND status IN ('completed', 'failed') AND completed_at IS NOT NULL
+      ORDER BY completed_at DESC LIMIT 1
+    `).get() as { status: 'completed' | 'failed'; body: string; error: string | null; at: string } | undefined;
+    return {
+      queueLength: queued.count,
+      oldestQueuedAt: queued.oldest,
+      running: running ?? null,
+      lastBuild: lastCompleted
+        ? { status: lastCompleted.status === 'completed' ? 'succeeded' : 'failed', at: lastCompleted.at, summary: lastCompleted.status === 'failed' ? (lastCompleted.error || lastCompleted.body) : lastCompleted.body }
+        : null,
+    };
+  }
+
   /** A promotion snapshots the complete idle tree, so later queued approvals
    * waiting on that same idle point are fulfilled by the one release. */
   completeQueuedPromotionMessages(exceptId: string, body: string): void {

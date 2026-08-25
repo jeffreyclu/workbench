@@ -235,8 +235,11 @@ export function createConversationRouter({ repository, database, capabilities }:
   router.post('/api/shared/messages/:id/interject', async (request, response) => {
     const replies = await interjectQueuedSharedMessage(repository, request.params.id);
     if (!replies) return response.status(404).json({ error: 'Queued message not found.' });
-    if (!replies.length) return response.status(409).json({ error: 'The active response ended before it accepted this interjection. Your message is still queued.' });
-    response.json({ replies });
+    // A queued interjection is intentional, not an error. This happens while
+    // Codex is still opening its live turn, and when Claude cannot accept live
+    // input; in both cases the original stream continues and the message keeps
+    // its priority for automatic delivery or normal dispatch.
+    response.status(replies.length ? 200 : 202).json({ replies, pending: !replies.length });
   });
 
   router.post('/api/shared/messages/:id/create-tasks', (request, response) => {

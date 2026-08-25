@@ -15,6 +15,7 @@ import {
   Cloud,
   Command,
   FileText,
+  GitBranch,
   LoaderCircle,
   MessageCircle,
   MessageSquarePlus,
@@ -66,6 +67,7 @@ import { SourcesDialog } from '../../sources-dialog';
 import { createTaskStackViewModel } from '../../stack-view-model';
 import { useRealtimeNotifications, type RealtimeNotification } from '../../realtime';
 import { conversationData, conversationQueryKeys } from './data';
+import { DecisionTreeVisualizer } from './decision-tree-visualizer';
 import { celebrate } from '../../celebrate';
 import { useDebouncedValue } from './hooks';
 
@@ -278,6 +280,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const setConversationView = (next: 'active' | 'archive') => { setOwnConversationView(next); onViewChange?.(next); };
   const [deleteConversationPromptOpen, setDeleteConversationPromptOpen] = useState(false);
   const [retrievedMemoryMessageId, setRetrievedMemoryMessageId] = useState<string | null>(null);
+  const [decisionTreeOpen, setDecisionTreeOpen] = useState(false);
   const [conversationSearch, setConversationSearch] = useState('');
   const [dismissedCompletionPromptPromotionId, setDismissedCompletionPromptPromotionId] = useState<string | null>(null);
   const debouncedConversationSearch = useDebouncedValue(conversationSearch.trim(), 300);
@@ -716,8 +719,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   });
   const interjectMessage = useMutation({
     mutationFn: api.interjectSharedMessage,
-    onSuccess: () => {
-      toast.success('Interjection started. The current response will continue.');
+    onSuccess: ({ pending }) => {
+      toast.success(pending
+        ? 'Interjection queued. The current response will continue.'
+        : 'Interjection sent. The current response will continue.');
       return queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] });
     },
     onError: (error) => toastError('Could not interject that message.', error),
@@ -1023,7 +1028,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               ?? (pendingSelectedConversation?.id === conversationId ? pendingSelectedConversation.title
                   : conversationDetail.isLoading ? <span className="conversation-title-skeleton"><Skeleton width="240px" height="19px" /></span>
                   : selectedConversationMissing ? 'Conversation not found'
-                    : 'New conversation')}</h2>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={12} /> Back to task</button>}</div>{conversationId && selectedConversation && <div className="conversation-window-actions">{!selectedConversation.workItemId && <ConversationTaskPicker tasks={linkableTasks.data?.items ?? []} isLoading={linkableTasks.isLoading} isError={linkableTasks.isError} isPending={setConversationTask.isPending} onRetry={() => void linkableTasks.refetch()} onSelect={(workItemId) => setConversationTask.mutate(workItemId)} />}{selectedConversation.workItemId && <button type="button" className="icon-button conversation-unlink-task" onClick={() => setConversationTask.mutate(null)} disabled={setConversationTask.isPending} aria-label="Unlink task" title="Unlink task"><Link2Off size={14} /></button>}{linkedWorkItem.data?.item && <button type="button" className="icon-button complete-task-button" disabled={linkedTaskCompleted || completeLinkedTask.isPending} onClick={() => completeLinkedTask.mutate()} aria-label={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'} title={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'}>{completeLinkedTask.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}</button>}<button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<span className={`conversation-delete-control ${selectedConversation.workItemId ? 'is-disabled' : ''}`} tabIndex={selectedConversation.workItemId ? 0 : undefined}><button className="icon-button delete-conversation-button" disabled={Boolean(selectedConversation.workItemId)} onClick={() => setDeleteConversationPromptOpen(true)} aria-label="Delete conversation" aria-describedby={selectedConversation.workItemId ? 'linked-conversation-delete-help' : undefined} title={selectedConversation.workItemId ? undefined : 'Delete permanently'}><Trash2 size={14} /></button>{selectedConversation.workItemId && <span id="linked-conversation-delete-help" className="action-tooltip" role="tooltip">Delete the related task to delete this conversation.</span>}</span></div>}</header>
+                  : 'New conversation')}</h2>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={12} /> Back to task</button>}</div>{conversationId && selectedConversation && <div className="conversation-window-actions"><button type="button" className="icon-button" onClick={() => setDecisionTreeOpen(true)} aria-label="Open agent decision tree" title="Open agent decision tree"><GitBranch size={14} /></button>{!selectedConversation.workItemId && <ConversationTaskPicker tasks={linkableTasks.data?.items ?? []} isLoading={linkableTasks.isLoading} isError={linkableTasks.isError} isPending={setConversationTask.isPending} onRetry={() => void linkableTasks.refetch()} onSelect={(workItemId) => setConversationTask.mutate(workItemId)} />}{selectedConversation.workItemId && <button type="button" className="icon-button conversation-unlink-task" onClick={() => setConversationTask.mutate(null)} disabled={setConversationTask.isPending} aria-label="Unlink task" title="Unlink task"><Link2Off size={14} /></button>}{linkedWorkItem.data?.item && <button type="button" className="icon-button complete-task-button" disabled={linkedTaskCompleted || completeLinkedTask.isPending} onClick={() => completeLinkedTask.mutate()} aria-label={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'} title={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'}>{completeLinkedTask.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}</button>}<button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<span className={`conversation-delete-control ${selectedConversation.workItemId ? 'is-disabled' : ''}`} tabIndex={selectedConversation.workItemId ? 0 : undefined}><button className="icon-button delete-conversation-button" disabled={Boolean(selectedConversation.workItemId)} onClick={() => setDeleteConversationPromptOpen(true)} aria-label="Delete conversation" aria-describedby={selectedConversation.workItemId ? 'linked-conversation-delete-help' : undefined} title={selectedConversation.workItemId ? undefined : 'Delete permanently'}><Trash2 size={14} /></button>{selectedConversation.workItemId && <span id="linked-conversation-delete-help" className="action-tooltip" role="tooltip">Delete the related task to delete this conversation.</span>}</span></div>}</header>
         {linkedWorkItem.data?.item && <div className="thread-filter-bar"><TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} /><button type="button" className={`icon-button${linkedWorkItem.data.item.status === 'pinned' ? ' icon-button-active' : ''}`} onClick={() => toggleLinkedTaskPin.mutate()} disabled={toggleLinkedTaskPin.isPending} aria-pressed={linkedWorkItem.data.item.status === 'pinned'} aria-label={linkedWorkItem.data.item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'} title={linkedWorkItem.data.item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'}><Pin size={13} fill={linkedWorkItem.data.item.status === 'pinned' ? 'currentColor' : 'none'} /></button></div>}
         <div className="shared-thread" ref={threadScrollRef}>
           {conversationDetail.isLoading && <ConversationThreadSkeleton />}
@@ -1147,6 +1152,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       {planArchivePromptOpen && <FollowUpArchiveDialog count={selectedPlanTaskIndexes.size} pending={resolvePlan.isPending} onClose={() => setPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolvePlan.mutate({ resolution: 'accepted', archiveParent })} />}
       {deleteConversationPromptOpen && conversationId && <ConfirmationDialog title="Delete this conversation?" description="This permanently deletes the conversation and cannot be undone." confirmLabel="Delete conversation" pending={deleteConversation.isPending} onClose={() => setDeleteConversationPromptOpen(false)} onConfirm={() => deleteConversation.mutate(conversationId)} />}
       {retrievedMemoryMessageId && <RetrievedMemoryDialog detail={retrievedMemoryDetail.data?.detail} loading={retrievedMemoryDetail.isLoading} onClose={() => setRetrievedMemoryMessageId(null)} />}
+      {decisionTreeOpen && <DecisionTreeVisualizer messages={allConversationMessages} onClose={() => setDecisionTreeOpen(false)} />}
     </main>
   );
 }

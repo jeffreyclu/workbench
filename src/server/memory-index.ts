@@ -304,8 +304,10 @@ export function collectMemoryDocuments(
 function upsertMemoryDocuments(database: WorkbenchDatabase, candidates: CandidateDocument[]): { upserted: number } {
   if (!candidates.length) return { upserted: 0 };
 
-  const existing = database.prepare('SELECT source, source_id, content_hash FROM memory_documents').all() as Array<{ source: string; source_id: string; content_hash: string }>;
-  const existingHashes = new Map(existing.map((row) => [`${row.source}::${row.source_id}`, row.content_hash]));
+  const existing = database.prepare('SELECT source, source_id, content_hash, conversation_id, work_item_id, actor, created_at FROM memory_documents').all() as Array<{
+    source: string; source_id: string; content_hash: string; conversation_id: string | null; work_item_id: string | null; actor: string | null; created_at: string;
+  }>;
+  const existingDocuments = new Map(existing.map((row) => [`${row.source}::${row.source_id}`, row]));
 
   const insert = database.prepare(`
     INSERT INTO memory_documents (id, source, source_id, conversation_id, work_item_id, actor, title, body, created_at, content_hash, indexed_at)
@@ -326,6 +328,10 @@ function upsertMemoryDocuments(database: WorkbenchDatabase, candidates: Candidat
   // first since the document row itself is not being deleted (ON DELETE
   // CASCADE does not fire on an UPDATE).
   const clearChunks = database.prepare('DELETE FROM memory_chunks WHERE document_id = (SELECT id FROM memory_documents WHERE source = ? AND source_id = ?)');
+  const updateMetadata = database.prepare(`
+    UPDATE memory_documents SET conversation_id = ?, work_item_id = ?, actor = ?, created_at = ?
+    WHERE source = ? AND source_id = ?
+  `);
 
   let upserted = 0;
   database.exec('BEGIN IMMEDIATE;');
@@ -333,9 +339,18 @@ function upsertMemoryDocuments(database: WorkbenchDatabase, candidates: Candidat
     for (const candidate of candidates) {
       const hash = createHash('sha256').update(`${candidate.title}::${candidate.body}`).digest('hex');
       const key = `${candidate.source}::${candidate.sourceId}`;
-      const previousHash = existingHashes.get(key);
-      if (previousHash === hash) continue;
-      if (previousHash !== undefined) clearChunks.run(candidate.source, candidate.sourceId);
+      const previous = existingDocuments.get(key);
+      if (previous?.content_hash === hash) {
+        if (previous.conversation_id !== candidate.conversationId
+          || previous.work_item_id !== candidate.workItemId
+          || previous.actor !== candidate.actor
+          || previous.created_at !== candidate.createdAt) {
+          updateMetadata.run(candidate.conversationId, candidate.workItemId, candidate.actor, candidate.createdAt, candidate.source, candidate.sourceId);
+          upserted += 1;
+        }
+        continue;
+      }
+      if (previous !== undefined) clearChunks.run(candidate.source, candidate.sourceId);
       insert.run(
         randomUUID(), candidate.source, candidate.sourceId, candidate.conversationId, candidate.workItemId,
         candidate.actor, candidate.title, candidate.body, candidate.createdAt, hash,
@@ -429,7 +444,7 @@ type MemoryDocumentRow = {
  * Never throws on the embedding side -- a model failure or an empty
  * embeddings table just falls back to the FTS ranking alone.
  */
-export async function searchMemory(database: WorkbenchDatabase, query: string, options: { limit?: number; sources?: string[] } = {}): Promise<MemorySearchResult[]> {
+export async function searchMemory(database: WorkbenchDatabase, query: string, options: { limit?: number; sources?: string[]; projectKey?: string } = {}): Promise<MemorySearchResult[]> {
   const trimmed = query.trim();
   if (trimmed.length < 2) return [];
   const limit = Math.max(1, Math.min(100, options.limit ?? 20));
@@ -479,7 +494,17 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
 
   const documentIds = [...bestByDocument.keys()];
   const placeholders = documentIds.map(() => '?').join(',');
-  const documents = database.prepare(`SELECT * FROM memory_documents WHERE id IN (${placeholders})`).all(...documentIds) as MemoryDocumentRow[];
+  // Project scope belongs at retrieval, before score sorting and prompt
+  // selection. Otherwise unrelated high-frequency transcripts can displace
+  // the linked project's evidence before it has a chance to be deduplicated.
+  const projectKey = options.projectKey?.trim() || null;
+  const documents = database.prepare(`
+    SELECT * FROM memory_documents
+    WHERE id IN (${placeholders})
+      AND (? IS NULL OR work_item_id IN (
+        SELECT id FROM work_items WHERE project_key = ? AND deleted_at IS NULL
+      ))
+  `).all(...documentIds, projectKey, projectKey) as MemoryDocumentRow[];
   const documentById = new Map(documents.map((doc) => [doc.id, doc]));
 
   const results: MemorySearchResult[] = [];

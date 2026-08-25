@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -81,6 +81,7 @@ describe('classifyExecution', () => {
     const claude = commandFor('claude', '/tmp/project', 'economy').args;
     expect(codex).toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(claude).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--disallowedTools', 'Task']));
+    expect(claude).toEqual(expect.arrayContaining(['--input-format', 'stream-json']));
     expect(claude).not.toContain('--forward-subagent-text');
     expect(claude).toEqual(expect.arrayContaining(['--autocompact', '100k']));
     expect(claude).toEqual(expect.arrayContaining(['--add-dir', '/tmp/project', homedir()]));
@@ -95,6 +96,24 @@ describe('classifyExecution', () => {
     // under dozens of identical markers, and the raw reasoning is never printed.
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'thinking' } } }))).toEqual({ progress: '', final: null, audit: [] });
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'private' } } }))).toEqual({ progress: '', final: null, audit: [] });
+  });
+
+  it('keeps Claude stdin open and appends an interjection after the initial prompt', async () => {
+    const fixture = fakeAgentDirectory('exit 1', 'exit 1');
+    const { directory, log } = fixture;
+    const script = `IFS= read -r first; printf '%s\\n' \"$first\" >> '${log}'; IFS= read -r second; printf '%s\\n' \"$second\" >> '${log}'; printf '%s\\n' '{\"type\":\"result\",\"result\":\"Applied the interjection.\"}'`;
+    writeFileSync(join(directory, 'claude'), `#!/bin/sh\nprintf '%s\\n' 'claude' >> '${log}'\n${script}\n`);
+    chmodSync(join(directory, 'claude'), 0o755);
+    const result = await runAgentCommandWithFallback('claude', directory, 'Start the task.', undefined, undefined, undefined, 'economy', undefined, undefined, 'analysis', undefined, undefined, (steer) => {
+      void steer('Change direction now.');
+    });
+
+    expect(result.output).toBe('Applied the interjection.');
+    const lines = readFileSync(log, 'utf8').trim().split('\n').slice(1).map((line) => JSON.parse(line));
+    expect(lines.map((line) => line.message.content[0].text)).toEqual([
+      `Start the task.\n\nClaude execution budget:\n${CLAUDE_EXECUTION_CONTRACT}`,
+      'Change direction now.',
+    ]);
   });
 
   it('shows streamed text once rather than twice when the completed block arrives', async () => {
@@ -584,8 +603,8 @@ describe('classifyExecution', () => {
     expect(buildPrompt(item('Build it'), run)).toContain('no permission prompts or dialogs exist to approve');
   });
 
-  it('uses one hundred as a candidate ceiling, not an injection target', () => {
-    expect(PROMPT_MEMORY_CANDIDATE_LIMIT).toBe(100);
+  it('uses four hundred as a candidate ceiling, not an injection target', () => {
+    expect(PROMPT_MEMORY_CANDIDATE_LIMIT).toBe(400);
   });
 
   it('injects bounded, untrusted historical retrieval into task prompts', () => {

@@ -394,3 +394,34 @@ required field, or accidentally duplicating one during a merge). The fix is alwa
 field in the literal object, not to touch the promotion queue or release script. When a promotion
 failure message includes a `tsc` line/column error, diagnose it as a type-fixture drift first — run
 `npx tsc -b` locally to see the full list before assuming the queue itself is flaky.
+
+### Offsite database backups must survive GitHub's file-size limit
+
+On 2026-08-25, launchd continued creating local SQLite snapshots every four hours, but GitHub had
+silently rejected every offsite push since 2026-08-24 because `latest.db` exceeded its 100 MB
+per-file limit. `scripts/backup.ts` now gzip-compresses and splits the redacted snapshot into
+90 MB `latest.db.gz.partNNNN` files before pushing. The chunks must be staged with `git add -f`,
+because generated archives may be ignored by the backup repository. Restore with
+`cat latest.db.gz.part* > latest.db.gz && gzip -dk latest.db.gz`, then run SQLite integrity and
+foreign-key checks. A manual push plus a launchd RunAtLoad run both succeeded after the fix; the
+remote copy passed `PRAGMA integrity_check` and `PRAGMA foreign_key_check`.
+
+### Promotion queue depth, in-flight progress, and last build outcome are now globally visible
+
+Jeffrey's request (2026-08-25): "i need to see the promotion queue and promotion status and build
+status" and "this needs to be prominent." The existing `/api/runtime/preview-status` +
+`getRuntimePreviewStatus` pair only answers "does the current editable tree differ from what's
+promoted," and the only place it surfaced was a per-conversation approval banner — not global. Added
+`ExecutionService.getPromotionQueueStatus()` (queried straight off existing `shared_messages` rows
+filtered on `dispatch_target = 'promotion'`; no migration needed, since queue depth, the running
+row's progress body, and the latest completed/failed row's body/error were already columns on that
+table), a `WorkItemRepository.getPromotionQueueStatus()` delegate, a new
+`GET /api/runtime/promotion-status` route, a `runtimeClient.getPromotionQueueStatus()` client method,
+and a `PromotionQueueStatus` widget rendered directly under the sidebar brand mark in
+`navigation/view.tsx` (global, on every page, polling every 2s) — showing "Promoting…" + queued
+count while running, "N promotions queued" while idle with a backlog, or the last build's
+success/failure once the queue is empty. While touching `system-router.ts` also fixed a duplicate
+`response.json(runtimePreviewStatus())` call in the existing preview-status handler (Express throws
+`ERR_HTTP_HEADERS_SENT` on a second `.json()` call in one handler; it had not yet been hit in
+practice because the first call already ends the response before the second executes, but it was a
+live latent bug).

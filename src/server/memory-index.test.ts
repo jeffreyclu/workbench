@@ -79,11 +79,11 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     setEmbedder(null);
   });
 
-  function insertDocument(id: string, source: string, title: string, body: string): void {
+  function insertDocument(id: string, source: string, title: string, body: string, workItemId: string | null = null): void {
     database.prepare(`
       INSERT INTO memory_documents (id, source, source_id, conversation_id, work_item_id, actor, title, body, created_at, content_hash, indexed_at)
-      VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, NULL)
-    `).run(id, source, id, title, body, new Date().toISOString(), `hash-${id}`);
+      VALUES (?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, NULL)
+    `).run(id, source, id, workItemId, title, body, new Date().toISOString(), `hash-${id}`);
   }
 
   it('chunks, embeds, and marks pending documents as indexed', async () => {
@@ -123,6 +123,21 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     const results = await searchMemory(database, 'restart scheduler', { sources: ['message'] });
     expect(results.length).toBeGreaterThan(0);
     expect(results.every((result) => result.source === 'message')).toBe(true);
+  });
+
+  it('filters retrieval to memories attached to the requested project before ranking', async () => {
+    const timestamp = '2026-08-25T00:00:00.000Z';
+    database.prepare(`INSERT INTO work_items (id, title, queue_position, project_name, project_key, created_at, updated_at, last_touched_at)
+      VALUES ('connectors-task', 'Connectors task', 1, 'Connectors', 'connectors', ?, ?, ?),
+             ('other-task', 'Other task', 2, 'Other', 'other', ?, ?, ?)`)
+      .run(timestamp, timestamp, timestamp, timestamp, timestamp, timestamp);
+    insertDocument('connectors-memory', 'message', 'Connectors', 'Duplicate fetches in connector gateway.', 'connectors-task');
+    insertDocument('other-memory', 'message', 'Other', 'Duplicate fetches in another system.', 'other-task');
+    await indexPendingMemory(database);
+
+    const results = await searchMemory(database, 'duplicate fetches', { projectKey: 'connectors' });
+
+    expect(results.map((result) => result.sourceId)).toEqual(['connectors-memory']);
   });
 
   it('returns no results for a query shorter than the minimum length', async () => {

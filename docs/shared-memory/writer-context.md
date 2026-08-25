@@ -151,3 +151,30 @@ document, the evidence pointing to it being spoken shorthand for the real "Agent
 When a term cannot be confirmed in code, say so and attribute it to the meeting rather than presenting
 it as an established name. Asking Jeffrey to confirm the term is not productive — he is reporting what
 he heard, not what he knows.
+
+### Writer terminology: confirmed acronym set
+
+Researched in Slack and Confluence and reconciled with `writer-monorepo` on 2026-08-25. Use these
+expansions consistently: **AIS** = AI Studio; **WA** = Writer Agent (historically Action Agent);
+**ABv1/ABv2** = Agent Builder version 1/version 2, with ABv1 the legacy path and ABv2 the current
+container-based deploy platform; **CG** = Connector Gateway; **MCP** = Model Context Protocol;
+**WDS** = Writer Design System; **EKM** = Encryption Key Management (**correction, 2026-08-25**: not
+"Enterprise Key Management" — every in-repo source, e.g. `docs/ekm-fields.md` and
+`backend/services/ekm/README.md`, spells it "Encryption"); **RAG** = retrieval-augmented generation;
+and **LLM** = large language model.
+
+Added the same day from a static repo-only sweep (no Confluence/Slack access in that session — see
+below): **WfP** = Workers-for-Platforms, Cloudflare's multi-tenant Worker isolation product, used for
+Agent Builder's deploy-path consolidation (`docs/cloudflare/agent-builder-map.md`); **BYOK** = Bring
+Your Own Key (customer-supplied model credentials) — this is the standard industry expansion inferred
+from usage, not a verbatim in-repo spell-out, so treat it as high-confidence rather than confirmed;
+**WE** = a Jira project-key prefix distinct from **ACTION**, expansion unconfirmed (usage pattern
+only); **GHA/GHCR** = GitHub Actions / GitHub Container Registry, generic and not Writer-specific.
+
+The source-of-truth onboarding glossary is `~/notes/knowledge/writer-product-surfaces.md`; use
+product names rather than abbreviations in user-facing writing unless the abbreviation is established
+by the surrounding material. Note that Confluence/Slack access is not always available session to
+session — a 2026-08-25 session confirmed no MCP integration exists for either and that `WebFetch`
+against Confluence redirects to an Atlassian SSO login it cannot complete, so verify claims of
+"researched in Confluence/Slack" against what a given session could actually reach before trusting
+them.

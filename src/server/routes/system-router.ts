@@ -23,7 +23,9 @@ export function createSystemRouter({ repository, admin }: RouteContext) {
   const router = Router();
   router.get('/api/runtime/preview-status', (_request, response) => {
     response.json(runtimePreviewStatus());
-    response.json(runtimePreviewStatus());
+  });
+  router.get('/api/runtime/promotion-status', (_request, response) => {
+    response.json(repository.getPromotionQueueStatus());
   });
   router.get('/api/insights', (request, response) => {
     const days = z.enum(['7', '30']).catch('30').parse(request.query.days);

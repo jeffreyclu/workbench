@@ -553,7 +553,7 @@ export class WorkItemRepository {
    * the request path (a poller keyed off a watermark) rather than doing it
    * here.
    */
-  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number }>> {
+  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; projectKey?: string } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number }>> {
     if (query.trim().length < 2) return [];
     if (options.refresh !== false) {
       try {
@@ -564,7 +564,7 @@ export class WorkItemRepository {
       }
     }
     const safeLimit = Math.max(1, Math.min(100, limit));
-    const results = await searchMemory(this.database, query, { limit: safeLimit });
+    const results = await searchMemory(this.database, query, { limit: safeLimit, projectKey: options.projectKey });
     const excludedBody = options.excludeExactBody?.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
     return results.map((result) => ({
       source: legacyMemorySource(result.source),
@@ -1803,6 +1803,10 @@ export class WorkItemRepository {
    * active deployment. It returns to the visible queue for the next worker. */
   requeueExpiredPromotionMessages(): number {
     return this.execution.requeueExpiredPromotionMessages();
+  }
+
+  getPromotionQueueStatus() {
+    return this.execution.getPromotionQueueStatus();
   }
 
   activeRunsForItem(workItemId: string): AgentRun[] {

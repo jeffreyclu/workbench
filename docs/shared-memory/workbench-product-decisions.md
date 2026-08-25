@@ -465,6 +465,14 @@ conversations, activities, and docs. The public result limit remains 100 and
 prompt injection remains query-relative, non-duplicative, and constrained by
 the prompt token budget; this change expands only the candidates considered.
 
+Project-scoped retrieval (2026-08-25): a conversation linked to a task must
+retrieve from every indexed message, activity, run, and task record attached
+to that task's canonical project before rank selection. A corpus-wide ranking
+lets unrelated long transcripts exhaust the relative-score threshold and leave
+only one visible match. Unlinked conversations remain corpus-wide; project
+filtering excludes only records attached to other projects, not the public
+read-only search endpoint.
+
 Current-turn echo exclusion (2026-08-25): shared-room retrieval must exclude
 an indexed message whose body is exactly the current retrieval query before
 relevance selection. Otherwise that just-created self-match can become the
@@ -481,11 +489,11 @@ protocol, so a runner owned by another process receives the cancellation
 request and terminates its CLI process tree instead of merely changing the
 message's displayed status.
 
-### Interject steers the active provider turn; it never queues or forks
+### Interject steers the active provider turn; it never forks or cancels
 
 *Decision from Jeffrey, 2026-08-25.* Interject is live input to every matching
 active agent turn. It must preserve the existing stream and reply bubble, and
-must never cancel it, wait until the next turn, or launch a parallel reply.
+must never cancel it or launch a parallel reply.
 Explicit Cancel remains the only termination action. The Codex app-server
 protocol exposes this as `turn/steer`; a one-shot `codex exec` process cannot
 implement the requirement.
@@ -494,6 +502,13 @@ implement the requirement.
 same-turn directive (acknowledge and apply it immediately), not a bare text
 fragment. Provider acceptance of `turn/steer` alone is not evidence that the
 active response visibly applied the direction.
+
+*Startup behavior, 2026-08-25.* A click before the provider exposes its live
+input channel is a durable, high-priority pending interjection, not a `409`
+failure: deliver it automatically to that same turn when ready. Codex uses
+app-server `turn/steer`; Claude uses its persistent `--input-format stream-json`
+stdin channel. In both cases, return `202 pending` while startup is incomplete,
+continue the existing stream, and never cancel or silently reroute it.
 
 ### In-progress "thinking" activity is a log, not a finished report
 
@@ -609,3 +624,34 @@ terminal session, another repo not scoped here, or a tool with no write-back
 to Workbench or `~/notes` remains unindexed by design. Verified: `tsc
 --noEmit` clean; `vitest run src/server/memory-index.test.ts` 15/15 passing;
 backfill + live retrieval confirmed against the running server on :5180.
+
+### Offsite backup pushes to GitHub silently stopped since 2026-08-23
+
+*Diagnosed by Claude, 2026-08-25.* Jeffrey noticed the last edit in
+`jeffreyclu/workbench-backups` was "2 days ago." Root cause: local SQLite
+`data/workbench.db` grew from ~20MB to ~240MB between 2026-08-23 and
+2026-08-25 (roughly 10x in 2 days, cause not yet investigated), pushing the
+redacted `latest.db` snapshot past GitHub's 100MB per-file limit. The
+`workbench-backups` repo has no Git LFS configured, so every `git push` since
+2026-08-24T04:00 has been rejected by GitHub's pre-receive hook
+("GH001: Large files detected"), and `scripts/backup.ts` throws uncaught on
+push failure, logging the crash to `data/logs/backup-error.log`. Local
+snapshotting in `data/backups/` (the `VACUUM INTO` step) is unaffected and
+has continued on schedule — this is purely a failure of the offsite push
+step, not the backup/retention mechanism itself. Confirmed via
+`git clone` of the backups repo: last successful commit is
+`2026-08-23T20:15:05-04:00` ("Snapshot 2026-08-24T00-15-05-081Z"). Needs a
+fix (Git LFS on the backups repo, or compressing/chunking before push) and
+separately the DB's rapid growth is worth investigating on its own.
+
+**Fix shipped 2026-08-25 (Claude):** `scripts/backup.ts` now gzip-compresses
+the redacted snapshot, then always splits it into 90MB chunks
+(`latest.db.gz.part0000`, `part0001`, ...) via BSD `split -d -b 90m` before
+pushing, and removes any stale chunks left over from a prior, larger backup.
+This is unconditional (not just "when needed") so the offsite push stays
+correct as the DB keeps growing, not just today's ~210MB size. Verified
+end-to-end against a scratch local bare repo (`git init --bare`): push
+succeeded, cloning back and running `cat part* | gzip -t` and reassembling
+into a `.db` confirmed a valid, queryable SQLite file. Restore procedure
+(`docs/backup-management.md`) updated to
+`cat latest.db.gz.part* > latest.db.gz && gzip -dk latest.db.gz`.

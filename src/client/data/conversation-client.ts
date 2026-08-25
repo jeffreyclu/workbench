@@ -29,7 +29,7 @@ export const conversationClient = {
   listSharedMessages: (conversationId?: string) => request<{ messages: SharedMessage[] }>(conversationId ? `/api/shared/messages?conversationId=${encodeURIComponent(conversationId)}&limit=200` : '/api/shared/messages?limit=200'),
   createSharedMessage: (conversationId: string, body: string, dispatchTo: 'auto' | 'both' | 'codex' | 'claude' | 'none', attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }>, executionProfile: AgentRun['executionProfile'] = null, accountProfile?: string) => request<{ message: SharedMessage; replies: SharedMessage[] }>('/api/shared/messages', { method: 'POST', body: JSON.stringify({ conversationId, body, dispatchTo, attachments, executionProfile, accountProfile }) }),
   cancelSharedReply: (id: string) => request<{ message: SharedMessage }>(`/api/shared/messages/${id}/cancel`, { method: 'POST' }),
-  interjectSharedMessage: (id: string) => request<{ replies: SharedMessage[] }>(`/api/shared/messages/${id}/interject`, { method: 'POST' }),
+  interjectSharedMessage: (id: string) => request<{ replies: SharedMessage[]; pending: boolean }>(`/api/shared/messages/${id}/interject`, { method: 'POST' }),
   createTasksFromReport: (id: string) => request<{ plan?: ExecutionPlan; jobMessage?: SharedMessage }>(`/api/shared/messages/${id}/create-tasks`, { method: 'POST' }),
   retrySharedMessage: (id: string) => request<{ reply: SharedMessage }>(`/api/shared/messages/${id}/retry`, { method: 'POST' }),
   getRetrievedMemory: (id: string) => request<{ detail: RetrievedMemoryDetail | null }>(`/api/shared/messages/${id}/retrieved-memory`),

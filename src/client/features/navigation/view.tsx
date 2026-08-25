@@ -1,4 +1,4 @@
-import { Cloud, Command, MessageCircle, MoreHorizontal, Search, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Check, Cloud, Command, LoaderCircle, MessageCircle, MoreHorizontal, Search, Wrench, X } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { MemorySearchResult } from '../../../shared/contracts';
@@ -108,6 +108,37 @@ export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: Memo
   </div>;
 }
 
+export function PromotionQueueStatus() {
+  const status = useQuery({
+    queryKey: ['promotion-queue-status'],
+    queryFn: () => api.getPromotionQueueStatus(),
+    refetchInterval: 2_000,
+  });
+  const data = status.data;
+  if (!data) return null;
+  if (data.running) {
+    return <div className="promotion-status promotion-status-running" title={data.running.progress}>
+      <LoaderCircle size={14} className="spin" /> Promoting… {data.queueLength > 0 && <span className="promotion-status-queue">+{data.queueLength} queued</span>}
+    </div>;
+  }
+  if (data.queueLength > 0) {
+    return <div className="promotion-status promotion-status-queued">
+      <Command size={14} /> {data.queueLength} promotion{data.queueLength === 1 ? '' : 's'} queued
+    </div>;
+  }
+  if (data.lastBuild?.status === 'failed') {
+    return <div className="promotion-status promotion-status-failed" title={data.lastBuild.summary}>
+      <AlertTriangle size={14} /> Last build failed
+    </div>;
+  }
+  if (data.lastBuild?.status === 'succeeded') {
+    return <div className="promotion-status promotion-status-succeeded" title={data.lastBuild.summary}>
+      <Check size={14} /> Build promoted
+    </div>;
+  }
+  return null;
+}
+
 function GlobalSearchResultSkeleton() {
   return <div className="global-search-skeleton" aria-hidden="true">
     {Array.from({ length: 3 }, (_, index) => (
@@ -145,6 +176,7 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
   const conversationPulse = useValuePulse(conversationCount);
   return <aside id="primary-nav" className="sidebar">
     <div className="brand"><span className="brand-mark">W</span><span>Workbench</span></div>
+    <PromotionQueueStatus />
     <nav onClick={releasePointerFocus}>
       <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={onOpenActive}><Command size={16} /> Attention stack <span className={activePulse}>{counts?.active ?? '…'}</span></button>
       <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={onOpenWorkbench}><Wrench size={16} /> Workbench <span className={workbenchPulse}>{counts?.workbench ?? '…'}</span></button>
