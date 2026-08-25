@@ -290,6 +290,28 @@ describe('shared room', () => {
     expect(await screen.findByRole('button', { name: 'Approve preview' })).toBeTruthy();
   });
 
+  it('offers task completion after an approval was combined into another successful promotion', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000097';
+    const taskId = '00000000-0000-4000-8000-000000000098';
+    const timestamp = '2026-01-01T00:00:00Z';
+    const conversation = { id: conversationId, title: 'Merged approval', workItemId: taskId, archivedAt: null, createdAt: timestamp, updatedAt: timestamp };
+    const item = { id: taskId, title: 'Linked task', description: '', status: 'in_progress', priority: 2, queuePosition: 0, source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete', agentOutcome: 'finished', sourceIdentifier: null, sourceUrl: null, sourceTags: ['Manual'], projectName: 'Workbench', stack: 'attention', workspacePath: null, strategy: '', assignees: ['codex'], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [], createdAt: timestamp, updatedAt: timestamp, lastTouchedAt: timestamp };
+    const mergedPromotion = { id: 'promotion-combined', conversationId, author: 'system', body: 'Preview approval was combined into the release that just promoted.', pinned: false, status: 'completed', error: '', createdAt: timestamp, attachments: [], model: null, executionProfile: null, dispatchTarget: 'promotion' };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], references: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages: [mergedPromotion] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ pending: false }), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    expect(await screen.findByText('Complete the linked task?')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Complete task' })).toBeTruthy();
+  });
+
   it('keeps the thread in document flow for queued promotion and completed messages', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000099';
@@ -344,7 +366,7 @@ describe('shared room', () => {
     await waitFor(() => expect(extractionStarted).toBe(true));
   });
 
-  it('shows the agent, model, account profile, and cost on an agent reply', async () => {
+  it('shows the agent, model, account profile, usage, and duration on an agent reply', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000005';
     const reply = { id: 'agent-proof', conversationId, author: 'claude', body: 'Completed.', pinned: false, status: 'completed', error: '', createdAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:00:02Z', attachments: [], model: 'sonnet', accountProfile: 'personal', executionProfile: 'standard', inputTokens: 1, outputTokens: 1, estimatedCostUsd: 0.05, fallbackFrom: 'codex', fallbackReason: 'quota', dispatchTarget: 'none' };
@@ -357,8 +379,7 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
-    expect(await screen.findByText('Claude · sonnet · personal · $0.050')).toBeTruthy();
-    expect(screen.queryByText(/1 in · 1 out/i)).toBeNull();
+    expect(await screen.findByText('Claude · sonnet (standard) · personal · $0.050 · 1 in · 1 out · 2.0s · fallback from codex (quota)')).toBeTruthy();
   });
 
   it('keeps the approved-awaiting-promotion badge on the conversation card while promotion runs', async () => {

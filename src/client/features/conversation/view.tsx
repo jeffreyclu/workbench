@@ -55,7 +55,7 @@ import { DiscoveryInboxView } from '../../discovery';
 import { useNavigation } from '../../features/navigation/hooks';
 import { NavigationView } from '../../features/navigation/view';
 import { FollowUpArchiveDialog } from '../../follow-up-archive-dialog';
-import { activityKindLabel, agentDecisionKinds, formatCostUsd, formatFileSize, formatRunTelemetry, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
+import { activityKindLabel, agentDecisionKinds, compactTokenCount, formatFileSize, formatRunBadge, formatRunTelemetry, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
 import { clearSentConversationDraft, readConversationDrafts, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
 import { QueueExplanationList } from '../../queue-explanations';
 import { RetrievedMemoryDialog } from '../../retrieved-memory-dialog';
@@ -107,12 +107,17 @@ function accountProfileForConversation(messages: SharedMessage[]): string {
   return DEFAULT_ACCOUNT_PROFILE;
 }
 
-export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'accountProfile' | 'estimatedCostUsd'>): string {
+export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'accountProfile' | 'estimatedCostUsd' | 'inputTokens' | 'outputTokens' | 'completedAt' | 'createdAt' | 'executionProfile' | 'fallbackFrom' | 'fallbackReason' | 'cacheReadInputTokens'>): string {
   const agent = message.author[0].toUpperCase() + message.author.slice(1);
-  const model = message.model ?? 'model unavailable';
+  const tier = message.executionProfile && message.executionProfile !== 'routing' ? message.executionProfile : null;
+  const model = `${message.model ?? 'model unavailable'}${tier ? ` (${tier})` : ''}`;
   const profile = message.accountProfile ?? 'profile unavailable';
-  const cost = message.estimatedCostUsd === null ? 'cost —' : formatCostUsd(message.estimatedCostUsd);
-  return `${agent} · ${model} · ${profile} · ${cost}`;
+  const usage = formatRunBadge(message);
+  const cacheRead = message.cacheReadInputTokens && message.cacheReadInputTokens > 0 ? `${compactTokenCount(message.cacheReadInputTokens)} cached` : null;
+  const durationMs = message.completedAt ? new Date(message.completedAt).getTime() - new Date(message.createdAt).getTime() : null;
+  const duration = durationMs === null ? null : `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
+  const fallback = message.fallbackFrom ? `fallback from ${message.fallbackFrom}${message.fallbackReason ? ` (${message.fallbackReason})` : ''}` : null;
+  return [`${agent} · ${model} · ${profile} · ${usage}`, cacheRead, duration, fallback].filter(Boolean).join(' · ');
 }
 
 type ConversationTaskPickerProps = {
@@ -914,8 +919,14 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     (message.author === 'codex' || message.author === 'claude') && message.status === 'completed' ? index : latest, -1);
   const latestPreviewApprovalRequestIndex = conversationMessages.reduce((latest, message, index) =>
     message.author === 'jeffrey' && /^\s*approve(?:\s+(?:the\s+)?)?(?:workbench\s+)?preview[.!]?\s*$/i.test(message.body) ? index : latest, -1);
+  // A successful promotion can either be the worker's own completion or a
+  // queued approval that was folded into that same release. Both are durable
+  // completed promotion records. Do not infer this workflow state from the
+  // display copy. The text fallback is only for records written before the
+  // promotion dispatch target existed.
   const latestPreviewPromotionIndex = conversationMessages.reduce((latest, message, index) =>
-    message.author === 'system' && message.status === 'completed' && /preview approved and promoted/i.test(message.body) ? index : latest, -1);
+    message.author === 'system' && message.status === 'completed'
+      && (String(message.dispatchTarget) === 'promotion' || /preview approved and promoted/i.test(message.body)) ? index : latest, -1);
   const latestSuccessfulPromotion = latestPreviewPromotionIndex >= 0 ? conversationMessages[latestPreviewPromotionIndex] : null;
   const completionPromptAvailable = Boolean(
     latestSuccessfulPromotion
@@ -1100,7 +1111,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
             </div>;
           })}
           </div>
-          {completionPromptAvailable && <div className="completion-prompt" role="status"><span><strong>Preview approved successfully.</strong><small>Complete the linked task?</small></span><div><button type="button" className="button secondary compact" onClick={() => setDismissedCompletionPromptPromotionId(latestSuccessfulPromotion!.id)}>Not yet</button><button type="button" className="button primary compact" onClick={() => completeLinkedTask.mutate()} disabled={completeLinkedTask.isPending}>{completeLinkedTask.isPending ? <><LoaderCircle className="spin" size={12} /> Completing…</> : <><Check size={12} /> Complete task</>}</button></div></div>}
+          {completionPromptAvailable && <div className="completion-prompt" role="status"><span><strong>Preview approved successfully.</strong><small>Complete the linked task?</small>{completeLinkedTask.error && <small className="completion-prompt-error">Could not complete the task. Try again.</small>}</span><div><button type="button" className="button secondary compact" onClick={() => setDismissedCompletionPromptPromotionId(latestSuccessfulPromotion!.id)}>Not yet</button><button type="button" className="button primary compact" onClick={() => completeLinkedTask.mutate()} disabled={completeLinkedTask.isPending}>{completeLinkedTask.isPending ? <><LoaderCircle className="spin" size={12} /> Completing…</> : <><Check size={12} /> Complete task</>}</button></div></div>}
           {previewApprovalAvailable && <div className="preview-approval"><span><strong>Workbench preview has unpublished changes</strong><small>Review them on port 5181, then promote this source snapshot to live.</small></span><button className="button primary compact" onClick={() => approvePreview.mutate()} disabled={approvePreview.isPending}>{approvePreview.isPending ? <LoaderCircle className="spin" size={12} /> : <Check size={12} />} {approvePreview.isPending ? 'Approving…' : 'Approve preview'}</button></div>}
           {previewApprovalAvailable && approvePreview.error && <p className="error-message">Could not approve preview: {approvePreview.error.message}</p>}
           {proposedPlan && proposedPlanConversationId === conversationId && <article className="chat-plan"><span className="eyebrow">Proposed follow-up tasks</span><h3>{proposedPlan.summary}</h3><ol>{proposedPlan.tasks.map((task, index) => <li key={`${task.title}-${index}`}><label><input type="checkbox" checked={selectedPlanTaskIndexes.has(index)} onChange={() => setSelectedPlanTaskIndexes((current) => { const next = new Set(current); if (next.has(index)) next.delete(index); else next.add(index); return next; })} /><span><strong>{task.title}</strong><p>{task.description}</p></span></label></li>)}</ol><div><button className="button secondary" onClick={() => resolvePlan.mutate({ resolution: 'rejected' })}>Reject</button><button className="button primary" disabled={selectedPlanTaskIndexes.size === 0 || resolvePlan.isPending} onClick={() => setPlanArchivePromptOpen(true)}><Check size={14} /> Add {selectedPlanTaskIndexes.size} to queue</button></div></article>}

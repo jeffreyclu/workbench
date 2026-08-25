@@ -123,7 +123,7 @@ export function formatRunTelemetry(entry: Pick<AgentRun | SharedMessage, 'execut
   return `${entry.executionProfile ?? 'unrouted'} · ${tokenText}${costText}${durationText}${fallbackText}`;
 }
 
-function compactTokenCount(value: number): string {
+export function compactTokenCount(value: number): string {
   return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 }
 
