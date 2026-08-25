@@ -141,6 +141,15 @@ describe('workbench auth gate', () => {
     expect(call('/api/work-items', { authorization: 'Bearer wrong' }, options).status).toBe(429);
   });
 
+  it('allows valid authentication to clear an active backoff', () => {
+    const gate = createAuthGate(token, {});
+    const options = { gate, remoteAddress: '203.0.113.7' };
+    for (let attempt = 0; attempt < 5; attempt++) call('/api/work-items', { authorization: 'Bearer wrong' }, options);
+
+    expect(call('/api/work-items', { authorization: `Bearer ${token}` }, options).nexted).toBe(true);
+    expect(call('/api/work-items', { authorization: 'Bearer wrong' }, options).status).toBe(401);
+  });
+
   it('exchanges a query token for a cookie and redirects the token out of the URL', () => {
     const result = call(`/?token=${token}&view=archive`, {}, { remoteAddress: '203.0.113.7' });
     expect(result.status).toBe(302);

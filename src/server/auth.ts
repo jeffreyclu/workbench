@@ -297,14 +297,6 @@ export function createAuthGate(token: string | null | undefined, env: NodeJS.Pro
     const offered = url.searchParams.get('token');
     const presented = offered || bearerToken(request) || readCookie(request.headers.cookie as string | undefined, authCookieName);
 
-    if (client && presented) {
-      const retryAfter = failedAttempts.retryAfterSeconds(client);
-      if (retryAfter !== null) {
-        respondWithAuthBackoff(response, url.pathname, retryAfter);
-        return;
-      }
-    }
-
     if (offered && tokensMatch(expected, offered)) {
       if (client) failedAttempts.clear(client);
       url.searchParams.delete('token');
@@ -320,6 +312,14 @@ export function createAuthGate(token: string | null | undefined, env: NodeJS.Pro
     if (isRequestAuthorized(request, expected, env)) {
       if (client) failedAttempts.clear(client);
       return next();
+    }
+
+    if (client && presented) {
+      const retryAfter = failedAttempts.retryAfterSeconds(client);
+      if (retryAfter !== null) {
+        respondWithAuthBackoff(response, url.pathname, retryAfter);
+        return;
+      }
     }
 
     const retryAfter = client && presented ? failedAttempts.recordFailure(client) : null;
