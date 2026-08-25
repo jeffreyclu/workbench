@@ -139,7 +139,7 @@ export function LiveRunOutput({ output, interjections = [] }: { output: string; 
   );
 }
 
-export function AgentMessageBody({ body, running, conversationId, workItemId, interjections }: { body: string; running: boolean; conversationId?: string; workItemId?: string; interjections?: Array<{ id: string; body: string; pending: boolean; streamOffset?: number | null }> }) {
+export function AgentMessageBody({ body, running, conversationId, workItemId, interjections, detailForSingle = false }: { body: string; running: boolean; conversationId?: string; workItemId?: string; interjections?: Array<{ id: string; body: string; pending: boolean; streamOffset?: number | null }>; detailForSingle?: boolean }) {
   const sectionIdPrefix = useId();
   const humanized = running ? humanizeRunOutput(body) : body;
   const visibleBody = hideWorkbenchControlBlocks(humanized);
@@ -148,7 +148,7 @@ export function AgentMessageBody({ body, running, conversationId, workItemId, in
   // activity feed distinct from the section-card treatment for final answers.
   if (running) return <LiveRunOutput output={visibleBody} interjections={interjections} />;
   const sections = splitAgentResponse(visibleBody);
-  const structured = sections.length > 1;
+  const structured = sections.length > 1 || detailForSingle;
   const renderMarkdown = (content: string) => <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
     code: MarkdownCode,
     pre: MarkdownPre,
@@ -161,10 +161,11 @@ export function AgentMessageBody({ body, running, conversationId, workItemId, in
 
   if (!structured) return <div className="agent-markdown"><StreamingMarkdown content={visibleBody} streaming={false} renderMarkdown={renderMarkdown} /></div>;
 
-  const lastIndex = sections.length - 1;
-  return <div className="agent-response" role="group" aria-label={`Agent response in ${sections.length} parts`}>
+  const detailSections = sections.length === 1 && detailForSingle ? [{ title: 'Detail', body: visibleBody }] : sections;
+  const lastIndex = detailSections.length - 1;
+  return <div className="agent-response" role="group" aria-label={`Agent response in ${detailSections.length} part${detailSections.length === 1 ? '' : 's'}`}>
     <div className="agent-response-deck">
-      {sections.map((section, index) => {
+      {detailSections.map((section, index) => {
         const headingId = `${sectionIdPrefix}-${index}`;
         return <section key={`${section.title}-${index}`} className="agent-response-section" role="region" aria-labelledby={headingId} style={{ '--section-index': index } as CSSProperties}>
           <div className="agent-response-section-heading"><h3 id={headingId}>{section.title}</h3></div>

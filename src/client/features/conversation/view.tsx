@@ -1119,8 +1119,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                   {message.status === 'running' && <button type="button" className="cancel-response" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel response" title="Cancel response"><X size={12} /></button>}
                 </header>
                 {message.status === 'running' && <p className="thinking">Live activity · {message.body ? 'receiving updates' : 'starting agent'}</p>}
-                {(message.body || liveInterjections.length > 0 || (isAgentMessage && message.status === 'running')) && (isAgentMessage
-                  ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} interjections={liveInterjections} />
+                {(message.body || liveInterjections.length > 0 || (isAgentMessage && message.status === 'running')) && (isAgentMessage || message.author === 'system'
+                  ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} interjections={liveInterjections} detailForSingle={message.status !== 'running'} />
                   : <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: MarkdownCode, pre: MarkdownPre }}>{message.body}</ReactMarkdown></div>)}
                 {isQueuedMessage && (
                   <div className="queued-message">

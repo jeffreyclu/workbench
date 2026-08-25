@@ -58,6 +58,15 @@ describe('splitAgentResponse', () => {
     expect(container.querySelector('.agent-response-section-heading > span')).toBeNull();
   });
 
+  it('wraps a single completed reply in a detail bubble when requested by the shared room', () => {
+    const { container } = render(<AgentMessageBody body="One concise update." running={false} detailForSingle />);
+
+    expect(screen.getByLabelText('Agent response in 1 part')).toBeInTheDocument();
+    expect(container.querySelectorAll('.agent-response-section')).toHaveLength(1);
+    expect(container.querySelector('.agent-response-section-heading h3')?.textContent).toBe('Detail');
+    expect(container.textContent).toContain('One concise update.');
+  });
+
   it('marks live agent text for the streaming motion treatment', () => {
     const { container } = render(<AgentMessageBody body="Receiving output" running />);
 

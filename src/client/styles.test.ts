@@ -116,13 +116,16 @@ describe('phone dialogs', () => {
 });
 
 describe('agent debugger layout', () => {
-  it('uses the dialog content width for the decision table and keeps Details below it', () => {
-    const wrapperRule = styles.match(/^\.decision-tree-table-wrap\s*\{[^}]*\}/m)?.[0] ?? '';
-    const tableRule = styles.match(/^\.decision-tree\s*\{[^}]*\}/m)?.[0] ?? '';
+  it('uses connected tree rails with a full-width mobile layout', () => {
+    const layoutRule = styles.match(/^\.decision-tree-layout\s*\{[^}]*\}/m)?.[0] ?? '';
+    const streamsRule = styles.match(/^\.decision-tree-streams\s*\{[^}]*\}/m)?.[0] ?? '';
+    const phoneRules = styles.slice(styles.indexOf('@media (max-width: 700px)'));
 
-    expect(wrapperRule).toContain('grid-template-columns: minmax(0, 1fr)');
-    expect(wrapperRule).not.toContain('190px');
-    expect(tableRule).toContain('width: 100%');
+    expect(layoutRule).toContain('grid-template-columns: minmax(0, 1fr) 260px');
+    expect(streamsRule).toContain('border-left: 1px solid');
+    expect(styles).toContain('.decision-tree-event-card');
+    expect(phoneRules).toContain('grid-template-columns: 1fr');
+    expect(phoneRules).toContain('position: static');
   });
 });
 

@@ -116,14 +116,12 @@ export function PromotionQueueStatus() {
     refetchInterval: 2_000,
   });
   const data = status.data;
-  if (!data) return null;
 
-  let color: 'green' | 'blue' | 'red' | null = null;
-  if (data.running) color = 'blue';
-  else if (data.queueLength > 0) color = 'blue';
-  else if (data.lastBuild?.status === 'failed') color = 'red';
-  else if (data.lastBuild?.status === 'succeeded') color = 'green';
-  if (!color) return null;
+  let color: 'green' | 'blue' | 'red' | 'idle' = 'idle';
+  if (data?.running) color = 'blue';
+  else if (data && data.queueLength > 0) color = 'blue';
+  else if (data?.lastBuild?.status === 'failed') color = 'red';
+  else if (data?.lastBuild?.status === 'succeeded') color = 'green';
 
   return <div
     className="promotion-status-wrap"
@@ -133,14 +131,14 @@ export function PromotionQueueStatus() {
   >
     <button
       type="button"
-      className={`promotion-status-led promotion-status-led-${color}`}
+      className={`brand-mark brand-mark-${color}`}
       aria-expanded={open}
       aria-haspopup="dialog"
       aria-label="Promotion status"
       onClick={() => setOpen((current) => !current)}
       onFocus={() => setOpen(true)}
-    />
-    {open && <div className="promotion-status-popover" role="dialog" aria-label="Promotion status">
+    >W</button>
+    {open && data && <div className="promotion-status-popover" role="dialog" aria-label="Promotion status">
       <div className="promotion-status-popover-row">
         <strong>Queue</strong>
         <span>{data.queueLength > 0 ? `${data.queueLength} waiting${data.oldestQueuedAt ? ` since ${new Date(data.oldestQueuedAt).toLocaleTimeString()}` : ''}` : 'Empty'}</span>
@@ -193,7 +191,7 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
   const workbenchPulse = useValuePulse(counts?.workbench);
   const conversationPulse = useValuePulse(conversationCount);
   return <aside id="primary-nav" className="sidebar">
-    <div className="brand"><span className="brand-mark">W</span><span>Workbench</span><PromotionQueueStatus /></div>
+    <div className="brand"><PromotionQueueStatus /><span>Workbench</span></div>
     <nav onClick={releasePointerFocus}>
       <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={onOpenActive}><Command size={16} /> Attention stack <span className={activePulse}>{counts?.active ?? '…'}</span></button>
       <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={onOpenWorkbench}><Wrench size={16} /> Workbench <span className={workbenchPulse}>{counts?.workbench ?? '…'}</span></button>

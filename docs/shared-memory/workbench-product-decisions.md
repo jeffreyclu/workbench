@@ -175,6 +175,12 @@ agent makes and the tools it calls in each agent stream. Dispatch metadata
 fulfill the debugger. Keep events scoped to the owning reply so simultaneous
 Codex and Claude streams never show each other's calls.
 
+*Presentation correction from Jeffrey, 2026-08-25.* The debugger must visibly
+read as a tree, not a flattened table. Show the causal hierarchy as request →
+agent stream → recorded decision → tool call, with connected branches and the
+recorded decision visibly attached to the call it motivated. Keep raw call
+detail inspectable through hover, keyboard focus, and click.
+
 ### Restore the last-opened item in each primary surface
 
 *Decision from Jeffrey, 2026-08-23.*
@@ -716,3 +722,10 @@ updates) must remain in one response bubble, not a wall of one-line `Detail`
 bubbles. Short unstructured replies may retain their existing restrained
 multi-beat treatment; authored Markdown headings remain the explicit way to
 request a titled report section.
+
+*Clarification from Jeffrey, 2026-08-25.* Every completed Codex, Claude, and
+system message in the shared room uses the detail-card treatment, even when it
+contains only one response section. The one-card case is labeled `Detail`.
+This does not reintroduce the stream regression: decision preambles stay out
+of the completed body, and multi-block replies remain capped to a small number
+of cards rather than one card per streamed line.

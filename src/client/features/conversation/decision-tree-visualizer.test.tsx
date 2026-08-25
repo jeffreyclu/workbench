@@ -24,30 +24,18 @@ const messages: SharedMessage[] = [{
 describe('DecisionTreeVisualizer', () => {
   afterEach(cleanup);
 
-  it('renders one concise row for a recorded decision and tool call, then closes accessibly', () => {
-    const onClose = vi.fn();
+  it('renders a connected request, stream, decision, and tool-call hierarchy', () => {
     render(<DecisionTreeVisualizer messages={messages} events={[
       { id: 'decision', messageId: 'stream', runId: null, kind: 'decision', detail: 'Check the existing tests before changing behavior.', createdAt: '2026-08-25T12:00:01.000Z' },
       { id: 'tool', messageId: 'stream', runId: null, kind: 'tool', detail: 'command_execution: npm test', createdAt: '2026-08-25T12:00:02.000Z' },
-    ]} isLoadingEvents={false} onClose={onClose} />);
+    ]} isLoadingEvents={false} onClose={vi.fn()} />);
 
-    expect(screen.getByRole('columnheader', { name: 'Decision' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Why' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Details' })).toBeInTheDocument();
-    expect(screen.getByRole('cell', { name: 'Ran the test suite.' })).toHaveAttribute('title', 'Ran the test suite.');
-    expect(screen.getByRole('cell', { name: 'Check the existing tests before changing behavior.' })).toHaveAttribute('title', 'Check the existing tests before changing behavior.');
-    const details = screen.getByRole('button', { name: 'Details' });
-    expect(details).toHaveAttribute('aria-expanded', 'false');
-    fireEvent.mouseEnter(details);
-    expect(screen.getByText('command_execution: npm test')).toBeInTheDocument();
-    expect(details).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.mouseLeave(details);
-    expect(screen.queryByText('command_execution: npm test')).not.toBeInTheDocument();
-    fireEvent.click(details);
-    expect(screen.getByText('command_execution: npm test')).toBeInTheDocument();
-    expect(screen.queryByText('Recorded the approach.')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Close decision tree' }));
-    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.getByRole('list', { name: 'Agent decision tree' })).toBeInTheDocument();
+    expect(screen.getByText('Requested Codex')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Codex agent stream' })).toBeInTheDocument();
+    expect(screen.getAllByText('Check the existing tests before changing behavior.')).toHaveLength(2);
+    expect(screen.getByText('Ran the test suite.')).toBeInTheDocument();
+    expect(screen.getByText('Why')).toBeInTheDocument();
   });
 
   it('updates the open debugger as live decisions and tool calls arrive', () => {
@@ -55,7 +43,7 @@ describe('DecisionTreeVisualizer', () => {
     const { rerender } = render(<DecisionTreeVisualizer messages={messages} events={[]} isLoadingEvents onClose={onClose} />);
 
     expect(screen.getByText('Loading agent events…')).toBeInTheDocument();
-    expect(screen.queryByText('Ran the test suite.')).not.toBeInTheDocument();
+    expect(screen.getByText('Waiting for recorded decisions or tool calls.')).toBeInTheDocument();
 
     rerender(<DecisionTreeVisualizer messages={messages} events={[{
       id: 'decision', messageId: 'stream', runId: null, kind: 'decision',
@@ -63,7 +51,7 @@ describe('DecisionTreeVisualizer', () => {
     }]} isLoadingEvents={false} onClose={onClose} />);
 
     expect(screen.queryByText('Loading agent events…')).not.toBeInTheDocument();
-    expect(screen.queryByText('Confirm the new behavior before testing it.')).not.toBeInTheDocument();
+    expect(screen.getByText('Confirm the new behavior before testing it.')).toBeInTheDocument();
 
     rerender(<DecisionTreeVisualizer messages={messages} events={[
       { id: 'decision', messageId: 'stream', runId: null, kind: 'decision', detail: 'Confirm the new behavior before testing it.', createdAt: '2026-08-25T12:00:01.000Z' },
@@ -71,7 +59,7 @@ describe('DecisionTreeVisualizer', () => {
     ]} isLoadingEvents={false} onClose={onClose} />);
 
     expect(screen.getByText('Ran the test suite.')).toBeInTheDocument();
-    expect(screen.getByText('Confirm the new behavior before testing it.')).toBeInTheDocument();
+    expect(screen.getAllByText('Confirm the new behavior before testing it.')).toHaveLength(2);
   });
 
   it('does not invent a missing decision summary for calls without one', () => {
@@ -82,17 +70,36 @@ describe('DecisionTreeVisualizer', () => {
 
     expect(screen.getByText('Ran the test suite.')).toBeInTheDocument();
     expect(screen.queryByText(/No decision summary was recorded before this call/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/^Why:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Why')).not.toBeInTheDocument();
   });
 
-  it('uses the same row for Claude events', () => {
+  it('keeps Claude events in their own agent stream', () => {
     render(<DecisionTreeVisualizer messages={[...messages.slice(0, 1), { ...messages[1], id: 'claude-stream', author: 'claude' }]} events={[
       { id: 'claude-decision', messageId: 'claude-stream', runId: null, kind: 'decision', detail: 'Inspect the route before editing it.', createdAt: '2026-08-25T12:00:01.000Z' },
       { id: 'claude-read', messageId: 'claude-stream', runId: null, kind: 'file_read', detail: 'src/routes.ts', createdAt: '2026-08-25T12:00:02.000Z' },
     ]} isLoadingEvents={false} onClose={vi.fn()} />);
 
-    expect(screen.getByText('Inspect the route before editing it.')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Claude agent stream' })).toBeInTheDocument();
+    expect(screen.getAllByText('Inspect the route before editing it.')).toHaveLength(2);
     expect(screen.getByText('Read src/routes.ts.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Details' })).toBeInTheDocument();
+  });
+
+  it('shows raw details on hover, focus, and click, then closes accessibly', () => {
+    const onClose = vi.fn();
+    render(<DecisionTreeVisualizer messages={messages} events={[
+      { id: 'tool', messageId: 'stream', runId: null, kind: 'tool', detail: 'command_execution: npm test', createdAt: '2026-08-25T12:00:02.000Z' },
+    ]} isLoadingEvents={false} onClose={onClose} />);
+
+    const inspect = screen.getByRole('button', { name: 'Inspect call' });
+    fireEvent.mouseEnter(inspect);
+    expect(screen.getByText('command_execution: npm test')).toBeInTheDocument();
+    fireEvent.mouseLeave(inspect);
+    expect(screen.queryByText('command_execution: npm test')).not.toBeInTheDocument();
+    fireEvent.focus(inspect);
+    expect(screen.getByText('command_execution: npm test')).toBeInTheDocument();
+    fireEvent.click(inspect);
+    expect(inspect).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Close decision tree' }));
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });
