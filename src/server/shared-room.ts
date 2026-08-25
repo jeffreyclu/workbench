@@ -47,6 +47,13 @@ export function agentStreamEventForCodexAppServerItem(method: string, item: Reco
       : '';
     if (summary) return { kind: 'decision', detail: summary.slice(0, 2_000) };
   }
+  if (method === 'item/completed' && (type === 'agentMessage' || type === 'agent_message') && typeof item.text === 'string') {
+    // The shared-room prompt requires a visible Decision: preamble before each
+    // tool call. Preserve only that explicit, agent-authored record; regular
+    // response text is not a decision and must not become fabricated context.
+    const decision = item.text.match(/^\s*Decision:\s*([^\n]+)\s*$/i)?.[1]?.trim();
+    if (decision) return { kind: 'decision', detail: decision.slice(0, 2_000) };
+  }
   return null;
 }
 

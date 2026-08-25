@@ -24,17 +24,17 @@ const messages: SharedMessage[] = [{
 describe('DecisionTreeVisualizer', () => {
   afterEach(cleanup);
 
-  it('renders each dispatch and its live stream, then closes accessibly', () => {
+  it('renders one concise row for a recorded decision and tool call, then closes accessibly', () => {
     const onClose = vi.fn();
     render(<DecisionTreeVisualizer messages={messages} events={[
       { id: 'decision', messageId: 'stream', runId: null, kind: 'decision', detail: 'Check the existing tests before changing behavior.', createdAt: '2026-08-25T12:00:01.000Z' },
       { id: 'tool', messageId: 'stream', runId: null, kind: 'tool', detail: 'command_execution: npm test', createdAt: '2026-08-25T12:00:02.000Z' },
     ]} isLoadingEvents={false} onClose={onClose} />);
 
-    expect(screen.getByRole('dialog', { name: 'Decisions and tools' })).toHaveTextContent('Requested Codex');
-    expect(screen.getByRole('dialog')).toHaveTextContent('gpt-5.6 · standard · default · 2 memory matches');
-    expect(screen.getByRole('dialog')).toHaveTextContent('Ran the test suite.');
-    expect(screen.getByRole('dialog')).toHaveTextContent('Why: Check the existing tests before changing behavior.');
+    expect(screen.getByRole('dialog', { name: 'Decisions and tools' })).toHaveTextContent('Why: Check the existing tests before changing behavior.');
+    expect(screen.getByRole('dialog')).toHaveTextContent('Decision: Ran the test suite.');
+    expect(screen.getByLabelText('Details: command_execution: npm test')).toHaveAttribute('title', 'command_execution: npm test');
+    expect(screen.queryByText('Recorded the approach.')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close decision tree' }));
     expect(onClose).toHaveBeenCalledOnce();
   });
@@ -52,7 +52,7 @@ describe('DecisionTreeVisualizer', () => {
     }]} isLoadingEvents={false} onClose={onClose} />);
 
     expect(screen.queryByText('Loading agent events…')).not.toBeInTheDocument();
-    expect(screen.getByText('Confirm the new behavior before testing it.')).toBeInTheDocument();
+    expect(screen.queryByText('Confirm the new behavior before testing it.')).not.toBeInTheDocument();
 
     rerender(<DecisionTreeVisualizer messages={messages} events={[
       { id: 'decision', messageId: 'stream', runId: null, kind: 'decision', detail: 'Confirm the new behavior before testing it.', createdAt: '2026-08-25T12:00:01.000Z' },
@@ -60,7 +60,7 @@ describe('DecisionTreeVisualizer', () => {
     ]} isLoadingEvents={false} onClose={onClose} />);
 
     expect(screen.getByText('Ran the test suite.')).toBeInTheDocument();
-    expect(screen.getByText('Why: Confirm the new behavior before testing it.')).toBeInTheDocument();
+    expect(screen.getByText('Confirm the new behavior before testing it.')).toBeInTheDocument();
   });
 
   it('does not invent a missing decision summary for calls without one', () => {
@@ -72,5 +72,16 @@ describe('DecisionTreeVisualizer', () => {
     expect(screen.getByText('Ran the test suite.')).toBeInTheDocument();
     expect(screen.queryByText(/No decision summary was recorded before this call/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Why:/)).not.toBeInTheDocument();
+  });
+
+  it('uses the same row for Claude events', () => {
+    render(<DecisionTreeVisualizer messages={[...messages.slice(0, 1), { ...messages[1], id: 'claude-stream', author: 'claude' }]} events={[
+      { id: 'claude-decision', messageId: 'claude-stream', runId: null, kind: 'decision', detail: 'Inspect the route before editing it.', createdAt: '2026-08-25T12:00:01.000Z' },
+      { id: 'claude-read', messageId: 'claude-stream', runId: null, kind: 'file_read', detail: 'src/routes.ts', createdAt: '2026-08-25T12:00:02.000Z' },
+    ]} isLoadingEvents={false} onClose={vi.fn()} />);
+
+    expect(screen.getByText('Inspect the route before editing it.')).toBeInTheDocument();
+    expect(screen.getByText('Read src/routes.ts.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Details: src/routes.ts')).toBeInTheDocument();
   });
 });

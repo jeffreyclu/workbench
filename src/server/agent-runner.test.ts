@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { CLAUDE_EXECUTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -111,7 +111,7 @@ describe('classifyExecution', () => {
     expect(result.output).toBe('Applied the interjection.');
     const lines = readFileSync(log, 'utf8').trim().split('\n').slice(1).map((line) => JSON.parse(line));
     expect(lines.map((line) => line.message.content[0].text)).toEqual([
-      `Start the task.\n\nClaude execution budget:\n${CLAUDE_EXECUTION_CONTRACT}`,
+      `Start the task.\n\nAgent debugger:\n${AGENT_DEBUGGER_CONTRACT}\n\nClaude execution budget:\n${CLAUDE_EXECUTION_CONTRACT}`,
       'Change direction now.',
     ]);
   });
@@ -666,6 +666,12 @@ describe('classifyExecution', () => {
 
     const codexFileChange = readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'file_change', changes: [{ path: 'src/foo.ts', kind: 'update' }] } }));
     expect(codexFileChange.audit).toEqual([expect.objectContaining({ category: 'agent_file_write', streamKind: 'file_write', detail: 'update: src/foo.ts' })]);
+
+    const codexDecision = readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Decision: Confirm the focused test still passes.' } }));
+    expect(codexDecision.audit).toEqual([expect.objectContaining({ streamKind: 'decision', detail: 'Confirm the focused test still passes.' })]);
+
+    const multiLineClaudeText = readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Decision: Inspect the route.\n\nThe route is large.' }] } }));
+    expect(multiLineClaudeText.audit).toEqual([]);
 
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'system', subtype: 'init' })).audit).toEqual([]);
   });

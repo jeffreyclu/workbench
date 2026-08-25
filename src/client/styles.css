@@ -698,6 +698,7 @@ nav { display: grid; gap: 3px; }
 .model-target { width: 112px; margin-left: auto; padding: 7px 24px 7px 8px; color: #c5c4bc; background: #11110f; border: 1px solid #30302b; border-radius: 7px; font: 10px 'DM Mono'; }
 .agent-target { width: 92px; padding: 7px 24px 7px 8px; color: #c5c4bc; background: #11110f; border: 1px solid #30302b; border-radius: 7px; font: 10px 'DM Mono'; }
 .composer-send { width: 34px; height: 34px; }
+.composer-queue { width: 34px; height: 34px; }
 .composer-send:hover:not(:disabled) { background: #d4ff45; transform: translateY(-1px); }.composer-send:disabled { color: #64645e; background: #292925; cursor: not-allowed; }
 .shared-thread { display: block; flex: 1; min-height: 0; overflow: auto; padding: 4px 5px 16px; }
 .thread-virtualizer { position: relative; width: 100%; }
@@ -760,28 +761,12 @@ nav { display: grid; gap: 3px; }
 .decision-tree-dialog { width: min(720px, calc(100vw - 28px)); max-height: min(760px, calc(100dvh - 28px)); overflow: auto; }
 .decision-tree-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
 .decision-tree-dialog-header .eyebrow { display: flex; align-items: center; gap: 5px; }
-.decision-tree-dialog-header h2 { margin: 5px 0 3px; font-size: 18px; }
-.decision-tree-dialog-header p { margin: 0; color: var(--muted); font-size: 12px; }
+.decision-tree-dialog-header h2 { margin: 5px 0 0; font-size: 18px; }
 .decision-tree-dialog-header .icon-button { flex: 0 0 auto; }
-.decision-tree { display: grid; gap: 12px; margin: 18px 0 0; padding: 0; list-style: none; }
-.decision-tree-node { min-width: 0; list-style: none; }
-.decision-tree-card { display: flex; align-items: flex-start; gap: 9px; min-width: 0; padding: 10px 12px; background: #151512; border: 1px solid #34342f; border-radius: 8px; }
-.decision-tree-card > div { min-width: 0; }
-.decision-tree-card strong, .decision-tree-card small { display: block; }
-.decision-tree-card strong { color: #e3e2db; font: 600 11px 'DM Mono'; }
-.decision-tree-card small { margin-top: 3px; color: #96958e; font: 10px/1.45 'DM Mono'; overflow-wrap: anywhere; }
-.decision-tree-status { flex: 0 0 auto; width: 7px; height: 7px; margin-top: 4px; border-radius: 50%; background: #77766f; }
-.decision-tree-status.status-running { background: var(--acid); box-shadow: 0 0 0 3px #c6f43219; animation: thinking-pulse 1.45s ease-out infinite; }
-.decision-tree-status.status-queued { background: #e6c75f; }
-.decision-tree-status.status-completed { background: #8aad62; }
-.decision-tree-status.status-failed { background: #df7668; }
-.decision-tree-status.status-canceled { background: #77766f; }
-.decision-tree-children { display: grid; gap: 8px; margin: 8px 0 0 15px; padding: 0 0 0 14px; border-left: 1px solid #3a3a34; }
-.decision-tree-events { display: grid; gap: 5px; margin: 8px 0 0 16px; padding: 0; list-style: none; }
-.decision-tree-event { display: grid; grid-template-columns: 14px minmax(0, 1fr); align-items: start; gap: 6px; color: #a9a89f; font: 10px/1.45 'DM Mono'; }
-.decision-tree-event svg { margin-top: 2px; color: #96958e; }.decision-tree-event div { display: grid; gap: 2px; min-width: 0; }.decision-tree-event span { color: #d2d1c9; }.decision-tree-event strong { color: #e0dfd7; font: 500 11px/1.4 'Manrope'; }.decision-tree-event small { min-width: 0; color: #929189; font: inherit; overflow-wrap: anywhere; }
-.decision-tree-rationale { margin-top: 3px; padding: 5px 7px; color: #c2c1b9 !important; background: #1a1a16; border-left: 2px solid #6f8c36; }
-.decision-tree-event.kind-decision span { color: #bfe153; }.decision-tree-loading { margin: 14px 0 0; color: var(--muted); font: 10px 'DM Mono'; }
+.decision-tree { display: grid; gap: 6px; margin: 18px 0 0; padding: 0; list-style: none; }
+.decision-tree-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; min-width: 0; padding: 9px 10px; color: #c2c1b9; background: #151512; border: 1px solid #34342f; border-radius: 7px; font: 11px/1.45 'DM Mono'; }
+.decision-tree-row > span { min-width: 0; overflow-wrap: anywhere; }.decision-tree-row b { color: #e3e2db; font-weight: 600; }.decision-tree-details { flex: 0 0 auto; padding: 2px 6px; color: #c7ef59; background: #22271a; border: 1px solid #4a5c2c; border-radius: 999px; cursor: help; font-size: 9px; outline-offset: 2px; }
+.decision-tree-loading { margin: 14px 0 0; color: var(--muted); font: 10px 'DM Mono'; }
 .decision-tree-empty { margin: 20px 0 0; color: var(--muted); font-size: 12px; }
 .agent-progress .agent-markdown ul { padding-left: 16px; }
 .agent-progress .agent-markdown li { margin: 3px 0; }
@@ -975,9 +960,9 @@ nav { display: grid; gap: 3px; }
   .agent-presence { display: none; }
   .composer-hint { display: none; }
   .agent-console .shared-composer textarea { min-height: 72px; max-height: 180px; padding: 12px 13px 8px; resize: none; }
-  .agent-console .composer-toolbar { display: grid; grid-template-columns: 34px repeat(3, minmax(0, 1fr)) 34px; grid-template-areas: 'attach model account dispatch send'; gap: 4px; min-height: 46px; padding: 6px; }
+  .agent-console .composer-toolbar { display: grid; grid-template-columns: 34px repeat(3, minmax(0, 1fr)) 34px 34px; grid-template-areas: 'attach model account dispatch queue send'; gap: 4px; min-height: 46px; padding: 6px; }
   .agent-console .composer-tool { justify-content: center; width: 34px; padding: 7px; font-size: 0; }
-  .agent-console .attach-button { grid-area: attach; }.agent-console .model-target { grid-area: model; }.agent-console .account-target { grid-area: account; }.agent-console .dispatch-target { grid-area: dispatch; }.agent-console .composer-send { grid-area: send; }
+  .agent-console .attach-button { grid-area: attach; }.agent-console .model-target { grid-area: model; }.agent-console .account-target { grid-area: account; }.agent-console .dispatch-target { grid-area: dispatch; }.agent-console .composer-queue { grid-area: queue; }.agent-console .composer-send { grid-area: send; }
   .agent-console .model-target, .agent-console .agent-target { width: 100%; min-width: 0; height: 34px; padding: 7px 4px; font-size: 9px; }
   .queued-message-action { width: 44px; height: 44px; }
   .reply-group-columns { flex-direction: column; }

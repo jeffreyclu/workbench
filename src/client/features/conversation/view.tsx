@@ -515,14 +515,17 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     setDispatchInitializedFor(conversationId);
   }, [conversationId, messages.data, composerPreferences?.preferredAccountProfile, composerPreferences?.preferredDispatchTarget]);
   const send = useMutation({
-    mutationFn: async () => {
+    mutationFn: async ({ intent }: { intent: 'interject' | 'queue' }) => {
       const attachments = await Promise.all(files.map(async (file) => ({
         name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size,
         dataBase64: await new Promise<string>((resolveValue, reject) => {
           const reader = new FileReader(); reader.onerror = () => reject(reader.error); reader.onload = () => resolveValue(String(reader.result).split(',')[1] ?? ''); reader.readAsDataURL(file);
         }),
       })));
-      return api.createSharedMessage(conversationId!, body, dispatchTo, attachments, executionProfile, accountProfile);
+      const created = await api.createSharedMessage(conversationId!, body, dispatchTo, attachments, executionProfile, accountProfile);
+      if (intent !== 'interject' || created.message.status !== 'queued') return { intent, pending: false };
+      const interjection = await api.interjectSharedMessage(created.message.id);
+      return { intent, pending: interjection.pending };
     },
     onMutate: async () => {
       if (!linkedWorkItemId) return undefined;
@@ -533,7 +536,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       }
       return { previous };
     },
-    onSuccess: async () => {
+    onSuccess: async ({ intent, pending }) => {
       const sentDraft = sentDraftRef.current;
       if (sentDraft) {
         clearSentConversationDraft(sentDraft.conversationId, sentDraft.body);
@@ -541,6 +544,11 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       }
       sentDraftRef.current = null;
       setFiles([]);
+      if (intent === 'interject') {
+        toast.success(pending
+          ? 'Interjecting. The current response will continue.'
+          : 'Interjected. The current response will continue.');
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] }),
         queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
@@ -917,7 +925,14 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     event.preventDefault();
     if ((body.trim() || files.length) && conversationId && !send.isPending && conversationReadyToSend) {
       sentDraftRef.current = { conversationId, body };
-      send.mutate();
+      send.mutate({ intent: 'interject' });
+    }
+  }
+
+  function queueMessage() {
+    if ((body.trim() || files.length) && conversationId && !send.isPending && conversationReadyToSend) {
+      sentDraftRef.current = { conversationId, body };
+      send.mutate({ intent: 'queue' });
     }
   }
 
@@ -1068,7 +1083,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               // Repeat Jeffrey's text in that provider's stream so the result
               // is visible where the interruption happened, not only as a
               // status label on his separate message bubble.
-              const liveInterjections = isAgentMessage && message.status === 'running'
+              const liveInterjections = isAgentMessage
                 ? conversationMessages
                   .filter((candidate) => candidate.author === 'jeffrey'
                     && (candidate.queuePriority ?? 0) > 0
@@ -1097,6 +1112,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                       <Search size={11} /> {typeof message.retrievedMemoryCount === 'number' ? message.retrievedMemoryCount : '—'}
                     </button>}
                   </span>
+                  {isAgentMessage && liveInterjections.length > 0 && <span className={`interjection-badge${liveInterjections.some((interjection) => interjection.pending) ? ' pending' : ''}`}>{liveInterjections.some((interjection) => interjection.pending) ? 'Interjecting' : 'Interjected'}</span>}
                   {message.status === 'running' && <button type="button" className="cancel-response" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel response" title="Cancel response"><X size={12} /></button>}
                 </header>
                 {message.status === 'running' && <p className="thinking">Live activity · {message.body ? 'receiving updates' : 'starting agent'}</p>}
@@ -1149,7 +1165,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} placeholder="Message Codex or Claude…" ariaLabel="Message Codex or Claude" onSubmit={() => {
             if ((body.trim() || files.length) && conversationId && !send.isPending && conversationReadyToSend) {
               sentDraftRef.current = { conversationId, body };
-              send.mutate();
+              send.mutate({ intent: 'interject' });
             }
           }} disabled={send.isPending} />
           <div className="composer-toolbar">
@@ -1163,7 +1179,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
             <select className="agent-target dispatch-target" value={dispatchTo} onChange={(event) => { const target = event.target.value as typeof dispatchTo; setDispatchTo(target); updateComposerPreferences({ dispatchTarget: target }); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond">
               <option value="codex">Codex</option><option value="claude">Claude</option><option value="both">Both</option>
             </select>
-            <button className="icon-button primary composer-send" aria-label="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
+            <button type="button" className="icon-button composer-queue" onClick={queueMessage} aria-label="Queue message for the next turn" title="Queue for the next turn" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}><Clock size={14} /></button>
+            <button className="icon-button primary composer-send" aria-label="Interject into the current response" title="Interject into the current response" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
           </div>
           {send.error && <p className="error-message">{send.error.message}</p>}
         </form>}

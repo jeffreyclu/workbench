@@ -161,4 +161,16 @@ describe('agentStreamEventForCodexAppServerItem', () => {
       threadId: 'thread', cwd: '/workspace', effort: 'medium', summary: 'concise',
     });
   });
+
+  it('records only an explicit completed agent-message decision preamble', () => {
+    expect(agentStreamEventForCodexAppServerItem('item/completed', {
+      type: 'agentMessage', text: 'Decision: Inspect the failing route before changing it.',
+    })).toEqual({ kind: 'decision', detail: 'Inspect the failing route before changing it.' });
+    expect(agentStreamEventForCodexAppServerItem('item/completed', {
+      type: 'agent_message', text: 'Decision: Re-run the focused test after the edit.',
+    })).toEqual({ kind: 'decision', detail: 'Re-run the focused test after the edit.' });
+    expect(agentStreamEventForCodexAppServerItem('item/completed', {
+      type: 'agentMessage', text: 'I updated the route and the test passes.',
+    })).toBeNull();
+  });
 });

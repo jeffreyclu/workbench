@@ -29,6 +29,7 @@ const PROGRESS_FLUSH_MS = 250;
  * footprint proportional to the actual task rather than multiplying it across
  * fresh subagent contexts. */
 export const CLAUDE_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Report a command as passing only if it ran in this run and its output was observed.`;
+export const AGENT_DEBUGGER_CONTRACT = 'Before each tool call, emit a separate, concise `Decision: <why this tool is the next correct action>` message. This is recorded in the agent debugger, so use only an explicit, human-readable rationale; never expose or claim hidden reasoning.';
 const activeRunControllers = new Map<string, AbortController>();
 export const isAgentRunActive = (id: string) => activeRunControllers.has(id);
 
@@ -573,7 +574,7 @@ export interface AgentEventContext { subagents: Map<string, string> }
  * agent-authored, attributable, and never an inferred substitute.
  */
 export function recordedDecision(text: string): string | null {
-  const match = text.match(/^\s*Decision:\s*([\s\S]+?)\s*$/i);
+  const match = text.match(/^\s*Decision:\s*([^\n]+?)\s*$/i);
   return match?.[1] ? match[1].slice(0, 2_000) : null;
 }
 
@@ -582,7 +583,11 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
     const event = JSON.parse(line) as Record<string, unknown>;
     if (agent === 'codex') {
       const item = event.item as Record<string, unknown> | undefined;
-      if (item?.type === 'agent_message' && typeof item.text === 'string') return { progress: item.text, final: item.text, audit: [] };
+      if (item?.type === 'agent_message' && typeof item.text === 'string') {
+        const decision = event.type === 'item.completed' ? recordedDecision(item.text) : null;
+        const audit = decision ? [{ category: 'agent_tool_use' as const, streamKind: 'decision' as const, detail: decision }] : [];
+        return { progress: item.text, final: item.text, audit };
+      }
       if (item?.type === 'reasoning' && typeof item.text === 'string') {
         const audit = event.type === 'item.completed' ? [{ category: 'agent_tool_use' as const, streamKind: 'decision' as const, detail: item.text.slice(0, 2_000) }] : [];
         return { progress: `Reasoning summary: ${item.text}`, final: null, audit };
@@ -731,10 +736,14 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
       cancellationRequested = true;
       stopProcessTree();
     };
-    const efficientPrompt = agent === 'claude' ? `${prompt}
+    const instrumentedPrompt = `${prompt}
+
+Agent debugger:
+${AGENT_DEBUGGER_CONTRACT}`;
+    const efficientPrompt = agent === 'claude' ? `${instrumentedPrompt}
 
 Claude execution budget:
-${CLAUDE_EXECUTION_CONTRACT}` : prompt;
+${CLAUDE_EXECUTION_CONTRACT}` : instrumentedPrompt;
     let stdout = '';
     let stderr = '';
     let buffered = '';

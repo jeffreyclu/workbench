@@ -628,6 +628,12 @@ record only its explicit, agent-authored `Decision:` preamble before a tool
 call. Existing runs cannot be backfilled, but newly started agent streams show
 the actual recorded decision and command sequence.
 
+*UI cleanup from Jeffrey, 2026-08-25.* Render each recorded tool call as one
+compact row only: `Why: <recorded rationale> Decision: <readable tool call>
+(Details)`. The Details pill exposes the raw recorded call on hover/focus.
+Decision records are association data, not standalone visible rows. Codex and
+Claude use the same renderer and the same explicit-rationale-only rule.
+
 ### RAG memory index now also ingests the shared ~/notes knowledge base
 
 *Fix from Jeffrey, 2026-08-25.* Root cause of "Workbench topics retrieve much
