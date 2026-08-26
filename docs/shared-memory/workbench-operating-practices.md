@@ -31,6 +31,15 @@ Workbench agent turns have a 30-minute hard timeout. Estimate and report whether
 foreground backfill or verification fits inside that window before starting it; split
 or checkpoint work that does not.
 
+### Reuse active coding-agent sessions where safe
+
+Jeffrey identified process-per-request agent startup as a material coding-workflow
+latency problem (2026-08-25). Workbench should retain a safe continuation path for
+an active coding conversation or task instead of treating every follow-up as an
+unrelated fresh instance. Any design must preserve durable shared context, workspace
+leases, cancellation, provider/account isolation, and a restart fallback; ephemeral
+agents remain appropriate for independent research, review, and fan-out work.
+
 ### Workbench improvement suggestions scope
 
 *When asked to find Workbench improvements, stick to user-facing UX and never resuggest filters/saved views*

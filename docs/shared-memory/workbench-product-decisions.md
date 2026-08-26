@@ -815,3 +815,51 @@ Not yet done: `retrievedMemoryForPrompt()` in `agent-runner.ts` (used by
 `buildPrompt()`) still calls `selectRelevantMemoryForPrompt` with no
 `localId`, so that path gets rank-floor behavior but not tiering. Needs a
 follow-up review to find its correct local-scope id.
+
+## 2026-08-26: agent-runner reuse policy — hybrid, ship pool + conversation-scoped sessions first
+
+Jeffrey approved (in shared room) the hybrid policy Claude/Codex proposed for
+the per-request cold-start problem: reuse persistent/resumable sessions only
+for coding conversations and active implementation tasks; keep research,
+reviews, short room answers, and independent one-shot tasks ephemeral, as
+today. Of the numbered options discussed, Jeffrey said to ship 1 and 2 first:
+
+1. One process per active conversation/workspace (not per turn) for the
+   coding-conversation path, instead of the current per-turn spawn.
+2. A warm process pool per (agent, cwd) — pre-started idle runtimes handed a
+   fresh task — to kill process-boot and MCP-negotiation cost. Complementary
+   to (1), needed for the ephemeral path too.
+
+Why this exists: `agent-runner.ts:510-541` spawns a cold process every turn —
+Claude with `--no-session-persistence`, Codex as `exec --ephemeral` — by
+deliberate design (comment at 522-538): unbounded reuse previously drove up to
+13M cached tokens on a single ~10-minute run, and `--autocompact 100k` was
+added as the mitigation. Any reuse work must keep that autocompact bound (or
+an equivalent) on resumed/warm sessions so this doesn't regress into the
+runaway-context failure mode the isolation design was built to avoid.
+
+Tracked as Workbench work item "Agent runner: warm process pool +
+per-conversation session reuse (coding only)" (created 2026-08-26).
+
+Update 2026-08-25 build: Option 1 is implemented. `shared_conversations` gained
+a `claude_session_id` column (migration `051_shared_conversation_claude_session_id`,
+with an upgrade-path test from migration 050). `executeAgentRun` in
+`agent-runner.ts` now resolves `resumeSessionId` from the conversation's stored
+`claudeSessionId` only when `run.agent === 'claude' && run.kind === 'execute' &&
+run.conversationId` — every other run kind/agent stays on the original
+per-turn cold-spawn path. `commandFor` swaps `--no-session-persistence` for
+`--resume <sessionId>` only when a resume id is present; `--autocompact 100k`
+stays unconditional in both branches, preserving the runaway-context
+mitigation. The session id returned by Claude's terminal `system`/`result`
+stream-json events (`event.session_id`) is captured in `readableAgentEvent`
+and persisted back via `repository.setConversationClaudeSessionId` after each
+coding run, so the next turn on the same conversation resumes rather than
+starting cold. Codex is untouched (`exec --ephemeral` unchanged).
+
+Caveat: the exact shape of Claude Code CLI's stream-json `session_id` field
+(which event(s) carry it) was not verified against live CLI output or docs —
+implemented from prior general knowledge. Verify against a real run before
+relying on it if resume appears to silently no-op.
+
+Option 2 (warm process pool per agent+cwd) is still not built — remains open
+on the same work item.

@@ -320,6 +320,10 @@ export class WorkItemRepository {
     return this.getConversation(id);
   }
 
+  setConversationClaudeSessionId(id: string, sessionId: string | null): SharedConversation | null {
+    return this.conversations.setClaudeSessionId(id, sessionId) ? this.getConversation(id) : null;
+  }
+
   setConversationWorkItem(id: string, workItemId: string | null): SharedConversation | null {
     return this.conversationService.setWorkItem(id, workItemId);
   }

@@ -357,7 +357,7 @@ export interface AgentUsage {
   estimatedCostUsd: number | null;
   costSource: 'provider' | 'estimated' | null;
 }
-interface AgentCommandResult { output: string; usage: AgentUsage; }
+interface AgentCommandResult { output: string; usage: AgentUsage; sessionId?: string | null; }
 
 function numberAt(record: Record<string, unknown>, ...keys: string[]): number | null {
   const value = keys.map((key) => record[key]).find((candidate) => typeof candidate === 'number');
@@ -507,7 +507,7 @@ export function effortFor(profile: ExecutionProfile): 'low' | 'medium' | 'high' 
 
 export type AgentInputSteering = (body: string) => Promise<boolean>;
 
-export function commandFor(agent: AgentRun['agent'], cwd: string, profile: ExecutionProfile, modelOverride?: string): { command: string; args: string[] } {
+export function commandFor(agent: AgentRun['agent'], cwd: string, profile: ExecutionProfile, modelOverride?: string, resumeSessionId?: string): { command: string; args: string[] } {
   const effort = effortFor(profile);
   if (agent === 'codex') {
     const model = modelOverride ?? modelFor(agent, profile);
@@ -538,7 +538,10 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
     // ceiling on runaway context growth is the right tradeoff here.
     // Keep stdin open for shared-room interjections. They become another user
     // turn in this Claude process instead of canceling it or spawning another.
-    args: ['-p', '--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--disallowedTools', 'Task', '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, '--no-session-persistence', '--disable-slash-commands', '--autocompact', '100k', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
+    // Coding runs (kind === 'execute') resume the conversation's prior Claude
+    // session instead of starting cold, so implementation work keeps its live
+    // context across turns; --autocompact stays unconditional either way.
+    args: ['-p', '--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--disallowedTools', 'Task', '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, ...(resumeSessionId ? ['--resume', resumeSessionId] : ['--no-session-persistence']), '--disable-slash-commands', '--autocompact', '100k', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
   };
 }
 
@@ -603,7 +606,7 @@ function terminateAgentProcessTree(child: ReturnType<typeof spawn>, signal: Node
  * traced back to the worker that produced it, so the runner keeps this for the
  * life of one invocation and hands it to each parsed event.
  */
-export interface AgentEventContext { subagents: Map<string, string> }
+export interface AgentEventContext { subagents: Map<string, string>; sessionId?: string }
 
 /**
  * Claude does not provide its hidden reasoning in stream-json. A visible
@@ -737,8 +740,14 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
       // event for a Claude print-mode invocation.
       return { progress: parts.join('\n'), final: null, audit };
     }
-    if (event.type === 'result' && typeof event.result === 'string') return { progress: '', final: event.result, audit: [] };
-    if (event.type === 'system') return { progress: '', final: null, audit: [] };
+    if (event.type === 'result' && typeof event.result === 'string') {
+      if (typeof event.session_id === 'string' && context) context.sessionId = event.session_id;
+      return { progress: '', final: event.result, audit: [] };
+    }
+    if (event.type === 'system') {
+      if (typeof event.session_id === 'string' && context) context.sessionId = event.session_id;
+      return { progress: '', final: null, audit: [] };
+    }
     return { progress: '', final: null, audit: [] };
   } catch {
     return { progress: line, final: null, audit: [] };
@@ -758,8 +767,8 @@ function terminalAgentError(agent: AgentRun['agent'], line: string): string | nu
   return null;
 }
 
-async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void, accountProfile = DEFAULT_ACCOUNT_PROFILE, modelOverride?: string, onSteeringReady?: (steer: AgentInputSteering) => void): Promise<AgentCommandResult> {
-  const { command, args } = commandFor(agent, cwd, profile, modelOverride);
+async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void, accountProfile = DEFAULT_ACCOUNT_PROFILE, modelOverride?: string, onSteeringReady?: (steer: AgentInputSteering) => void, resumeSessionId?: string): Promise<AgentCommandResult> {
+  const { command, args } = commandFor(agent, cwd, profile, modelOverride, resumeSessionId);
   return new Promise<AgentCommandResult>((resolveOutput, reject) => {
     const child = spawn(command, args, {
       cwd,
@@ -965,7 +974,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : instrumentedPrompt;
       else if (code === 0 && !terminalError) {
         const output = finalOutput.trim() || progress.trim() || stdout.trim();
         const outputTokens = reportedUsage.outputTokens ?? (estimatedOutputTokens || null);
-        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens, estimatedCostUsd: costFor(reportedUsage.inputTokens, outputTokens, reportedUsage.cacheCreationInputTokens, reportedUsage.cacheReadInputTokens), costSource: costSource(reportedUsage.inputTokens, outputTokens, reportedUsage.cacheCreationInputTokens, reportedUsage.cacheReadInputTokens) } });
+        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens, estimatedCostUsd: costFor(reportedUsage.inputTokens, outputTokens, reportedUsage.cacheCreationInputTokens, reportedUsage.cacheReadInputTokens), costSource: costSource(reportedUsage.inputTokens, outputTokens, reportedUsage.cacheCreationInputTokens, reportedUsage.cacheReadInputTokens) }, sessionId: eventContext.sessionId ?? null });
       }
       else {
         const providerDiagnostic = stderr.trim() || terminalError || finalOutput.trim() || stdout.trim();
@@ -1042,10 +1051,11 @@ export async function runAgentCommandWithFallback(
   accountProfile = DEFAULT_ACCOUNT_PROFILE,
   modelOverride?: string,
   onSteeringReady?: (steer: AgentInputSteering) => void,
-): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null }> {
+  resumeSessionId?: string,
+): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null }> {
   void kind;
   try {
-    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady);
+    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, resumeSessionId);
     return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
   } catch (error) {
     // An autonomous reservation is provider+model specific. Crossing providers
@@ -1198,6 +1208,10 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // The model and effort tier are picked for Jeffrey, not by him. Record the
     // choice and its reason so the activity log explains what actually ran.
     repository.addActivity(item.id, 'system', 'model_selected', describeModelSelection({ agent: run.agent, kind: run.kind, model, profile, source: decision.source }));
+    // Coding runs (execute + claude) resume the same provider session across
+    // turns instead of starting cold every time; other run kinds stay ephemeral.
+    const resumesSession = run.agent === 'claude' && run.kind === 'execute' && Boolean(run.conversationId);
+    const resumeSessionId = resumesSession && run.conversationId ? repository.getConversation(run.conversationId)?.claudeSessionId ?? undefined : undefined;
     let result = await runAgentCommandWithFallback(run.agent, cwd, run.agent === 'claude' ? claudeScopeRecoveryPrompt(prompt, cwd) : prompt, (partialOutput) => {
       repository.updateRun(run.id, { output: partialOutput });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
@@ -1215,7 +1229,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
       })));
-    }, run.kind, run.accountProfile, autonomousModel ?? undefined);
+    }, run.kind, run.accountProfile, autonomousModel ?? undefined, undefined, resumeSessionId);
+    if (resumesSession && run.conversationId) repository.setConversationClaudeSessionId(run.conversationId, result.sessionId ?? null);
     if (run.origin !== 'autonomous' && result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the run to Codex.';
       repository.addActivity(item.id, 'system', 'agent_fallback', reason);

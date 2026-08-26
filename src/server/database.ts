@@ -1527,6 +1527,19 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // A `--no-session-persistence` Claude invocation per turn re-pays cold
+    // process/context/MCP startup on every reply. Coding conversations reuse
+    // the prior turn's Claude session id (via `--resume`) instead; this column
+    // is that continuity anchor, scoped to one conversation at a time.
+    id: '051_shared_conversation_claude_session_id',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'claude_session_id')) {
+        database.exec('ALTER TABLE shared_conversations ADD COLUMN claude_session_id TEXT;');
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {
