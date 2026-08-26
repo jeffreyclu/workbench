@@ -898,8 +898,8 @@ Caveat: the exact shape of Claude Code CLI's stream-json `session_id` field
 implemented from prior general knowledge. Verify against a real run before
 relying on it if resume appears to silently no-op.
 
-Option 2 (warm process pool per agent+cwd) is still not built — remains open
-on the same work item.
+Option 2 (warm process pool per agent+cwd) is now built and shipped — see the
+2026-08-26 update below for final status.
 
 ### Code review lives in the conversation
 
@@ -930,5 +930,32 @@ too would reopen the 13M-token regression. Health check is a liveness probe at
 claim time only (no background scheduler for v1); idle TTL eviction (proposed
 2 min) plus immediate reap on exit/failed probe, never retrying a dead
 process. Pooled processes keep the unconditional `--autocompact 100k` — no
-exception path. Implementation (pool manager, claim/evict logic, wiring into
-agent-runner.ts) is still open on work item `f762adb1`.
+exception path.
+
+Update 2026-08-26 (later same day): implementation confirmed shipped. Pool
+manager (`agent-pool.ts`) implements claim/warm/evict with a liveness check
+(`exitCode`/`signalCode`) at claim time, a 5-minute idle TTL swept both lazily
+(on `warmProcess`) and by a 60s `setInterval` (`sweepIdlePool`/
+`startPoolSweep`), and a 1-process-per-key idle cap. `agent-runner.ts` wires
+`poolEligible` into `runAgentCommandWithFallback`, computed as
+`!resumesSession` where `resumesSession = run.agent === 'claude' &&
+run.kind === 'execute' && Boolean(run.conversationId)` — this is the explicit,
+testable ephemeral-vs-persistent split the design called for. A follow-up
+session found and fixed a gap: three ephemeral call sites in
+`shared-room.ts` (initial room reply, Claude-scope recovery handoff to Codex,
+`synthesizeSharedTurn`) were not passing `poolEligible = true`, so short room
+answers and cross-agent synthesis weren't drawing from the pool despite being
+named in-scope by this design. Fixed in commit `2a20715`.
+
+Two accepted deviations from the original wording above, both deliberate and
+left as-is rather than "corrected": idle TTL is 5 minutes, not the "proposed
+2 min" — the shipped code's own doc comment treats 5 min as the considered
+value. And reap is lazy/interval-swept rather than an immediate exit-listener
+per process — functionally equivalent (a dead process is never handed out;
+`isAlive()` is checked at claim time and sweeps happen every 60s or on next
+warm), just not instantaneous-on-exit. Neither blocks the design intent.
+Verified via `tsc --noEmit` (clean) and `npx vitest run` (987/988 passing; the
+1 failure, `repository.test.ts` "shares one retrieval snapshot", is
+pre-existing and unrelated — reproduced identically with the fix stashed
+out). Tracked on work item `f762adb1`, description updated to reflect DONE on
+both scope items.
