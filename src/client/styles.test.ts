@@ -137,6 +137,13 @@ describe('diff review layout', () => {
     expect(phoneRules).toContain('.workspace-diff-file, .github-diff-file { min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }');
   });
 
+  it('clamps the recorded-version selector so it cannot dominate the phone action row', () => {
+    const phoneRules = styles.match(/@media \(max-width: 640px\) \{[\s\S]*?\.task-collapsible/)?.[0] ?? '';
+
+    expect(phoneRules).toContain('.workspace-diff-timeline { flex: 0 1 160px; max-width: 100%; }');
+    expect(phoneRules).toContain('.workspace-diff-timeline select { width: 100%; }');
+  });
+
   it('makes a pending diff assessment explicit instead of rendering an empty dark pill', () => {
     expect(styles).toContain('.diff-confidence-pending { min-width: 58px; color: #e6c75f; border-color: #8c6f2c; background: #2b2414; opacity: 1; }');
   });
