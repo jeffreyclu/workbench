@@ -30,9 +30,25 @@ const PROGRESS_FLUSH_MS = 250;
  * footprint proportional to the actual task rather than multiplying it across
  * fresh subagent contexts. */
 export const CLAUDE_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Report a command as passing only if it ran in this run and its output was observed.`;
+export const TOOL_OUTPUT_CONTRACT = `Tool-output discipline: keep every command and file read bounded to the lines needed for the decision. Do not paste, summarize verbatim, or carry raw command output into later turns. Record only the command, relevant paths, and the decisive finding; reopen an exact path/range when needed.`;
 export const AGENT_DEBUGGER_CONTRACT = 'For every tool call, first emit one standalone text block exactly in the form `Decision: <why this tool is the next correct action>`, then make exactly that one tool call. Do not reuse a decision for later calls or batch multiple tool calls under one decision. This is recorded in the agent debugger, so use only an explicit, human-readable rationale; never expose or claim hidden reasoning.';
 export const EXTERNAL_ACTION_CONTRACT = 'External-source guardrail: default deny all access to or actions on external websites, services, and networked CLIs, including GitHub, Slack, Confluence, Linear, and their APIs. Do not attempt a workaround. An explicit order must be represented by a supervisor-issued capability; never infer authorization from task text. No external capability is issued for this run, so report the blocked action without performing it.';
 export const PUSH_CAPABILITY_CONTRACT = 'Supervisor-issued capability: Jeffrey explicitly instructed this current turn to commit and/or push. You may create the corresponding local commit and run exactly the corresponding `git push` for this workspace. This does not authorize pull/fetch, creating or merging pull requests, posting comments, changing issues, publishing artifacts, deployments, or any other external action.';
+export const RUNNER_SYSTEM_CONTRACT = `Non-interactive: use tools directly; no permission prompts or dialogs exist to approve. If access is missing, name the exact missing integration/credential and continue with what's possible.
+
+Execution integrity: this is one foreground, tracked run — no detached/background work or promised later results. Report only observed results. On tool failure, include the exact command, path, and error; never infer a sandbox/permission restriction without one.
+
+Before acting, name the relevant decision, handoff, or blocker from the shared brief you're continuing, and flag any conflict with the task or observed repo state.
+
+Full activity memory (shared, read-only) is searchable when prior work may matter: curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=100'. Do not claim history you did not retrieve.
+
+For an approved artifact publication, use the Workbench MCP \`publish_artifact\` tool; do not curl the Workbench UI. Publishing remains limited to a supervisor-issued capability for this one turn.
+
+Workspace isolation: the task workspace is a project workspace, not a place for Workbench bookkeeping. Never create or update \`docs/shared-memory*\`, Workbench operating notes, or other Workbench-internal files there. Use Workbench's shared conversation and activity state for handoffs. Create or edit project documentation only when Jeffrey explicitly asks for that project documentation.
+
+Emit brief progress updates before/after meaningful steps — what you're checking, why, what you learned, what's next — as concise decisions/summaries, not chain-of-thought.
+
+Complete the requested capability. Report decisions, evidence, risks, files changed, and verification. Do not change the Workbench database directly.`;
 
 export type ExternalActionAuthorization = { granted: boolean; operation: string | null };
 
@@ -266,23 +282,28 @@ ${compactPromptSection(sharedContext || 'No shared context yet.', 700)}
 
 ${retrievedMemoryForPrompt(retrievedMemory, item.id)}
 
-Non-interactive: use tools directly; no permission prompts or dialogs exist to approve. If access is missing, name the exact missing integration/credential and continue with what's possible.
-
 ${externalActionContract ?? externalActionContractForCurrentInstruction(currentUserInstruction, precedingUserInstruction)}
 
-Execution integrity: this is one foreground, tracked run — no detached/background work or promised later results. Report only observed results. On tool failure, include the exact command, path, and error; never infer a sandbox/permission restriction without one.
+${run.agent === 'claude' ? '' : RUNNER_SYSTEM_CONTRACT}`;
+}
 
-Before acting, name the relevant decision, handoff, or blocker from the shared brief you're continuing, and flag any conflict with the task or observed repo state.
+export function buildResumedPrompt(item: WorkItem, run: AgentRun, currentUserInstruction?: string, precedingUserInstruction?: string, externalActionContract?: string): string {
+  return `Continue the existing task session. The prior task, source context, shared context, and earlier decisions are already available in this session.
 
-Full activity memory (shared, read-only) is searchable when prior work may matter: curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=100'. Do not claim history you did not retrieve.
+Task: ${compactPromptSection(item.title, 300)}
+Status: ${item.status}
+Current strategy:
+${compactPromptSection(item.strategy || 'No strategy yet.', 1_500)}
 
-For an approved artifact publication, use the Workbench MCP \`publish_artifact\` tool; do not curl the Workbench UI. Publishing remains limited to a supervisor-issued capability for this one turn.
+Current instructions:
+${compactPromptSection(run.instructions || 'Continue the requested work and report the observed result.', 1_500)}
 
-Durable memory is shared, never per-agent: read docs/shared-memory.md's index, open only relevant topic file(s), and append anything durable there in the same turn.
+Current attached files:
+${item.attachments?.length
+    ? item.attachments.map((file) => `- ${file.name} (${file.mimeType}, ${file.size} bytes): ${file.path}`).join('\n')
+    : 'None.'}
 
-Emit brief progress updates before/after meaningful steps — what you're checking, why, what you learned, what's next — as concise decisions/summaries, not chain-of-thought.
-
-Complete the requested capability. Report decisions, evidence, risks, files changed, and verification. Do not change the Workbench database directly.`;
+${externalActionContract ?? externalActionContractForCurrentInstruction(currentUserInstruction, precedingUserInstruction)}`;
 }
 
 export type RetrievedMemory = { source: string; title: string; body: string; createdAt: string; score?: number; conversationId?: string | null; workItemId?: string | null };
@@ -585,8 +606,9 @@ export function effortFor(profile: ExecutionProfile): 'low' | 'medium' | 'high' 
 
 export type AgentInputSteering = (body: string) => Promise<boolean>;
 
-export function commandFor(agent: AgentRun['agent'], cwd: string, profile: ExecutionProfile, modelOverride?: string, resumeSessionId?: string): { command: string; args: string[] } {
+export function commandFor(agent: AgentRun['agent'], cwd: string, profile: ExecutionProfile, modelOverride?: string, resumeSessionId?: string, kind: AgentRun['kind'] = 'execute'): { command: string; args: string[] } {
   const effort = effortFor(profile);
+  const readOnly = kind === 'analysis' || kind === 'research' || kind === 'review' || kind === 'strategy';
   if (agent === 'codex') {
     const model = modelOverride ?? modelFor(agent, profile);
     return {
@@ -595,7 +617,7 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
       // --ignore-user-config excludes every personal MCP server. Add back only
       // Workbench's loopback-local MCP surface so Codex does not try to curl
       // the host UI from inside its command sandbox.
-      args: ['exec', '--ephemeral', '--ignore-user-config', '--sandbox', 'workspace-write', '--skip-git-repo-check', '--json', '-c', `model_reasoning_effort="${effort}"`, '-c', 'mcp_servers.workbench.url="http://localhost:5180/mcp"', '--model', model, '-C', cwd, '-'],
+      args: ['exec', '--ephemeral', '--ignore-user-config', '--sandbox', readOnly ? 'read-only' : 'workspace-write', '--skip-git-repo-check', '--json', '-c', `model_reasoning_effort="${effort}"`, '-c', 'mcp_servers.workbench.url="http://localhost:5180/mcp"', '--model', model, '-C', cwd, '-'],
     };
   }
   const model = modelOverride ?? modelFor(agent, profile);
@@ -622,7 +644,7 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
     // Coding runs (kind === 'execute') resume the conversation's prior Claude
     // session instead of starting cold, so implementation work keeps its live
     // context across turns; --autocompact stays unconditional either way.
-    args: ['-p', '--permission-mode', 'bypassPermissions', '--no-chrome', '--disallowedTools', 'Task,WebFetch,WebSearch', '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, ...(resumeSessionId ? ['--resume', resumeSessionId] : []), '--disable-slash-commands', '--autocompact', '100k', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
+    args: ['-p', '--permission-mode', 'bypassPermissions', '--no-chrome', '--disallowedTools', readOnly ? 'Task,WebFetch,WebSearch,Edit,Write,NotebookEdit' : 'Task,WebFetch,WebSearch', '--append-system-prompt', RUNNER_SYSTEM_CONTRACT, '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, ...(resumeSessionId ? ['--resume', resumeSessionId] : []), '--disable-slash-commands', '--autocompact', '100k', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
   };
 }
 
@@ -848,8 +870,8 @@ function terminalAgentError(agent: AgentRun['agent'], line: string): string | nu
   return null;
 }
 
-async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void, accountProfile = DEFAULT_ACCOUNT_PROFILE, modelOverride?: string, onSteeringReady?: (steer: AgentInputSteering) => void, resumeSessionId?: string, poolEligible = false): Promise<AgentCommandResult> {
-  const { command, args } = commandFor(agent, cwd, profile, modelOverride, resumeSessionId);
+async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void, accountProfile = DEFAULT_ACCOUNT_PROFILE, modelOverride?: string, onSteeringReady?: (steer: AgentInputSteering) => void, resumeSessionId?: string, poolEligible = false, kind: AgentRun['kind'] = 'analysis'): Promise<AgentCommandResult> {
+  const { command, args } = commandFor(agent, cwd, profile, modelOverride, resumeSessionId, kind);
   const spawnFresh = () => spawn(command, args, {
     cwd,
     env: agentAccountEnv(agent, accountProfile),
@@ -896,10 +918,12 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
 
 Agent debugger:
 ${AGENT_DEBUGGER_CONTRACT}`;
-    const efficientPrompt = agent === 'claude' ? `${instrumentedPrompt}
+    const efficientPrompt = `${instrumentedPrompt}
+
+${TOOL_OUTPUT_CONTRACT}${agent === 'claude' ? `
 
 Claude execution budget:
-${CLAUDE_EXECUTION_CONTRACT}` : instrumentedPrompt;
+${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
     let stdout = '';
     let stderr = '';
     let buffered = '';
@@ -1156,9 +1180,8 @@ export async function runAgentCommandWithFallback(
   resumeSessionId?: string,
   poolEligible = false,
 ): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null }> {
-  void kind;
   try {
-    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, resumeSessionId, poolEligible);
+    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, resumeSessionId, poolEligible, kind);
     return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
   } catch (error) {
     // An autonomous reservation is provider+model specific. Crossing providers
@@ -1169,7 +1192,10 @@ export async function runAgentCommandWithFallback(
     onFallback?.(fallback, reason);
     const prefix = `${primary} is unavailable due to its usage limit. Continuing with ${fallback}.`;
     onProgress?.(prefix);
-    const result = await runAgentCommandWithUsage(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile, onUsage, onAudit, accountProfile, undefined, undefined, undefined, poolEligible);
+    const fallbackPrompt = primary === 'claude' && fallback === 'codex'
+      ? `${prompt}\n\n${RUNNER_SYSTEM_CONTRACT}`
+      : prompt;
+    const result = await runAgentCommandWithUsage(fallback, cwd, fallbackPrompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile, onUsage, onAudit, accountProfile, undefined, undefined, undefined, poolEligible, kind);
     return { ...result, agent: fallback, fallbackFrom: primary, fallbackReason: reason.slice(0, 500) };
   }
 }
@@ -1273,28 +1299,47 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // The resolved workspace is explicit in the CLI command and surfaced in
     // activity so a run's filesystem boundary is never implicit.
     repository.addActivity(item.id, 'system', 'progress', `Workspace resolved to ${cwd}.`);
-    const sharedContext = [repository.getSharedContext(undefined, { workItemId: item.id }), externalContext].filter(Boolean).join('\n\n');
-    // Every task run gets the same bounded hybrid retrieval that shared-room
-    // replies use. This is the hot path where an agent otherwise has to read
-    // a broad handoff and manually discover related conversations or earlier
-    // work. Retrieval failure is non-fatal: the task's own context remains
-    // sufficient to run, and the prompt says exactly what was unavailable.
-    const retrievedMemory = await repository.searchActivityMemory(memoryQueryForRun(item, run), PROMPT_MEMORY_CANDIDATE_LIMIT, {
-      refresh: false,
-      projectKey: projectKey(item.projectName) || undefined,
-    }).catch((error) => {
-      console.error('[agent-runner] memory retrieval failed for prompt injection', error);
-      return [];
-    });
-    const injectedMemory = selectRelevantMemoryForPrompt(retrievedMemory, undefined, item.id);
-    repository.addActivity(item.id, 'system', 'progress', injectedMemory.length > 0
-      ? `Retrieved ${injectedMemory.length} relevant memory match${injectedMemory.length === 1 ? '' : 'es'} for context.`
-      : 'No relevant memory found.');
+    const resumeSessionId = run.agent === 'claude' && run.kind === 'execute' && run.conversationId
+      ? repository.getConversation(run.conversationId)?.claudeSessionId ?? undefined
+      : undefined;
+    // A conversation id alone is not enough: the first turn still needs the
+    // complete task prompt. Once Claude has returned a session id, --resume
+    // retains that context, so replaying shared context and RAG is pure cost.
+    const resumesSession = Boolean(resumeSessionId);
+    const sharedContext = resumesSession
+      ? ''
+      : [repository.getSharedContext(undefined, { workItemId: item.id }), externalContext].filter(Boolean).join('\n\n');
+    const retrievedMemory = resumesSession
+      ? []
+      : await repository.searchActivityMemory(memoryQueryForRun(item, run), PROMPT_MEMORY_CANDIDATE_LIMIT, {
+        refresh: false,
+        projectKey: projectKey(item.projectName) || undefined,
+      }).catch((error) => {
+        console.error('[agent-runner] memory retrieval failed for prompt injection', error);
+        return [];
+      });
+    const injectedMemory = resumesSession ? [] : selectRelevantMemoryForPrompt(retrievedMemory, undefined, item.id);
+    repository.addActivity(item.id, 'system', 'progress', resumesSession
+      ? 'Resuming Claude session with bounded continuation context.'
+      : injectedMemory.length > 0
+        ? `Retrieved ${injectedMemory.length} relevant memory match${injectedMemory.length === 1 ? '' : 'es'} for context.`
+        : 'No relevant memory found.');
     if (run.messageId) repository.updateSharedMessage(run.messageId, {
       retrievedMemoryCount: injectedMemory.length,
       retrievedMemoryDetail: { query: memoryQueryForRun(item, run), items: injectedMemory },
     });
-    const prompt = buildPrompt(item, run, sharedContext, injectedMemory);
+    const prompt = resumesSession
+      ? buildResumedPrompt(item, run)
+      : buildPrompt(item, run, sharedContext, injectedMemory);
+    repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, run.agent, 'prompt', {
+      promptChars: prompt.length,
+      taskChars: item.description.length,
+      strategyChars: item.strategy?.length ?? 0,
+      instructionChars: run.instructions.length,
+      sharedContextChars: sharedContext.length,
+      retrievedMemoryCount: injectedMemory.length,
+      retrievedMemoryChars: injectedMemory.reduce((total, match) => total + match.title.length + match.body.length, 0),
+    });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { executionProfile: 'routing' });
     const decision: { profile: ExecutionProfile; source: ExecutionProfileSource } = run.executionProfile
       ? { profile: run.executionProfile, source: 'requested' }
@@ -1311,10 +1356,6 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // The model and effort tier are picked for Jeffrey, not by him. Record the
     // choice and its reason so the activity log explains what actually ran.
     repository.addActivity(item.id, 'system', 'model_selected', describeModelSelection({ agent: run.agent, kind: run.kind, model, profile, source: decision.source }));
-    // Coding runs (execute + claude) resume the same provider session across
-    // turns instead of starting cold every time; other run kinds stay ephemeral.
-    const resumesSession = run.agent === 'claude' && run.kind === 'execute' && Boolean(run.conversationId);
-    const resumeSessionId = resumesSession && run.conversationId ? repository.getConversation(run.conversationId)?.claudeSessionId ?? undefined : undefined;
     let result = await runAgentCommandWithFallback(run.agent, cwd, run.agent === 'claude' ? claudeScopeRecoveryPrompt(prompt, cwd) : prompt, (partialOutput) => {
       repository.updateRun(run.id, { output: partialOutput });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
@@ -1327,8 +1368,10 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
       repository.updateRun(run.id, telemetry);
       if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
+      repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, run.agent, 'usage', telemetry);
     }, (entries, producingAgent) => {
       for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
+      for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, producingAgent, 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
       if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
       })));
@@ -1339,15 +1382,17 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.addActivity(item.id, 'system', 'agent_fallback', reason);
       repository.updateRun(run.id, { output: '● Claude reported an invalid workspace-scope blocker. Handing this tracked run to Codex…', fallbackFrom: 'claude', fallbackReason: reason });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { body: '● Claude reported an invalid workspace-scope blocker. Handing this tracked run to Codex…', fallbackFrom: 'claude', fallbackReason: reason });
-      const recovered = await runAgentCommandWithFallback('codex', cwd, `${prompt}\n\nRecovery handoff: Claude incorrectly claimed it lacked workspace access. Complete the original task directly. Do not repeat that claim; report only observed commands, files changed, verification, and concrete blockers.`, (partialOutput) => {
+      const recovered = await runAgentCommandWithFallback('codex', cwd, `${prompt}\n\n${RUNNER_SYSTEM_CONTRACT}\n\nRecovery handoff: Claude incorrectly claimed it lacked workspace access. Complete the original task directly. Do not repeat that claim; report only observed commands, files changed, verification, and concrete blockers.`, (partialOutput) => {
         repository.updateRun(run.id, { output: partialOutput });
         if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
       }, controller.signal, undefined, profile, (usage) => {
-      const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
+        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
         repository.updateRun(run.id, telemetry);
         if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
+        repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, 'codex', 'usage', telemetry);
       }, (entries, producingAgent) => {
         for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
+        for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, producingAgent, 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
         if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
         })));

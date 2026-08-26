@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, PUSH_CAPABILITY_CONTRACT, backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, externalActionContractForAuthorization, externalActionContractForCurrentInstruction, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, PUSH_CAPABILITY_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, externalActionContractForAuthorization, externalActionContractForCurrentInstruction, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -93,6 +93,32 @@ describe('classifyExecution', () => {
     expect(commandFor('claude', '/tmp/project', 'standard').args).not.toContain('--no-session-persistence');
   });
 
+  it('passes invariant Claude runner rules through the static system-prompt channel', () => {
+    const args = commandFor('claude', '/tmp/project', 'standard').args;
+    const systemPromptIndex = args.indexOf('--append-system-prompt');
+    expect(systemPromptIndex).toBeGreaterThan(-1);
+    expect(args[systemPromptIndex + 1]).toBe(RUNNER_SYSTEM_CONTRACT);
+
+    const task = item('Fix the task card', 'This full description must not be replayed after session resume.');
+    const claudePrompt = buildPrompt(task, { agent: 'claude', kind: 'execute', instructions: '' } as AgentRun);
+    const codexPrompt = buildPrompt(task, { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun);
+    expect(claudePrompt).not.toContain(RUNNER_SYSTEM_CONTRACT);
+    expect(codexPrompt).toContain(RUNNER_SYSTEM_CONTRACT);
+  });
+
+  it('builds a bounded continuation prompt for an already-resumed Claude session', () => {
+    const task = { ...item('Fix the task card', 'x'.repeat(10_000)), strategy: 'Keep the established strategy.' };
+    const prompt = buildResumedPrompt(task, { agent: 'claude', kind: 'execute', instructions: 'Apply the latest fix.' } as AgentRun);
+
+    expect(prompt).toContain('Continue the existing task session.');
+    expect(prompt).toContain('Fix the task card');
+    expect(prompt).toContain('Apply the latest fix.');
+    expect(prompt).not.toContain('x'.repeat(1_000));
+    expect(prompt).not.toContain('Shared context available to every agent:');
+    expect(prompt).not.toContain('Retrieved memory');
+    expect(prompt).not.toContain(RUNNER_SYSTEM_CONTRACT);
+  });
+
   it('streams Claude partial messages so a long answer is visible while it is written', () => {
     expect(commandFor('claude', '/tmp/project', 'standard').args).toContain('--include-partial-messages');
     const delta = readableAgentEvent('claude', JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Reading ' } } }));
@@ -101,6 +127,12 @@ describe('classifyExecution', () => {
     // under dozens of identical markers, and the raw reasoning is never printed.
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'thinking' } } }))).toEqual({ progress: '', final: null, audit: [] });
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'private' } } }))).toEqual({ progress: '', final: null, audit: [] });
+  });
+
+  it('narrows read-only task kinds to a read-only tool surface', () => {
+    expect(commandFor('codex', '/tmp/project', 'standard', undefined, undefined, 'research').args).toEqual(expect.arrayContaining(['--sandbox', 'read-only']));
+    expect(commandFor('claude', '/tmp/project', 'standard', undefined, undefined, 'review').args).toEqual(expect.arrayContaining(['--disallowedTools', 'Task,WebFetch,WebSearch,Edit,Write,NotebookEdit']));
+    expect(commandFor('codex', '/tmp/project', 'standard', undefined, undefined, 'execute').args).toEqual(expect.arrayContaining(['--sandbox', 'workspace-write']));
   });
 
   it('keeps Claude stdin open and appends an interjection after the initial prompt', async () => {
@@ -116,7 +148,7 @@ describe('classifyExecution', () => {
     expect(result.output).toBe('Applied the interjection.');
     const lines = readFileSync(log, 'utf8').trim().split('\n').slice(1).map((line) => JSON.parse(line));
     expect(lines.map((line) => line.message.content[0].text)).toEqual([
-      `Start the task.\n\nAgent debugger:\n${AGENT_DEBUGGER_CONTRACT}\n\nClaude execution budget:\n${CLAUDE_EXECUTION_CONTRACT}`,
+      `Start the task.\n\nAgent debugger:\n${AGENT_DEBUGGER_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\nClaude execution budget:\n${CLAUDE_EXECUTION_CONTRACT}`,
       'Change direction now.',
     ]);
   });
@@ -160,6 +192,8 @@ describe('classifyExecution', () => {
   it('injects the explicit-order external-source guardrail into every work-item prompt', () => {
     const prompt = buildPrompt(item('Fix a component'), { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun);
     expect(prompt).toContain(EXTERNAL_ACTION_CONTRACT);
+    expect(prompt).toContain('Workspace isolation:');
+    expect(prompt).toContain('Never create or update `docs/shared-memory*`');
   });
 
   it('issues a push capability only for a direct current user command', () => {

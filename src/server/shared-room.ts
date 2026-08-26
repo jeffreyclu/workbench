@@ -458,7 +458,7 @@ ${formatRetrievedMemory(retrievedMemory ?? [], localId)}
 Current conversation:
 ${compactConversationHistory(thread)}
 
-Answer Jeffrey concisely. State the decision, handoff, or blocker you are continuing and any conflict with observed state. The live stream is progress only; after work ends, give one fresh, compact final handoff that synthesizes the outcome, changed files or decisions, verification, and any remaining blocker. Do not replay the live progress log or narrate steps verbatim. Before each tool call, emit a separate, concise \`Decision: <why this tool is the next correct action>\` statement. It is recorded in the agent debugger, so make it concrete and human-readable; never claim hidden reasoning. Retrieved memory covers the latest message only; query more via curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=100'. Record durable facts in docs/shared-memory/*.md, never private memory. Workbench is non-interactive: use tools directly and report exact missing access. Finish foreground work now; never detach work or promise a later result.`;
+Answer Jeffrey concisely. State the decision, handoff, or blocker you are continuing and any conflict with observed state. The live stream is progress only; after work ends, give one fresh, compact final handoff that synthesizes the outcome, changed files or decisions, verification, and any remaining blocker. Do not replay the live progress log or narrate steps verbatim. Before each tool call, emit a separate, concise \`Decision: <why this tool is the next correct action>\` statement. It is recorded in the agent debugger, so make it concrete and human-readable; never claim hidden reasoning. Retrieved memory covers the latest message only; query more via curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=100'. Workspace isolation is mandatory: never write Workbench bookkeeping, \`docs/shared-memory*\`, or other Workbench-internal files into a linked project repository. Use this conversation and Workbench activity for durable handoffs; modify project files only for Jeffrey's explicit project request. Workbench is non-interactive: use tools directly and report exact missing access. Finish foreground work now; never detach work or promise a later result.`;
 }
 
 /**
@@ -677,6 +677,14 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       precedingUserMessage,
       externalActionContract,
     );
+    if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'prompt', {
+      promptChars: prompt.length,
+      sharedContextChars: repository.getSharedContext(target.conversationId, { conversationId: target.conversationId }).length,
+      connectionContextChars: connectionContext.length,
+      conversationMessageCount: thread.length,
+      retrievedMemoryCount: injectedMemory.length,
+      retrievedMemoryChars: injectedMemory.reduce((total, match) => total + match.title.length + match.body.length, 0),
+    });
     repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
     const guardedPrompt = prompt;
     const profile = target.executionProfile && target.executionProfile !== 'routing'
@@ -711,6 +719,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
       repository.updateSharedMessage(messageId, telemetry);
       if (runId) repository.updateRun(runId, telemetry);
+      if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'usage', telemetry);
     }, (entries) => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
       kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
     }))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, agent === 'claude' ? (steer) => {
