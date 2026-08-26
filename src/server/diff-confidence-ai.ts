@@ -7,7 +7,14 @@ const SYSTEM_PROMPT = `You are reviewing a code diff. For every supplied changed
 const cache = new Map<string, Promise<Record<string, number>>>();
 
 export function parseDiffConfidenceAssessment(output: string, keys: string[]): Record<string, number> {
-  const json = output.match(/\{[\s\S]*\}/)?.[0];
+  let candidate = output;
+  try {
+    const envelope = JSON.parse(output) as { result?: unknown };
+    if (typeof envelope.result === 'string') candidate = envelope.result;
+  } catch {
+    // The model can return raw JSON instead of the CLI's JSON envelope.
+  }
+  const json = candidate.match(/\{[\s\S]*\}/)?.[0];
   if (!json) throw new Error('AI diff assessment returned no JSON.');
   const parsed = JSON.parse(json) as { assessments?: unknown };
   if (!parsed.assessments || typeof parsed.assessments !== 'object' || Array.isArray(parsed.assessments)) throw new Error('AI diff assessment returned an invalid shape.');
