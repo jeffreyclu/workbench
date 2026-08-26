@@ -1121,8 +1121,8 @@ export class WorkItemRepository {
     return this.queuePlanning.explainQueue(now);
   }
 
-  buildDailyProposal(now = Date.now()): QueueProposal {
-    return this.queuePlanning.buildDailyProposal(now);
+  buildDailyProposal(now = Date.now(), stack: 'attention' | 'workbench' = 'attention'): QueueProposal {
+    return this.queuePlanning.buildDailyProposal(now, stack);
   }
 
   getPendingExecutionPlan(workItemId: string): ExecutionPlan | null {

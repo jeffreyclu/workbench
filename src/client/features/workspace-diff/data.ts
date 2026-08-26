@@ -13,5 +13,5 @@ export const workspaceDiffData = {
   get: (scope: WorkspaceDiffScope) => api.getWorkspaceDiff(scope),
   getSnapshots: (scope: WorkspaceDiffScope) => api.getWorkspaceDiffSnapshots(scope),
   getStatus: (scope: WorkspaceDiffScope, revision: string) => api.getWorkspaceDiffStatus(scope, revision),
-  commitAndPush: (scope: WorkspaceDiffScope, revision: string) => api.commitAndPushWorkspace(scope, revision),
+  commitAndPush: (scope: WorkspaceDiffScope, revision: string, message?: string) => api.commitAndPushWorkspace(scope, revision, message),
 };

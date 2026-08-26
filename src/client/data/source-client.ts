@@ -22,7 +22,7 @@ export const sourceClient = {
   getWorkspaceDiff: (scope: WorkspaceDiffScope) => request<{ diff: WorkspaceDiff }>(`${workspaceDiffBasePath(scope)}/workspace-diff`),
   getWorkspaceDiffSnapshots: (scope: WorkspaceDiffScope) => request<{ snapshots: WorkspaceDiffSnapshot[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/snapshots`),
   getWorkspaceDiffStatus: (scope: WorkspaceDiffScope, revision: string) => request<{ changed: boolean }>(`${workspaceDiffBasePath(scope)}/workspace-diff/status?revision=${encodeURIComponent(revision)}`),
-  commitAndPushWorkspace: (scope: WorkspaceDiffScope, revision: string) => request<{ result: WorkspacePublishResult }>(`${workspaceDiffBasePath(scope)}/workspace-diff/commit-and-push`, { method: 'POST', body: JSON.stringify({ revision }) }),
+  commitAndPushWorkspace: (scope: WorkspaceDiffScope, revision: string, message?: string) => request<{ result: WorkspacePublishResult }>(`${workspaceDiffBasePath(scope)}/workspace-diff/commit-and-push`, { method: 'POST', body: JSON.stringify({ revision, message }) }),
   getGitHubPullRequestDiff: (url: string) => request<{ diff: GitHubPullRequestDiff }>(`/api/github/pull-request-diff?url=${encodeURIComponent(url)}`),
   assessDiffBlocks: (blocks: Array<{ key: string; lines: string[] }>) => request<{ assessments: Record<string, { risk: number; reasoning: string }> }>('/api/diff-confidence', { method: 'POST', body: JSON.stringify({ blocks }) }),
 };

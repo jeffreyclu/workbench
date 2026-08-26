@@ -351,6 +351,8 @@ nav { display: grid; gap: 3px; }
 .workspace-diff-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .workspace-diff-timeline { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 0 7px; color: #aaa9a2; border: 1px solid #353530; border-radius: 6px; font: 700 10px 'DM Mono'; }
 .workspace-diff-timeline select { min-width: 0; max-width: 190px; color: inherit; border: 0; outline: 0; background: transparent; font: inherit; }
+.workspace-diff-commit-message input { min-height: 28px; min-width: 200px; padding: 0 8px; color: #eae9e2; border: 1px solid #353530; border-radius: 6px; background: transparent; font: 400 11px 'DM Mono'; }
+.workspace-diff-commit-message input:disabled { color: #85847d; cursor: not-allowed; }
 .workspace-diff-publish { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 0 9px; color: #171713; border: 1px solid #c6f432; border-radius: 6px; background: #c6f432; cursor: pointer; font: 700 10px 'DM Mono'; }
 .workspace-diff-publish:hover:not(:disabled) { border-color: #d9ff5d; background: #d9ff5d; }.workspace-diff-publish:disabled { color: #85847d; border-color: #353530; background: transparent; cursor: not-allowed; }
 .workspace-diff-publish-error { margin: -5px 0 12px; color: #e1a68f; font-size: 11px; line-height: 1.4; }
@@ -374,7 +376,16 @@ nav { display: grid; gap: 3px; }
 .diff-line.addition { color: #c3d8f0; background: #182636; }.diff-line.addition > span:nth-child(-n + 2) { background: #142031; }
 .diff-line.deletion { color: #f0dcb0; background: #33270f; }.diff-line.deletion > span:nth-child(-n + 2) { background: #2b200c; }
 .diff-line.header { color: #aaa9a2; background: #20201d; }.diff-line.header > span:nth-child(-n + 2) { background: #1c1c19; }
+.diff-line-marker { padding-right: 2px; user-select: none; }
 .diff-block { margin: 4px 0; }
+.token.comment, .token.prolog, .token.doctype, .token.cdata { color: #74736b; }
+.token.punctuation { color: #b3b2ab; }
+.token.property, .token.tag, .token.boolean, .token.number, .token.constant, .token.symbol, .token.deleted { color: #e2a06f; }
+.token.selector, .token.attr-name, .token.string, .token.char, .token.builtin, .token.inserted { color: #9fca7a; }
+.token.operator, .token.entity, .token.url, .language-css .token.string, .style .token.string { color: #d7d6cd; }
+.token.atrule, .token.attr-value, .token.keyword { color: #7fb0e0; }
+.token.function, .token.class-name { color: #e0c56f; }
+.token.regex, .token.important, .token.variable { color: #d98b8b; }
 .diff-confidence-control { position: relative; display: block; width: max-content; margin: 1px 0 1px 84px; }
 .diff-confidence-bubble { display: inline-flex; align-items: center; justify-content: center; min-width: 21px; height: 15px; margin: 0; padding: 0 4px; border: 1px solid; border-radius: 999px; background: #10100f; font: 9px 'DM Mono'; line-height: 1; cursor: pointer; }
 .diff-confidence-bubble:focus-visible { outline: 2px solid #e5e4dc; outline-offset: 2px; }

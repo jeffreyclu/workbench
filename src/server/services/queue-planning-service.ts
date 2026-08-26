@@ -122,9 +122,9 @@ export class QueuePlanningService {
     return this.queue.getPendingProposal(stack);
   }
 
-  createProposal(orderedItemIds: string[], rationale: string, explanations: QueueItemExplanation[] = []): QueueProposal {
-    const canonicalStack = 'attention';
-    const previousOrder = this.collaborators.list().map((item) => item.id);
+  createProposal(orderedItemIds: string[], rationale: string, explanations: QueueItemExplanation[] = [], stack: 'attention' | 'workbench' = 'attention'): QueueProposal {
+    const canonicalStack = stack;
+    const previousOrder = (canonicalStack === 'workbench' ? this.collaborators.listWorkbench() : this.collaborators.list()).map((item) => item.id);
     if (previousOrder.length !== orderedItemIds.length || !previousOrder.every((id) => orderedItemIds.includes(id))) {
       throw new Error('Proposal must contain every active queued item exactly once.');
     }
@@ -210,11 +210,11 @@ export class QueuePlanningService {
     return planQueue(this.collaborators.list(), this.buildQueueContext(now));
   }
 
-  buildDailyProposal(now = Date.now()): QueueProposal {
-    const items = this.collaborators.list();
+  buildDailyProposal(now = Date.now(), stack: 'attention' | 'workbench' = 'attention'): QueueProposal {
+    const items = stack === 'workbench' ? this.collaborators.listWorkbench() : this.collaborators.list();
     if (!items.length) throw new Error('Add at least one task before planning the stack.');
     const plan = planQueue(items, this.buildQueueContext(now));
-    return this.createProposal(plan.orderedItemIds, plan.rationale, plan.explanations);
+    return this.createProposal(plan.orderedItemIds, plan.rationale, plan.explanations, stack);
   }
 
   resolveProposal(id: string, resolution: 'accepted' | 'rejected'): QueueProposal | null {

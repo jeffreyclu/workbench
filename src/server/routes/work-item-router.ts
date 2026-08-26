@@ -87,8 +87,8 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     try {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const { revision } = z.object({ revision: z.string().trim().min(1) }).parse(request.body);
-      const result = await commitAndPushWorkspace(resolveWorkingDirectory(item), `chore: ${item.title}`, revision);
+      const { revision, message } = z.object({ revision: z.string().trim().min(1), message: z.string().trim().min(1).optional() }).parse(request.body);
+      const result = await commitAndPushWorkspace(resolveWorkingDirectory(item), message ?? `chore: ${item.title}`, revision);
       response.json({ result });
     } catch (error) { next(error); }
   });

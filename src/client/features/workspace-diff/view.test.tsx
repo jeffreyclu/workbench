@@ -11,6 +11,28 @@ afterEach(() => {
 });
 
 describe('WorkspaceDiffView', () => {
+  it('shows a retry action instead of an empty-diff state when loading the workspace diff fails', async () => {
+    let attempts = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspace-diff/snapshots')) return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.endsWith('/workspace-diff')) {
+        attempts += 1;
+        if (attempts === 1) throw new Error('Network unavailable');
+        return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'review', revision: 'retry', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={false} /></QueryClientProvider>);
+
+    expect(await screen.findByText('Could not load local workspace changes.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('No uncommitted changes to review.')).toBeInTheDocument();
+    expect(attempts).toBe(2);
+  });
+
   it('offers an orange refresh action when a newer workspace revision is detected without replacing the open patch', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -40,7 +62,7 @@ describe('WorkspaceDiffView', () => {
     render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning /></QueryClientProvider>);
 
     expect(await screen.findByRole('button', { name: 'Refresh changes' })).toHaveClass('workspace-diff-refresh-pending');
-    expect(screen.getByText('+after')).toBeInTheDocument();
+    expect(document.querySelector('.diff-line.addition')?.textContent).toContain('+after');
     expect(screen.getByRole('button', { name: /src\/old\.ts/ })).toBeInTheDocument();
     expect(document.querySelector('.diff-review-layout > .diff-file-list')).toBeInTheDocument();
     expect(await screen.findByLabelText('AI risk assessment: 42 out of 100')).toBeInTheDocument();
@@ -93,7 +115,7 @@ describe('WorkspaceDiffView', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Commit & push' }));
     expect(await screen.findByRole('button', { name: 'Publishing…' })).toBeDisabled();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/work-items/work-item-1/workspace-diff/commit-and-push', expect.objectContaining({ method: 'POST', body: JSON.stringify({ revision: 'revision-1' }) })));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/work-items/work-item-1/workspace-diff/commit-and-push', expect.objectContaining({ method: 'POST', body: JSON.stringify({ revision: 'revision-1', message: 'chore: update' }) })));
     resolvePublish!(new Response(JSON.stringify({ result: { committed: true, pushed: true, commit: 'abc1234' } }), { headers: { 'Content-Type': 'application/json' } }));
     expect(await screen.findByText('Committed and pushed abc1234.')).toBeInTheDocument();
     expect(await screen.findByText('No uncommitted changes to review.')).toBeInTheDocument();
@@ -142,7 +164,7 @@ describe('WorkspaceDiffView', () => {
     const version = await screen.findByLabelText('Workspace diff version');
     fireEvent.change(version, { target: { value: 'recorded-version' } });
     expect(await screen.findByRole('heading', { name: 'Workspace diff record' })).toBeInTheDocument();
-    expect(screen.getByText('+preserved')).toBeInTheDocument();
+    expect(document.querySelector('.diff-line.addition')?.textContent).toContain('+preserved');
     expect(screen.getByText(/This record is preserved after commit and push/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'No changes to commit' })).toBeDisabled();
   });
@@ -169,7 +191,7 @@ describe('WorkspaceDiffView', () => {
     render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={false} /></QueryClientProvider>);
 
     expect(await screen.findByRole('heading', { name: 'Workspace diff record' })).toBeInTheDocument();
-    expect(screen.getByText('+preserved')).toBeInTheDocument();
+    expect(document.querySelector('.diff-line.addition')?.textContent).toContain('+preserved');
     expect(screen.getByLabelText('Workspace diff version')).toHaveValue('recorded-version');
   });
 });

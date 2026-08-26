@@ -26,8 +26,11 @@ export function createQueueRouter({ repository }: RouteContext) {
     } catch (error) { next(error); }
   });
   router.post('/api/queue/plan', (request, response, next) => {
-    try { response.status(201).json({ proposal: repository.buildDailyProposal(Date.now()), items: repository.list() }); }
-    catch (error) { next(error); }
+    try {
+      const stack = z.enum(['attention', 'workbench']).default('attention').parse(request.body?.stack ?? 'attention');
+      const proposal = repository.buildDailyProposal(Date.now(), stack);
+      response.status(201).json({ proposal, items: stack === 'workbench' ? repository.listWorkbench() : repository.list() });
+    } catch (error) { next(error); }
   });
   router.post('/api/queue/proposals/:id/:resolution', (request, response) => {
     const resolution = z.enum(['accepted', 'rejected']).parse(request.params.resolution);

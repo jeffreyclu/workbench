@@ -81,9 +81,9 @@ export function createConversationRouter({ repository, database, capabilities }:
     try {
       const workingDirectory = conversationWorkingDirectory(request.params.id);
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
-      const { revision } = z.object({ revision: z.string().trim().min(1) }).parse(request.body);
+      const { revision, message } = z.object({ revision: z.string().trim().min(1), message: z.string().trim().min(1).optional() }).parse(request.body);
       const conversation = repository.getConversation(request.params.id)!;
-      const result = await commitAndPushWorkspace(workingDirectory, `chore: ${conversation.title}`, revision);
+      const result = await commitAndPushWorkspace(workingDirectory, message ?? `chore: ${conversation.title}`, revision);
       response.json({ result });
     } catch (error) { next(error); }
   });

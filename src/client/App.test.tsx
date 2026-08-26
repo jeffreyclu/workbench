@@ -55,6 +55,32 @@ describe('primary navigation', () => {
     expect(search).toHaveValue('');
   });
 
+  it('plans only the Workbench stack from the Workbench reorder control', async () => {
+    window.history.replaceState(null, '', '/workbench');
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/queue/plan') {
+        expect(init?.method).toBe('POST');
+        expect(init?.body).toBe(JSON.stringify({ stack: 'workbench' }));
+        return new Response(JSON.stringify({ proposal: { id: 'proposal-1' }, items: [] }), { status: 201, headers: { 'Content-Type': 'application/json' } });
+      }
+      const body = url.startsWith('/api/work-items?')
+        ? { items: [], nextCursor: null, totalCount: 0, proposal: null }
+        : url.includes('/api/work-items/counts')
+          ? { active: 0, workbench: 0, archive: 0 }
+          : url.includes('/api/shared/conversations')
+            ? { conversations: [] }
+            : { messages: [] };
+      return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reorder stack' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/queue/plan', expect.objectContaining({ method: 'POST', body: JSON.stringify({ stack: 'workbench' }) })));
+  });
+
   it('reopens the independently saved attention, Workbench, and conversation items', () => {
     const attentionId = '00000000-0000-4000-8000-000000000101';
     const workbenchId = '00000000-0000-4000-8000-000000000102';

@@ -743,7 +743,7 @@ describe('queue explainability and undo routes', () => {
     expect(repository.list().map((entry) => entry.id)).toEqual([fresh.id, stale.id]);
   });
 
-  it('plans the canonical attention stack from the Workbench focus route', async () => {
+  it('plans the Workbench stack on its own from the Workbench focus route, leaving Attention untouched', async () => {
     const attention = create('Customer task');
     const fresh = repository.create({ title: 'Fresh roadmap task', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     const stale = repository.create({ title: 'Stale roadmap task', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
@@ -754,14 +754,18 @@ describe('queue explainability and undo routes', () => {
     });
     expect(response.status).toBe(201);
     const body = await response.json() as { proposal: { id: string; stack: string }; items: Array<{ id: string }> };
-    expect(body.proposal.stack).toBe('attention');
-    expect(body.items.map((item) => item.id)).toEqual([stale.id, fresh.id, attention.id]);
+    expect(body.proposal.stack).toBe('workbench');
+    expect(body.items.map((item) => item.id)).toEqual([stale.id, fresh.id]);
+    // Planning is non-mutating and Attention is untouched by a Workbench-scoped plan.
     expect(repository.listWorkbench().map((item) => item.id)).toEqual([stale.id, fresh.id]);
     expect(repository.list().map((item) => item.id)).toEqual([stale.id, fresh.id, attention.id]);
+
     const accepted = await fetch(`${baseUrl}/api/queue/proposals/${body.proposal.id}/accepted`, { method: 'POST' });
     const acceptedBody = await accepted.json() as { proposal: { stack: string }; items: Array<{ id: string }> };
-    expect(acceptedBody.proposal.stack).toBe('attention');
-    expect(acceptedBody.items.map((item) => item.id)).toEqual([stale.id, fresh.id, attention.id]);
+    expect(acceptedBody.proposal.stack).toBe('workbench');
+    expect(acceptedBody.items.map((item) => item.id)).toEqual([stale.id, fresh.id]);
+    expect(repository.listWorkbench().map((item) => item.id)).toEqual([stale.id, fresh.id]);
+    expect(repository.list().map((item) => item.id)).toEqual([stale.id, fresh.id, attention.id]);
   });
 });
 

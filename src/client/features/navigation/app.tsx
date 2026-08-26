@@ -323,9 +323,9 @@ export function App() {
     onError: (error) => toastError('Could not update the proposal.', error),
   });
   const planQueue = useMutation({
-    mutationFn: () => api.planQueue('attention'),
-    onSuccess: () => {
-      toast.success('Stack reordered.');
+    mutationFn: (stack: 'attention' | 'workbench') => api.planQueue(stack),
+    onSuccess: (_result, stack) => {
+      toast.success(`${stack === 'workbench' ? 'Workbench' : 'Attention'} stack proposal ready.`);
       queryClient.invalidateQueries({ queryKey: ['work-items'] });
     },
     onError: (error) => toastError('Could not reorder the stack.', error),
@@ -569,7 +569,7 @@ export function App() {
           <div className="stack-toolbar-copy"><span className="eyebrow">{isArchiveView ? 'Archive' : 'Tasks'}</span><h2>{isWorkbenchScope ? 'Workbench focus' : 'Attention stack'}</h2></div>
           <div className="header-actions">
             {(!isArchiveView) && <>
-            <button className="icon-button" onClick={() => planQueue.mutate()} disabled={planQueue.isPending} aria-label={planQueue.isPending ? 'Reordering stack' : 'Reorder stack'} title={planQueue.isPending ? 'Reordering stack' : 'Reorder stack'}>
+            <button className="icon-button" onClick={() => planQueue.mutate(isWorkbenchScope ? 'workbench' : 'attention')} disabled={planQueue.isPending} aria-label={planQueue.isPending ? 'Reordering stack' : 'Reorder stack'} title={planQueue.isPending ? 'Reordering stack' : 'Reorder stack'}>
               {planQueue.isPending ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}
             </button>
             <button className="icon-button primary" onClick={() => { setCreateTaskReopenState(null); setShowCreate(true); }} aria-label="New task" title="New task"><Plus size={15} /></button>

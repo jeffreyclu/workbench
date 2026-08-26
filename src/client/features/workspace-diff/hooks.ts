@@ -45,7 +45,7 @@ export function useWorkspaceDiffSnapshots(scope: WorkspaceDiffScope | null, revi
 export function useCommitAndPushWorkspace(scope: WorkspaceDiffScope) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (revision: string) => workspaceDiffData.commitAndPush(scope, revision),
+    mutationFn: ({ revision, message }: { revision: string; message?: string }) => workspaceDiffData.commitAndPush(scope, revision, message),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.detail(scope) });
       await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.snapshots(scope) });

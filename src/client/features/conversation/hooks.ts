@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { WorkItemReference } from '../../../shared/contracts.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
@@ -37,9 +37,19 @@ export function useConversationChangesAvailability(scope: WorkspaceDiffScope | n
   const hasWorkspaceChanges = (workspaceDiff.data?.diff?.changedFiles ?? 0) > 0;
   const hasRecordedWorkspaceChanges = (snapshots.data?.snapshots ?? []).some((snapshot) => snapshot.diff.changedFiles > 0);
   const hasPullRequestChanges = (pullRequestDiff.data?.diff?.changedFiles ?? 0) > 0;
+  const isError = workspaceDiff.isError || snapshots.isError || pullRequestDiff.isError;
+  const retry = useCallback(async () => {
+    await Promise.all([
+      workspaceDiff.refetch(),
+      snapshots.refetch(),
+      ...(pullRequestUrlValue ? [pullRequestDiff.refetch()] : []),
+    ]);
+  }, [pullRequestDiff.refetch, pullRequestUrlValue, snapshots.refetch, workspaceDiff.refetch]);
 
   return {
     hasChanges: hasWorkspaceChanges || hasRecordedWorkspaceChanges || hasPullRequestChanges,
     isLoading: workspaceDiff.isLoading || snapshots.isLoading || pullRequestDiff.isLoading,
+    isError,
+    retry,
   };
 }
