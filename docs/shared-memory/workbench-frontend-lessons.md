@@ -663,3 +663,12 @@ from `item/agentMessage/delta`, so it bypassed the completed-item filter and
 still persisted every `Decision:` preamble. Filter standalone decision
 preambles while accumulating app-server delta text as well. Both transports
 must keep the preamble in the debugger audit only, never in the reply body.
+
+### Confidence assessment loading must be visibly labeled
+
+*Confirmed 2026-08-25.* Diff-confidence scoring is an asynchronous model call.
+Before its numeric red-to-green score arrives, never render an unlabeled dark
+pill or ellipsis: on a phone it is indistinguishable from a broken confidence
+bubble. Use a readable, visibly distinct `AI scoring` pending pill, then
+replace it with the returned `n/100` score. Do not manufacture a provisional
+number just to avoid the loading state.

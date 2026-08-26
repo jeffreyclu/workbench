@@ -11,6 +11,8 @@ describe('DiffConfidenceBubble', () => {
     render(<DiffConfidenceBubble confidence={null} />);
     const bubble = screen.getByLabelText('AI assessment in progress');
     expect(bubble).toHaveClass('diff-confidence-bubble', 'diff-confidence-pending');
+    expect(bubble).toHaveTextContent('AI scoring');
+    expect(bubble).toHaveAttribute('aria-live', 'polite');
   });
 
   it('renders a low score more prominently than a high one', () => {

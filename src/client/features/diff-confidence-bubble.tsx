@@ -4,7 +4,7 @@ import { confidenceProminence, confidenceTone } from './diff-confidence.js';
  * still renders so blocks do not shift position when the scores land. */
 export function DiffConfidenceBubble({ confidence }: { confidence: number | null }) {
   if (confidence === null) {
-    return <span className="diff-confidence-bubble diff-confidence-pending" aria-label="AI assessment in progress" title="Assessing this change…">…</span>;
+    return <span className="diff-confidence-bubble diff-confidence-pending" aria-label="AI assessment in progress" aria-live="polite" title="AI is scoring this change"><span aria-hidden="true">AI scoring</span></span>;
   }
   const tone = confidenceTone(confidence);
   const { opacity, fontWeight } = confidenceProminence(confidence);
