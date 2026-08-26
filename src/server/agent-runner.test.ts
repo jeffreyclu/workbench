@@ -104,6 +104,8 @@ describe('classifyExecution', () => {
     const codexPrompt = buildPrompt(task, { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun);
     expect(claudePrompt).not.toContain(RUNNER_SYSTEM_CONTRACT);
     expect(codexPrompt).toContain(RUNNER_SYSTEM_CONTRACT);
+    expect(claudePrompt).toContain('write-enabled for the resolved workspace');
+    expect(buildPrompt(task, { agent: 'claude', kind: 'analysis', instructions: '' } as AgentRun)).toContain('read-only by task type');
   });
 
   it('builds a bounded continuation prompt for an already-resumed Claude session', () => {

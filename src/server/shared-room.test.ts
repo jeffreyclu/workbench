@@ -6,7 +6,7 @@ import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, warmSharedRoomCodex } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, sharedTurnKindForMessage, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const temporaryDirectories: string[] = [];
@@ -194,6 +194,16 @@ describe('compactConversationHistory', () => {
 
     const ambiguous = classificationForLinkedItem(repository, task, 'why?');
     expect(ambiguous.kind).toBe('research');
+    database.close();
+  });
+
+  it('routes an unlinked manual implementation request as write-enabled execution', () => {
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+
+    expect(sharedTurnKindForMessage(repository, null, 'Build the pool warming.')).toBe('execute');
+    expect(sharedTurnKindForMessage(repository, null, 'Explain why the pool is slow.')).toBe('analysis');
+
     database.close();
   });
 

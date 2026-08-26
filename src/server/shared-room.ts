@@ -366,6 +366,18 @@ export function classificationForLinkedItem(repository: WorkItemRepository, item
   return { ...classificationForKind(item, inferredKind), reason: `keyword rules: this turn's request reads as ${inferredKind}, overriding the task's original ${stored.kind} classification` };
 }
 
+/**
+ * Manual conversations have no stored task classification. Infer a clear
+ * deliverable from the current message before falling back to analysis; using
+ * analysis unconditionally made requests such as "build the pool warming"
+ * run in an intentionally read-only sandbox.
+ */
+export function sharedTurnKindForMessage(repository: WorkItemRepository, linkedItem: WorkItem | null, currentMessage: string): AgentRun['kind'] {
+  return linkedItem
+    ? classificationForLinkedItem(repository, linkedItem, currentMessage).kind
+    : classifyMessageIntent(currentMessage) ?? 'analysis';
+}
+
 /** Linked conversations inherit their task workspace rather than the Workbench server cwd. */
 export function resolveSharedReplyWorkingDirectory(linkedItem: WorkItem | null): string {
   return linkedItem ? resolveWorkingDirectory(linkedItem) : process.cwd();
@@ -537,8 +549,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   // instead of treating every chat instruction as generic analysis, but let
   // each turn's own request override that routing when it reads as a
   // different kind of work than the task started as.
-  const classification = linkedItem ? classificationForLinkedItem(repository, linkedItem, queued.message.body) : null;
-  const taskKind = classification?.kind ?? 'analysis';
+  const taskKind = sharedTurnKindForMessage(repository, linkedItem, queued.message.body);
   const resolvedAgents = resolveAgents(taskKind, queued.dispatchTarget);
   const agents = queued.dispatchTarget === 'auto'
     ? [repository.selectBalancedAgent(resolvedAgents[0])]

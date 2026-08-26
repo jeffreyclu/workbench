@@ -239,6 +239,7 @@ function isDocumentWork(item: WorkItem): boolean {
 }
 
 export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', retrievedMemory: RetrievedMemory[] = [], currentUserInstruction?: string, precedingUserInstruction?: string, externalActionContract?: string): string {
+  const readOnly = run.kind === 'analysis' || run.kind === 'research' || run.kind === 'review' || run.kind === 'strategy';
   const persona = run.kind === 'review'
     ? FRONTEND_REVIEWER_PERSONA
     : run.kind === 'bugfix'
@@ -273,6 +274,9 @@ ${item.attachments?.length
     : 'None.'}
 
 Requested capability: ${run.kind}
+Execution mode: ${readOnly
+    ? 'read-only by task type. Inspect, research, or review only; do not attempt project-file edits and do not describe this intentional mode as a missing sandbox permission.'
+    : 'write-enabled for the resolved workspace. You may inspect and edit project files needed to complete this task.'}
 Additional instructions:
 ${compactPromptSection(run.instructions || 'Use your judgment and return a concise, actionable result.', 1_500)}
 
