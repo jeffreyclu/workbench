@@ -1,11 +1,11 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { GitHubPullRequestFile, WorkspaceDiff } from '../shared/contracts.js';
+import type { WorkspaceDiff, WorkspaceDiffFile } from '../shared/contracts.js';
 
 const execFile = promisify(execFileCallback);
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
-type ChangedFileStatus = GitHubPullRequestFile['status'];
+type ChangedFileStatus = WorkspaceDiffFile['status'];
 
 function statusFor(code: string): ChangedFileStatus {
   if (code.includes('A') || code === '??') return 'added';
@@ -24,8 +24,8 @@ function changedLines(patch: string) {
   }, { additions: 0, deletions: 0 });
 }
 
-/** Parse git's unified output into the same file-level shape used by PR viewing. */
-export function parseWorkspacePatch(patch: string, statuses = new Map<string, ChangedFileStatus>()): GitHubPullRequestFile[] {
+/** Parse git's unified output into the workspace diff file shape. */
+export function parseWorkspacePatch(patch: string, statuses = new Map<string, ChangedFileStatus>()): WorkspaceDiffFile[] {
   const sections = patch.split(/^diff --git /m).filter(Boolean);
   return sections.map((section) => {
     const lines = section.split('\n');
