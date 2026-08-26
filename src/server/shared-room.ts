@@ -607,7 +607,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     }))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, agent === 'claude' ? (steer) => {
       registerActiveReplySteering(messageId, steer);
       void deliverPendingSharedInterjections(repository, messageId);
-    } : undefined);
+    } : undefined, undefined, true);
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       if (controller.signal.aborted) throw new Error('Agent run canceled.');
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the turn to Codex.';
@@ -621,7 +621,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
         const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
         repository.updateSharedMessage(messageId, telemetry);
         if (runId) repository.updateRun(runId, telemetry);
-      }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE);
+      }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, undefined, undefined, true);
       result = { ...recovered, fallbackFrom: 'claude', fallbackReason: reason };
       repository.updateSharedMessage(messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
       if (runId) repository.updateRun(runId, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
@@ -770,7 +770,7 @@ async function synthesizeSharedTurn(repository: WorkItemRepository, conversation
   await runSharedBackgroundJob(repository, message.id, async (signal, onProgress) => {
     const result = await runAgentCommandWithFallback(agent, process.cwd(), source.prompt, onProgress, signal, undefined, profile, (usage) => {
       repository.updateSharedMessage(message.id, { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource });
-    });
+    }, undefined, undefined, undefined, undefined, undefined, undefined, true);
     repository.updateSharedMessage(message.id, {
       model: modelFor(result.agent, profile), inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens,
       estimatedCostUsd: result.usage.estimatedCostUsd, costSource: result.usage.costSource, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason,
