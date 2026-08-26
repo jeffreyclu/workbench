@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexFinalReply, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, memoryQueryForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexFinalReply, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, latestHumanMessageForSharedReply, memoryQueryForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
 
 function message(index: number, body: string): SharedMessage {
   return {
@@ -87,6 +87,26 @@ describe('compactConversationHistory', () => {
     ];
 
     expect(memoryQueryForSharedReply(messages)).toBe('What are my hobbies?');
+  });
+
+  it('uses the newest human turn for an external-action capability', () => {
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Update PR description', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Update the PR description.');
+    const messages = [
+      message(0, 'Discuss the PR description, but do not post anything.'),
+      message(1, 'I will keep this local.'),
+      message(2, 'Update the GitHub PR description to include the Loom demo.'),
+    ];
+
+    const current = latestHumanMessageForSharedReply(messages);
+    const prompt = buildSharedReplyPrompt('claude', 'Shared context.', '', messages, { item: task, run }, [], null, current);
+
+    expect(current).toBe('Update the GitHub PR description to include the Loom demo.');
+    expect(prompt).toContain('Supervisor-issued external-action capability');
+    expect(prompt).not.toContain('No external capability is issued');
+    database.close();
   });
 
   it('injects only memory matches that clear the query-relative relevance threshold', () => {

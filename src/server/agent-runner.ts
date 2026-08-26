@@ -50,9 +50,13 @@ export function externalActionContractForCurrentInstruction(instruction: string 
   // Other providers require both a direct imperative and a named external
   // destination. This intentionally does not treat "the task says to post" or
   // an old approval in memory as authority for a new action.
-  const directExternalAction = /^(?:please\s+)?(?:(?:can|could|will)\s+you\s+)?(?:go\s+ahead(?:\s+and)?\s+)?(?:post|comment|reply|create|update|edit|delete|merge|close|reopen|publish|send|deploy|release|upload|share|invite|assign|transition|sync)\b/i;
-  const namedExternalDestination = /\b(?:github|gitlab|linear|confluence|jira|slack|figma|notion|asana|trello|google\s+(?:docs|drive|calendar)|external\s+(?:site|service|system)|https?:\/\/)/i;
-  if (!directExternalAction.test(current) || !namedExternalDestination.test(current)) return EXTERNAL_ACTION_CONTRACT;
+  const directExternalAction = /^(?:please\s+)?(?:(?:can|could|will)\s+you\s+)?(?:go\s+ahead(?:\s+and)?\s+)?(?:post|comment|reply|create|update|edit|rewrite|delete|merge|close|reopen|publish|send|deploy|release|upload|share|invite|assign|transition|sync)\b/i;
+  // A grant may be phrased separately from the imperative (for example,
+  // “you should have the ability to change a PR description now”). It is
+  // still scoped to this exact message and is never stored for later turns.
+  const explicitAuthorization = /\b(?:(?:i\s+)?(?:explicitly\s+)?(?:authorize|allow|approve|grant|give)\s+(?:you\s+)?(?:permission|access|authorization|authority|ability)|you\s+(?:now\s+)?(?:have|are\s+authorized|may|can|should\s+have)\s+(?:(?:the\s+)?(?:permission|access|authorization|authority|ability)\s+)?(?:to\s+)?(?:post|comment|reply|create|update|edit|rewrite|change|delete|merge|close|reopen|publish|send|deploy|release|upload|share|invite|assign|transition|sync))\b/i;
+  const namedExternalDestination = /\b(?:github|gitlab|linear|confluence|jira|slack|figma|notion|asana|trello|google\s+(?:docs|drive|calendar)|external\s+(?:site|service|system)|pull\s+request|pr\s+(?:description|comment|title)|https?:\/\/)/i;
+  if ((!directExternalAction.test(current) && !explicitAuthorization.test(current)) || !namedExternalDestination.test(current)) return EXTERNAL_ACTION_CONTRACT;
   return `Supervisor-issued external-action capability: Jeffrey explicitly authorized this exact current-turn operation:\n\n${current.slice(0, 1_500)}\n\nPerform only the external action(s) and destination(s) stated above. Do not infer authority for related reads, other posts/comments, pull requests, merges, ticket changes, publication, deployments, or any other external operation. If credentials or the required integration are unavailable, report that concrete blocker; do not work around it.`;
 }
 const activeRunControllers = new Map<string, AbortController>();

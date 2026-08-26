@@ -393,6 +393,11 @@ export function memoryQueryForSharedReply(thread: SharedMessage[]): string {
   return userTurns.slice(-2).map((message) => message.body.trim()).join('\n').slice(0, 2_000);
 }
 
+/** The repository returns conversation messages in chronological order. */
+export function latestHumanMessageForSharedReply(thread: SharedMessage[]): string {
+  return thread.filter((message) => message.author === 'jeffrey').at(-1)?.body ?? '';
+}
+
 export function linearContextForPrompt(repository: WorkItemRepository, message: string): string {
   if (!/\blinear\b|linear\.app/i.test(message)) return '';
   const query = connectionSearchQuery(message);
@@ -539,7 +544,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
   }
   try {
     const thread = repository.listSharedMessages(100, null, target.conversationId).messages.filter((message) => message.id !== messageId);
-    const latestUserMessage = [...thread].reverse().find((message) => message.author === 'jeffrey')?.body ?? '';
+    const latestUserMessage = latestHumanMessageForSharedReply(thread);
     const memoryQuery = retrievalSnapshot?.query ?? memoryQueryForSharedReply(thread);
     const recentSourceReferences = thread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body);
     const connectionContext = await connectionContextForPrompt(repository, [latestUserMessage, ...recentSourceReferences].join('\n'));
