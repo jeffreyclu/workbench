@@ -346,6 +346,8 @@ nav { display: grid; gap: 3px; }
 .workspace-diff > header p { margin: 7px 0 0; color: #85847d; font-size: 11px; line-height: 1.45; }
 .workspace-diff-refresh { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; min-height: 28px; padding: 0 9px; color: #c4c3bc; border: 1px solid #353530; border-radius: 6px; background: transparent; cursor: pointer; font: 700 10px 'DM Mono'; }
 .workspace-diff-refresh:hover:not(:disabled) { color: var(--acid); border-color: #596234; }.workspace-diff-refresh:disabled { opacity: .65; cursor: wait; }
+.workspace-diff-refresh-pending { color: #1d1305; border-color: #f4a340; background: #f4a340; box-shadow: 0 0 0 1px #f4a34033; }
+.workspace-diff-refresh-pending:hover:not(:disabled) { color: #1d1305; border-color: #ffc16e; background: #ffc16e; }
 .workspace-diff-layout { display: grid; grid-template-columns: minmax(180px, 28%) minmax(0, 1fr); overflow: hidden; border: 1px solid #302f2b; border-radius: 8px; background: #10100f; }
 .workspace-diff nav { min-width: 0; border-right: 1px solid #302f2b; background: #151513; }
 .workspace-diff nav > span { display: block; padding: 10px 11px; color: #85847d; border-bottom: 1px solid #302f2b; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }

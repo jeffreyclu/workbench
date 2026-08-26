@@ -313,6 +313,8 @@ export interface WorkspaceDiffFile {
 export interface WorkspaceDiff {
   workspacePath: string;
   branch: string;
+  /** Content revision used to detect updates without replacing an open diff. */
+  revision: string;
   files: WorkspaceDiffFile[];
   changedFiles: number;
   additions: number;

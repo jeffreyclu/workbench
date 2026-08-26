@@ -101,6 +101,7 @@ const baselineInventory = [
   'POST /api/queue/proposals/:id/:resolution',
   'GET /api/work-items/:id',
   'GET /api/work-items/:id/workspace-diff',
+  'GET /api/work-items/:id/workspace-diff/status',
   'GET /api/work-items/:id/dependency-candidates',
   'POST /api/work-items/:id/references',
   'POST /api/work-items/:id/linked-tasks',
@@ -159,7 +160,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(127);
+    expect(baselineInventory).toHaveLength(128);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

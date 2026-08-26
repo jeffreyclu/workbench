@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import type { WorkspaceDiff, WorkspaceDiffFile } from '../shared/contracts.js';
 
@@ -79,6 +80,10 @@ async function git(workspacePath: string, args: string[]) {
   return execFile('git', args, { cwd: workspacePath, maxBuffer: MAX_OUTPUT_BYTES, timeout: 10_000, encoding: 'utf8' });
 }
 
+function workspaceDiffRevision(...parts: string[]) {
+  return createHash('sha256').update(parts.join('\0')).digest('hex');
+}
+
 export async function getWorkspaceDiff(workspacePath: string): Promise<WorkspaceDiff> {
   let status: string;
   let branch: string;
@@ -115,5 +120,20 @@ export async function getWorkspaceDiff(workspacePath: string): Promise<Workspace
   }));
   const files = parseWorkspacePatch(`${patch}${untrackedPatches.join('')}`, statuses);
   const totals = files.reduce((counts, file) => ({ additions: counts.additions + file.additions, deletions: counts.deletions + file.deletions }), { additions: 0, deletions: 0 });
-  return { workspacePath, branch: branch || 'detached HEAD', files, changedFiles: files.length, ...totals };
+  return {
+    workspacePath,
+    branch: branch || 'detached HEAD',
+    revision: workspaceDiffRevision(status, branch, patch, ...untrackedPatches),
+    files,
+    changedFiles: files.length,
+    ...totals,
+  };
+}
+
+/**
+ * Keep an open diff stable while the workspace changes. This is intentionally
+ * separate from the rendered snapshot so callers can opt into a refresh.
+ */
+export async function getWorkspaceDiffRevision(workspacePath: string) {
+  return (await getWorkspaceDiff(workspacePath)).revision;
 }

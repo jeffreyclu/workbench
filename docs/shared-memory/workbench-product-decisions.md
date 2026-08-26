@@ -1,5 +1,14 @@
 ## Workbench product decisions
 
+### Open diffs stay stable; updates require an explicit refresh
+
+*Decision from Jeffrey, 2026-08-25.* During an active task, Workbench may poll
+for a newer local workspace revision, but it must not replace or re-render the
+diff someone is reading. Keep the open diff as a stable snapshot. When a newer
+revision is detected, show an orange **Refresh changes** button; only that
+explicit action loads the new patch. This follows GitHub's review behavior and
+keeps the live conversation/activity stream separate from the review surface.
+
 ### Artifact comments live on the shared page
 
 *Decision from Jeffrey, 2026-08-25.* Comments belong on the public artifact page

@@ -12,5 +12,6 @@ export const sourceClient = {
   startManagedMcpOAuth: (provider: 'figma' | 'atlassian') => request<{ url: string }>(`/api/source-connections/${provider}/managed/oauth/start`, { method: 'POST' }),
   disconnectSource: (provider: 'confluence' | 'slack' | 'figma' | 'gmail' | 'github') => request<void>(`/api/source-connections/${provider}`, { method: 'DELETE' }),
   getWorkspaceDiff: (workItemId: string) => request<{ diff: WorkspaceDiff }>(`/api/work-items/${workItemId}/workspace-diff`),
+  getWorkspaceDiffStatus: (workItemId: string, revision: string) => request<{ changed: boolean }>(`/api/work-items/${workItemId}/workspace-diff/status?revision=${encodeURIComponent(revision)}`),
   getGitHubPullRequestDiff: (url: string) => request<{ diff: GitHubPullRequestDiff }>(`/api/github/pull-request-diff?url=${encodeURIComponent(url)}`),
 };
