@@ -371,6 +371,30 @@ describe('shared room', () => {
     expect(screen.getByRole('button', { name: 'Complete task' })).toBeTruthy();
   });
 
+  it('pins the linked task from the conversation window actions', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000095';
+    const taskId = '00000000-0000-4000-8000-000000000096';
+    const timestamp = '2026-01-01T00:00:00Z';
+    const conversation = { id: conversationId, title: 'Pinned from conversation', workItemId: taskId, archivedAt: null, createdAt: timestamp, updatedAt: timestamp };
+    const item = { id: taskId, title: 'Linked task', description: '', status: 'in_progress', priority: 2, queuePosition: 0, source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete', agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: 'Workbench', stack: 'attention', workspacePath: null, strategy: '', assignees: ['codex'], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [], createdAt: timestamp, updatedAt: timestamp, lastTouchedAt: timestamp };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/work-items/${taskId}` && init?.method === 'PATCH') return new Response(JSON.stringify({ item: { ...item, status: 'pinned' } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], references: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Put a pin in it' }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url) === `/api/work-items/${taskId}` && init?.method === 'PATCH' && init.body === JSON.stringify({ status: 'pinned' }))).toBe(true));
+  });
+
   it('keeps the thread in document flow for queued promotion and completed messages', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000099';
