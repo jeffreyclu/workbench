@@ -120,7 +120,7 @@ export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'ac
   const agent = message.author[0].toUpperCase() + message.author.slice(1);
   const tier = message.executionProfile && message.executionProfile !== 'routing' ? message.executionProfile : null;
   const model = `${message.model ?? 'model unavailable'}${tier ? ` (${tier})` : ''}`;
-  const profile = message.accountProfile ?? 'profile unavailable';
+  const profile = message.accountProfile ?? DEFAULT_ACCOUNT_PROFILE;
   const usage = formatRunBadge(message);
   const cacheRead = message.cacheReadInputTokens && message.cacheReadInputTokens > 0 ? `${compactTokenCount(message.cacheReadInputTokens)} cached` : null;
   const durationMs = message.completedAt ? new Date(message.completedAt).getTime() - new Date(message.createdAt).getTime() : null;

@@ -19,7 +19,7 @@ describe('replyBadge', () => {
     })).toBe('Codex · gpt-5.6 (standard) · default · $0.0010 · 120 in · 340 out · 1.5s');
   });
 
-  it('makes missing model, profile, and usage data explicit', () => {
+  it('makes missing model and usage data explicit while defaulting a legacy profile', () => {
     expect(replyBadge({
       author: 'claude',
       model: null,
@@ -33,7 +33,7 @@ describe('replyBadge', () => {
       fallbackFrom: null,
       fallbackReason: null,
       cacheReadInputTokens: null,
-    })).toBe('Claude · model unavailable · profile unavailable · counting…');
+    })).toBe('Claude · model unavailable · default · counting…');
   });
 
   it('surfaces prompt-cache reuse and fallback provenance when present', () => {
