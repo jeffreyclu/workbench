@@ -275,7 +275,7 @@ export class ExecutionService {
   getRunInsights(days: 7 | 30 = 30): RunInsights {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
     const runs = this.database.prepare(`
-      SELECT agent, kind, status, attempt, fallback_from, model, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, estimated_cost_usd, cost_source, created_at, completed_at,
+      SELECT agent, kind, status, attempt, fallback_from, model, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, created_at, completed_at,
         CAST((julianday(completed_at) - julianday(started_at)) * 24 * 60 * 60 * 1000 AS INTEGER) as duration_ms
       FROM agent_runs WHERE status IN ('completed', 'failed', 'canceled') AND completed_at >= ?
     `).all(since) as Array<{

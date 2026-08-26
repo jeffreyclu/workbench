@@ -1,27 +1,28 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { openDatabase } from './database.js';
 import { parseDiffConfidenceAssessment } from './diff-confidence-ai.js';
 
 describe('parseDiffConfidenceAssessment', () => {
   it('keeps only validated integer scores for every requested block', () => {
-    expect(parseDiffConfidenceAssessment('{"assessments":{"a":{"confidence":82,"reasoning":"Visible guard covers the branch."},"b":{"confidence":11,"reasoning":"No visible caller checks the result."},"extra":{"confidence":99,"reasoning":"Ignored."}}}', ['a', 'b'])).toEqual({ a: { confidence: 82, reasoning: 'Visible guard covers the branch.' }, b: { confidence: 11, reasoning: 'No visible caller checks the result.' } });
+    expect(parseDiffConfidenceAssessment('{"assessments":{"a":{"risk":82,"reasoning":"Visible guard covers the branch."},"b":{"risk":11,"reasoning":"No visible caller checks the result."},"extra":{"risk":99,"reasoning":"Ignored."}}}', ['a', 'b'])).toEqual({ a: { risk: 82, reasoning: 'Visible guard covers the branch.' }, b: { risk: 11, reasoning: 'No visible caller checks the result.' } });
   });
 
   it('unwraps the Claude CLI JSON envelope before parsing the model result', () => {
     const output = JSON.stringify({
       type: 'result',
       is_error: false,
-      result: '```json\n{"assessments":{"a":{"confidence":82,"reasoning":"Visible path is covered."},"b":{"confidence":11,"reasoning":"No visible test covers this."}}}\n```',
+      result: '```json\n{"assessments":{"a":{"risk":82,"reasoning":"Visible path is covered."},"b":{"risk":11,"reasoning":"No visible test covers this."}}}\n```',
     });
 
-    expect(parseDiffConfidenceAssessment(output, ['a', 'b'])).toEqual({ a: { confidence: 82, reasoning: 'Visible path is covered.' }, b: { confidence: 11, reasoning: 'No visible test covers this.' } });
+    expect(parseDiffConfidenceAssessment(output, ['a', 'b'])).toEqual({ a: { risk: 82, reasoning: 'Visible path is covered.' }, b: { risk: 11, reasoning: 'No visible test covers this.' } });
   });
 
   it('rejects missing, fractional, and out-of-range scores', () => {
-    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":{"confidence":50,"reasoning":"Covered."}}}', ['a', 'b'])).toThrow();
-    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":{"confidence":50.5,"reasoning":"Covered."}}}', ['a'])).toThrow();
-    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":{"confidence":101,"reasoning":"Covered."}}}', ['a'])).toThrow();
-    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":{"confidence":50,"reasoning":""}}}', ['a'])).toThrow();
+    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":{"risk":50,"reasoning":"Covered."}}}', ['a', 'b'])).toThrow();
+    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":{"risk":50.5,"reasoning":"Covered."}}}', ['a'])).toThrow();
+    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":{"risk":101,"reasoning":"Covered."}}}', ['a'])).toThrow();
+    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":{"risk":50,"reasoning":""}}}', ['a'])).toThrow();
   });
 });
 
@@ -38,7 +39,7 @@ describe('assessDiffBlocks caching', () => {
         emitter.stdin = { end: (prompt: string) => {
           queueMicrotask(() => {
             const blocks = JSON.parse(prompt.slice(prompt.indexOf('Blocks:\n') + 'Blocks:\n'.length)) as Array<{ key: string }>;
-            const assessments = Object.fromEntries(blocks.map((block) => [block.key, { confidence: 70, reasoning: 'Looks fine.' }]));
+            const assessments = Object.fromEntries(blocks.map((block) => [block.key, { risk: 70, reasoning: 'Looks fine.' }]));
             emitter.stdout.emit('data', Buffer.from(JSON.stringify({ assessments })));
             emitter.emit('close', 0);
           });
@@ -47,14 +48,50 @@ describe('assessDiffBlocks caching', () => {
       },
     }));
     const { assessDiffBlocks } = await import('./diff-confidence-ai.js');
+    const database = openDatabase(':memory:');
 
-    await assessDiffBlocks([{ key: 'shared', lines: ['+const x = 1;'] }, { key: 'unique-1', lines: ['+const y = 2;'] }]);
+    await assessDiffBlocks(database, [{ key: 'shared', lines: ['+const x = 1;'] }, { key: 'unique-1', lines: ['+const y = 2;'] }]);
     expect(spawnCalls).toBe(1);
 
     // Same content under a different key in a different batch: still a cache hit, so only the new block is sent.
-    const result = await assessDiffBlocks([{ key: 'shared', lines: ['+const x = 1;'] }, { key: 'unique-2', lines: ['+const z = 3;'] }]);
+    const result = await assessDiffBlocks(database, [{ key: 'shared', lines: ['+const x = 1;'] }, { key: 'unique-2', lines: ['+const z = 3;'] }]);
     expect(spawnCalls).toBe(2);
-    expect(result.shared).toEqual({ confidence: 70, reasoning: 'Looks fine.' });
-    expect(result['unique-2']).toEqual({ confidence: 70, reasoning: 'Looks fine.' });
+    expect(result.shared).toEqual({ risk: 70, reasoning: 'Looks fine.' });
+    expect(result['unique-2']).toEqual({ risk: 70, reasoning: 'Looks fine.' });
+  });
+
+  it('persists scores across process restarts by reading from the database on a fresh module instance', async () => {
+    vi.resetModules();
+    let spawnCalls = 0;
+    const mockSpawn = () => ({
+      spawn: (..._args: unknown[]) => {
+        spawnCalls += 1;
+        const emitter = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: { end: (prompt: string) => void } };
+        emitter.stdout = new EventEmitter();
+        emitter.stderr = new EventEmitter();
+        emitter.stdin = { end: (prompt: string) => {
+          queueMicrotask(() => {
+            const blocks = JSON.parse(prompt.slice(prompt.indexOf('Blocks:\n') + 'Blocks:\n'.length)) as Array<{ key: string }>;
+            const assessments = Object.fromEntries(blocks.map((block) => [block.key, { risk: 42, reasoning: 'Persisted.' }]));
+            emitter.stdout.emit('data', Buffer.from(JSON.stringify({ assessments })));
+            emitter.emit('close', 0);
+          });
+        } };
+        return emitter;
+      },
+    });
+    vi.doMock('node:child_process', mockSpawn);
+    const { assessDiffBlocks: assessFirstProcess } = await import('./diff-confidence-ai.js');
+    const database = openDatabase(':memory:');
+    await assessFirstProcess(database, [{ key: 'a', lines: ['+const persisted = true;'] }]);
+    expect(spawnCalls).toBe(1);
+
+    // Reload the module (simulating a fresh process) but reuse the same database handle.
+    vi.resetModules();
+    vi.doMock('node:child_process', mockSpawn);
+    const { assessDiffBlocks: assessSecondProcess } = await import('./diff-confidence-ai.js');
+    const result = await assessSecondProcess(database, [{ key: 'a', lines: ['+const persisted = true;'] }]);
+    expect(spawnCalls).toBe(1);
+    expect(result.a).toEqual({ risk: 42, reasoning: 'Persisted.' });
   });
 });

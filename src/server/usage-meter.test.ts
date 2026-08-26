@@ -4,15 +4,12 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { AUTONOMOUS_TARGET_FRACTION, CALIBRATION_MAX_AGE_DAYS, CLAUDE_PESSIMISTIC_CEILING_SET, computeWeeklyUsageReport, computeWorkbenchUsage, currentUsageCalibration, isCalibrationDrift, recordUsageCalibration, scanClaudeInteractiveUsage, sonnetEquivalentTokens, startOfIsoWeekUtc } from './usage-meter.js';
+import { AUTONOMOUS_TARGET_FRACTION, CALIBRATION_MAX_AGE_DAYS, CLAUDE_PESSIMISTIC_CEILING_SET, computeWeeklyUsageReport, computeWorkbenchUsage, currentUsageCalibration, isCalibrationDrift, recordUsageCalibration, scanClaudeInteractiveUsage, startOfIsoWeekUtc, totalUsageTokens } from './usage-meter.js';
 
-describe('sonnetEquivalentTokens', () => {
-  it('applies every token-class weight and each Claude model multiplier', () => {
+describe('totalUsageTokens', () => {
+  it('sums every token class without price weighting', () => {
     const tokens = { inputTokens: 100, cacheCreationInputTokens: 100, cacheReadInputTokens: 100, outputTokens: 100 };
-    // Base: 100 + 125 + 10 + 500 = 735 SET.
-    expect(sonnetEquivalentTokens('claude', 'claude-sonnet-5', tokens)).toBeCloseTo(735, 5);
-    expect(sonnetEquivalentTokens('claude', 'claude-haiku-4-5', tokens)).toBeCloseTo(735 * (5 / 15), 5);
-    expect(sonnetEquivalentTokens('claude', 'claude-opus-4-1', tokens)).toBeCloseTo(735 * 5, 5);
+    expect(totalUsageTokens(tokens)).toBe(400);
   });
 });
 
@@ -55,12 +52,10 @@ describe('computeWorkbenchUsage', () => {
 
     expect(usage.claude.manual.inputTokens).toBe(1000);
     expect(usage.claude.manual.outputTokens).toBe(100);
-    // Sonnet tier multiplier is 1: SET = 1000*1 + 100*5 = 1500.
-    expect(usage.claude.manual.setTokens).toBeCloseTo(1500, 5);
+    expect(usage.claude.manual.setTokens).toBe(1100);
     expect(usage.claude.manual.runCount).toBe(1);
 
-    // Haiku tier multiplier is 5/15 = 0.3333...: SET = 0.3333*(2000*1 + 200*5) = 1000.
-    expect(usage.claude.autonomous.setTokens).toBeCloseTo(1000, 1);
+    expect(usage.claude.autonomous.setTokens).toBe(2200);
     expect(usage.claude.autonomous.runCount).toBe(1);
 
     expect(usage.codex.manual.runCount).toBe(1);
@@ -121,12 +116,11 @@ describe('recordUsageCalibration / currentUsageCalibration', () => {
     });
     const observedAt = '2026-08-19T12:00:00.000Z'; // Wednesday, week of 2026-08-17
     const run = repository.createRun(item.id, 'execute', 'claude', 'claude', '', null, null, 'manual');
-    // Sonnet multiplier 1: SET = 10000*1 + 1000*5 = 15000.
     repository.updateRun(run.id, { model: 'sonnet', inputTokens: 10000, outputTokens: 1000 });
 
     const calibration = recordUsageCalibration(repository, 'claude', observedAt, 10);
 
-    expect(calibration.workbenchSet).toBeCloseTo(15000, 5);
+    expect(calibration.workbenchSet).toBe(11000);
     // interactiveSet comes from this machine's real ~/.claude/projects transcripts, so its exact
     // value is environment-dependent; only the ceiling formula's shape is asserted here.
     expect(calibration.interactiveSet).toBeGreaterThanOrEqual(0);
@@ -213,7 +207,7 @@ describe('scanClaudeInteractiveUsage', () => {
   let root: string;
   afterEach(() => { if (root) rmSync(root, { recursive: true, force: true }); });
 
-  it('sums SET from transcript usage samples within the week and ignores samples outside it', () => {
+  it('sums tokens from transcript usage samples within the week and ignores samples outside it', () => {
     root = mkdtempSync(join(tmpdir(), 'claude-projects-test-'));
     const projectDir = join(root, 'project-a');
     mkdirSync(projectDir, { recursive: true });
@@ -228,8 +222,7 @@ describe('scanClaudeInteractiveUsage', () => {
     const weekEnd = new Date('2026-08-24T00:00:00.000Z');
     const result = scanClaudeInteractiveUsage(weekStart, weekEnd, root);
 
-    // Sonnet multiplier 1: SET = 100*1 + 40*1.25 + 1000*0.1 + 10*5 = 100+50+100+50 = 300.
-    expect(result.setTokens).toBeCloseTo(300, 5);
+    expect(result.setTokens).toBe(1150);
     expect(result.scannedFiles).toBe(1);
     expect(result.error).toBeNull();
   });

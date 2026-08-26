@@ -1160,7 +1160,7 @@ describe('shared room', () => {
     expect(screen.getByRole('option', { name: /1 files/ })).toBeTruthy();
   });
 
-  it('pins the linked task from the conversation window and moves its conversation into the pinned stack', async () => {
+  it('does not duplicate the conversation pin in the top action bar', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000017';
     const taskId = '00000000-0000-4000-8000-000000000018';
@@ -1189,15 +1189,8 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Put a pin in it' }));
-
-    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) =>
-      String(input) === `/api/work-items/${taskId}`
-      && init?.method === 'PATCH'
-      && JSON.parse(String(init.body)).status === 'pinned',
-    )).toBe(true));
-    expect(await screen.findByTitle('Pinned task')).toBeTruthy();
-    expect(screen.getByText('Pinned for you').parentElement?.textContent).toContain('1');
+    await screen.findByRole('button', { name: 'Complete linked task' });
+    expect(screen.queryByRole('button', { name: 'Put a pin in it' })).toBeNull();
   });
 
   it('ignores a stale owner-mutation response that resolves after a newer one', async () => {

@@ -73,9 +73,9 @@ function ProviderDial({ label, manualSet, autonomousSet, extraSet, extraLabel, c
         <span><span className="usage-dial-marker-swatch usage-dial-marker-swatch-alarm" />Alarm {formatPercent(alarmMarkerPercent)}</span>
       </div>
       <dl className="usage-dial-breakdown">
-        <div><dt><span className="usage-dial-swatch usage-dial-swatch-manual" />Manual</dt><dd>{formatSet(manualSet)} SET</dd></div>
-        <div><dt><span className="usage-dial-swatch usage-dial-swatch-autonomous" />Autonomous</dt><dd>{formatSet(autonomousSet)} SET</dd></div>
-        {extraSet !== undefined && extraLabel && <div><dt><span className="usage-dial-swatch usage-dial-swatch-interactive" />{extraLabel}</dt><dd>{formatSet(extraSet)} SET</dd></div>}
+        <div><dt><span className="usage-dial-swatch usage-dial-swatch-manual" />Manual</dt><dd>{formatSet(manualSet)} tokens</dd></div>
+        <div><dt><span className="usage-dial-swatch usage-dial-swatch-autonomous" />Autonomous</dt><dd>{formatSet(autonomousSet)} tokens</dd></div>
+        {extraSet !== undefined && extraLabel && <div><dt><span className="usage-dial-swatch usage-dial-swatch-interactive" />{extraLabel}</dt><dd>{formatSet(extraSet)} tokens</dd></div>}
       </dl>
       <p className="usage-dial-reset-note">{resetNote}</p>
       <CalibrationLabel calibration={calibration} />
@@ -91,7 +91,7 @@ export function UsageDial({ report, lastRefreshedAt }: { report: WeeklyUsageRepo
         <h3>Weekly usage</h3>
         {lastRefreshedAt !== undefined && <span className="usage-dial-last-refreshed">Last refreshed {weekdayTimeFormat.format(new Date(lastRefreshedAt))}</span>}
       </header>
-      <p className="insight-section-intro">Workbench SET this week, split manual vs autonomous. Codex shows its live account percentage; Claude's bar is a pessimistic ceiling estimate until a real calibration is recorded.</p>
+      <p className="insight-section-intro">Workbench tokens this week, split manual vs autonomous. Codex shows its live account percentage; Claude's bar is a pessimistic ceiling estimate until a real calibration is recorded.</p>
       <div className="usage-dial-grid">
         <ProviderDial
           label="Claude"

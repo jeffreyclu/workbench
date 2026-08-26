@@ -16,7 +16,7 @@ describe('GitHubDiffView', () => {
       const url = String(input);
       if (url === '/api/diff-confidence') {
         const keys = (JSON.parse(String(init?.body)) as { blocks: Array<{ key: string }> }).blocks.map((block) => block.key);
-        return new Response(JSON.stringify({ assessments: Object.fromEntries(keys.map((key) => [key, { confidence: 42, reasoning: 'The changed call has no visible error handling.' }])) }), { headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({ assessments: Object.fromEntries(keys.map((key) => [key, { risk: 42, reasoning: 'The changed call has no visible error handling.' }])) }), { headers: { 'Content-Type': 'application/json' } });
       }
       return new Response(JSON.stringify({
         diff: {
@@ -33,6 +33,6 @@ describe('GitHubDiffView', () => {
     expect(await screen.findByText('+after')).toBeInTheDocument();
     expect(document.querySelector('.diff-review-layout > .diff-file-list')).toBeInTheDocument();
     expect(document.querySelector('.github-diff-file')).toBeInTheDocument();
-    expect(await screen.findByLabelText('AI assessment: 42 out of 100')).toBeInTheDocument();
+    expect(await screen.findByLabelText('AI risk assessment: 42 out of 100')).toBeInTheDocument();
   });
 });

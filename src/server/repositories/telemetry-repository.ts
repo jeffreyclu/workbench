@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { AgentRun, AuditLogEntry, AuditLogPage, DiagnosticEvent, UsageCalibration } from '../../shared/contracts.js';
-import { sonnetEquivalentTokens } from '../usage-meter.js';
+import { totalUsageTokens } from '../usage-meter.js';
 import type { UnitOfWork } from '../unit-of-work.js';
 
 export interface AutonomyPolicy {
@@ -159,7 +159,7 @@ export class TelemetryRepository {
         AND (input_tokens IS NOT NULL OR cache_creation_input_tokens IS NOT NULL OR cache_read_input_tokens IS NOT NULL OR output_tokens IS NOT NULL)`)
       .all(agent, model) as Array<{ input_tokens: number | null; cache_creation_input_tokens: number | null; cache_read_input_tokens: number | null; output_tokens: number | null }>;
     if (!rows.length) return null;
-    return rows.reduce((total, row) => total + sonnetEquivalentTokens(agent, model, {
+    return rows.reduce((total, row) => total + totalUsageTokens({
       inputTokens: row.input_tokens, cacheCreationInputTokens: row.cache_creation_input_tokens,
       cacheReadInputTokens: row.cache_read_input_tokens, outputTokens: row.output_tokens,
     }), 0) / rows.length;
@@ -171,7 +171,7 @@ export class TelemetryRepository {
       WHERE agent = ? AND origin = 'autonomous' AND created_at >= ? AND created_at < ?
         AND (input_tokens IS NOT NULL OR cache_creation_input_tokens IS NOT NULL OR cache_read_input_tokens IS NOT NULL OR output_tokens IS NOT NULL)`)
       .all(provider, windowStart, windowEnd) as Array<{ model: string | null; input_tokens: number | null; cache_creation_input_tokens: number | null; cache_read_input_tokens: number | null; output_tokens: number | null }>;
-    return rows.reduce((total, row) => total + sonnetEquivalentTokens(provider, row.model, {
+    return rows.reduce((total, row) => total + totalUsageTokens({
       inputTokens: row.input_tokens, cacheCreationInputTokens: row.cache_creation_input_tokens,
       cacheReadInputTokens: row.cache_read_input_tokens, outputTokens: row.output_tokens,
     }), 0);
@@ -234,7 +234,7 @@ export class TelemetryRepository {
         input_tokens: number | null; cache_creation_input_tokens: number | null; cache_read_input_tokens: number | null; output_tokens: number | null;
       } | undefined;
       if (!run || run.origin !== 'autonomous' || run.agent !== reservation.provider || !['completed', 'failed', 'canceled'].includes(run.status)) return null;
-      const actualSet = sonnetEquivalentTokens(run.agent, run.model, {
+      const actualSet = totalUsageTokens({
         inputTokens: run.input_tokens, cacheCreationInputTokens: run.cache_creation_input_tokens,
         cacheReadInputTokens: run.cache_read_input_tokens, outputTokens: run.output_tokens,
       });

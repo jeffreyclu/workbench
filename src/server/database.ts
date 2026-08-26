@@ -1610,6 +1610,19 @@ const schemaMigrations: readonly Migration[] = [
       database.exec('CREATE INDEX IF NOT EXISTS idx_shared_conversations_pinned_updated ON shared_conversations(pinned DESC, updated_at DESC);');
     },
   },
+  {
+    id: '056_diff_confidence_cache',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS diff_confidence_cache (
+          hash TEXT PRIMARY KEY,
+          risk INTEGER NOT NULL,
+          reasoning TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

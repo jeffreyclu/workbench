@@ -32,27 +32,23 @@ export const AUTONOMOUS_TARGET_FRACTION = 0.16;
 export const CALIBRATION_MAX_AGE_DAYS = 14;
 
 /**
- * Token usage across every provider and usage class. The historical SET name
- * remains in persistence contracts, but the value is now a direct token total.
+ * Token usage across every provider and usage class. Historical persistence
+ * contracts still use `setTokens`, but the value is a direct token total.
  */
 
-/**
- * Exact SET conversion for the four usage classes captured on new runs. Rows
- * written before migration 029 lack cache fields; their historic input is
- * intentionally treated as fresh input rather than inventing a cache split.
- */
-export function sonnetEquivalentTokens(_agent: AgentRun['agent'], _model: string | null, tokens: { inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null }): number {
+/** Sum the four usage classes captured on new runs without price weighting. */
+export function totalUsageTokens(tokens: { inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null }): number {
   return (tokens.inputTokens ?? 0) + (tokens.cacheCreationInputTokens ?? 0) + (tokens.cacheReadInputTokens ?? 0) + (tokens.outputTokens ?? 0);
 }
 
-/** Exact SET for one Claude Code transcript usage sample, using the real cache-read/cache-write split. */
-function setForTranscriptUsage(model: string | null, usage: {
+/** Total tokens for one Claude Code transcript usage sample. */
+function tokensForTranscriptUsage(usage: {
   input_tokens?: number;
   output_tokens?: number;
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
 }): number {
-  return sonnetEquivalentTokens('claude', model, { inputTokens: usage.input_tokens, cacheCreationInputTokens: usage.cache_creation_input_tokens, cacheReadInputTokens: usage.cache_read_input_tokens, outputTokens: usage.output_tokens });
+  return totalUsageTokens({ inputTokens: usage.input_tokens, cacheCreationInputTokens: usage.cache_creation_input_tokens, cacheReadInputTokens: usage.cache_read_input_tokens, outputTokens: usage.output_tokens });
 }
 
 function emptyTotals(): UsageTotals {
@@ -86,7 +82,7 @@ export function computeWorkbenchUsage(repository: WorkItemRepository, weekStart:
     const outputTokens = row.outputTokens ?? 0;
     bucket.inputTokens += inputTokens;
     bucket.outputTokens += outputTokens;
-    bucket.setTokens += sonnetEquivalentTokens(row.agent, row.model, { inputTokens, cacheCreationInputTokens: row.cacheCreationInputTokens, cacheReadInputTokens: row.cacheReadInputTokens, outputTokens });
+    bucket.setTokens += totalUsageTokens({ inputTokens, cacheCreationInputTokens: row.cacheCreationInputTokens, cacheReadInputTokens: row.cacheReadInputTokens, outputTokens });
     bucket.runCount += 1;
   }
   return totals;
@@ -142,7 +138,7 @@ export function scanClaudeInteractiveUsage(weekStart: Date, weekEnd: Date, root 
           if (!usage || !parsed.timestamp) continue;
           const occurredAt = new Date(parsed.timestamp);
           if (occurredAt < weekStart || occurredAt >= weekEnd) continue;
-          setTokens += setForTranscriptUsage(parsed.message?.model ?? null, usage);
+          setTokens += tokensForTranscriptUsage(usage);
         }
       } catch (error) {
         return { setTokens: 0, scannedFiles, error: `Unable to read Claude transcript ${filePath}: ${error instanceof Error ? error.message : String(error)}` };

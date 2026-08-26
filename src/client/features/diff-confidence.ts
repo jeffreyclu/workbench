@@ -1,7 +1,7 @@
-// Grouping and presentation for AI-assessed diff blocks. The confidence score
-// itself is produced by the model server-side (`POST /api/diff-confidence`);
-// this module only decides what counts as one logical block and how a score
-// maps to colour and prominence — low confidence is loud, high is quiet.
+// Grouping and presentation for AI-assessed diff blocks. The risk score itself
+// is produced by the model server-side (`POST /api/diff-confidence`); this
+// module only decides what counts as one logical block and how a score maps
+// to colour and prominence — low risk recedes, high risk is loud.
 export interface DiffBlockLine {
   key: string;
   kind: 'context' | 'addition' | 'deletion' | 'header';
@@ -16,7 +16,7 @@ export interface DiffBlock {
 }
 
 export interface DiffConfidenceAssessment {
-  confidence: number;
+  risk: number;
   reasoning: string;
 }
 
@@ -31,7 +31,7 @@ export function formatDiffFollowUpReference({ filePath, lines, assessment }: Dif
   const lineNumbers = lines.map((line) => line.newLine ?? line.oldLine).filter((line): line is number => line !== null);
   const location = lineNumbers.length ? `:${Math.min(...lineNumbers)}${Math.max(...lineNumbers) === Math.min(...lineNumbers) ? '' : `-${Math.max(...lineNumbers)}`}` : '';
   const patch = lines.map((line) => line.text).join('\n');
-  return `Please follow up on this confidence assessment.\n\n**${filePath}${location}** · AI confidence: ${assessment.confidence}/100\n\n> ${assessment.reasoning}\n\n\`\`\`diff\n${patch}\n\`\`\``;
+  return `Please follow up on this risk assessment.\n\n**${filePath}${location}** · AI risk: ${assessment.risk}/100\n\n> ${assessment.reasoning}\n\n\`\`\`diff\n${patch}\n\`\`\``;
 }
 
 /** Group parsed diff lines into logical blocks: each contiguous run of changed
@@ -56,16 +56,16 @@ export function isChangedBlock(block: DiffBlock): boolean {
   return block.lines.some((line) => line.kind === 'addition' || line.kind === 'deletion');
 }
 
-export function confidenceTone(confidence: number) {
-  const low = { r: 217, g: 90, b: 90 };
-  const high = { r: 108, g: 191, b: 110 };
-  const t = Math.max(0, Math.min(1, confidence / 100));
+export function confidenceTone(risk: number) {
+  const low = { r: 108, g: 191, b: 110 };
+  const high = { r: 217, g: 90, b: 90 };
+  const t = Math.max(0, Math.min(1, risk / 100));
   const mix = (a: number, b: number) => Math.round(a + (b - a) * t);
   return `rgb(${mix(low.r, high.r)}, ${mix(low.g, high.g)}, ${mix(low.b, high.b)})`;
 }
 
-/** Lower confidence should draw the eye; higher confidence should recede. */
-export function confidenceProminence(confidence: number): { opacity: number; fontWeight: number } {
-  const t = Math.max(0, Math.min(1, confidence / 100));
-  return { opacity: Math.round((0.55 + (1 - t) * 0.45) * 100) / 100, fontWeight: t > 0.7 ? 500 : 700 };
+/** Trivial/low risk should recede into the background; high risk should draw the eye. */
+export function confidenceProminence(risk: number): { opacity: number; fontWeight: number } {
+  const t = Math.max(0, Math.min(1, risk / 100));
+  return { opacity: Math.round((0.55 + t * 0.45) * 100) / 100, fontWeight: t > 0.3 ? 700 : 500 };
 }

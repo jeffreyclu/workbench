@@ -35,12 +35,12 @@ import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
 
-export function createWorkItemRouter({ repository }: RouteContext) {
+export function createWorkItemRouter({ repository, database }: RouteContext) {
   const router = Router();
   router.post('/api/diff-confidence', async (request, response, next) => {
     try {
       const { blocks } = diffConfidenceRequestSchema.parse(request.body);
-      response.json({ assessments: await assessDiffBlocks(blocks) });
+      response.json({ assessments: await assessDiffBlocks(database, blocks) });
     } catch (error) { next(error); }
   });
   const persistAttachments = (attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }>) => {

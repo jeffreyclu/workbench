@@ -66,6 +66,7 @@ const EXPECTED_MIGRATIONS = [
   '053_shared_conversation_codex_thread_id',
   '054_agent_run_diagnostics',
   '055_shared_conversation_pinning',
+  '056_diff_confidence_cache',
 ];
 
 describe('openDatabase', () => {
@@ -501,6 +502,21 @@ describe('openDatabase', () => {
     expect(columns).toContain('pinned');
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '055_shared_conversation_pinning'").get()).toBeTruthy();
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_shared_conversations_pinned_updated'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds the diff confidence cache table on upgrade from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE diff_confidence_cache;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '056_diff_confidence_cache'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(diff_confidence_cache)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['hash', 'risk', 'reasoning', 'created_at']));
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '056_diff_confidence_cache'").get()).toBeTruthy();
     upgraded.close();
   });
 

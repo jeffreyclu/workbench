@@ -25,7 +25,7 @@ function stubInsightsFetch(insightsPayload: unknown) {
 describe('InsightsView', () => {
   it('renders token totals grouped by provider and model', async () => {
     stubInsightsFetch({
-      retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
+      retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
       medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 1_200, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 300,
       tokenUsageByModel: [{ provider: 'codex', model: 'gpt-5.6-terra', inputTokens: 1_200, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 300 }],
       cursing: { total: 0, messagesAnalyzed: 1, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
@@ -42,7 +42,7 @@ describe('InsightsView', () => {
 
   it('keeps massive cache traffic visible instead of folding it into fresh input', async () => {
     stubInsightsFetch({
-      retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 1, completedTasks: 0,
+      retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 1, completedTasks: 0,
       medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 1_700, cacheCreationInputTokens: 2_000_000, cacheReadInputTokens: 57_500_000, outputTokens: 184_400,
       tokenUsageByModel: [{ provider: 'claude', model: 'claude-opus-5', inputTokens: 1_700, cacheCreationInputTokens: 2_000_000, cacheReadInputTokens: 57_500_000, outputTokens: 184_400, runs: 1 }],
       cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
@@ -59,7 +59,7 @@ describe('InsightsView', () => {
 
   it('does not recommend an agent when task-type success rates are tied', async () => {
     stubInsightsFetch({
-      retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 2, completedTasks: 0,
+      retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 2, completedTasks: 0,
       medianTaskCycleMs: null, followUpsCreated: 0, inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
       agentFit: [
         { kind: 'execute', agent: 'claude', completed: 1, failed: 0, canceled: 0, successRate: 1, medianDurationMs: 1_000 },
@@ -77,9 +77,9 @@ describe('InsightsView', () => {
 
   it('reports retry and handoff lifecycle events as a per-run frequency, including values above 100 per 100 runs', async () => {
     stubInsightsFetch({
-      retryRate: 2.5, retryCount: 5, fallbackRate: 1.5, handoffCount: 3, costByDay: [], byKind: [], completedRuns: 2, completedTasks: 0,
+      retryRate: 2.5, retryCount: 5, fallbackRate: 1.5, handoffCount: 3, byKind: [], completedRuns: 2, completedTasks: 0,
       medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [], byAgent: [
-        { agent: 'codex', total: 2, completed: 2, failed: 0, canceled: 0, successRate: 1, retryRate: 2.5, fallbackRate: 1.5, medianDurationMs: 1_000, p90DurationMs: 1_000, providerCostUsd: 0, estimatedCostUsd: 0 },
+        { agent: 'codex', total: 2, completed: 2, failed: 0, canceled: 0, successRate: 1, retryRate: 2.5, fallbackRate: 1.5, medianDurationMs: 1_000, p90DurationMs: 1_000 },
       ],
       cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
     });
@@ -95,7 +95,7 @@ describe('InsightsView', () => {
 
   it('censors curse terms in the Insights breakdown', async () => {
     stubInsightsFetch({
-      retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
+      retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
       medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
       cursing: { total: 5, messagesAnalyzed: 1, messagesWithCurses: 1, instancesPer100Messages: 500, byTerm: [{ term: 'clusterfuck', count: 2 }, { term: 'fuck', count: 1 }, { term: 'shit', count: 1 }, { term: 'damn', count: 1 }], byDay: [], byModel: [{ model: 'sonnet', count: 5, messagesWithCurses: 1, messagesAnalyzed: 1, instancesPer100Messages: 500 }] },
     });
@@ -111,7 +111,7 @@ describe('InsightsView', () => {
 
   it('shows the calendar day with the most curses for angriest day', async () => {
     stubInsightsFetch({
-      retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
+      retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
       medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
       cursing: { total: 5, angriestDay: { day: '2026-08-20', count: 4 }, messagesAnalyzed: 2, messagesWithCurses: 2, instancesPer100Messages: 250, byTerm: [], byDay: [{ day: '2026-08-20', count: 4 }, { day: '2026-08-21', count: 1 }] },
     });
@@ -124,7 +124,7 @@ describe('InsightsView', () => {
 
   it('shows the weekly usage dial with the manual/autonomous split and the 20% autonomous slice', async () => {
     stubInsightsFetch({
-      retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 1, completedTasks: 0,
+      retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 1, completedTasks: 0,
       medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
       cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
     });
@@ -143,7 +143,7 @@ describe('InsightsView', () => {
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response(JSON.stringify({
-        retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 1, completedTasks: 0,
+        retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 1, completedTasks: 0,
         medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
         cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -155,8 +155,8 @@ describe('InsightsView', () => {
     expect(await screen.findByRole('heading', { name: /weekly usage/i })).toBeTruthy();
     // (30M manual + 3M autonomous + 0.3M interactive) / 333M ceiling = 10%.
     expect(screen.getByText('10% of weekly ceiling')).toBeTruthy();
-    expect(screen.getByText('30M SET')).toBeTruthy();
-    expect(screen.getByText('3M SET')).toBeTruthy();
+    expect(screen.getByText('30M tokens')).toBeTruthy();
+    expect(screen.getByText('3M tokens')).toBeTruthy();
     // Codex has no ceiling estimate yet.
     expect(screen.getByText(/No Codex ceiling estimate yet/)).toBeTruthy();
     // Calibration is agent-owned; the usage view does not expose manual controls for either provider.
@@ -166,7 +166,7 @@ describe('InsightsView', () => {
 
   it('labels the ceiling as an uncalibrated estimate until a /usage observation is recorded', async () => {
     stubInsightsFetch({
-      retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
+      retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
       medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
       cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
     });
@@ -194,7 +194,7 @@ describe('InsightsView', () => {
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response(JSON.stringify({
-        retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
+        retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
         medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
         cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -213,7 +213,7 @@ describe('InsightsView', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 360 });
     window.dispatchEvent(new Event('resize'));
     stubInsightsFetch({
-      retryRate: null, fallbackRate: null, costByDay: [], byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
+      retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
       medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
       cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
     });
