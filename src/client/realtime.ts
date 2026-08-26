@@ -17,7 +17,11 @@ export type RealtimeNotification = Extract<RealtimeMessage, { type: 'notificatio
  * established connection was lost and backoff is in progress. Callers use
  * this to warn that cached data may be stale while the socket is down.
  */
-export type RealtimeConnectionState = 'connecting' | 'connected' | 'reconnecting';
+export type RealtimeConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'polling';
+
+const MAX_WEBSOCKET_RECONNECT_ATTEMPTS = 3;
+const HTTPS_FALLBACK_POLL_MS = 1_500;
+const AGENT_POLL_TOPICS: readonly RealtimeTopic[] = ['shared', 'work-items', 'insights'];
 
 const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
   'work-items': [
@@ -78,13 +82,31 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
 
     let socket: WebSocket | null = null;
     let reconnectTimer: number | null = null;
+    let pollingTimer: number | null = null;
     let attempts = 0;
     let disposed = false;
+
+    const startHttpsFallback = () => {
+      if (disposed || pollingTimer !== null) return;
+      // The socket carries invalidations only. Invalidating active queries
+      // makes TanStack Query fetch their normal HTTPS endpoints, preserving
+      // live agent output when a proxy, VPN, or browser policy rejects WS.
+      setConnectionState('polling');
+      invalidateRealtimeTopics(queryClient, AGENT_POLL_TOPICS);
+      pollingTimer = window.setInterval(() => invalidateRealtimeTopics(queryClient, AGENT_POLL_TOPICS), HTTPS_FALLBACK_POLL_MS);
+    };
 
     const connect = () => {
       if (disposed) return;
       socket = new WebSocket(realtimeUrl());
-      socket.addEventListener('open', () => { attempts = 0; setConnectionState('connected'); });
+      socket.addEventListener('open', () => {
+        attempts = 0;
+        if (pollingTimer !== null) {
+          window.clearInterval(pollingTimer);
+          pollingTimer = null;
+        }
+        setConnectionState('connected');
+      });
       socket.addEventListener('message', (event) => {
         try {
           const message: unknown = JSON.parse(typeof event.data === 'string' ? event.data : '');
@@ -97,6 +119,10 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
       });
       socket.addEventListener('close', () => {
         if (disposed) return;
+        if (attempts >= MAX_WEBSOCKET_RECONNECT_ATTEMPTS) {
+          startHttpsFallback();
+          return;
+        }
         setConnectionState('reconnecting');
         const delay = Math.min(30_000, 1_000 * 2 ** attempts++);
         const jitter = Math.round(delay * (0.2 * Math.random()));
@@ -108,6 +134,7 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
     return () => {
       disposed = true;
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      if (pollingTimer !== null) window.clearInterval(pollingTimer);
       socket?.close();
     };
   }, [onNotification, queryClient]);

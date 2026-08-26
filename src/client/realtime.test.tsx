@@ -24,6 +24,7 @@ class MockWebSocket {
 
 afterEach(() => {
   MockWebSocket.instances = [];
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -78,6 +79,29 @@ describe('realtime invalidation', () => {
 
     act(() => { socket.emit('close'); });
     expect(states.at(-1)).toBe('reconnecting');
+    rendered.unmount();
+  });
+
+  it('falls back to HTTPS query polling after a bounded number of websocket failures', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    const client = new QueryClient();
+    const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
+    const states: string[] = [];
+    const noop = () => {};
+    function RealtimeClient() { states.push(useRealtimeNotifications(noop)); return null; }
+
+    const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
+    for (let attempt = 0; attempt <= 3; attempt += 1) {
+      act(() => { MockWebSocket.instances.at(-1)?.emit('close'); });
+      if (attempt < 3) act(() => { vi.advanceTimersByTime(30_000); });
+    }
+
+    expect(states.at(-1)).toBe('polling');
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['shared-messages'] });
+    const callsBeforePoll = invalidateQueries.mock.calls.length;
+    act(() => { vi.advanceTimersByTime(1_500); });
+    expect(invalidateQueries.mock.calls.length).toBeGreaterThan(callsBeforePoll);
     rendered.unmount();
   });
 });

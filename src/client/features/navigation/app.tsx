@@ -543,6 +543,11 @@ export function App() {
           <LoaderCircle className="spin" size={13} /> Reconnecting… showing cached data
         </div>
       )}
+      {realtimeConnectionState === 'polling' && (
+        <div className="realtime-status-banner" role="status">
+          <LoaderCircle className="spin" size={13} /> Live agent updates are polling over HTTPS
+        </div>
+      )}
       <NavigationView
         view={view === 'workbench-archive' ? 'workbench' : view}
         mobileNavOpen={mobileNavOpen}
