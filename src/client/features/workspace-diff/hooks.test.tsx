@@ -17,7 +17,7 @@ describe('useWorkspaceDiff', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 
-    const { result } = renderHook(() => useWorkspaceDiff('work-item-1'), { wrapper });
+    const { result } = renderHook(() => useWorkspaceDiff({ workItemId: 'work-item-1' }), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     await new Promise((resolve) => setTimeout(resolve, 2_000));

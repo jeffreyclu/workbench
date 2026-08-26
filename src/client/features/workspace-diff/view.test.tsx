@@ -34,7 +34,7 @@ describe('WorkspaceDiffView', () => {
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    render(<QueryClientProvider client={client}><WorkspaceDiffView workItemId="work-item-1" isRunning /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning /></QueryClientProvider>);
 
     expect(await screen.findByRole('button', { name: 'Refresh changes' })).toHaveClass('workspace-diff-refresh-pending');
     expect(screen.getByText('+after')).toBeInTheDocument();
@@ -62,7 +62,7 @@ describe('WorkspaceDiffView', () => {
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    render(<QueryClientProvider client={client}><WorkspaceDiffView workItemId="work-item-1" isRunning={false} /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={false} /></QueryClientProvider>);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Commit & push' }));
     expect(await screen.findByRole('button', { name: 'Publishing…' })).toBeDisabled();
@@ -82,11 +82,11 @@ describe('WorkspaceDiffView', () => {
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    const { rerender } = render(<QueryClientProvider client={client}><WorkspaceDiffView workItemId="work-item-running" isRunning /></QueryClientProvider>);
+    const { rerender } = render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-running' }} isRunning /></QueryClientProvider>);
     expect(await screen.findByRole('button', { name: 'Agent running' })).toBeDisabled();
-    rerender(<QueryClientProvider client={client}><WorkspaceDiffView workItemId="work-item-clean" isRunning={false} /></QueryClientProvider>);
+    rerender(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-clean' }} isRunning={false} /></QueryClientProvider>);
     expect(await screen.findByRole('button', { name: 'No changes to commit' })).toBeDisabled();
-    rerender(<QueryClientProvider client={client}><WorkspaceDiffView workItemId="work-item-ahead" isRunning={false} /></QueryClientProvider>);
+    rerender(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-ahead' }} isRunning={false} /></QueryClientProvider>);
     expect(await screen.findByRole('button', { name: 'Push 2 commits' })).toBeEnabled();
   });
 });

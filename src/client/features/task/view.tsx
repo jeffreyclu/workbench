@@ -664,7 +664,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       {deleteTaskPromptOpen && <ConfirmationDialog title={`Delete “${item.title}”?`} description="This permanently deletes the task and cannot be undone." confirmLabel="Delete task" pending={lifecycle.isPending} onClose={() => setDeleteTaskPromptOpen(false)} onConfirm={() => lifecycle.mutate('delete')} />}
       {feedbackTarget && <SessionFeedbackPrompt onSubmit={async (rating: SessionFeedbackRating) => { await api.createSessionFeedback({ ...feedbackTarget, rating }); setFeedbackTarget(null); onClose(); }} />}
 
-      <WorkspaceDiffView workItemId={item.id} isRunning={detail.data.runs.some((run) => run.status === 'queued' || run.status === 'running')} />
+      <WorkspaceDiffView scope={{ workItemId: item.id }} isRunning={detail.data.runs.some((run) => run.status === 'queued' || run.status === 'running')} />
       <details className="detail-section task-collapsible relationships-section">
         <summary><span>Linked items & history</span><small>{(detail.data.parentItem ? 1 : 0) + detail.data.children.length + linkedTasks.length + detail.data.conversations.length + detail.data.artifacts.length + references.length} linked</small></summary>
         <div className="task-collapsible-content">

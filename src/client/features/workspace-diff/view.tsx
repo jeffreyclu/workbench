@@ -1,6 +1,7 @@
 import { memo, useMemo, useState } from 'react';
 import { FileDiff, GitCommitHorizontal, RefreshCw, Upload } from 'lucide-react';
 import { Skeleton, SkeletonText } from '../../skeleton.js';
+import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { DiffConfidenceBubble } from '../diff-confidence-bubble.js';
 import { useDiffBlockConfidence } from '../diff-confidence-hooks.js';
 import { groupDiffBlocks, isChangedBlock } from '../diff-confidence.js';
@@ -14,14 +15,14 @@ function DiffSkeleton() {
   </section>;
 }
 
-export const WorkspaceDiffView = memo(function WorkspaceDiffView({ workItemId, isRunning }: { workItemId: string; isRunning: boolean }) {
-  const query = useWorkspaceDiff(workItemId);
+export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning }: { scope: WorkspaceDiffScope; isRunning: boolean }) {
+  const query = useWorkspaceDiff(scope);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const diff = query.data?.diff;
   const files = diff?.files ?? [];
   const selectedFile = files.find((file) => file.path === selectedPath) ?? files[0] ?? null;
-  const hasChanges = useWorkspaceDiffChanges(workItemId, diff?.revision, isRunning);
-  const publish = useCommitAndPushWorkspace(workItemId);
+  const hasChanges = useWorkspaceDiffChanges(scope, diff?.revision, isRunning);
+  const publish = useCommitAndPushWorkspace(scope);
   const patch = selectedFile?.patch ?? null;
   const blocks = useMemo(() => (patch ? groupDiffBlocks(parsePatch(patch)) : []), [patch]);
   const changedBlocks = useMemo(() => blocks.filter(isChangedBlock).map((block) => ({ key: block.key, lines: block.lines.map((line) => line.text) })), [blocks]);

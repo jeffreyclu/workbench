@@ -1,12 +1,15 @@
 import { api } from '../../api.js';
+import type { WorkspaceDiffScope } from '../../data/source-client.js';
+
+const scopeKey = (scope: WorkspaceDiffScope) => ('workItemId' in scope ? scope.workItemId : scope.conversationId);
 
 export const workspaceDiffQueryKeys = {
-  detail: (workItemId: string) => ['workspace-diff', workItemId] as const,
-  status: (workItemId: string, revision: string) => ['workspace-diff-status', workItemId, revision] as const,
+  detail: (scope: WorkspaceDiffScope) => ['workspace-diff', scopeKey(scope)] as const,
+  status: (scope: WorkspaceDiffScope, revision: string) => ['workspace-diff-status', scopeKey(scope), revision] as const,
 };
 
 export const workspaceDiffData = {
-  get: (workItemId: string) => api.getWorkspaceDiff(workItemId),
-  getStatus: (workItemId: string, revision: string) => api.getWorkspaceDiffStatus(workItemId, revision),
-  commitAndPush: (workItemId: string, revision: string) => api.commitAndPushWorkspace(workItemId, revision),
+  get: (scope: WorkspaceDiffScope) => api.getWorkspaceDiff(scope),
+  getStatus: (scope: WorkspaceDiffScope, revision: string) => api.getWorkspaceDiffStatus(scope, revision),
+  commitAndPush: (scope: WorkspaceDiffScope, revision: string) => api.commitAndPushWorkspace(scope, revision),
 };

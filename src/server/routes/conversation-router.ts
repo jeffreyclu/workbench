@@ -6,7 +6,8 @@ import { z } from 'zod';
 import { createSessionFeedbackSchema, createSharedConversationSchema, createSharedMessageSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema } from '../../shared/contracts.js';
 import { runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
-import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, runSharedBackgroundJob } from '../shared-room.js';
+import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, resolveSharedReplyWorkingDirectory, runSharedBackgroundJob } from '../shared-room.js';
+import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision } from '../workspace-diff.js';
 import { parseFollowUpPlan } from '../app-exports.js';
 import { isRuntimeApproval } from '../runtime-promotion.js';
 import { PROMOTION_QUEUED_MESSAGE } from '../promotion-messages.js';
@@ -36,6 +37,44 @@ export function createConversationRouter({ repository, database, capabilities }:
   router.get('/api/shared/conversations/:id/feedback', (request, response) => {
     if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
     response.json({ feedback: repository.getSessionFeedback(request.params.id) });
+  });
+
+  // A conversation without a linked task still runs its agent turns somewhere
+  // (see resolveSharedReplyWorkingDirectory: the Workbench server cwd), so it
+  // has real, reviewable changes even though there is no task workspace.
+  const conversationWorkingDirectory = (conversationId: string) => {
+    const conversation = repository.getConversation(conversationId);
+    if (!conversation) return null;
+    const linkedItem = conversation.workItemId ? repository.get(conversation.workItemId) : null;
+    return resolveSharedReplyWorkingDirectory(linkedItem ?? null);
+  };
+
+  router.get('/api/shared/conversations/:id/workspace-diff', async (request, response, next) => {
+    try {
+      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
+      response.json({ diff: await getWorkspaceDiff(workingDirectory) });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/api/shared/conversations/:id/workspace-diff/status', async (request, response, next) => {
+    try {
+      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
+      const revision = await getWorkspaceDiffRevision(workingDirectory);
+      response.json({ changed: revision !== request.query.revision });
+    } catch (error) { next(error); }
+  });
+
+  router.post('/api/shared/conversations/:id/workspace-diff/commit-and-push', async (request, response, next) => {
+    try {
+      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
+      const { revision } = z.object({ revision: z.string().trim().min(1) }).parse(request.body);
+      const conversation = repository.getConversation(request.params.id)!;
+      const result = await commitAndPushWorkspace(workingDirectory, `chore: ${conversation.title}`, revision);
+      response.json({ result });
+    } catch (error) { next(error); }
   });
 
   router.post('/api/shared/session-feedback', (request, response) => {

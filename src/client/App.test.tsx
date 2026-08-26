@@ -966,6 +966,33 @@ describe('shared room', () => {
     expect(screen.queryByText(/Archived conversation · restore or fork it to continue/)).toBeNull();
   });
 
+  it('opens workspace changes for a conversation without a linked task', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000213';
+    const timestamp = '2026-01-01T00:00:00Z';
+    const conversation = { id: conversationId, title: 'Standalone implementation', workItemId: null, archivedAt: null, createdAt: timestamp, updatedAt: timestamp };
+    const message = { id: 'standalone-message', conversationId, author: 'codex', body: 'Implemented the standalone change.', pinned: false, status: 'completed', error: '', createdAt: timestamp, attachments: [], model: null, executionProfile: null, dispatchTarget: 'none' };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/shared/conversations/${conversationId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'conversation-diff', changedFiles: 1, additions: 1, deletions: 0, publish: { branch: 'conversation-diff', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/standalone.tsx', previousPath: null, status: 'added', additions: 1, deletions: 0, isBinary: false, patch: '@@ -0,0 +1 @@\n+standalone' }] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [message] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    const changes = await screen.findByRole('button', { name: 'Changes' });
+    await waitFor(() => expect(changes).toBeEnabled());
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/shared/conversations/${conversationId}/workspace-diff`)).toBe(true);
+
+    fireEvent.click(changes);
+    expect(await screen.findByRole('heading', { name: 'Current workspace changes' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /src\/client\/standalone\.tsx/ })).toBeTruthy();
+    expect(screen.getByLabelText('Conversation changes')).toBeTruthy();
+  });
+
   it('opens a linked GitHub pull-request diff inside the conversation window on demand', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000214';
