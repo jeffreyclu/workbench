@@ -9,6 +9,13 @@ revision is detected, show an orange **Refresh changes** button; only that
 explicit action loads the new patch. This follows GitHub's review behavior and
 keeps the live conversation/activity stream separate from the review surface.
 
+### Diff review uses one compact layout on desktop and phone
+
+*Decision from Jeffrey, 2026-08-25.* Local workspace and GitHub pull-request
+diffs use the same layout at every viewport: a compact horizontally scrollable
+file rail above a full-width selected patch. Do not restore the desktop
+side-by-side file sidebar; the patch is the primary review surface.
+
 ### Artifact comments live on the shared page
 
 *Decision from Jeffrey, 2026-08-25.* Comments belong on the public artifact page

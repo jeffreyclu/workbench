@@ -115,13 +115,15 @@ describe('phone dialogs', () => {
   });
 });
 
-describe('phone diff review', () => {
-  it('gives both local and GitHub diffs a compact file rail and a full-width patch pane', () => {
+describe('diff review layout', () => {
+  it('gives both local and GitHub diffs a compact file rail and a full-width patch pane on every viewport', () => {
+    expect(styles).toContain('.workspace-diff-layout, .github-diff-layout { display: grid; grid-template-columns: minmax(0, 1fr);');
+    expect(styles).toContain('.workspace-diff nav > div, .github-diff nav > div { display: flex; max-height: 68px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }');
+    expect(styles).toContain('.workspace-diff nav button, .github-diff nav button { display: grid; flex: 0 0 min(280px, 40vw);');
+
     const phoneRules = styles.match(/@media \(max-width: 640px\) \{[\s\S]*?\.task-collapsible/)?.[0] ?? '';
 
-    expect(phoneRules).toContain('.workspace-diff-layout, .github-diff-layout, .workspace-diff-skeleton, .github-diff-skeleton { grid-template-columns: minmax(0, 1fr); }');
-    expect(phoneRules).toContain('.diff-file-list > div { display: flex; max-height: 68px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }');
-    expect(phoneRules).toContain('.diff-file-list button { flex: 0 0 min(220px, 68vw); min-height: 52px; padding: 7px 10px; }');
+    expect(phoneRules).toContain('.diff-file-list button { flex-basis: min(220px, 68vw); }');
     expect(phoneRules).toContain('.workspace-diff-file, .github-diff-file { min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }');
   });
 });
