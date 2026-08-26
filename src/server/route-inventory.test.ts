@@ -100,6 +100,7 @@ const baselineInventory = [
   'DELETE /api/source-connections/:provider',
   'POST /api/queue/proposals/:id/:resolution',
   'GET /api/work-items/:id',
+  'GET /api/work-items/:id/workspace-diff',
   'GET /api/work-items/:id/dependency-candidates',
   'POST /api/work-items/:id/references',
   'POST /api/work-items/:id/linked-tasks',

@@ -24,9 +24,11 @@ import {
   searchSourcesSchema,
 } from '../../shared/contracts.js';
 import { classificationForKind } from '../agent-runner.js';
+import { resolveWorkingDirectory } from '../agent-runner.js';
 import { summarizeWorkItemChanges } from '../activity-log.js';
 import { resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { generateFastAiTaskDraft } from '../fast-task-draft-ai.js';
+import { getWorkspaceDiff } from '../workspace-diff.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
 
@@ -42,6 +44,13 @@ export function createWorkItemRouter({ repository }: RouteContext) {
       return { name: attachment.name, path, mimeType: attachment.mimeType, size: attachment.size };
     });
   };
+  router.get('/api/work-items/:id/workspace-diff', async (request, response, next) => {
+    try {
+      const item = repository.get(request.params.id);
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      response.json({ diff: await getWorkspaceDiff(resolveWorkingDirectory(item)) });
+    } catch (error) { next(error); }
+  });
   router.get('/api/work-items', (request, response) => {
     const view = request.query.view === 'workbench-archive' ? 'workbench-archive' : request.query.view === 'archive' ? 'archive' : request.query.view === 'workbench' ? 'workbench' : 'active';
     const limit = Number(request.query.limit ?? 50);

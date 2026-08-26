@@ -71,6 +71,7 @@ import { useTaskAccountProfile, useTaskExecutionProfile } from './state';
 import { celebrate } from '../../celebrate';
 import { SessionFeedbackPrompt } from '../../session-feedback-prompt';
 import { GitHubDiffView } from '../github-diff/view';
+import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { AgentAccountProfile } from '../../data/runtime-client';
 
 export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCreated, onRemoving }: { id: string; onClose: () => void; onOpenConversation: (conversationId: string) => void; onOpenTask: (taskId: string) => void; onCreated: (item: WorkItem) => void; onRemoving?: (id: string) => Promise<void> }) {
@@ -664,6 +665,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       {deleteTaskPromptOpen && <ConfirmationDialog title={`Delete “${item.title}”?`} description="This permanently deletes the task and cannot be undone." confirmLabel="Delete task" pending={lifecycle.isPending} onClose={() => setDeleteTaskPromptOpen(false)} onConfirm={() => lifecycle.mutate('delete')} />}
       {feedbackTarget && <SessionFeedbackPrompt onSubmit={async (rating: SessionFeedbackRating) => { await api.createSessionFeedback({ ...feedbackTarget, rating }); setFeedbackTarget(null); onClose(); }} />}
 
+      <WorkspaceDiffView workItemId={item.id} isRunning={detail.data.runs.some((run) => run.status === 'queued' || run.status === 'running')} />
       <GitHubDiffView sourceUrl={item.sourceUrl} references={detail.data.references} />
 
       <details className="detail-section task-collapsible relationships-section">

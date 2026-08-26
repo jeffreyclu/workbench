@@ -322,6 +322,16 @@ export interface GitHubPullRequestDiff {
   deletions: number;
 }
 
+/** A read-only snapshot of the uncommitted changes in a task's local workspace. */
+export interface WorkspaceDiff {
+  workspacePath: string;
+  branch: string;
+  files: GitHubPullRequestFile[];
+  changedFiles: number;
+  additions: number;
+  deletions: number;
+}
+
 export const sourceProviderSchema = z.enum(['github', 'slack', 'figma', 'confluence', 'gmail']);
 export type SourceProvider = z.infer<typeof sourceProviderSchema>;
 export type SourceAuthMode = 'oauth' | 'api_key' | 'managed_externally';

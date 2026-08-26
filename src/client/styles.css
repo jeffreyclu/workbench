@@ -345,6 +345,9 @@ nav { display: grid; gap: 3px; }
 .github-diff small i, .github-diff nav i { color: #d97b73; font-style: normal; }
 .github-diff > header > a, .github-diff-error > a { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; min-height: 28px; padding: 0 9px; color: #c4c3bc; border: 1px solid #353530; border-radius: 6px; font: 700 10px 'DM Mono'; text-decoration: none; }
 .github-diff > header > a:hover, .github-diff-error > a:hover { color: var(--acid); border-color: #596234; }
+.workspace-diff > header p { margin: 7px 0 0; color: #85847d; font-size: 11px; line-height: 1.45; }
+.workspace-diff-refresh { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; min-height: 28px; padding: 0 9px; color: #c4c3bc; border: 1px solid #353530; border-radius: 6px; background: transparent; cursor: pointer; font: 700 10px 'DM Mono'; }
+.workspace-diff-refresh:hover:not(:disabled) { color: var(--acid); border-color: #596234; }.workspace-diff-refresh:disabled { opacity: .65; cursor: wait; }
 .github-diff-layout { display: grid; grid-template-columns: minmax(180px, 28%) minmax(0, 1fr); overflow: hidden; border: 1px solid #302f2b; border-radius: 8px; background: #10100f; }
 .github-diff nav { min-width: 0; border-right: 1px solid #302f2b; background: #151513; }
 .github-diff nav > span { display: block; padding: 10px 11px; color: #85847d; border-bottom: 1px solid #302f2b; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
