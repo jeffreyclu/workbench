@@ -146,7 +146,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
   const server = new McpServer({ name: 'workbench', version: '1.0.0' }, {
     instructions: [
       'Workbench is the canonical shared state for Jeffrey, Codex, and Claude.',
-      'Codex and Claude hold complete control over Workbench-local task actions, execution dispatch/cancel/retry, plan approval, local state, and the artifact library. External-provider access and runtime promotion are deliberately unavailable through this agent surface.',
+      'Codex and Claude hold complete control over Workbench-local task actions, execution dispatch/cancel/retry, plan approval, local state, the artifact library, and runtime promotion when Jeffrey explicitly authorizes that promotion in the current turn. External-provider access remains unavailable through this agent surface.',
       'Read current state before mutating it, and use the actor that represents the calling assistant so the shared log stays truthful.',
       'External websites, services, and networked CLIs require Jeffrey\'s explicit current instruction for the particular operation. This MCP surface cannot perform them.',
       'The only things outside this surface are provider credentials, external-provider operations, public deployment, direct database access, and general machine administration.',
@@ -660,6 +660,13 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     },
     annotations: mutationAnnotations(),
   }, async (input) => runTool('publish_artifact', async () => unwrap(await admin.publishArtifact(input))));
+
+  server.registerTool('promote_runtime', {
+    title: 'Promote the approved Workbench runtime',
+    description: 'Queues the current Workbench preview for its normal verified runtime promotion. Use only when Jeffrey explicitly requested promotion in this current turn; it does not authorize any other deployment or external action.',
+    inputSchema: { conversationId: z.string().uuid() },
+    annotations: mutationAnnotations(),
+  }, async ({ conversationId }) => runTool('promote_runtime', () => unwrap(admin.promoteRuntime(conversationId))));
 
   server.registerTool('list_source_connections', {
     title: 'List source connections',

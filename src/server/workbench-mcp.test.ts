@@ -99,6 +99,7 @@ describe('Workbench MCP', () => {
       'manage_conversation',
       'manage_work_item_link',
       'manage_work_item_reference',
+      'promote_runtime',
       'propose_execution_plan',
       'publish_artifact',
       'queue_linear_work_item',
@@ -115,7 +116,7 @@ describe('Workbench MCP', () => {
     expect(tools.tools.find((tool) => tool.name === 'create_work_item')?.annotations).toEqual(expect.objectContaining({ readOnlyHint: false, openWorldHint: false }));
     expect(tools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining([
       'authorize_source_connection', 'disconnect_source_connection', 'get_linear_provider',
-      'sync_linear_provider', 'run_discovery_scan', 'revoke_artifact', 'promote_runtime',
+      'sync_linear_provider', 'run_discovery_scan', 'revoke_artifact',
     ]));
     // Irreversible actions stay available, but they announce themselves as destructive.
     for (const name of ['delete_work_item']) {
@@ -281,6 +282,14 @@ describe('Workbench MCP', () => {
     expect(calls.at(-1)).toEqual({ method: 'publishArtifact', args: [{
       path: 'docs/reference/intro.md', title: 'All-hands introduction', conversationId: '00000000-0000-4000-8000-000000000001',
     }] });
+  });
+
+  it('routes an explicitly authorized runtime promotion through the Workbench service', async () => {
+    const conversation = repository.createConversation('Promote preview', null);
+
+    await callData('promote_runtime', { conversationId: conversation.id });
+
+    expect(calls.at(-1)).toEqual({ method: 'promoteRuntime', args: [conversation.id] });
   });
 
   it('surfaces a refused admin action as a domain error rather than an internal failure', async () => {

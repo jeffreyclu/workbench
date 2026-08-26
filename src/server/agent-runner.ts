@@ -101,7 +101,7 @@ export function externalActionContractForCurrentInstruction(instruction: string 
   // Other providers require both a direct imperative and a named external
   // destination. This intentionally does not treat "the task says to post" or
   // an old approval in memory as authority for a new action.
-  const directExternalAction = /^(?:please\s+)?(?:(?:can|could|will)\s+you\s+)?(?:go\s+ahead(?:\s+and)?\s+)?(?:post|comment|reply|create|update|edit|rewrite|delete|merge|close|reopen|publish|send|deploy|release|upload|share|invite|assign|transition|sync)\b/i;
+  const directExternalAction = /^(?:please\s+)?(?:(?:can|could|will)\s+you\s+)?(?:go\s+ahead(?:\s+and)?\s+)?(?:post|comment|reply|create|update|edit|rewrite|delete|merge|close|reopen|publish|send|deploy|release|promote|upload|share|invite|assign|transition|sync)\b/i;
   // A grant may be phrased separately from the imperative (for example,
   // “you should have the ability to change a PR description now”). It is
   // still scoped to this exact message and is never stored for later turns.
