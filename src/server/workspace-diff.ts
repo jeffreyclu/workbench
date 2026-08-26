@@ -24,6 +24,39 @@ function changedLines(patch: string) {
   }, { additions: 0, deletions: 0 });
 }
 
+/**
+ * `git diff --no-renames` deliberately emits a rename as a removed file plus
+ * an added file. Keep the porcelain metadata aligned with that reviewable
+ * output instead of applying the rename state to only one half of the pair.
+ */
+export function workspaceStatuses(status: string): Map<string, ChangedFileStatus> {
+  const statuses = new Map<string, ChangedFileStatus>();
+  const entries = status.split('\0').filter(Boolean);
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    const code = entry.slice(0, 2);
+    const path = entry.slice(3);
+    const isRenameOrCopy = code.includes('R') || code.includes('C');
+
+    if (isRenameOrCopy) {
+      const originalPath = entries[index + 1];
+      index += 1;
+      if (code.includes('R')) {
+        statuses.set(path, 'added');
+        if (originalPath) statuses.set(originalPath, 'removed');
+      } else {
+        statuses.set(path, 'added');
+      }
+      continue;
+    }
+
+    statuses.set(path, statusFor(code));
+  }
+
+  return statuses;
+}
+
 /** Parse git's unified output into the workspace diff file shape. */
 export function parseWorkspacePatch(patch: string, statuses = new Map<string, ChangedFileStatus>()): WorkspaceDiffFile[] {
   const sections = patch.split(/^diff --git /m).filter(Boolean);
@@ -61,14 +94,13 @@ export async function getWorkspaceDiff(workspacePath: string): Promise<Workspace
     throw new Error(`Could not read local workspace changes. Confirm ${workspacePath} is a Git repository. ${message}`);
   }
 
-  const statuses = new Map<string, ChangedFileStatus>();
   const untracked: string[] = [];
   for (const entry of status.split('\0').filter(Boolean)) {
     const code = entry.slice(0, 2);
     const path = entry.slice(3);
     if (code === '??') untracked.push(path);
-    statuses.set(path, statusFor(code));
   }
+  const statuses = workspaceStatuses(status);
 
   const untrackedPatches = await Promise.all(untracked.map(async (path) => {
     try {

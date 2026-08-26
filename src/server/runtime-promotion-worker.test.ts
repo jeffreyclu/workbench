@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
+import { PROMOTION_QUEUED_MESSAGE } from './promotion-messages.js';
 import { WorkItemRepository } from './repository.js';
 
 type PromoteRuntime = (signal: AbortSignal, onProgress: (body: string) => void) => Promise<string>;
@@ -36,7 +37,7 @@ describe('runtime promotion worker', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(repository.getSharedMessageById(promotion.id)).toEqual(expect.objectContaining({
       status: 'running',
-      body: expect.stringMatching(/queued by the orchestrator/i),
+      body: PROMOTION_QUEUED_MESSAGE,
     }));
     expect(promoteRuntimeMock).not.toHaveBeenCalled();
 
