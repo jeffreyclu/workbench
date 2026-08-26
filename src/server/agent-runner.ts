@@ -9,7 +9,7 @@ import { AUTONOMOUS_MODEL_ALLOWLIST } from './autonomy-governor.js';
 const AUTONOMOUS_MODELS = new Set<string>(AUTONOMOUS_MODEL_ALLOWLIST);
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
 import { agentAccountEnv } from './agent-security.js';
-import { claimWarmProcess, hasWarmProcess, startPoolSweep, warmProcess } from './agent-pool.js';
+import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
 import { estimateModelCost } from './model-pricing.js';
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
@@ -860,7 +860,7 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     // never returned to the pool; a fresh replacement is warmed in the
     // background under the same (agent, cwd, command, args) key so the pool
     // stays populated for the next matching task.
-    const claimed = poolEligible ? claimWarmProcess(agent, cwd, command, args) : null;
+    const claimed = poolEligible ? claimWarmProcess(agent, cwd, command, args, accountProfile) : null;
     const child = claimed ?? spawnFresh();
     // Skip background replenishment under the test runner: it spawns a real
     // extra process, which pre-existing tests asserting exact spawn logs
@@ -868,8 +868,8 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     // agent-pool.test.ts.
     if (poolEligible && !process.env.VITEST) {
       startPoolSweep();
-      if (!hasWarmProcess(agent, cwd, command, args)) {
-        try { warmProcess(agent, cwd, command, args, spawnFresh()); } catch { /* best-effort warm; a fresh spawn still serves the next task */ }
+      if (!hasPooledProcess(agent, cwd, command, args, accountProfile)) {
+        try { warmProcess(agent, cwd, command, args, spawnFresh(), null, accountProfile); } catch { /* best-effort warm; a fresh spawn still serves the next task */ }
       }
     }
     let forceKillTimer: ReturnType<typeof setTimeout> | null = null;

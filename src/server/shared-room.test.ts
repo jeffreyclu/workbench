@@ -1,8 +1,29 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
+import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, warmSharedRoomCodex } from './shared-room.js';
+
+const originalPath = process.env.PATH;
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  resetPoolForTest();
+  process.env.PATH = originalPath;
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for the fake app-server handshake.');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 function message(index: number, body: string): SharedMessage {
   return {
@@ -229,6 +250,35 @@ describe('agentStreamEventForCodexAppServerItem', () => {
     expect(agentStreamEventForCodexAppServerItem('item/completed', {
       type: 'agentMessage', text: 'I updated the route and the test passes.',
     })).toBeNull();
+  });
+});
+
+describe('shared-room Codex warming', () => {
+  it('claims only an app-server that completed the provider initialize handshake', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-codex-app-server-'));
+    temporaryDirectories.push(directory);
+    const log = join(directory, 'app-server.log');
+    const fakeAppServer = [
+      '#!/bin/sh',
+      'IFS= read -r initialize',
+      `printf '%s\\n' \"$initialize\" >> '${log}'`,
+      'sleep 0.05',
+      `printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"serverInfo\":{\"name\":\"fake-codex\"}}}'`,
+      'while IFS= read -r request; do :; done',
+    ].join('\n');
+    writeFileSync(join(directory, 'codex'), fakeAppServer);
+    chmodSync(join(directory, 'codex'), 0o755);
+    process.env.PATH = directory;
+
+    warmSharedRoomCodex(directory);
+
+    expect(hasWarmProcess('codex', directory, 'codex', ['app-server', '--stdio'], 'default')).toBe(false);
+    await waitFor(() => hasWarmProcess('codex', directory, 'codex', ['app-server', '--stdio'], 'default'));
+    expect(JSON.parse(readFileSync(log, 'utf8'))).toMatchObject({ id: 1, method: 'initialize' });
+
+    const claimed = claimWarmProcess('codex', directory, 'codex', ['app-server', '--stdio'], 'default');
+    expect(claimed).not.toBeNull();
+    claimed?.kill();
   });
 });
 

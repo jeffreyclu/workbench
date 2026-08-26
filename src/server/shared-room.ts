@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
@@ -8,6 +8,8 @@ import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
 import { humanizeRunOutputBlocks } from '../shared/run-output.js';
+import { agentAccountEnv } from './agent-security.js';
+import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
 
 const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
@@ -95,10 +97,71 @@ export function codexThreadBootstrapRequest(cwd: string, resumeThreadId?: string
     : { method: 'thread/start', params: { cwd, ephemeral: false, model: null, approvalPolicy: 'never' } };
 }
 
+const CODEX_APP_SERVER_ARGS = ['app-server', '--stdio'];
+
+function codexAppServerCommand(): string {
+  return process.env.CODEX_BIN?.trim() || 'codex';
+}
+
+function spawnCodexAppServer(cwd: string, accountProfile: string) {
+  return spawn(codexAppServerCommand(), CODEX_APP_SERVER_ARGS, {
+    cwd, env: agentAccountEnv('codex', accountProfile), stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
+  });
+}
+
+/** Completes the provider handshake before a pooled app-server can be claimed. */
+export function initializeCodexAppServer(child: ChildProcessWithoutNullStreams): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let buffered = ''; let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      child.stdout.off('data', onData);
+      child.off('error', onError);
+      child.off('exit', onExit);
+      child.stdin.off('error', onError);
+      if (error) reject(error); else resolve();
+    };
+    const onError = (error: Error) => finish(error);
+    const onExit = () => finish(new Error('Codex app-server exited before initialization completed.'));
+    const onData = (chunk: Buffer) => {
+      buffered += chunk.toString();
+      const lines = buffered.split('\n'); buffered = lines.pop() ?? '';
+      for (const line of lines.filter(Boolean)) {
+        try {
+          const event = JSON.parse(line) as { id?: number; result?: unknown; error?: { message?: string } };
+          if (event.id === 1) finish(event.error ? new Error(event.error.message ?? 'Codex app-server initialization failed.') : event.result ? undefined : new Error('Codex app-server returned no initialization result.'));
+        } catch { /* wait for a complete protocol record */ }
+      }
+    };
+    const timeout = setTimeout(() => finish(new Error('Timed out initializing Codex app-server.')), 15_000);
+    timeout.unref();
+    child.stdout.on('data', onData);
+    child.on('error', onError);
+    child.once('exit', onExit);
+    child.stdin.on('error', onError);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'workbench', title: 'Workbench', version: '0.1.0' }, capabilities: { experimentalApi: true, requestAttestation: false } } })}\n`);
+  });
+}
+
+/** Starts one provider-ready idle app-server per room workspace and account. */
+export function warmSharedRoomCodex(cwd: string, accountProfile = DEFAULT_ACCOUNT_PROFILE): void {
+  const command = codexAppServerCommand();
+  if (hasPooledProcess('codex', cwd, command, CODEX_APP_SERVER_ARGS, accountProfile)) return;
+  startPoolSweep();
+  const child = spawnCodexAppServer(cwd, accountProfile);
+  warmProcess('codex', cwd, command, CODEX_APP_SERVER_ARGS, child, initializeCodexAppServer(child), accountProfile);
+}
+
 /** Codex's app-server is the provider protocol that supports turn/steer. */
-function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, resumeThreadId?: string | null): Promise<{ output: string; threadId: string }> {
+function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE): Promise<{ output: string; threadId: string }> {
   return new Promise((resolveOutput, reject) => {
-    const child = spawn('codex', ['app-server', '--stdio'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+    const command = codexAppServerCommand();
+    const claimed = claimWarmProcess('codex', cwd, command, CODEX_APP_SERVER_ARGS, accountProfile);
+    const child = claimed ?? spawnCodexAppServer(cwd, accountProfile);
+    const initialized = Boolean(claimed);
+    if (!process.env.VITEST) warmSharedRoomCodex(cwd, accountProfile);
     let buffered = ''; let output = ''; let liveOutput = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
     const pendingSteers = new Map<number, (accepted: boolean) => void>();
     let steerCount = 0;
@@ -160,7 +223,7 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
       buffered += chunk.toString(); const lines = buffered.split('\n'); buffered = lines.pop() ?? '';
       for (const line of lines.filter(Boolean)) {
         let event: any; try { event = JSON.parse(line); } catch { continue; }
-        if (event.id === 1 && event.result) {
+        if (!initialized && event.id === 1 && event.result) {
           const bootstrap = codexThreadBootstrapRequest(cwd, resumeThreadId);
           request(bootstrap.method, bootstrap.params);
         }
@@ -229,7 +292,7 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
       }
     });
     child.on('close', (code) => { if (!settled) fail(signal.aborted ? new Error('Agent run canceled.') : new Error(`Codex app-server exited with code ${code}.`)); });
-    request('initialize', { clientInfo: { name: 'workbench', title: 'Workbench', version: '0.1.0' }, capabilities: { experimentalApi: true, requestAttestation: false } });
+    if (!initialized) request('initialize', { clientInfo: { name: 'workbench', title: 'Workbench', version: '0.1.0' }, capabilities: { experimentalApi: true, requestAttestation: false } });
   });
 }
 
@@ -616,7 +679,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
         // Keep that explicitly promoted human message queued, then deliver it
         // as soon as the same live session exposes turn/steer.
         void deliverPendingSharedInterjections(repository, messageId);
-      }, (event) => repository.addAgentStreamEvents(messageId, runId ?? null, [event]), linkedConversation?.codexThreadId)
+      }, (event) => repository.addAgentStreamEvents(messageId, runId ?? null, [event]), linkedConversation?.codexThreadId, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE)
         .then(({ output, threadId }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage: { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null }, fallbackFrom: null, fallbackReason: null }))
       : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       if (controller.signal.aborted) return;

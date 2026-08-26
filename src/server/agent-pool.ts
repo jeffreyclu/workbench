@@ -20,6 +20,7 @@ export interface PooledProcess {
   args: string[];
   child: ChildProcessWithoutNullStreams;
   createdAt: number;
+  ready: boolean;
 }
 
 const IDLE_TTL_MS = 5 * 60_000;
@@ -27,8 +28,8 @@ const MAX_IDLE_PER_KEY = 1;
 
 const idleByKey = new Map<string, PooledProcess[]>();
 
-export function poolKey(agent: string, cwd: string): string {
-  return `${agent}:${cwd}`;
+export function poolKey(agent: string, cwd: string, identity = ''): string {
+  return `${agent}:${cwd}:${identity}`;
 }
 
 function isAlive(entry: PooledProcess): boolean {
@@ -40,33 +41,48 @@ function argsMatch(a: string[], b: string[]): boolean {
 }
 
 /** Takes a matching idle process out of the pool, or returns null if none is warm and ready. */
-export function claimWarmProcess(agent: string, cwd: string, command: string, args: string[]): ChildProcessWithoutNullStreams | null {
-  const key = poolKey(agent, cwd);
+export function claimWarmProcess(agent: string, cwd: string, command: string, args: string[], identity = ''): ChildProcessWithoutNullStreams | null {
+  const key = poolKey(agent, cwd, identity);
   const bucket = idleByKey.get(key);
   if (!bucket?.length) return null;
-  const index = bucket.findIndex((entry) => isAlive(entry) && entry.command === command && argsMatch(entry.args, args));
+  const index = bucket.findIndex((entry) => entry.ready && isAlive(entry) && entry.command === command && argsMatch(entry.args, args));
   if (index === -1) return null;
   const [entry] = bucket.splice(index, 1);
   return entry.child;
 }
 
 /** True when a matching warm process is already idle and waiting to be claimed. */
-export function hasWarmProcess(agent: string, cwd: string, command: string, args: string[]): boolean {
-  const bucket = idleByKey.get(poolKey(agent, cwd));
+export function hasWarmProcess(agent: string, cwd: string, command: string, args: string[], identity = ''): boolean {
+  const bucket = idleByKey.get(poolKey(agent, cwd, identity));
+  return Boolean(bucket?.some((entry) => entry.ready && isAlive(entry) && entry.command === command && argsMatch(entry.args, args)));
+}
+
+/** True when a matching process is either ready or still completing its provider handshake. */
+export function hasPooledProcess(agent: string, cwd: string, command: string, args: string[], identity = ''): boolean {
+  const bucket = idleByKey.get(poolKey(agent, cwd, identity));
   return Boolean(bucket?.some((entry) => isAlive(entry) && entry.command === command && argsMatch(entry.args, args)));
 }
 
 /** Adds a pre-spawned, not-yet-claimed process to the pool for its (agent, cwd) key. */
-export function warmProcess(agent: string, cwd: string, command: string, args: string[], child: ChildProcessWithoutNullStreams): void {
-  const key = poolKey(agent, cwd);
+export function warmProcess(agent: string, cwd: string, command: string, args: string[], child: ChildProcessWithoutNullStreams, ready: Promise<void> | null = null, identity = ''): void {
+  const key = poolKey(agent, cwd, identity);
   const bucket = idleByKey.get(key) ?? [];
   sweepBucket(bucket);
   if (bucket.length >= MAX_IDLE_PER_KEY) {
     try { child.kill('SIGTERM'); } catch { /* already exiting */ }
     return;
   }
-  bucket.push({ command, args, child, createdAt: Date.now() });
+  const entry: PooledProcess = { command, args, child, createdAt: Date.now(), ready: !ready };
+  bucket.push(entry);
   idleByKey.set(key, bucket);
+  if (ready) {
+    void ready.then(() => { entry.ready = true; }).catch(() => {
+      const index = bucket.indexOf(entry);
+      if (index >= 0) bucket.splice(index, 1);
+      try { child.kill('SIGTERM'); } catch { /* already exiting */ }
+      if (bucket.length === 0) idleByKey.delete(key);
+    });
+  }
 }
 
 function sweepBucket(bucket: PooledProcess[]): void {
@@ -86,8 +102,8 @@ export function sweepIdlePool(): void {
   }
 }
 
-export function idlePoolSizeForTest(agent: string, cwd: string): number {
-  return idleByKey.get(poolKey(agent, cwd))?.length ?? 0;
+export function idlePoolSizeForTest(agent: string, cwd: string, identity = ''): number {
+  return idleByKey.get(poolKey(agent, cwd, identity))?.length ?? 0;
 }
 
 export function resetPoolForTest(): void {
