@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { getWorkspaceDiff, parseWorkspacePatch, workspaceStatuses } from './workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceDiff, parseWorkspacePatch, workspaceStatuses } from './workspace-diff.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -61,5 +61,23 @@ describe('workspace diff parsing', () => {
     expect(diff.changedFiles).toBe(1);
     expect(diff.files[0]).toEqual(expect.objectContaining({ path: 'large.ts', status: 'modified' }));
     expect(diff.files[0].patch?.length).toBeGreaterThan(8 * 1024 * 1024);
+  });
+
+  it('stages, commits, and pushes the current branch when the workspace has an origin', async () => {
+    const workspace = temporaryGitWorkspace();
+    const remote = mkdtempSync(join(tmpdir(), 'workbench-workspace-remote-'));
+    temporaryDirectories.push(remote);
+    execFileSync('git', ['init', '--bare', '--quiet'], { cwd: remote });
+    writeFileSync(join(workspace, 'file.ts'), 'export const version = 1;\n');
+    execFileSync('git', ['add', 'file.ts'], { cwd: workspace });
+    execFileSync('git', ['commit', '--quiet', '-m', 'initial'], { cwd: workspace });
+    execFileSync('git', ['remote', 'add', 'origin', remote], { cwd: workspace });
+    execFileSync('git', ['push', '--quiet', '--set-upstream', 'origin', 'HEAD'], { cwd: workspace });
+    writeFileSync(join(workspace, 'file.ts'), 'export const version = 2;\n');
+
+    const revision = (await getWorkspaceDiff(workspace)).revision;
+    await expect(commitAndPushWorkspace(workspace, 'chore: publish workspace', revision)).resolves.toEqual({ committed: true, pushed: true, commit: expect.any(String) });
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' })).toBe('');
+    expect(execFileSync('git', ['rev-list', '--count', '@{upstream}..HEAD'], { cwd: workspace, encoding: 'utf8' }).trim()).toBe('0');
   });
 });

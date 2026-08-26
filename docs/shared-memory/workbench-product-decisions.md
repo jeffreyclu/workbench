@@ -17,6 +17,18 @@ one local workspace or linked GitHub pull-request diff contains changed files.
 Leave it disabled when both are empty or unavailable; it must not open an empty
 review surface.
 
+### Changes can commit and push the reviewed workspace
+
+*Decision from Jeffrey, 2026-08-26.* The local-workspace Changes pane includes
+one **Commit & push** control. It stages the reviewed workspace, commits using
+the task title, then pushes the current branch to `origin`. Disable it while an
+agent is running, with no local changes or commits to publish, from detached
+HEAD, or without an `origin` remote. Show an explicit pending state and any
+Git failure. If a commit succeeds but the push fails, the control becomes a
+retry **Push N commits** action. A publish request must carry the displayed
+diff revision; reject it when the workspace changed until the reviewer refreshes
+the snapshot.
+
 ### Diff review uses one compact layout on desktop and phone
 
 *Decision from Jeffrey, 2026-08-25.* Local workspace and GitHub pull-request

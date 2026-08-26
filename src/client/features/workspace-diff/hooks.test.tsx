@@ -11,7 +11,7 @@ afterEach(() => {
 describe('useWorkspaceDiff', () => {
   it('does not refetch a running workspace while the diff is being reviewed', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      diff: { workspacePath: '/tmp/workbench', branch: 'review', changedFiles: 0, additions: 0, deletions: 0, files: [] },
+      diff: { workspacePath: '/tmp/workbench', branch: 'review', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] },
     }), { headers: { 'Content-Type': 'application/json' } }));
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

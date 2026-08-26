@@ -28,7 +28,7 @@ import { resolveWorkingDirectory } from '../agent-runner.js';
 import { summarizeWorkItemChanges } from '../activity-log.js';
 import { resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { generateFastAiTaskDraft } from '../fast-task-draft-ai.js';
-import { getWorkspaceDiff, getWorkspaceDiffRevision } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision } from '../workspace-diff.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
 
@@ -57,6 +57,15 @@ export function createWorkItemRouter({ repository }: RouteContext) {
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
       const revision = await getWorkspaceDiffRevision(resolveWorkingDirectory(item));
       response.json({ changed: revision !== request.query.revision });
+    } catch (error) { next(error); }
+  });
+  router.post('/api/work-items/:id/workspace-diff/commit-and-push', async (request, response, next) => {
+    try {
+      const item = repository.get(request.params.id);
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      const { revision } = z.object({ revision: z.string().trim().min(1) }).parse(request.body);
+      const result = await commitAndPushWorkspace(resolveWorkingDirectory(item), `chore: ${item.title}`, revision);
+      response.json({ result });
     } catch (error) { next(error); }
   });
   router.get('/api/work-items', (request, response) => {

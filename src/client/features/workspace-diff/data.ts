@@ -8,4 +8,5 @@ export const workspaceDiffQueryKeys = {
 export const workspaceDiffData = {
   get: (workItemId: string) => api.getWorkspaceDiff(workItemId),
   getStatus: (workItemId: string, revision: string) => api.getWorkspaceDiffStatus(workItemId, revision),
+  commitAndPush: (workItemId: string, revision: string) => api.commitAndPushWorkspace(workItemId, revision),
 };

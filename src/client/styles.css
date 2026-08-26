@@ -348,6 +348,11 @@ nav { display: grid; gap: 3px; }
 .workspace-diff-refresh:hover:not(:disabled) { color: var(--acid); border-color: #596234; }.workspace-diff-refresh:disabled { opacity: .65; cursor: wait; }
 .workspace-diff-refresh-pending { color: #1d1305; border-color: #f4a340; background: #f4a340; box-shadow: 0 0 0 1px #f4a34033; }
 .workspace-diff-refresh-pending:hover:not(:disabled) { color: #1d1305; border-color: #ffc16e; background: #ffc16e; }
+.workspace-diff-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.workspace-diff-publish { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 0 9px; color: #171713; border: 1px solid #c6f432; border-radius: 6px; background: #c6f432; cursor: pointer; font: 700 10px 'DM Mono'; }
+.workspace-diff-publish:hover:not(:disabled) { border-color: #d9ff5d; background: #d9ff5d; }.workspace-diff-publish:disabled { color: #85847d; border-color: #353530; background: transparent; cursor: not-allowed; }
+.workspace-diff-publish-error { margin: -5px 0 12px; color: #e1a68f; font-size: 11px; line-height: 1.4; }
+.workspace-diff-publish-success { margin: -5px 0 12px; color: #8bbd75; font-size: 11px; line-height: 1.4; }
 .workspace-diff-layout, .github-diff-layout { display: grid; grid-template-columns: minmax(0, 1fr); overflow: hidden; border: 1px solid #302f2b; border-radius: 8px; background: #10100f; }
 .workspace-diff nav, .github-diff nav { min-width: 0; border-bottom: 1px solid #302f2b; background: #151513; }
 .workspace-diff nav > span { display: block; padding: 10px 11px; color: #85847d; border-bottom: 1px solid #302f2b; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
@@ -364,9 +369,11 @@ nav { display: grid; gap: 3px; }
 .diff-line { display: grid; grid-template-columns: 42px 42px minmax(0, 1fr); min-height: 18px; color: #c9c8c1; white-space: pre; }
 .diff-line > span { padding: 0 8px; }
 .diff-line > span:nth-child(-n + 2) { color: #77766f; text-align: right; user-select: none; border-right: 1px solid #242421; }
-.diff-line.addition { color: #cde4bc; background: #1d3021; }.diff-line.addition > span:nth-child(-n + 2) { background: #19291d; }
-.diff-line.deletion { color: #f0c1bc; background: #3a211e; }.diff-line.deletion > span:nth-child(-n + 2) { background: #321d1a; }
+.diff-line.addition { color: #c3d8f0; background: #182636; }.diff-line.addition > span:nth-child(-n + 2) { background: #142031; }
+.diff-line.deletion { color: #f0dcb0; background: #33270f; }.diff-line.deletion > span:nth-child(-n + 2) { background: #2b200c; }
 .diff-line.header { color: #aaa9a2; background: #20201d; }.diff-line.header > span:nth-child(-n + 2) { background: #1c1c19; }
+.diff-block { margin: 4px 0; }
+.diff-confidence-bubble { display: inline-flex; align-items: center; justify-content: center; min-width: 21px; height: 15px; margin: 1px 0 1px 84px; padding: 0 4px; border: 1px solid; border-radius: 999px; background: #10100f; font: 9px 'DM Mono'; line-height: 1; }
 .workspace-diff-error { padding-bottom: 2px; }.workspace-diff-error strong { color: #e1a68f; }.workspace-diff-error p { margin: 5px 0 11px; }
 .github-diff { margin-top: 35px; padding-top: 22px; border-top: 1px solid #272724; }
 .github-diff > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
@@ -391,13 +398,14 @@ nav { display: grid; gap: 3px; }
 .github-diff-skeleton, .workspace-diff-skeleton { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 12px; border: 1px solid #302f2b; border-radius: 8px; }
 @media (max-width: 640px) {
   .workspace-diff > header, .github-diff > header { flex-wrap: wrap; gap: 10px; }
-  .workspace-diff > header > .workspace-diff-refresh, .github-diff > header > a { min-height: 44px; }
+  .workspace-diff > header > .workspace-diff-actions button, .github-diff > header > a { min-height: 44px; }
   .diff-file-list > span { padding-block: 8px; }
   .diff-file-list button { flex-basis: min(220px, 68vw); }
   .workspace-diff-file, .github-diff-file { min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }
   .workspace-diff-file > header, .github-diff-file > header { min-height: 44px; padding-inline: 10px; }
   .workspace-diff-file pre, .github-diff-file pre { font-size: 10px; }
   .diff-line { grid-template-columns: 34px 34px minmax(0, 1fr); }
+  .diff-confidence-bubble { margin-left: 68px; }
   .diff-line > span { padding-inline: 6px; }
 }
 .task-collapsible { border-top: 1px solid #272724; }

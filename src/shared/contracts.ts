@@ -319,6 +319,21 @@ export interface WorkspaceDiff {
   changedFiles: number;
   additions: number;
   deletions: number;
+  publish: WorkspacePublishStatus;
+}
+
+export interface WorkspacePublishStatus {
+  branch: string | null;
+  hasOrigin: boolean;
+  ahead: number;
+  hasChanges: boolean;
+  reason: string | null;
+}
+
+export interface WorkspacePublishResult {
+  committed: boolean;
+  pushed: boolean;
+  commit: string | null;
 }
 
 export interface GitHubPullRequestFile {

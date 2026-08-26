@@ -1,7 +1,7 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
-import type { WorkspaceDiff, WorkspaceDiffFile } from '../shared/contracts.js';
+import type { WorkspaceDiff, WorkspaceDiffFile, WorkspacePublishResult, WorkspacePublishStatus } from '../shared/contracts.js';
 
 const execFile = promisify(execFileCallback);
 // Workspace diffs in the Writer monorepo routinely exceed Node's 1 MiB
@@ -84,6 +84,27 @@ async function git(workspacePath: string, args: string[]) {
   return execFile('git', args, { cwd: workspacePath, maxBuffer: MAX_OUTPUT_BYTES, timeout: 10_000, encoding: 'utf8' });
 }
 
+async function gitOutput(workspacePath: string, args: string[]) {
+  return (await git(workspacePath, args)).stdout.trim();
+}
+
+async function publishStatus(workspacePath: string, status: string, branch: string): Promise<WorkspacePublishStatus> {
+  const hasChanges = status.split('\0').some(Boolean);
+  if (!branch) return { branch: null, hasOrigin: false, ahead: 0, hasChanges, reason: 'Cannot publish from detached HEAD.' };
+
+  let hasOrigin = false;
+  try {
+    await gitOutput(workspacePath, ['remote', 'get-url', 'origin']);
+    hasOrigin = true;
+  } catch { /* A local-only workspace cannot push. */ }
+  if (!hasOrigin) return { branch, hasOrigin: false, ahead: 0, hasChanges, reason: 'This workspace has no origin remote.' };
+
+  let ahead = 0;
+  try { ahead = Number(await gitOutput(workspacePath, ['rev-list', '--count', '@{upstream}..HEAD'])) || 0; }
+  catch { /* A new branch has no upstream yet; pushing HEAD still establishes it. */ }
+  return { branch, hasOrigin: true, ahead, hasChanges, reason: null };
+}
+
 function workspaceDiffRevision(...parts: string[]) {
   return createHash('sha256').update(parts.join('\0')).digest('hex');
 }
@@ -124,6 +145,7 @@ export async function getWorkspaceDiff(workspacePath: string): Promise<Workspace
   }));
   const files = parseWorkspacePatch(`${patch}${untrackedPatches.join('')}`, statuses);
   const totals = files.reduce((counts, file) => ({ additions: counts.additions + file.additions, deletions: counts.deletions + file.deletions }), { additions: 0, deletions: 0 });
+  const publish = await publishStatus(workspacePath, status, branch);
   return {
     workspacePath,
     branch: branch || 'detached HEAD',
@@ -131,6 +153,7 @@ export async function getWorkspaceDiff(workspacePath: string): Promise<Workspace
     files,
     changedFiles: files.length,
     ...totals,
+    publish,
   };
 }
 
@@ -140,4 +163,35 @@ export async function getWorkspaceDiff(workspacePath: string): Promise<Workspace
  */
 export async function getWorkspaceDiffRevision(workspacePath: string) {
   return (await getWorkspaceDiff(workspacePath)).revision;
+}
+
+function gitFailure(error: unknown) {
+  if (typeof error !== 'object' || error === null) return 'Git command failed.';
+  const result = error as { stderr?: unknown; stdout?: unknown; message?: unknown };
+  return [result.stderr, result.stdout, result.message].map((part) => String(part ?? '').trim()).find(Boolean) ?? 'Git command failed.';
+}
+
+/** Stage the reviewed workspace, create one commit, then publish the current branch. */
+export async function commitAndPushWorkspace(workspacePath: string, message: string, expectedRevision: string): Promise<WorkspacePublishResult> {
+  const before = await getWorkspaceDiff(workspacePath);
+  if (before.revision !== expectedRevision) throw new Error('Workspace changed since this diff was opened. Refresh changes before committing.');
+  if (before.publish.reason) throw new Error(before.publish.reason);
+
+  let committed = false;
+  let commit: string | null = null;
+  try {
+    if (before.publish.hasChanges) {
+      await git(workspacePath, ['add', '--all']);
+      await git(workspacePath, ['commit', '-m', message]);
+      committed = true;
+      commit = await gitOutput(workspacePath, ['rev-parse', '--short', 'HEAD']);
+    }
+    const afterCommit = await getWorkspaceDiff(workspacePath);
+    if (afterCommit.publish.ahead === 0) throw new Error('There are no commits to push.');
+    await git(workspacePath, ['push', '--set-upstream', 'origin', 'HEAD']);
+    return { committed, pushed: true, commit };
+  } catch (error) {
+    const prefix = committed ? 'Commit created, but push failed.' : 'Could not commit and push.';
+    throw new Error(`${prefix} ${gitFailure(error)}`);
+  }
 }

@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { workspaceDiffData, workspaceDiffQueryKeys } from './data.js';
 
 export function useWorkspaceDiff(workItemId: string | null) {
@@ -21,4 +21,14 @@ export function useWorkspaceDiffChanges(workItemId: string, revision: string | u
     select: ({ changed }) => changed,
   });
   return status.data ?? false;
+}
+
+export function useCommitAndPushWorkspace(workItemId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (revision: string) => workspaceDiffData.commitAndPush(workItemId, revision),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.detail(workItemId) });
+    },
+  });
 }
