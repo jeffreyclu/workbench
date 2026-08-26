@@ -33,17 +33,17 @@ describe('assessDiffBlocks caching', () => {
     vi.doMock('node:child_process', () => ({
       spawn: (..._args: unknown[]) => {
         spawnCalls += 1;
-        const emitter = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: { end: (prompt: string) => void } };
+        const emitter = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: EventEmitter & { end: (prompt: string) => void } };
         emitter.stdout = new EventEmitter();
         emitter.stderr = new EventEmitter();
-        emitter.stdin = { end: (prompt: string) => {
+        emitter.stdin = Object.assign(new EventEmitter(), { end: (prompt: string) => {
           queueMicrotask(() => {
             const blocks = JSON.parse(prompt.slice(prompt.indexOf('Blocks:\n') + 'Blocks:\n'.length)) as Array<{ key: string }>;
             const assessments = Object.fromEntries(blocks.map((block) => [block.key, { risk: 70, reasoning: 'Looks fine.' }]));
             emitter.stdout.emit('data', Buffer.from(JSON.stringify({ assessments })));
             emitter.emit('close', 0);
           });
-        } };
+        } });
         return emitter;
       },
     }));
@@ -66,17 +66,17 @@ describe('assessDiffBlocks caching', () => {
     const mockSpawn = () => ({
       spawn: (..._args: unknown[]) => {
         spawnCalls += 1;
-        const emitter = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: { end: (prompt: string) => void } };
+        const emitter = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: EventEmitter & { end: (prompt: string) => void } };
         emitter.stdout = new EventEmitter();
         emitter.stderr = new EventEmitter();
-        emitter.stdin = { end: (prompt: string) => {
+        emitter.stdin = Object.assign(new EventEmitter(), { end: (prompt: string) => {
           queueMicrotask(() => {
             const blocks = JSON.parse(prompt.slice(prompt.indexOf('Blocks:\n') + 'Blocks:\n'.length)) as Array<{ key: string }>;
             const assessments = Object.fromEntries(blocks.map((block) => [block.key, { risk: 42, reasoning: 'Persisted.' }]));
             emitter.stdout.emit('data', Buffer.from(JSON.stringify({ assessments })));
             emitter.emit('close', 0);
           });
-        } };
+        } });
         return emitter;
       },
     });

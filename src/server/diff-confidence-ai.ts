@@ -65,16 +65,27 @@ function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, Di
   const prompt = `${SYSTEM_PROMPT}\n\nBlocks:\n${JSON.stringify(blocks)}`;
   return new Promise((resolve, reject) => {
     const child = spawn('claude', ['-p', '--model', 'haiku', '--effort', 'low', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '', '--no-session-persistence', '--no-chrome', '--output-format', 'json', '--system-prompt', SYSTEM_PROMPT], { cwd: '/tmp', env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = ''; let stderr = '';
+    let stdout = ''; let stderr = ''; let settled = false;
     const timeout = setTimeout(() => child.kill('SIGTERM'), 30_000);
+    // Pipes to the subprocess can drop mid-read (ECONNRESET/EPIPE); without an
+    // 'error' listener on each stream, Node treats that as an uncaught
+    // exception and crashes the whole server process instead of just this request.
+    const settle = (error: Error | null, value?: Record<string, DiffConfidenceAssessment>) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) reject(error); else resolve(value!);
+    };
+    child.stdin.on('error', (error) => settle(error instanceof Error ? error : new Error(String(error))));
+    child.stdout.on('error', (error) => settle(error instanceof Error ? error : new Error(String(error))));
+    child.stderr.on('error', (error) => settle(error instanceof Error ? error : new Error(String(error))));
     child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.once('error', reject);
+    child.once('error', (error) => settle(error));
     child.once('close', (code) => {
-      clearTimeout(timeout);
-      if (code !== 0) { reject(new Error(stderr.trim() || 'AI diff assessment failed.')); return; }
-      try { resolve(parseDiffConfidenceAssessment(stdout, keys)); }
-      catch (error) { reject(error instanceof Error ? error : new Error(String(error))); }
+      if (code !== 0) { settle(new Error(stderr.trim() || `AI diff assessment failed (exit ${code}).`)); return; }
+      try { settle(null, parseDiffConfidenceAssessment(stdout, keys)); }
+      catch (error) { settle(error instanceof Error ? error : new Error(String(error))); }
     });
     child.stdin.end(prompt);
   });
