@@ -33,6 +33,16 @@ describe('shared message layout', () => {
     expect(rule).toContain('overflow-wrap: anywhere');
     expect(rule).toContain('word-break: break-word');
   });
+
+  it('stacks completed interjection segments vertically instead of shrinking them into columns', () => {
+    const rowRule = styles.match(/^\.thread-segmented-message\s*\{[^}]*\}/m)?.[0] ?? '';
+    const segmentRule = styles.match(/^\.shared-message-segment-group\s*\{[^}]*\}/m)?.[0] ?? '';
+
+    expect(rowRule).toContain('flex-direction: column');
+    expect(segmentRule).toContain('flex-direction: column');
+    expect(segmentRule).toContain('width: 100%');
+    expect(segmentRule).toContain('min-width: 0');
+  });
 });
 
 describe('conversation view controls', () => {

@@ -776,6 +776,8 @@ nav { display: grid; gap: 3px; }
 .show-more-history-button:hover, .show-more-activity-button:hover { color: #d4d3cc; border-color: #3a3a35; }
 .thread-virtual-row { position: absolute; top: 0; left: 0; display: flex; width: 100%; padding-bottom: 10px; }
 .thread-live-flow .thread-virtual-row { position: relative; top: auto; left: auto; transform: none; }
+.thread-segmented-message { flex-direction: column; align-items: stretch; gap: 10px; }
+.shared-message-segment-group { display: flex; flex-direction: column; align-items: stretch; gap: 10px; width: 100%; min-width: 0; }
 .thread-virtual-row .shared-message.shared-jeffrey { margin-left: auto; }
 .thread-virtual-row.reply-group { flex-direction: column; align-items: stretch; gap: 6px; }
 .reply-group-header { display: flex; align-items: center; gap: 6px; padding-left: 2px; color: #8f8e86; font: 9px 'DM Mono'; text-transform: uppercase; letter-spacing: .06em; }

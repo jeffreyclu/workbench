@@ -1208,7 +1208,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               </>);
 
               if (splitIntoBubbles && segments) {
-                return <div key={message.id} className={`thread-virtual-row${inGroup ? ' reply-group-message' : ''}`}>
+                return <div key={message.id} className={`thread-virtual-row thread-segmented-message${inGroup ? ' reply-group-message' : ''}`}>
                   {segments.map((segment, index) => {
                     const isLast = index === segments.length - 1;
                     return <div key={`${message.id}-segment-${index}`} className="shared-message-segment-group">
