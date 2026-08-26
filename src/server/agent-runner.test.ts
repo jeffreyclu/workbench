@@ -80,6 +80,7 @@ describe('classifyExecution', () => {
     const codex = commandFor('codex', '/tmp/project', 'economy').args;
     const claude = commandFor('claude', '/tmp/project', 'economy').args;
     expect(codex).toEqual(expect.arrayContaining(['--ignore-user-config', '--sandbox', 'workspace-write']));
+    expect(codex).toContain('mcp_servers.workbench.url="http://localhost:5180/mcp"');
     expect(codex).not.toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(claude).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--no-chrome', '--disallowedTools', 'Task,WebFetch,WebSearch']));
     expect(claude).not.toContain('--safe-mode');

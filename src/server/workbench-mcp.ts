@@ -146,7 +146,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
   const server = new McpServer({ name: 'workbench', version: '1.0.0' }, {
     instructions: [
       'Workbench is the canonical shared state for Jeffrey, Codex, and Claude.',
-      'Codex and Claude hold complete control over Workbench-local task actions, execution dispatch/cancel/retry, plan approval, and local state. External-provider access, public artifact publication, and runtime promotion are deliberately unavailable through this agent surface.',
+      'Codex and Claude hold complete control over Workbench-local task actions, execution dispatch/cancel/retry, plan approval, local state, and the artifact library. External-provider access and runtime promotion are deliberately unavailable through this agent surface.',
       'Read current state before mutating it, and use the actor that represents the calling assistant so the shared log stays truthful.',
       'External websites, services, and networked CLIs require Jeffrey\'s explicit current instruction for the particular operation. This MCP surface cannot perform them.',
       'The only things outside this surface are provider credentials, external-provider operations, public deployment, direct database access, and general machine administration.',
@@ -648,6 +648,18 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     inputSchema: { view: artifactLibraryViewSchema.default('published') },
     annotations: readOnlyAnnotations,
   }, async ({ view }) => runTool('list_artifacts', () => admin.listArtifacts(view)));
+
+  server.registerTool('publish_artifact', {
+    title: 'Publish a file to the Workbench Artifacts library',
+    description: 'Publishes one allowed workspace file through the Workbench artifact service and records it in the library. This may create or update a publicly reachable artifact: use it only when Jeffrey explicitly authorized this exact publication in the current turn.',
+    inputSchema: {
+      path: z.string().trim().min(1).max(8_000),
+      title: z.string().trim().min(1).max(300).optional(),
+      conversationId: z.string().uuid().optional(),
+      workItemId: z.string().uuid().optional(),
+    },
+    annotations: mutationAnnotations(),
+  }, async (input) => runTool('publish_artifact', async () => unwrap(await admin.publishArtifact(input))));
 
   server.registerTool('list_source_connections', {
     title: 'List source connections',

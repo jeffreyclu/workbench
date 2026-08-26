@@ -276,6 +276,8 @@ Before acting, name the relevant decision, handoff, or blocker from the shared b
 
 Full activity memory (shared, read-only) is searchable when prior work may matter: curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=100'. Do not claim history you did not retrieve.
 
+For an approved artifact publication, use the Workbench MCP \`publish_artifact\` tool; do not curl the Workbench UI. Publishing remains limited to a supervisor-issued capability for this one turn.
+
 Durable memory is shared, never per-agent: read docs/shared-memory.md's index, open only relevant topic file(s), and append anything durable there in the same turn.
 
 Emit brief progress updates before/after meaningful steps — what you're checking, why, what you learned, what's next — as concise decisions/summaries, not chain-of-thought.
@@ -590,7 +592,10 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
     return {
       command: 'codex',
       // The task workspace picks a working directory; it is not a filesystem boundary.
-      args: ['exec', '--ephemeral', '--ignore-user-config', '--sandbox', 'workspace-write', '--skip-git-repo-check', '--json', '-c', `model_reasoning_effort="${effort}"`, '--model', model, '-C', cwd, '-'],
+      // --ignore-user-config excludes every personal MCP server. Add back only
+      // Workbench's loopback-local MCP surface so Codex does not try to curl
+      // the host UI from inside its command sandbox.
+      args: ['exec', '--ephemeral', '--ignore-user-config', '--sandbox', 'workspace-write', '--skip-git-repo-check', '--json', '-c', `model_reasoning_effort="${effort}"`, '-c', 'mcp_servers.workbench.url="http://localhost:5180/mcp"', '--model', model, '-C', cwd, '-'],
     };
   }
   const model = modelOverride ?? modelFor(agent, profile);
