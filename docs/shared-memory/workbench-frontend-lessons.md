@@ -678,3 +678,22 @@ pill or ellipsis: on a phone it is indistinguishable from a broken confidence
 bubble. Use a readable, visibly distinct `AI scoring` pending pill, then
 replace it with the returned `n/100` score. Do not manufacture a provisional
 number just to avoid the loading state.
+
+### Session-feedback ("How did we do?") must only fire on the two explicit completion actions
+
+*Confirmed 2026-08-26.* Jeffrey's rule: the feedback modal may appear only
+when a linked task is explicitly marked complete (`completeLinkedTask` /
+task-view `lifecycle.mutate('complete')`), or an unlinked conversation is
+explicitly archived (`archiveConversation`). An earlier fix for "modal shows
+after dual-agent synthesis" patched a symptom by adding a
+`completionIsSynthesized` guard to a `useEffect` that auto-opened the modal
+whenever a conversation's derived `state` reached `'finished'` — but that
+effect was wrong at the root: reaching a derived "finished" state (last
+message completed) is not the same as the user completing or archiving
+anything, so it kept firing on ordinary finished replies. The fix was to
+delete the auto-trigger effect entirely (and the now-dead
+`conversationFeedback`/`getConversationFeedback` query it existed to gate)
+rather than add another exception. When a bug report describes a feedback/
+confirmation modal firing on the wrong condition, check whether it is wired
+to a derived/inferred state instead of the specific user action list — that
+is a broader defect than the one-off condition being reported.

@@ -438,7 +438,6 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     retry: false,
   });
   const selectedConversation = listedConversation ?? conversationDetail.data?.conversation;
-  const conversationFeedback = useQuery({ queryKey: ['session-feedback', conversationId], queryFn: () => api.getConversationFeedback(conversationId!), enabled: Boolean(conversationId) });
   const selectedConversationMissing = Boolean(conversationId) && !listedConversation && conversationDetail.isError;
   useEffect(() => {
     // A conversation opened via search or a deep link may not belong to the
@@ -508,15 +507,6 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     refetchInterval: (query) => query.state.data?.messages.some((message) => message.status === 'running' || message.status === 'queued') ? 750 : false,
   });
   const allConversationMessages = messages.data?.messages ?? [];
-  const completionIsSynthesized = allConversationMessages.some((message) =>
-    message.author === 'system'
-      && message.status === 'completed'
-      && message.body.startsWith('Synthesis:'),
-  );
-  useEffect(() => {
-    if (!conversationId || !selectedConversation || selectedConversation.workItemId || selectedConversation.state !== 'finished' || completionIsSynthesized || conversationFeedback.data?.feedback || conversationFeedback.isLoading) return;
-    setFeedbackTarget((current) => current ?? { conversationId });
-  }, [completionIsSynthesized, conversationFeedback.data?.feedback, conversationFeedback.isLoading, conversationId, selectedConversation]);
   const agentAccounts = useQuery({ queryKey: ['agent-accounts'], queryFn: api.listAgentAccounts, refetchInterval: 5_000 });
   const accountProfiles = useMemo(() => {
     const configured = agentAccounts.data?.accounts ?? [];
