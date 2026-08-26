@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
-import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type AgentInputSteering, type RetrievedMemory } from './agent-runner.js';
+import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type AgentInputSteering, type AgentUsage, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -63,6 +63,11 @@ export function agentStreamEventForCodexAppServerItem(method: string, item: Reco
 /** App-server sends debugger-only decision preambles as ordinary text deltas. */
 export function isCodexDecisionPreamble(text: string): boolean {
   return /^\s*Decision:\s*/i.test(text);
+}
+
+/** Provider session IDs are ephemeral; a missing one must never poison retries. */
+export function isMissingClaudeSessionError(error: unknown): boolean {
+  return /no conversation found with session id/i.test(error instanceof Error ? error.message : String(error));
 }
 
 /**
@@ -668,7 +673,9 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     repository.updateSharedMessage(messageId, { model: modelFor(agent, profile), executionProfile: profile });
     if (runId) repository.updateRun(runId, { model: modelFor(agent, profile), executionProfile: profile });
     repository.setConversationExecutionProfile(target.conversationId, profile);
-    let result = agent === 'codex'
+    let result: { output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; codexThreadId?: string };
+    try {
+      result = agent === 'codex'
       ? await runSteerableCodex(guardedPrompt, cwd, controller.signal, (partial) => {
         if (controller.signal.aborted) return;
         repository.updateSharedMessage(messageId, { body: partial });
@@ -698,6 +705,25 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       registerActiveReplySteering(messageId, steer);
       void deliverPendingSharedInterjections(repository, messageId);
     } : undefined, agent === 'claude' ? linkedConversation?.claudeSessionId ?? undefined : undefined, agent !== 'claude');
+    } catch (error) {
+      if (agent !== 'claude' || !linkedConversation?.claudeSessionId || !isMissingClaudeSessionError(error)) throw error;
+      repository.setConversationClaudeSessionId(target.conversationId, null);
+      repository.updateSharedMessage(messageId, { body: '● Claude session expired. Restarting this turn in a fresh session…' });
+      result = await runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(guardedPrompt, cwd), (partial) => {
+        if (controller.signal.aborted) return;
+        repository.updateSharedMessage(messageId, { body: partial });
+        if (runId) repository.updateRun(runId, { output: partial });
+      }, controller.signal, undefined, profile, (usage) => {
+        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
+        repository.updateSharedMessage(messageId, telemetry);
+        if (runId) repository.updateRun(runId, telemetry);
+      }, (entries) => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
+        kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+      }))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
+        registerActiveReplySteering(messageId, steer);
+        void deliverPendingSharedInterjections(repository, messageId);
+      }, undefined, false);
+    }
     if (result.agent === 'codex' && 'codexThreadId' in result && result.codexThreadId) repository.setConversationCodexThreadId(target.conversationId, result.codexThreadId);
     if (result.agent === 'claude') repository.setConversationClaudeSessionId(target.conversationId, result.sessionId ?? null);
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
