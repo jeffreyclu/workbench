@@ -19,8 +19,8 @@ export function ConversationOriginBadge({ workItemId }: Pick<SharedConversation,
     {isTaskLinked ? 'Task-linked' : 'Manual'}
   </span>;
 }
-export function ModelProfileSelect({ value, onChange, className = '' }: { value: AgentRun['executionProfile']; onChange: (value: AgentRun['executionProfile']) => void; className?: string }) {
-  return <select className={className} value={value ?? 'auto'} onChange={(event) => onChange(event.target.value === 'auto' ? null : event.target.value as NonNullable<AgentRun['executionProfile']>)} aria-label="Model choice">
+export function ModelProfileSelect({ value, onChange, className = '', disabled = false }: { value: AgentRun['executionProfile']; onChange: (value: AgentRun['executionProfile']) => void; className?: string; disabled?: boolean }) {
+  return <select className={className} value={value ?? 'auto'} onChange={(event) => onChange(event.target.value === 'auto' ? null : event.target.value as NonNullable<AgentRun['executionProfile']>)} aria-label="Model choice" disabled={disabled}>
     <option value="auto">Auto</option>
     <option value="economy">Fast</option>
     <option value="standard">Balanced</option>

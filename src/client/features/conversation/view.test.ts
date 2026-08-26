@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { replyBadge } from './view';
+import { composerSelectionFromConversation, replyBadge } from './view';
 
 describe('replyBadge', () => {
   it('shows the actual model alongside the compact agent, profile, usage, and duration telemetry', () => {
@@ -48,5 +48,23 @@ describe('replyBadge', () => {
       fallbackReason: 'rate limited',
       cacheReadInputTokens: 5_400,
     })).toBe('Codex · gpt-5.6 (economy) · default · 120 in · 340 out · 5.4K cached · 1.5s · fallback from claude (rate limited)');
+  });
+});
+
+describe('composerSelectionFromConversation', () => {
+  it('uses only the conversation record stored by the server', () => {
+    expect(composerSelectionFromConversation({
+      preferredExecutionProfile: 'deep',
+      preferredAccountProfile: 'personal',
+      preferredDispatchTarget: 'claude',
+    })).toEqual({ executionProfile: 'deep', accountProfile: 'personal', dispatchTarget: 'claude' });
+  });
+
+  it('uses stable defaults for a legacy conversation without stored preferences', () => {
+    expect(composerSelectionFromConversation({
+      preferredExecutionProfile: null,
+      preferredAccountProfile: null,
+      preferredDispatchTarget: null,
+    })).toEqual({ executionProfile: null, accountProfile: 'default', dispatchTarget: 'both' });
   });
 });

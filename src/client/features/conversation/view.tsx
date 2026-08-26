@@ -85,35 +85,24 @@ const CONVERSATION_ROW_GAP = 6;
 const CONVERSATION_CARD_ESTIMATE = 88;
 
 type ConversationDispatchTarget = 'both' | 'codex' | 'claude';
+type ComposerSelection = {
+  executionProfile: Exclude<AgentRun['executionProfile'], 'routing'>;
+  accountProfile: string;
+  dispatchTarget: ConversationDispatchTarget;
+};
 
-/**
- * The composer is a continuation control. A routed Jeffrey message records
- * the choice he made; an agent reply is the useful legacy fallback for older
- * messages that predate dispatch_target. Empty conversations deliberately
- * start collaborative rather than inheriting a choice from another thread.
- */
-function dispatchTargetForConversation(messages: SharedMessage[]): ConversationDispatchTarget {
-  for (const message of [...messages].reverse()) {
-    if (message.author === 'jeffrey' && (message.dispatchTarget === 'both' || message.dispatchTarget === 'codex' || message.dispatchTarget === 'claude')) return message.dispatchTarget;
-  }
-  for (const message of [...messages].reverse()) {
-    if (message.author === 'codex' || message.author === 'claude') return message.author;
-  }
-  return 'both';
-}
+const defaultComposerSelection = (): ComposerSelection => ({
+  executionProfile: null,
+  accountProfile: DEFAULT_ACCOUNT_PROFILE,
+  dispatchTarget: 'both',
+});
 
-function executionProfileForConversation(messages: SharedMessage[]): Exclude<AgentRun['executionProfile'], 'routing'> {
-  for (const message of [...messages].reverse()) {
-    if (message.author === 'codex' || message.author === 'claude' || (message.author === 'jeffrey' && message.dispatchTarget !== 'none')) return message.executionProfile === 'routing' ? null : message.executionProfile ?? null;
-  }
-  return null;
-}
-
-function accountProfileForConversation(messages: SharedMessage[]): string {
-  for (const message of [...messages].reverse()) {
-    if (message.accountProfile) return message.accountProfile;
-  }
-  return DEFAULT_ACCOUNT_PROFILE;
+export function composerSelectionFromConversation(conversation: Pick<SharedConversation, 'preferredExecutionProfile' | 'preferredAccountProfile' | 'preferredDispatchTarget'>): ComposerSelection {
+  return {
+    executionProfile: conversation.preferredExecutionProfile ?? null,
+    accountProfile: conversation.preferredAccountProfile ?? DEFAULT_ACCOUNT_PROFILE,
+    dispatchTarget: conversation.preferredDispatchTarget ?? 'both',
+  };
 }
 
 export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'accountProfile' | 'inputTokens' | 'outputTokens' | 'completedAt' | 'createdAt' | 'executionProfile' | 'fallbackFrom' | 'fallbackReason' | 'cacheReadInputTokens'>): string {
@@ -202,42 +191,36 @@ function ConversationTaskPicker({ tasks, isLoading, isError, isPending, onRetry,
 export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectConversation, view, onViewChange }: { initialConversationId?: string | null; onOpenTask?: (taskId: string) => void; onSelectConversation?: (conversationId: string | null) => void; view?: 'active' | 'archive'; onViewChange?: (view: 'active' | 'archive') => void }) {
   const queryClient = useQueryClient();
   const [body, setBody] = useState(() => initialConversationId ? readConversationDrafts()[initialConversationId] ?? '' : '');
-  const [dispatchTo, setDispatchTo] = useState<ConversationDispatchTarget>('both');
-  const [accountProfile, setAccountProfile] = useState(DEFAULT_ACCOUNT_PROFILE);
-  const [composerPreferenceOverrides, setComposerPreferenceOverrides] = useState<Record<string, Pick<SharedConversation, 'preferredExecutionProfile' | 'preferredAccountProfile' | 'preferredDispatchTarget'>>>({});
-  const dispatchInitializedConversationId = useRef<string | null>(null);
-  // Mirrors dispatchInitializedConversationId as render-visible state: the ref
-  // alone doesn't trigger a re-render, so the send button could stay
-  // (in)correctly disabled until some unrelated state change happened to
-  // re-render the component.
-  const [dispatchInitializedFor, setDispatchInitializedFor] = useState<string | null>(null);
+  const [composerSelection, setComposerSelection] = useState<ComposerSelection>(defaultComposerSelection);
+  const [selectionHydratedFor, setSelectionHydratedFor] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(initialConversationId ?? null);
   const isCreatingConversationRef = useRef(false);
   const [locallyReadConversationIds, setLocallyReadConversationIds] = useState<Set<string>>(new Set());
   const [exitingMessageIds, setExitingMessageIds] = useState<Set<string>>(new Set());
   const conversationIdRef = useRef(conversationId);
   const sentDraftRef = useRef<{ conversationId: string; body: string } | null>(null);
+  const preferenceMutationSequence = useRef(0);
   const updateConversationPreferences = useMutation({
-    mutationFn: ({ conversationId, preferences }: { conversationId: string; preferences: { executionProfile: AgentRun['executionProfile']; accountProfile: string | null; dispatchTarget: ConversationDispatchTarget | null } }) => api.updateSharedConversationPreferences(conversationId, preferences),
-    onMutate: ({ conversationId }) => ({ conversationId, previousPreferences: composerPreferenceOverrides[conversationId] }),
-    onSuccess: async ({ conversation }) => {
-      setComposerPreferenceOverrides((current) => ({ ...current, [conversation.id]: {
-        preferredExecutionProfile: conversation.preferredExecutionProfile,
-        preferredAccountProfile: conversation.preferredAccountProfile,
-        preferredDispatchTarget: conversation.preferredDispatchTarget,
-      } }));
+    mutationFn: ({ conversationId, selection, sequence }: { conversationId: string; selection: ComposerSelection; sequence: number }) => api.updateSharedConversationPreferences(conversationId, selection),
+    onSuccess: async ({ conversation }, { conversationId: updatedConversationId, sequence }) => {
+      // Several selectors may change before earlier requests return. Only the
+      // newest response may hydrate this window, otherwise an older response
+      // visibly snaps a picker back to a stale value.
+      if (conversationIdRef.current === updatedConversationId && sequence === preferenceMutationSequence.current) {
+        setComposerSelection(composerSelectionFromConversation(conversation));
+        setSelectionHydratedFor(updatedConversationId);
+      }
       await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
+      await queryClient.invalidateQueries({ queryKey: conversationQueryKeys.detail(updatedConversationId) });
     },
-    // Roll an optimistic choice back if the server rejects it. Keeping a
-    // browser-only value here would recreate the original persistence bug.
-    onError: (error, { conversationId }, context) => {
+    onError: (error, { conversationId: failedConversationId, sequence }) => {
       toastError('Could not save the composer preferences.', error);
-      setComposerPreferenceOverrides((current) => {
-        const next = { ...current };
-        if (context?.previousPreferences) next[conversationId] = context.previousPreferences;
-        else delete next[conversationId];
-        return next;
-      });
+      // Keep the last visible selection until the direct server refresh
+      // resolves; never replace it with a value inferred from old messages.
+      if (conversationIdRef.current === failedConversationId && sequence === preferenceMutationSequence.current) {
+        setSelectionHydratedFor(null);
+        void queryClient.invalidateQueries({ queryKey: conversationQueryKeys.detail(failedConversationId) });
+      }
     },
   });
   const selectConversationRef = useRef(onSelectConversation);
@@ -246,6 +229,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     conversationIdRef.current = conversationId;
     setBody(conversationId ? readConversationDrafts()[conversationId] ?? '' : '');
     setFiles([]);
+    setComposerSelection(defaultComposerSelection());
+    setSelectionHydratedFor(null);
   }, [conversationId]);
   useEffect(() => {
     if (conversationId) setShowingConversationStackOnly(false);
@@ -265,24 +250,14 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     updateBody(nextBody);
     setConversationSurface('messages');
   }
-  function updateComposerPreferences(updates: Partial<{ executionProfile: AgentRun['executionProfile']; accountProfile: string | null; dispatchTarget: ConversationDispatchTarget | null }>) {
+  function updateComposerPreferences(updates: Partial<ComposerSelection>) {
     if (!conversationId) return;
     const targetConversationId = conversationId;
-    const current = composerPreferenceOverrides[targetConversationId] ?? selectedConversation;
-    const preferences = {
-      executionProfile: current?.preferredExecutionProfile ?? executionProfileForConversation(allConversationMessages),
-      accountProfile: current?.preferredAccountProfile ?? accountProfileForConversation(allConversationMessages),
-      dispatchTarget: current?.preferredDispatchTarget ?? dispatchTargetForConversation(allConversationMessages),
-      ...updates,
-    };
-    setComposerPreferenceOverrides((existing) => ({ ...existing, [targetConversationId]: {
-      preferredExecutionProfile: preferences.executionProfile,
-      preferredAccountProfile: preferences.accountProfile,
-      preferredDispatchTarget: preferences.dispatchTarget,
-    } }));
-    updateConversationPreferences.mutate({ conversationId: targetConversationId, preferences });
+    const selection = { ...composerSelection, ...updates };
+    setComposerSelection(selection);
+    updateConversationPreferences.mutate({ conversationId: targetConversationId, selection, sequence: ++preferenceMutationSequence.current });
   }
-  function setExecutionProfile(profile: AgentRun['executionProfile']) {
+  function setExecutionProfile(profile: ComposerSelection['executionProfile']) {
     updateComposerPreferences({ executionProfile: profile });
   }
   // The rail's Active/Archive selection is owned by the caller when it supplies
@@ -434,7 +409,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const conversationDetail = useQuery({
     queryKey: conversationQueryKeys.detail(conversationId),
     queryFn: () => conversationData.get(conversationId!),
-    enabled: Boolean(conversationId) && !listedConversation && !conversations.isLoading,
+    // The rail is deliberately lightweight and can be stale. The picker
+    // values belong to this exact conversation window, so always fetch its
+    // canonical server record immediately on open.
+    enabled: Boolean(conversationId),
     retry: false,
   });
   const selectedConversation = listedConversation ?? conversationDetail.data?.conversation;
@@ -510,16 +488,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const agentAccounts = useQuery({ queryKey: ['agent-accounts'], queryFn: api.listAgentAccounts, refetchInterval: 5_000 });
   const accountProfiles = useMemo(() => {
     const configured = agentAccounts.data?.accounts ?? [];
-    return configured.some((account) => account.name === accountProfile)
+    return configured.some((account) => account.name === composerSelection.accountProfile)
       ? configured
-      : [{ name: accountProfile }, ...configured];
-  }, [accountProfile, agentAccounts.data?.accounts]);
-  // Conversation preferences are canonical once saved. Message history fills
-  // in older conversations whose last model choice predates that preference.
-  const composerPreferences = conversationId ? composerPreferenceOverrides[conversationId] ?? selectedConversation : null;
-  const executionProfile = conversationId
-    ? composerPreferences?.preferredExecutionProfile ?? executionProfileForConversation(allConversationMessages)
-    : null;
+      : [{ name: composerSelection.accountProfile }, ...configured];
+  }, [composerSelection.accountProfile, agentAccounts.data?.accounts]);
   // Keep the thread bounded to a handful of recent messages instead of an
   // endless scroll; older history is revealed a page at a time on request.
   const hasEarlierMessages = allConversationMessages.length > threadVisibleCount;
@@ -559,15 +531,10 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   // cached-height transition: streamed Markdown can grow or settle at any
   // time without another bubble ever reusing its vertical space.
   useEffect(() => {
-    // Message history can resolve before the selected conversation record.
-    // Do not mark this composer initialized from that legacy fallback: its
-    // saved recipient preference is canonical and may arrive a render later.
-    if (!conversationId || dispatchInitializedConversationId.current === conversationId || !messages.data || !selectedConversation) return;
-    setDispatchTo(composerPreferences?.preferredDispatchTarget ?? dispatchTargetForConversation(messages.data.messages));
-    setAccountProfile(composerPreferences?.preferredAccountProfile ?? accountProfileForConversation(messages.data.messages));
-    dispatchInitializedConversationId.current = conversationId;
-    setDispatchInitializedFor(conversationId);
-  }, [conversationId, messages.data, composerPreferences?.preferredAccountProfile, composerPreferences?.preferredDispatchTarget]);
+    if (!conversationId || selectionHydratedFor === conversationId || !conversationDetail.data?.conversation) return;
+    setComposerSelection(composerSelectionFromConversation(conversationDetail.data.conversation));
+    setSelectionHydratedFor(conversationId);
+  }, [conversationId, conversationDetail.data?.conversation, selectionHydratedFor]);
   const send = useMutation({
     mutationFn: async ({ intent }: { intent: 'interject' | 'queue' }) => {
       const attachments = await Promise.all(files.map(async (file) => ({
@@ -576,7 +543,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           const reader = new FileReader(); reader.onerror = () => reject(reader.error); reader.onload = () => resolveValue(String(reader.result).split(',')[1] ?? ''); reader.readAsDataURL(file);
         }),
       })));
-      const created = await api.createSharedMessage(conversationId!, body, dispatchTo, attachments, executionProfile, accountProfile);
+      const created = await api.createSharedMessage(conversationId!, body, composerSelection.dispatchTarget, attachments, composerSelection.executionProfile, composerSelection.accountProfile);
       // A normal send can be dispatched synchronously by the create endpoint.
       // `replies` is definitive even if a stale API response labels the human
       // turn queued, so never try to interject a turn that is already claimed.
@@ -831,15 +798,11 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
       const result = await api.updateWorkItem(linkedWorkItemId!, { assignees: agents });
       return { result, seq };
     },
-    onMutate: () => ({ previousDispatchTo: dispatchTo }),
     onSuccess: ({ seq }) => {
       if (seq !== ownerMutationSeq.current) return;
       void queryClient.invalidateQueries({ queryKey: ['work-item', linkedWorkItemId] });
     },
-    onError: (error, _target, context) => {
-      if (context?.previousDispatchTo) setDispatchTo(context.previousDispatchTo);
-      toastError('Could not update the conversation owner.', error);
-    },
+    onError: (error) => toastError('Could not update the conversation owner.', error),
   });
   const createTasks = useMutation({
     mutationFn: ({ messageId }: { messageId: string; conversationId: string }) => api.createTasksFromReport(messageId),
@@ -1000,7 +963,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   };
   // Sending before the agent target / conversation state has finished
   // initializing for this conversation can dispatch to the wrong agent.
-  const conversationReadyToSend = Boolean(conversationId) && dispatchInitializedFor === conversationId && !messages.isLoading;
+  const conversationReadyToSend = Boolean(conversationId) && selectionHydratedFor === conversationId && !messages.isLoading;
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -1287,11 +1250,11 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
             <input ref={fileRef} className="visually-hidden" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
             <button type="button" className="composer-tool attach-button" onClick={() => fileRef.current?.click()} aria-label="Attach files" title="Attach files"><Paperclip size={14} /></button>
             <span className="composer-hint">Files, screenshots, or context</span>
-            <ModelProfileSelect className="model-target" value={executionProfile} onChange={setExecutionProfile} />
-            <select className="agent-target account-target" value={accountProfile} onChange={(event) => { const profile = event.target.value; setAccountProfile(profile); updateComposerPreferences({ accountProfile: profile }); }} aria-label="Account profile" disabled={agentAccounts.isLoading}>
+            <ModelProfileSelect className="model-target" value={composerSelection.executionProfile} onChange={setExecutionProfile} disabled={selectionHydratedFor !== conversationId} />
+            <select className="agent-target account-target" value={composerSelection.accountProfile} onChange={(event) => updateComposerPreferences({ accountProfile: event.target.value })} aria-label="Account profile" disabled={agentAccounts.isLoading || selectionHydratedFor !== conversationId}>
               {accountProfiles.map((account) => <option key={account.name} value={account.name}>{account.name === 'default' ? 'Default' : account.name}</option>)}
             </select>
-            <select className="agent-target dispatch-target" value={dispatchTo} onChange={(event) => { const target = event.target.value as typeof dispatchTo; setDispatchTo(target); updateComposerPreferences({ dispatchTarget: target }); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond">
+            <select className="agent-target dispatch-target" value={composerSelection.dispatchTarget} onChange={(event) => { const target = event.target.value as ConversationDispatchTarget; updateComposerPreferences({ dispatchTarget: target }); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond" disabled={selectionHydratedFor !== conversationId}>
               <option value="codex">Codex</option><option value="claude">Claude</option><option value="both">Both</option>
             </select>
             <button className="icon-button primary composer-send" aria-label="Send message" title="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
