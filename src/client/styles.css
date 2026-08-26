@@ -367,6 +367,39 @@ nav { display: grid; gap: 3px; }
 .diff-line.header { color: #aaa9a2; background: #20201d; }.diff-line.header > span:nth-child(-n + 2) { background: #1c1c19; }
 .workspace-diff-error { padding-bottom: 2px; }.workspace-diff-error strong { color: #e1a68f; }.workspace-diff-error p { margin: 5px 0 11px; }
 .workspace-diff-skeleton { display: grid; grid-template-columns: minmax(160px, 28%) minmax(0, 1fr); gap: 14px; padding: 12px; border: 1px solid #302f2b; border-radius: 8px; }
+.github-diff { margin-top: 35px; padding-top: 22px; border-top: 1px solid #272724; }
+.github-diff > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.github-diff > header > div { min-width: 0; }
+.github-diff-eyebrow { display: inline-flex; align-items: center; gap: 6px; color: #94938b; font: 700 10px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
+.github-diff h2 { margin: 5px 0; color: #deddd6; font-size: 16px; line-height: 1.35; }
+.github-diff small { color: #85847d; font: 10px 'DM Mono'; }
+.github-diff small b, .github-diff nav b { color: #8bbd75; font-weight: 700; }
+.github-diff small i, .github-diff nav i { color: #d97b73; font-style: normal; }
+.github-diff > header a { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; min-height: 28px; padding: 0 9px; color: #c4c3bc; border: 1px solid #353530; border-radius: 6px; font: 700 10px 'DM Mono'; text-decoration: none; }
+.github-diff > header a:hover { color: var(--acid); border-color: #596234; }
+.github-diff-layout { display: grid; grid-template-columns: minmax(180px, 28%) minmax(0, 1fr); overflow: hidden; border: 1px solid #302f2b; border-radius: 8px; background: #10100f; }
+.github-diff nav { min-width: 0; border-right: 1px solid #302f2b; background: #151513; }
+.github-diff nav > span { display: block; padding: 10px 11px; color: #85847d; border-bottom: 1px solid #302f2b; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
+.github-diff nav > div { max-height: 430px; overflow: auto; }
+.github-diff nav button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 6px; width: 100%; min-height: 36px; padding: 7px 9px; color: #aaa9a2; text-align: left; background: transparent; border: 0; border-bottom: 1px solid #252522; cursor: pointer; font: 10px 'DM Mono'; }
+.github-diff nav button:hover, .github-diff nav button.selected { color: #eee; background: #24241f; }
+.github-diff nav button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.github-diff nav button b, .github-diff nav button i { font-size: 9px; }
+.github-diff-file { min-width: 0; overflow: auto; }
+.github-diff-file > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 39px; padding: 0 12px; color: #d5d4cd; border-bottom: 1px solid #302f2b; font: 10px 'DM Mono'; }
+.github-diff-file > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.github-diff-file > header span { flex: 0 0 auto; color: #898880; text-transform: capitalize; }
+.github-diff-file pre { min-width: max-content; margin: 0; padding: 8px 0; overflow: visible; background: #10100f; font: 11px/1.55 'DM Mono'; }
+.github-diff-error { padding-bottom: 2px; }.github-diff-error strong { color: #e1a68f; }.github-diff-error p { margin: 5px 0 11px; }
+.github-diff-skeleton { display: grid; grid-template-columns: minmax(160px, 28%) minmax(0, 1fr); gap: 14px; padding: 12px; border: 1px solid #302f2b; border-radius: 8px; }
+@media (max-width: 640px) {
+  .github-diff > header { flex-wrap: wrap; }
+  .github-diff > header > a { min-height: 44px; }
+  .github-diff-layout, .github-diff-skeleton { grid-template-columns: minmax(0, 1fr); }
+  .github-diff nav { border-right: 0; border-bottom: 1px solid #302f2b; }
+  .github-diff nav > div { display: flex; max-height: 150px; overflow-x: auto; overflow-y: hidden; }
+  .github-diff nav button { flex: 0 0 min(260px, 78vw); min-height: 44px; }
+}
 .task-collapsible { border-top: 1px solid #272724; }
 .task-collapsible > summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; color: #96958e; cursor: pointer; list-style: none; font: 700 10px 'DM Mono'; letter-spacing: .12em; text-transform: uppercase; }
 .task-collapsible > summary::-webkit-details-marker { display: none; }

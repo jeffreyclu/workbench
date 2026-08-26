@@ -54,6 +54,15 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     ]);
   });
 
+  it('requires a connected GitHub source before serving pull-request diffs', async () => {
+    const response = await fetch(`${baseUrl}/api/github/pull-request-diff?url=https%3A%2F%2Fgithub.com%2Fwriter%2Fworkbench%2Fpull%2F24`);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: 'GitHub is not connected. Connect it in Sources to view pull-request diffs.',
+    });
+  });
+
   it('reports only work owned by this backend in its runtime drain health', async () => {
     const idle = await fetch(`${baseUrl}/api/health`);
     expect(await idle.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: false, buildId: expect.any(String) });

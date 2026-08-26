@@ -319,6 +319,29 @@ export interface WorkspaceDiff {
   deletions: number;
 }
 
+export interface GitHubPullRequestFile {
+  path: string;
+  status: 'added' | 'modified' | 'removed' | 'renamed' | 'copied' | 'changed';
+  additions: number;
+  deletions: number;
+  previousPath: string | null;
+  patch: string | null;
+  isBinary: boolean;
+}
+
+export interface GitHubPullRequestDiff {
+  url: string;
+  repository: string;
+  number: number;
+  title: string;
+  baseRef: string;
+  headRef: string;
+  files: GitHubPullRequestFile[];
+  changedFiles: number;
+  additions: number;
+  deletions: number;
+}
+
 export const sourceProviderSchema = z.enum(['github', 'slack', 'figma', 'confluence', 'gmail']);
 export type SourceProvider = z.infer<typeof sourceProviderSchema>;
 export type SourceAuthMode = 'oauth' | 'api_key' | 'managed_externally';
