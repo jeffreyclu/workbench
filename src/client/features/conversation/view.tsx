@@ -129,6 +129,16 @@ export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'ac
   return [`${agent} · ${model} · ${profile} · ${usage}`, cacheRead, duration, fallback].filter(Boolean).join(' · ');
 }
 
+export function replyHeaderTelemetry(message: Pick<SharedMessage, 'model' | 'accountProfile' | 'estimatedCostUsd' | 'inputTokens' | 'outputTokens' | 'completedAt' | 'createdAt' | 'executionProfile'>): string {
+  const tier = message.executionProfile && message.executionProfile !== 'routing' ? message.executionProfile : null;
+  const model = `${message.model ?? 'model unavailable'}${tier ? ` (${tier})` : ''}`;
+  const profile = message.accountProfile ?? 'profile unavailable';
+  const usage = formatRunBadge(message);
+  const durationMs = message.completedAt ? new Date(message.completedAt).getTime() - new Date(message.createdAt).getTime() : null;
+  const duration = durationMs === null ? null : `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
+  return [model, profile, usage, duration].filter(Boolean).join(' · ');
+}
+
 type ConversationTaskPickerProps = {
   tasks: WorkItem[];
   isLoading: boolean;
@@ -1195,7 +1205,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                 <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                   {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
                   {showSummaryBadges && <span className="header-badge-row">
-                    {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyBadge(message)}</span>}
+                    {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyHeaderTelemetry(message)}</span>}
                     {isAgentMessage && <button
                       type="button"
                       className={`memory-badge${typeof message.retrievedMemoryCount === 'number' ? '' : ' memory-badge-not-run'}`}

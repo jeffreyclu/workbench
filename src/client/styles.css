@@ -815,10 +815,10 @@ nav { display: grid; gap: 3px; }
 .shared-message.shared-message-exiting { pointer-events: none; animation: shared-message-exit 560ms cubic-bezier(.4,0,1,1) both; }
 @keyframes shared-message-exit { to { max-height: 0; margin: 0; padding-block: 0; border-width: 0; opacity: 0; transform: translate3d(30px, -5px, 0) scale(.96); } }
 .reply-group-columns .shared-message { width: 100%; max-width: 100%; }
-.shared-message header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-right: 22px; }
+.shared-message header { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding-right: 22px; }
 .shared-message header strong, .shared-message header time, .shared-message header .recipient-badge, .shared-message header .cancel-response { flex: 0 0 auto; }
-.shared-message header .header-badge-row { display: flex; align-items: center; gap: 6px; flex: 1 1 100%; min-width: 0; margin-top: 4px; }
-.shared-message header .model-badge { flex: 0 1 auto; width: fit-content; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shared-message header .header-badge-row { display: flex; align-items: center; gap: 7px; flex: 1 1 auto; min-width: 0; }
+.shared-message header .model-badge { flex: 0 1 auto; width: fit-content; max-width: 100%; min-width: 0; padding: 0; overflow: hidden; color: #777f9b; background: transparent; border: 0; border-radius: 0; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .shared-message header .memory-badge { flex: 0 0 auto; }
 .shared-message header strong { color: #c8c7bf; font: 9px 'DM Mono'; text-transform: capitalize; }
 .shared-message header time { color: #575650; font: 8px 'DM Mono'; }
