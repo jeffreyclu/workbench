@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
-import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyMessageIntent, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type AgentInputSteering, type RetrievedMemory } from './agent-runner.js';
+import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type AgentInputSteering, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -89,8 +89,14 @@ export function codexTurnStartParams(threadId: string, cwd: string, prompt: stri
   };
 }
 
+export function codexThreadBootstrapRequest(cwd: string, resumeThreadId?: string | null): { method: 'thread/start' | 'thread/resume'; params: Record<string, unknown> } {
+  return resumeThreadId
+    ? { method: 'thread/resume', params: { threadId: resumeThreadId, cwd, approvalPolicy: 'never' } }
+    : { method: 'thread/start', params: { cwd, ephemeral: false, model: null, approvalPolicy: 'never' } };
+}
+
 /** Codex's app-server is the provider protocol that supports turn/steer. */
-function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void): Promise<string> {
+function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, resumeThreadId?: string | null): Promise<{ output: string; threadId: string }> {
   return new Promise((resolveOutput, reject) => {
     const child = spawn('codex', ['app-server', '--stdio'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     let buffered = ''; let output = ''; let liveOutput = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
@@ -154,7 +160,10 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
       buffered += chunk.toString(); const lines = buffered.split('\n'); buffered = lines.pop() ?? '';
       for (const line of lines.filter(Boolean)) {
         let event: any; try { event = JSON.parse(line); } catch { continue; }
-        if (event.id === 1 && event.result) request('thread/start', { cwd, ephemeral: true, model: null, approvalPolicy: 'never' });
+        if (event.id === 1 && event.result) {
+          const bootstrap = codexThreadBootstrapRequest(cwd, resumeThreadId);
+          request(bootstrap.method, bootstrap.params);
+        }
         else if (event.result?.thread?.id && !threadId) { threadId = event.result.thread.id; request('turn/start', codexTurnStartParams(threadId, cwd, prompt)); }
         else if (event.result?.turn?.id && !turnId) { turnId = event.result.turn.id; onReady(steer); }
         if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
@@ -208,7 +217,7 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
         if (event.method === 'turn/completed') {
           settled = true;
           rejectPendingSteers();
-          resolveOutput(output.trim());
+          resolveOutput({ output: output.trim(), threadId });
           child.stdin.end();
         }
         if (event.error) {
@@ -355,9 +364,10 @@ export function buildSharedReplyPrompt(
   localId?: string | null,
   currentUserInstruction?: string,
   precedingUserInstruction?: string,
+  externalActionContract?: string,
 ): string {
   const roleContext = linked
-    ? buildPrompt(linked.item, linked.run, sharedContext, [], currentUserInstruction, precedingUserInstruction)
+    ? buildPrompt(linked.item, linked.run, sharedContext, [], currentUserInstruction, precedingUserInstruction, externalActionContract)
     : `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.\n\n${compactSharedBrief(sharedContext)}`;
   return `${roleContext}
 
@@ -561,6 +571,8 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       : linkedConversation?.workItemId ? repository.get(linkedConversation.workItemId) : null;
     const cwd = resolveSharedReplyWorkingDirectory(linkedItem);
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}.`);
+    const externalAuthorization = await classifyExternalActionAuthorization(latestUserMessage, precedingUserMessage);
+    const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const retrievedMemory = await (retrievalSnapshot?.matches ?? repository.searchActivityMemory(memoryQuery, PROMPT_MEMORY_CANDIDATE_LIMIT, {
       excludeExactBody: memoryQuery,
       projectKey: linkedItem ? projectKey(linkedItem.projectName) || undefined : undefined,
@@ -583,6 +595,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       target.conversationId,
       latestUserMessage,
       precedingUserMessage,
+      externalActionContract,
     );
     repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
     const guardedPrompt = prompt;
@@ -603,8 +616,8 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
         // Keep that explicitly promoted human message queued, then deliver it
         // as soon as the same live session exposes turn/steer.
         void deliverPendingSharedInterjections(repository, messageId);
-      }, (event) => repository.addAgentStreamEvents(messageId, runId ?? null, [event]))
-        .then((output) => ({ output, agent: 'codex' as const, usage: { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null }, fallbackFrom: null, fallbackReason: null }))
+      }, (event) => repository.addAgentStreamEvents(messageId, runId ?? null, [event]), linkedConversation?.codexThreadId)
+        .then(({ output, threadId }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage: { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null }, fallbackFrom: null, fallbackReason: null }))
       : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       if (controller.signal.aborted) return;
       repository.updateSharedMessage(messageId, { body: partial });
@@ -621,7 +634,9 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     }))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, agent === 'claude' ? (steer) => {
       registerActiveReplySteering(messageId, steer);
       void deliverPendingSharedInterjections(repository, messageId);
-    } : undefined, undefined, true);
+    } : undefined, agent === 'claude' ? linkedConversation?.claudeSessionId ?? undefined : undefined, agent !== 'claude');
+    if (result.agent === 'codex' && 'codexThreadId' in result && result.codexThreadId) repository.setConversationCodexThreadId(target.conversationId, result.codexThreadId);
+    if (result.agent === 'claude') repository.setConversationClaudeSessionId(target.conversationId, result.sessionId ?? null);
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       if (controller.signal.aborted) throw new Error('Agent run canceled.');
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the turn to Codex.';

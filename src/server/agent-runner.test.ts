@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, PUSH_CAPABILITY_CONTRACT, backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, externalActionContractForCurrentInstruction, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, PUSH_CAPABILITY_CONTRACT, backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, externalActionContractForAuthorization, externalActionContractForCurrentInstruction, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -178,6 +178,13 @@ describe('classifyExecution', () => {
     expect(externalActionContractForCurrentInstruction('NOW YOU HAVE PERMISSION', 'Update the GitHub PR description to include the Loom demo.')).toContain('immediately preceding pending operation');
     expect(externalActionContractForCurrentInstruction('NOW YOU HAVE PERMISSION')).toBe(EXTERNAL_ACTION_CONTRACT);
     expect(externalActionContractForCurrentInstruction('Do it.')).toBe(EXTERNAL_ACTION_CONTRACT);
+  });
+
+  it('uses a fail-closed model judgment for natural-language external authorization', async () => {
+    const granted = await classifyExternalActionAuthorization('NOW YOU HAVE PERMISSION', 'Update GitHub PR #14337 with the Loom demo.', async () => '<external-authorization>{"granted":true,"operation":"Update GitHub PR #14337 with the Loom demo."}</external-authorization>');
+    expect(externalActionContractForAuthorization(granted)).toContain('Supervisor-issued external-action capability');
+    const denied = await classifyExternalActionAuthorization('Sounds good.', 'Update GitHub PR #14337.', async () => '<external-authorization>{"granted":false,"operation":null}</external-authorization>');
+    expect(externalActionContractForAuthorization(denied)).toBe(EXTERNAL_ACTION_CONTRACT);
   });
 
   it('sends both agents the same reasoning effort for a given tier', () => {
