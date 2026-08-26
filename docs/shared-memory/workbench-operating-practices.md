@@ -40,13 +40,14 @@ unrelated fresh instance. Any design must preserve durable shared context, works
 leases, cancellation, provider/account isolation, and a restart fallback; ephemeral
 agents remain appropriate for independent research, review, and fan-out work.
 
-**Verified limitation, 2026-08-26:** the current implementation does not yet satisfy
-that requirement for ordinary shared-room conversation turns. `replyInSharedRoom`
-spawns a fresh Codex app-server for each reply, and Claude uses the ephemeral lane.
-The only persisted session is `claudeSessionId`, and it is resumed only for linked
-`execute` runs. Codex is always invoked with `exec --ephemeral` in the durable-run
-lane. Do not describe warm-up as fixed until direct conversation turns retain a
-per-conversation session for both providers and this is measured end to end.
+**Resolved implementation gap, 2026-08-26:** ordinary shared-room conversation
+turns now retain provider-specific conversation anchors. Codex starts one
+non-ephemeral app-server thread per conversation and later uses `thread/resume`
+with its durable `codexThreadId`; Claude receives that conversation's stored
+`claudeSessionId` through `--resume`. Provider switching remains deliberately
+isolated: each provider resumes only its own prior context, never the other
+provider's. This is covered by focused unit and migration tests; end-to-end
+startup-latency measurement remains required before claiming a quantified speedup.
 
 ### Workbench improvement suggestions scope
 

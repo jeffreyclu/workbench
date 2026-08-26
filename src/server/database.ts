@@ -1567,6 +1567,18 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // Shared-room Codex replies use the app-server thread protocol. Persist a
+    // non-ephemeral thread id per conversation so a later Codex turn can use
+    // thread/resume instead of paying a fresh conversation startup.
+    id: '053_shared_conversation_codex_thread_id',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'codex_thread_id')) {
+        database.exec('ALTER TABLE shared_conversations ADD COLUMN codex_thread_id TEXT;');
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

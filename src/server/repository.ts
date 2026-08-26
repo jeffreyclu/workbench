@@ -335,6 +335,10 @@ export class WorkItemRepository {
     return this.conversations.setClaudeSessionId(id, sessionId) ? this.getConversation(id) : null;
   }
 
+  setConversationCodexThreadId(id: string, threadId: string | null): SharedConversation | null {
+    return this.conversations.setCodexThreadId(id, threadId) ? this.getConversation(id) : null;
+  }
+
   setConversationWorkItem(id: string, workItemId: string | null): SharedConversation | null {
     return this.conversationService.setWorkItem(id, workItemId);
   }

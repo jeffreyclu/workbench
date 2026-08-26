@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexFinalReply, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
 
 function message(index: number, body: string): SharedMessage {
   return {
@@ -215,6 +215,8 @@ describe('agentStreamEventForCodexAppServerItem', () => {
     expect(codexTurnStartParams('thread', '/workspace', 'Fix it')).toMatchObject({
       threadId: 'thread', cwd: '/workspace', effort: 'medium', summary: 'concise',
     });
+    expect(codexThreadBootstrapRequest('/workspace')).toEqual({ method: 'thread/start', params: { cwd: '/workspace', ephemeral: false, model: null, approvalPolicy: 'never' } });
+    expect(codexThreadBootstrapRequest('/workspace', 'thread-1')).toEqual({ method: 'thread/resume', params: { threadId: 'thread-1', cwd: '/workspace', approvalPolicy: 'never' } });
   });
 
   it('records only an explicit completed agent-message decision preamble', () => {

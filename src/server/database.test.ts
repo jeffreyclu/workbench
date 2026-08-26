@@ -63,6 +63,7 @@ const EXPECTED_MIGRATIONS = [
   '050_session_feedback_decision_tree_snapshot',
   '051_shared_conversation_claude_session_id',
   '052_workspace_diff_snapshots',
+  '053_shared_conversation_codex_thread_id',
 ];
 
 describe('openDatabase', () => {
@@ -528,6 +529,21 @@ describe('openDatabase', () => {
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'workspace_diff_snapshots'").get()).toBeTruthy();
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_workspace_diff_snapshots_work_item_captured'").get()).toBeTruthy();
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '052_workspace_diff_snapshots'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds the Codex thread id column when upgrading from migration 052', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '053_shared_conversation_codex_thread_id'").run();
+    current.exec('ALTER TABLE shared_conversations DROP COLUMN codex_thread_id;');
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toContain('codex_thread_id');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '053_shared_conversation_codex_thread_id'").get()).toBeTruthy();
     upgraded.close();
   });
 
