@@ -315,8 +315,8 @@ export function App() {
   });
   const resolveProposal = useMutation({
     mutationFn: ({ id, resolution }: { id: string; resolution: 'accepted' | 'rejected' }) => api.resolveQueueProposal(id, resolution),
-    onSuccess: (_result, variables) => {
-      navigate({ name: 'stack', stack: 'active' });
+    onSuccess: (result, variables) => {
+      navigate({ name: 'stack', stack: result.proposal.stack === 'workbench' ? 'workbench' : 'active' });
       toast.success(variables.resolution === 'accepted' ? 'Proposed stack accepted.' : 'Proposed stack rejected.');
       void queryClient.invalidateQueries({ queryKey: ['work-items'] });
     },

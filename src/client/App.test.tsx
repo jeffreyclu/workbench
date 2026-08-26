@@ -81,6 +81,30 @@ describe('primary navigation', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/queue/plan', expect.objectContaining({ method: 'POST', body: JSON.stringify({ stack: 'workbench' }) })));
   });
 
+  it('keeps a resolved Workbench proposal in the Workbench tab', async () => {
+    window.history.replaceState(null, '', '/workbench');
+    const proposal = { id: 'workbench-proposal', stack: 'workbench', rationale: 'Workbench items need attention first.', explanations: [] };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/queue/proposals/${proposal.id}/accepted`) {
+        return new Response(JSON.stringify({ proposal, items: [] }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      const body = url.startsWith('/api/work-items?')
+        ? { items: [], nextCursor: null, totalCount: 0, proposal }
+        : url.includes('/api/work-items/counts')
+          ? { active: 0, workbench: 0, archive: 0 }
+          : url.includes('/api/shared/conversations')
+            ? { conversations: [] }
+            : { messages: [] };
+      return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Keep order' }));
+    await waitFor(() => expect(window.location.pathname).toBe('/workbench'));
+  });
+
   it('reopens the independently saved attention, Workbench, and conversation items', () => {
     const attentionId = '00000000-0000-4000-8000-000000000101';
     const workbenchId = '00000000-0000-4000-8000-000000000102';
