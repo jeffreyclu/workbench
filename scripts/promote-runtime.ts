@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runtimeSourceFingerprint } from '../src/server/runtime-preview.js';
-import { publishRuntimeRelease } from '../src/server/runtime-release.js';
+import { markRuntimePromotionPending, publishRuntimeRelease } from '../src/server/runtime-release.js';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
 const runtimeRoot = join(root, '.workbench-runtime');
@@ -81,6 +81,7 @@ const build = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run'
 if (build.status !== 0) throw new Error(`Runtime build failed with exit code ${build.status ?? 1}.`);
 
 publishRuntimeRelease(root, releaseId, runtimeSourceFingerprint(root));
+markRuntimePromotionPending(root, releaseId);
 console.log(`Promoted Workbench runtime ${releaseId}. The stable gateway will switch to it after its health check.`);
 } finally {
   releaseLock();

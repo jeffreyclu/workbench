@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { listAuditLogQuerySchema, submitUsageCalibrationSchema } from '../../shared/contracts.js';
 import type { RouteContext } from '../route-context.js';
 import { runtimePreviewStatus } from '../runtime-preview.js';
+import { lastCompletedRuntimePromotion } from '../runtime-release.js';
 import { LIFECYCLE_REPORT_MS, lifecycleReportMinimumCases, OWNER_ID } from '../scheduler.js';
 import { computeWeeklyUsageReport, isCalibrationDrift, recordUsageCalibration } from '../usage-meter.js';
 import { readCodexRateLimit } from '../codex-rate-limits.js';
@@ -25,7 +26,17 @@ export function createSystemRouter({ repository, admin }: RouteContext) {
     response.json(runtimePreviewStatus());
   });
   router.get('/api/runtime/promotion-status', (_request, response) => {
-    response.json(repository.getPromotionQueueStatus());
+    const status = repository.getPromotionQueueStatus();
+    const verified = lastCompletedRuntimePromotion();
+    const lastBuildAt = status.lastBuild ? Date.parse(status.lastBuild.at) : Number.NEGATIVE_INFINITY;
+    if (verified && Date.parse(verified.at) > lastBuildAt) {
+      return response.json({ ...status, lastBuild: {
+        status: 'succeeded' as const,
+        at: verified.at,
+        summary: 'Verified runtime promotion completed and is live.',
+      } });
+    }
+    response.json(status);
   });
   router.get('/api/insights', (request, response) => {
     const days = z.enum(['7', '30']).catch('30').parse(request.query.days);

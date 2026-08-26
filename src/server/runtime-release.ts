@@ -3,6 +3,49 @@ import { join, relative, resolve } from 'node:path';
 
 const CLIENT_ENTRY = 'client/index.html';
 const SERVER_ENTRY = 'src/server/index.ts';
+const PROMOTION_PENDING = 'pending-promotion.json';
+const PROMOTION_COMPLETED = 'last-promotion.json';
+
+type RuntimePromotionRecord = { releaseId: string; at: string };
+
+function readPromotionRecord(path: string): RuntimePromotionRecord | null {
+  try {
+    const record = JSON.parse(readFileSync(path, 'utf8')) as Partial<RuntimePromotionRecord>;
+    if (typeof record.releaseId !== 'string' || typeof record.at !== 'string' || Number.isNaN(Date.parse(record.at))) return null;
+    return { releaseId: record.releaseId, at: record.at };
+  } catch { return null; }
+}
+
+function writePromotionRecord(path: string, record: RuntimePromotionRecord): void {
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, JSON.stringify(record));
+  renameSync(temporary, path);
+}
+
+/** Records that a release was explicitly requested for promotion. It does not
+ * count as successful until the stable gateway reports the release healthy. */
+export function markRuntimePromotionPending(root: string, releaseId: string): void {
+  const runtimeRoot = join(root, '.workbench-runtime');
+  mkdirSync(runtimeRoot, { recursive: true });
+  writePromotionRecord(join(runtimeRoot, PROMOTION_PENDING), { releaseId, at: new Date().toISOString() });
+}
+
+/** Commits a promotion result only after the stable gateway has health-checked
+ * the requested release. Repeated deploys and ordinary restarts do nothing. */
+export function completePendingRuntimePromotion(root: string, releasePath: string): RuntimePromotionRecord | null {
+  const runtimeRoot = join(root, '.workbench-runtime');
+  const pendingPath = join(runtimeRoot, PROMOTION_PENDING);
+  const pending = readPromotionRecord(pendingPath);
+  if (!pending || pending.releaseId !== releasePath.split('/').at(-1)) return null;
+  const completed = { ...pending, at: new Date().toISOString() };
+  writePromotionRecord(join(runtimeRoot, PROMOTION_COMPLETED), completed);
+  rmSync(pendingPath, { force: true });
+  return completed;
+}
+
+export function lastCompletedRuntimePromotion(root = process.cwd()): RuntimePromotionRecord | null {
+  return readPromotionRecord(join(root, '.workbench-runtime', PROMOTION_COMPLETED));
+}
 
 /**
  * A release is assembled completely off to the side.  The gateway can only

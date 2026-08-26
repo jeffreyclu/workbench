@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { assertUsableRuntimeRelease, publishRuntimeRelease } from './runtime-release.js';
+import { assertUsableRuntimeRelease, completePendingRuntimePromotion, lastCompletedRuntimePromotion, markRuntimePromotionPending, publishRuntimeRelease } from './runtime-release.js';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -31,5 +31,14 @@ describe('runtime release publishing', () => {
     const root = fixture();
     writeFileSync(join(root, 'dist/client/index.html'), '<html><script src="/assets/missing.js"></script></html>');
     expect(() => publishRuntimeRelease(root, 'broken', 'fingerprint')).toThrow(/assets are incomplete/);
+  });
+
+  it('records direct promotion success only after the gateway health-checks that release', () => {
+    const root = fixture();
+    const releasePath = publishRuntimeRelease(root, 'release-a', 'fingerprint');
+    markRuntimePromotionPending(root, 'release-a');
+    expect(lastCompletedRuntimePromotion(root)).toBeNull();
+    expect(completePendingRuntimePromotion(root, releasePath)).toEqual(expect.objectContaining({ releaseId: 'release-a' }));
+    expect(lastCompletedRuntimePromotion(root)).toEqual(expect.objectContaining({ releaseId: 'release-a' }));
   });
 });

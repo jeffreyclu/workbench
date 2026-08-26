@@ -4,6 +4,7 @@ import type { Socket } from 'node:net';
 import { existsSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { isDatabaseCompatible, newestCompatibleRelease } from '../src/server/runtime-compatibility.js';
+import { completePendingRuntimePromotion } from '../src/server/runtime-release.js';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
 const currentLink = join(root, '.workbench-runtime/current');
@@ -113,6 +114,7 @@ async function deploy(releasePath = currentRelease()): Promise<void> {
     await waitForHealth(port, child);
     const previous = active;
     active = { releasePath, port, child };
+    completePendingRuntimePromotion(root, releasePath);
     child.once('exit', () => {
       if (stopping || active?.child !== child) return;
       active = null;
