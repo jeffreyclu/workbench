@@ -1095,7 +1095,7 @@ describe('WorkItemRepository', () => {
     repository.createSharedMessage('jeffrey', 'The durable fact has several relevant details.', 'completed', conversation.id);
     repository.createSharedMessage('jeffrey', 'Continue the durable fact investigation.', 'queued', conversation.id, [], 'both');
     const matches = Array.from({ length: 12 }, (_, index) => ({
-      source: 'message', title: `Relevant ${index + 1}`, body: `Durable detail ${index + 1}: ${'evidence '.repeat(24)}`, createdAt: '2026-08-25T00:00:00.000Z', score: 0.03 - index * 0.001,
+      source: 'message', title: `Relevant ${index + 1}`, body: `Durable detail ${index + 1}: ${'evidence '.repeat(24)}`, createdAt: '2026-08-25T00:00:00.000Z', score: 0.03 - index * 0.001, conversationId: null, workItemId: null,
     }));
     const retrieval = vi.spyOn(repository, 'searchActivityMemory').mockResolvedValue(matches);
     const previousPath = process.env.PATH;
