@@ -22,6 +22,7 @@ type MarkdownComposerProps = {
   onChange: (markdown: string) => void;
   /** Enter submits only where the surrounding UI explicitly opts into it. */
   onSubmit?: () => void;
+  onFocus?: () => void;
   onBlur?: () => void;
   placeholder?: string;
   ariaLabel?: string;
@@ -135,13 +136,14 @@ function CopyCodeBlocksPlugin() {
   return null;
 }
 
-function MarkdownEditor({ value, onChange, onSubmit, onBlur, disabled, placeholder = 'Write in Markdown…', ariaLabel = 'Markdown editor', autoFocus = false, className }: Pick<MarkdownComposerProps, 'value' | 'onChange' | 'onSubmit' | 'onBlur' | 'disabled' | 'placeholder' | 'ariaLabel' | 'autoFocus' | 'className'>) {
+function MarkdownEditor({ value, onChange, onSubmit, onFocus, onBlur, disabled, placeholder = 'Write in Markdown…', ariaLabel = 'Markdown editor', autoFocus = false, className }: Pick<MarkdownComposerProps, 'value' | 'onChange' | 'onSubmit' | 'onFocus' | 'onBlur' | 'disabled' | 'placeholder' | 'ariaLabel' | 'autoFocus' | 'className'>) {
   return <div className={['markdown-composer', className].filter(Boolean).join(' ')}>
     <RichTextPlugin
       contentEditable={<ContentEditable
         className="markdown-contenteditable"
         aria-label={ariaLabel}
         autoFocus={autoFocus}
+        onFocus={onFocus}
         onBlur={onBlur}
       />}
       placeholder={<div className="markdown-placeholder">{placeholder}</div>}
@@ -160,7 +162,7 @@ function MarkdownEditor({ value, onChange, onSubmit, onBlur, disabled, placehold
 }
 
 /** A Lexical editor that stores Markdown, keeping messages agent-readable. */
-export function MarkdownComposer({ conversationId, value, onChange, onSubmit, onBlur, placeholder, ariaLabel, autoFocus, className, disabled = false }: MarkdownComposerProps) {
+export function MarkdownComposer({ conversationId, value, onChange, onSubmit, onFocus, onBlur, placeholder, ariaLabel, autoFocus, className, disabled = false }: MarkdownComposerProps) {
   const initialConfig = useMemo(() => ({
     namespace: `workbench-markdown-${conversationId ?? 'new'}`,
     // Keep this in sync with `TRANSFORMERS`: MarkdownShortcutPlugin validates
@@ -175,6 +177,6 @@ export function MarkdownComposer({ conversationId, value, onChange, onSubmit, on
   }), [conversationId]);
 
   return <LexicalComposer key={conversationId ?? 'new'} initialConfig={initialConfig}>
-    <MarkdownEditor value={value} onChange={onChange} onSubmit={onSubmit} onBlur={onBlur} placeholder={placeholder} ariaLabel={ariaLabel} autoFocus={autoFocus} className={className} disabled={disabled} />
+    <MarkdownEditor value={value} onChange={onChange} onSubmit={onSubmit} onFocus={onFocus} onBlur={onBlur} placeholder={placeholder} ariaLabel={ariaLabel} autoFocus={autoFocus} className={className} disabled={disabled} />
   </LexicalComposer>;
 }

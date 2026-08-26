@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 
 export type DiffConfidenceBlock = { key: string; lines: string[] };
+export type DiffConfidenceAssessment = { confidence: number; reasoning: string };
 
-const SYSTEM_PROMPT = `You are reviewing a code diff. For every supplied changed block, estimate how likely the block is to be correct in its local context. Return only minified JSON in this exact form: {"assessments":{"block-key":0}}. Every supplied key must appear exactly once. Use an integer from 0 to 100. This is an AI assessment, not a claim of calibrated probability. Base it on visible code only; do not invent context.`;
-const cache = new Map<string, Promise<Record<string, number>>>();
+const SYSTEM_PROMPT = `You are reviewing a code diff. For every supplied changed block, estimate how likely the block is to be correct in its local context. Return only minified JSON in this exact form: {"assessments":{"block-key":{"confidence":0,"reasoning":"brief visible-code rationale"}}}. Every supplied key must appear exactly once. Confidence is an integer from 0 to 100 and reasoning is a concise sentence. This is an AI assessment, not a claim of calibrated probability. Base it on visible code only; do not invent context.`;
+const cache = new Map<string, Promise<Record<string, DiffConfidenceAssessment>>>();
 
-export function parseDiffConfidenceAssessment(output: string, keys: string[]): Record<string, number> {
+export function parseDiffConfidenceAssessment(output: string, keys: string[]): Record<string, DiffConfidenceAssessment> {
   let candidate = output;
   try {
     const envelope = JSON.parse(output) as { result?: unknown };
@@ -19,16 +20,18 @@ export function parseDiffConfidenceAssessment(output: string, keys: string[]): R
   const parsed = JSON.parse(json) as { assessments?: unknown };
   if (!parsed.assessments || typeof parsed.assessments !== 'object' || Array.isArray(parsed.assessments)) throw new Error('AI diff assessment returned an invalid shape.');
   const source = parsed.assessments as Record<string, unknown>;
-  const assessments: Record<string, number> = {};
+  const assessments: Record<string, DiffConfidenceAssessment> = {};
   for (const key of keys) {
     const value = source[key];
-    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 100) throw new Error('AI diff assessment omitted or invalidated a block score.');
-    assessments[key] = value;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('AI diff assessment omitted or invalidated a block score.');
+    const assessment = value as { confidence?: unknown; reasoning?: unknown };
+    if (typeof assessment.confidence !== 'number' || !Number.isInteger(assessment.confidence) || assessment.confidence < 0 || assessment.confidence > 100 || typeof assessment.reasoning !== 'string' || !assessment.reasoning.trim()) throw new Error('AI diff assessment omitted or invalidated a block score.');
+    assessments[key] = { confidence: assessment.confidence, reasoning: assessment.reasoning.trim() };
   }
   return assessments;
 }
 
-function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, number>> {
+function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, DiffConfidenceAssessment>> {
   const keys = blocks.map((block) => block.key);
   const prompt = `${SYSTEM_PROMPT}\n\nBlocks:\n${JSON.stringify(blocks)}`;
   return new Promise((resolve, reject) => {
@@ -48,7 +51,7 @@ function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, nu
   });
 }
 
-export function assessDiffBlocks(blocks: DiffConfidenceBlock[]): Promise<Record<string, number>> {
+export function assessDiffBlocks(blocks: DiffConfidenceBlock[]): Promise<Record<string, DiffConfidenceAssessment>> {
   const key = createHash('sha256').update(JSON.stringify(blocks)).digest('hex');
   const existing = cache.get(key);
   if (existing) return existing;

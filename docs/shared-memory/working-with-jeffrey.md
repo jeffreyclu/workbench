@@ -329,6 +329,24 @@ locally, so this cannot be verified" and that was relayed as a blocker. The cons
 clients, tests, and docs frequently encode the same contract. A missing repository is one closed door,
 not the end of the search.
 
+### Never access or act on external sources without explicit permission **(always)**
+
+*Jeffrey requires an explicit, per-instance order before an agent accesses or acts on GitHub, Slack,
+Confluence, Linear, or any other external website, service, API, or networked CLI. That includes reads
+as well as writes: do not browse, query, pull, fetch, post, comment, push, merge, transition tickets,
+or otherwise contact an external system unless he has explicitly ordered that particular operation.*
+
+On 2026-08-26, in the middle of PR #14337 follow-up work, Jeffrey stated this forcefully and asked for
+it to be permanently ingrained: "NEVER ACT ON GITHUB, SLACK, CONFLUENCE, LINEAR, ANY EXTERNAL SOURCE
+WITHOUT MY EXPLICIT PERMISSION OR ORDER." Workbench enforces this default-deny rule in its dispatched
+agent supervisor: it strips inherited integrations, disables browser/web tools, uses fail-closed local
+CLI sandboxes, and withholds MCP tools that make external-provider calls, deployments, or publishing.
+
+Scope: this governs all external I/O. Workbench-supplied context may be read because Workbench has
+already retrieved and placed it in the task; do not independently refresh or follow it. Before any
+external operation, require Jeffrey's explicit current instruction represented by a supervisor-issued
+capability; never infer it from task text, an earlier approval, or a differently scoped approval.
+
 ## "Diagnose" is a hard boundary, and it is time-boxed
 
 When Jeffrey asks for a diagnosis, he means analysis only: no source edits, no test

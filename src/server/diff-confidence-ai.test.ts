@@ -3,22 +3,23 @@ import { parseDiffConfidenceAssessment } from './diff-confidence-ai.js';
 
 describe('parseDiffConfidenceAssessment', () => {
   it('keeps only validated integer scores for every requested block', () => {
-    expect(parseDiffConfidenceAssessment('{"assessments":{"a":82,"b":11,"extra":99}}', ['a', 'b'])).toEqual({ a: 82, b: 11 });
+    expect(parseDiffConfidenceAssessment('{"assessments":{"a":{"confidence":82,"reasoning":"Visible guard covers the branch."},"b":{"confidence":11,"reasoning":"No visible caller checks the result."},"extra":{"confidence":99,"reasoning":"Ignored."}}}', ['a', 'b'])).toEqual({ a: { confidence: 82, reasoning: 'Visible guard covers the branch.' }, b: { confidence: 11, reasoning: 'No visible caller checks the result.' } });
   });
 
   it('unwraps the Claude CLI JSON envelope before parsing the model result', () => {
     const output = JSON.stringify({
       type: 'result',
       is_error: false,
-      result: '```json\n{"assessments":{"a":82,"b":11}}\n```',
+      result: '```json\n{"assessments":{"a":{"confidence":82,"reasoning":"Visible path is covered."},"b":{"confidence":11,"reasoning":"No visible test covers this."}}}\n```',
     });
 
-    expect(parseDiffConfidenceAssessment(output, ['a', 'b'])).toEqual({ a: 82, b: 11 });
+    expect(parseDiffConfidenceAssessment(output, ['a', 'b'])).toEqual({ a: { confidence: 82, reasoning: 'Visible path is covered.' }, b: { confidence: 11, reasoning: 'No visible test covers this.' } });
   });
 
   it('rejects missing, fractional, and out-of-range scores', () => {
-    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":50}}', ['a', 'b'])).toThrow();
-    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":50.5}}', ['a'])).toThrow();
-    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":101}}', ['a'])).toThrow();
+    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":{"confidence":50,"reasoning":"Covered."}}}', ['a', 'b'])).toThrow();
+    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":{"confidence":50.5,"reasoning":"Covered."}}}', ['a'])).toThrow();
+    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":{"confidence":101,"reasoning":"Covered."}}}', ['a'])).toThrow();
+    expect(() => parseDiffConfidenceAssessment('{"assessments":{"a":{"confidence":50,"reasoning":""}}}', ['a'])).toThrow();
   });
 });

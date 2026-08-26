@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -76,16 +76,18 @@ describe('classifyExecution', () => {
     expect(isAgentCapacityError(new Error('Task implementation failed a test'))).toBe(false);
   });
 
-  it('grants agents full home access while retaining the task workspace as cwd', () => {
+  it('runs agents in local-only, fail-closed modes while retaining the task workspace as cwd', () => {
     const codex = commandFor('codex', '/tmp/project', 'economy').args;
     const claude = commandFor('claude', '/tmp/project', 'economy').args;
-    expect(codex).toContain('--dangerously-bypass-approvals-and-sandbox');
-    expect(claude).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--disallowedTools', 'Task']));
+    expect(codex).toEqual(expect.arrayContaining(['--ignore-user-config', '--sandbox', 'workspace-write']));
+    expect(codex).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(claude).toEqual(expect.arrayContaining(['--permission-mode', 'dontAsk', '--safe-mode', '--no-chrome', '--disallowedTools', 'Task,WebFetch,WebSearch']));
+    expect(claude).not.toContain('--dangerously-skip-permissions');
     expect(claude).toEqual(expect.arrayContaining(['--input-format', 'stream-json']));
     expect(claude).not.toContain('--forward-subagent-text');
     expect(claude).toEqual(expect.arrayContaining(['--autocompact', '100k']));
     expect(claude).toEqual(expect.arrayContaining(['--add-dir', '/tmp/project', homedir()]));
-    expect(commandFor('claude', '/tmp/project', 'standard').args).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions']));
+    expect(commandFor('claude', '/tmp/project', 'standard').args).toEqual(expect.arrayContaining(['--permission-mode', 'dontAsk']));
   });
 
   it('streams Claude partial messages so a long answer is visible while it is written', () => {
@@ -142,7 +144,7 @@ describe('classifyExecution', () => {
   it('keeps Claude in one foreground context to avoid multiplied cache reads', () => {
     for (const profile of ['economy', 'standard', 'deep'] as const) {
       const args = commandFor('claude', '/tmp/project', profile).args;
-      expect(args).toEqual(expect.arrayContaining(['--disallowedTools', 'Task']));
+      expect(args).toEqual(expect.arrayContaining(['--disallowedTools', 'Task,WebFetch,WebSearch']));
       expect(args).not.toContain('--forward-subagent-text');
     }
   });
@@ -150,6 +152,11 @@ describe('classifyExecution', () => {
   it('tells Claude not to open extra cached subagent contexts', () => {
     expect(CLAUDE_EXECUTION_CONTRACT).toContain('do not delegate to subagents');
     expect(CLAUDE_EXECUTION_CONTRACT).toContain('Report a command as passing only if it ran in this run');
+  });
+
+  it('injects the explicit-order external-source guardrail into every work-item prompt', () => {
+    const prompt = buildPrompt(item('Fix a component'), { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun);
+    expect(prompt).toContain(EXTERNAL_ACTION_CONTRACT);
   });
 
   it('sends both agents the same reasoning effort for a given tier', () => {

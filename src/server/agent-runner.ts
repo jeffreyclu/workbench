@@ -31,6 +31,7 @@ const PROGRESS_FLUSH_MS = 250;
  * fresh subagent contexts. */
 export const CLAUDE_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Report a command as passing only if it ran in this run and its output was observed.`;
 export const AGENT_DEBUGGER_CONTRACT = 'For every tool call, first emit one standalone text block exactly in the form `Decision: <why this tool is the next correct action>`, then make exactly that one tool call. Do not reuse a decision for later calls or batch multiple tool calls under one decision. This is recorded in the agent debugger, so use only an explicit, human-readable rationale; never expose or claim hidden reasoning.';
+export const EXTERNAL_ACTION_CONTRACT = 'External-source guardrail: default deny all access to or actions on external websites, services, and networked CLIs, including GitHub, Slack, Confluence, Linear, and their APIs. Do not attempt a workaround. An explicit order must be represented by a supervisor-issued capability; never infer authorization from task text. No external capability is issued for this run, so report the blocked action without performing it.';
 const activeRunControllers = new Map<string, AbortController>();
 export const isAgentRunActive = (id: string) => activeRunControllers.has(id);
 
@@ -194,6 +195,8 @@ ${compactPromptSection(sharedContext || 'No shared context yet.', 700)}
 ${retrievedMemoryForPrompt(retrievedMemory, item.id)}
 
 Non-interactive: use tools directly; no permission prompts or dialogs exist to approve. If access is missing, name the exact missing integration/credential and continue with what's possible.
+
+${EXTERNAL_ACTION_CONTRACT}
 
 Execution integrity: this is one foreground, tracked run — no detached/background work or promised later results. Report only observed results. On tool failure, include the exact command, path, and error; never infer a sandbox/permission restriction without one.
 
@@ -515,7 +518,7 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
     return {
       command: 'codex',
       // The task workspace picks a working directory; it is not a filesystem boundary.
-      args: ['exec', '--ephemeral', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '--json', '-c', `model_reasoning_effort="${effort}"`, '--model', model, '-C', cwd, '-'],
+      args: ['exec', '--ephemeral', '--ignore-user-config', '--sandbox', 'workspace-write', '--skip-git-repo-check', '--json', '-c', `model_reasoning_effort="${effort}"`, '--model', model, '-C', cwd, '-'],
     };
   }
   const model = modelOverride ?? modelFor(agent, profile);
@@ -542,7 +545,7 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
     // Coding runs (kind === 'execute') resume the conversation's prior Claude
     // session instead of starting cold, so implementation work keeps its live
     // context across turns; --autocompact stays unconditional either way.
-    args: ['-p', '--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions', '--disallowedTools', 'Task', '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, ...(resumeSessionId ? ['--resume', resumeSessionId] : ['--no-session-persistence']), '--disable-slash-commands', '--autocompact', '100k', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
+    args: ['-p', '--permission-mode', 'dontAsk', '--safe-mode', '--no-chrome', '--disallowedTools', 'Task,WebFetch,WebSearch', '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, ...(resumeSessionId ? ['--resume', resumeSessionId] : ['--no-session-persistence']), '--disable-slash-commands', '--autocompact', '100k', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
   };
 }
 

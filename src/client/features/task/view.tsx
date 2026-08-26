@@ -71,6 +71,7 @@ import { useTaskAccountProfile, useTaskExecutionProfile } from './state';
 import { celebrate } from '../../celebrate';
 import { SessionFeedbackPrompt } from '../../session-feedback-prompt';
 import { WorkspaceDiffView } from '../workspace-diff/view';
+import { formatDiffFollowUpReference, type DiffFollowUpReference } from '../diff-confidence';
 import type { AgentAccountProfile } from '../../data/runtime-client';
 
 export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCreated, onRemoving }: { id: string; onClose: () => void; onOpenConversation: (conversationId: string) => void; onOpenTask: (taskId: string) => void; onCreated: (item: WorkItem) => void; onRemoving?: (id: string) => Promise<void> }) {
@@ -107,6 +108,16 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const [activityVisibleCount, setActivityVisibleCount] = useState(ACTIVITY_PAGE_SIZE);
   const RUNS_PAGE_SIZE = 5;
   const [runsVisibleCount, setRunsVisibleCount] = useState(RUNS_PAGE_SIZE);
+  const addDiffFollowUp = (reference: DiffFollowUpReference) => {
+    const conversation = detail.data?.conversations[0];
+    if (!conversation) {
+      toast.error('This task has no conversation to follow up in.');
+      return;
+    }
+    const previousDraft = readConversationDrafts()[conversation.id]?.trim();
+    writeConversationDraft(conversation.id, [previousDraft, formatDiffFollowUpReference(reference)].filter(Boolean).join('\n\n'));
+    onOpenConversation(conversation.id);
+  };
 
   const initializedExecutionPlanSelectionId = useRef<string | null>(null);
   const update = useMutation({
@@ -664,7 +675,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       {deleteTaskPromptOpen && <ConfirmationDialog title={`Delete “${item.title}”?`} description="This permanently deletes the task and cannot be undone." confirmLabel="Delete task" pending={lifecycle.isPending} onClose={() => setDeleteTaskPromptOpen(false)} onConfirm={() => lifecycle.mutate('delete')} />}
       {feedbackTarget && <SessionFeedbackPrompt onSubmit={async (rating: SessionFeedbackRating) => { await api.createSessionFeedback({ ...feedbackTarget, rating }); setFeedbackTarget(null); onClose(); }} />}
 
-      <WorkspaceDiffView scope={{ workItemId: item.id }} isRunning={detail.data.runs.some((run) => run.status === 'queued' || run.status === 'running')} />
+      <WorkspaceDiffView scope={{ workItemId: item.id }} isRunning={detail.data.runs.some((run) => run.status === 'queued' || run.status === 'running')} onFollowUp={addDiffFollowUp} />
       <details className="detail-section task-collapsible relationships-section">
         <summary><span>Linked items & history</span><small>{(detail.data.parentItem ? 1 : 0) + detail.data.children.length + linkedTasks.length + detail.data.conversations.length + detail.data.artifacts.length + references.length} linked</small></summary>
         <div className="task-collapsible-content">

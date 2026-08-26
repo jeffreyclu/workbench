@@ -16,7 +16,7 @@ describe('WorkspaceDiffView', () => {
       const url = String(input);
       if (url === '/api/diff-confidence') {
         const keys = (JSON.parse(String(init?.body)) as { blocks: Array<{ key: string }> }).blocks.map((block) => block.key);
-        return new Response(JSON.stringify({ assessments: Object.fromEntries(keys.map((key) => [key, 42])) }), { headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({ assessments: Object.fromEntries(keys.map((key) => [key, { confidence: 42, reasoning: 'The changed call has no visible error handling.' }])) }), { headers: { 'Content-Type': 'application/json' } });
       }
       if (url === '/api/work-items/work-item-1/workspace-diff/snapshots') {
         return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
@@ -44,6 +44,30 @@ describe('WorkspaceDiffView', () => {
     expect(screen.getByRole('button', { name: /src\/old\.ts/ })).toBeInTheDocument();
     expect(document.querySelector('.diff-review-layout > .diff-file-list')).toBeInTheDocument();
     expect(await screen.findByLabelText('AI assessment: 42 out of 100')).toBeInTheDocument();
+  });
+
+  it('adds the selected logical block and its reasoning to a follow-up', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/diff-confidence') {
+        const keys = (JSON.parse(String(init?.body)) as { blocks: Array<{ key: string }> }).blocks.map((block) => block.key);
+        return new Response(JSON.stringify({ assessments: Object.fromEntries(keys.map((key) => [key, { confidence: 42, reasoning: 'The changed call has no visible error handling.' }])) }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.endsWith('/workspace-diff/snapshots')) return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.endsWith('/workspace-diff')) return new Response(JSON.stringify({ diff: {
+        workspacePath: '/tmp/workbench', branch: 'review', revision: 'follow-up', changedFiles: 1, additions: 1, deletions: 1,
+        publish: { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
+        files: [{ path: 'src/follow-up.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }],
+      } }), { headers: { 'Content-Type': 'application/json' } });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const onFollowUp = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={false} onFollowUp={onFollowUp} /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'AI assessment: 42 out of 100' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Follow up' }));
+    expect(onFollowUp).toHaveBeenCalledWith(expect.objectContaining({ filePath: 'src/follow-up.ts', assessment: { confidence: 42, reasoning: 'The changed call has no visible error handling.' }, lines: expect.arrayContaining([expect.objectContaining({ text: '+after', kind: 'addition' })]) }));
   });
 
   it('commits and pushes reviewed changes, then refreshes the snapshot', async () => {

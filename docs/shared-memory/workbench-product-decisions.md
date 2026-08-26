@@ -975,3 +975,6 @@ Verified via `tsc --noEmit` (clean) and `npx vitest run` (987/988 passing; the
 pre-existing and unrelated — reproduced identically with the fix stashed
 out). Tracked on work item `f762adb1`, description updated to reflect DONE on
 both scope items.
+# Confidence assessments support direct follow-up context
+
+*Decision from Jeffrey, 2026-08-26.* A confidence bubble in a code diff is an interactive details control, not just a score. Its details show the model's concise visible-code reasoning and a **Follow up** action. Follow up must carry the exact logical diff block, file location, confidence, and reasoning into the conversation draft so the next agent turn has the original code context. Use the existing message draft and canonical send path; do not invent a fake file upload or a separate backend persistence model for this context.

@@ -70,12 +70,11 @@ describe('Workbench MCP', () => {
     return (result.structuredContent as { data: T }).data;
   }
 
-  it('advertises the complete Workbench admin surface, including destructive and control-plane actions', async () => {
+  it('advertises the local Workbench admin surface without external-provider actions', async () => {
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
       'add_activity',
       'add_conversation_message',
-      'authorize_source_connection',
       'cancel_agent_run',
       'cancel_conversation_message',
       'configure_linear_provider',
@@ -83,11 +82,9 @@ describe('Workbench MCP', () => {
       'create_conversation',
       'create_work_item',
       'delete_work_item',
-      'disconnect_source_connection',
       'dispatch_conversation_turn',
       'execute_work_item',
       'get_conversation',
-      'get_linear_provider',
       'get_work_item',
       'list_artifacts',
       'list_audit_log',
@@ -102,26 +99,25 @@ describe('Workbench MCP', () => {
       'manage_conversation',
       'manage_work_item_link',
       'manage_work_item_reference',
-      'promote_runtime',
       'propose_execution_plan',
-      'publish_artifact',
       'queue_linear_work_item',
       'reorder_stack',
       'resolve_discovery',
       'resolve_execution_plan',
       'retry_agent_run',
-      'revoke_artifact',
-      'run_discovery_scan',
       'set_figma_discovery_scope',
       'set_work_item_lifecycle',
-      'sync_linear_provider',
       'unblock_work_item',
       'update_work_item',
     ]);
     expect(tools.tools.find((tool) => tool.name === 'list_results')?.annotations).toEqual(expect.objectContaining({ readOnlyHint: true }));
     expect(tools.tools.find((tool) => tool.name === 'create_work_item')?.annotations).toEqual(expect.objectContaining({ readOnlyHint: false, openWorldHint: false }));
+    expect(tools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining([
+      'authorize_source_connection', 'disconnect_source_connection', 'get_linear_provider',
+      'sync_linear_provider', 'run_discovery_scan', 'publish_artifact', 'revoke_artifact', 'promote_runtime',
+    ]));
     // Irreversible actions stay available, but they announce themselves as destructive.
-    for (const name of ['delete_work_item', 'revoke_artifact']) {
+    for (const name of ['delete_work_item']) {
       expect(tools.tools.find((tool) => tool.name === name)?.annotations).toEqual(expect.objectContaining({ destructiveHint: true }));
     }
     const updateProperties = tools.tools.find((tool) => tool.name === 'update_work_item')?.inputSchema.properties ?? {};
@@ -252,39 +248,26 @@ describe('Workbench MCP', () => {
     await callData('retry_agent_run', { runId: run.id, force: true });
     await callData('resolve_execution_plan', { planId: plan.id, resolution: 'accepted' });
     await callData('dispatch_conversation_turn', { conversationId: conversation.id, actor: 'codex', body: 'Take this.', dispatchTo: 'claude' });
-    await callData('publish_artifact', { path: 'notes/report.md', workItemId: item.id });
-    await callData('revoke_artifact', { artifactId: 'artifact-1' });
-    await callData('run_discovery_scan', {});
-    await callData('promote_runtime', { conversationId: conversation.id });
     await callData('delete_work_item', { workItemId: item.id, actor: 'claude' });
 
     expect(calls.map((call) => call.method)).toEqual([
       'startWorkItemExecution', 'startAgentRun', 'cancelRun', 'retryRun', 'resolvePlan',
-      'dispatchConversationTurn', 'publishArtifact', 'revokeArtifact', 'runDiscoveryScan',
-      'promoteRuntime', 'deleteWorkItem',
+      'dispatchConversationTurn', 'deleteWorkItem',
     ]);
     expect(calls[0].args).toEqual([item.id, { executionProfile: 'deep', force: true }]);
     expect(calls[1].args).toEqual([item.id, { kind: 'review', target: 'claude', instructions: 'Review it.', executionProfile: null }, { actor: 'claude', force: false }]);
     expect(calls[5].args).toEqual([conversation.id, 'codex', 'Take this.', 'claude', null]);
   });
 
-  it('administers source connections and Linear without exposing credentials', async () => {
+  it('exposes only local source and Linear configuration state', async () => {
     await callData('list_source_connections', {});
-    await callData('authorize_source_connection', { provider: 'figma', mode: 'managed' });
     await callData('set_figma_discovery_scope', { roots: ['https://www.figma.com/design/abc123/Workbench'] });
-    await callData('disconnect_source_connection', { provider: 'slack', actor: 'codex' });
-    await callData('get_linear_provider', { teamId: 'team-1' });
-    await callData('sync_linear_provider', {});
     await callData('configure_linear_provider', { teamIds: ['team-1'], projectIds: ['project-1'] });
     await callData('queue_linear_work_item', { workItemId: '00000000-0000-4000-8000-000000000001' });
 
-    expect(calls.slice(-8)).toEqual([
+    expect(calls.slice(-4)).toEqual([
       { method: 'listSourceConnections', args: [] },
-      { method: 'authorizeSource', args: [{ provider: 'figma', mode: 'managed' }] },
       { method: 'setFigmaScope', args: [['https://www.figma.com/design/abc123/Workbench']] },
-      { method: 'disconnectSource', args: ['slack', 'codex'] },
-      { method: 'getLinearProvider', args: ['team-1'] },
-      { method: 'syncLinearProvider', args: [] },
       { method: 'configureLinearProvider', args: [['team-1'], ['project-1']] },
       { method: 'queueLinearWorkItem', args: ['00000000-0000-4000-8000-000000000001'] },
     ]);

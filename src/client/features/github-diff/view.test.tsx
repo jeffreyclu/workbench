@@ -16,7 +16,7 @@ describe('GitHubDiffView', () => {
       const url = String(input);
       if (url === '/api/diff-confidence') {
         const keys = (JSON.parse(String(init?.body)) as { blocks: Array<{ key: string }> }).blocks.map((block) => block.key);
-        return new Response(JSON.stringify({ assessments: Object.fromEntries(keys.map((key) => [key, 42])) }), { headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({ assessments: Object.fromEntries(keys.map((key) => [key, { confidence: 42, reasoning: 'The changed call has no visible error handling.' }])) }), { headers: { 'Content-Type': 'application/json' } });
       }
       return new Response(JSON.stringify({
         diff: {

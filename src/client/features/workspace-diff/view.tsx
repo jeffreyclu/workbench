@@ -4,7 +4,7 @@ import { Skeleton, SkeletonText } from '../../skeleton.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { DiffConfidenceBubble } from '../diff-confidence-bubble.js';
 import { useDiffBlockConfidence } from '../diff-confidence-hooks.js';
-import { groupDiffBlocks, isChangedBlock } from '../diff-confidence.js';
+import { groupDiffBlocks, isChangedBlock, type DiffFollowUpReference } from '../diff-confidence.js';
 import { fileLabel, parsePatch } from './logic.js';
 import { useCommitAndPushWorkspace, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
 
@@ -15,7 +15,7 @@ function DiffSkeleton() {
   </section>;
 }
 
-export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning }: { scope: WorkspaceDiffScope; isRunning: boolean }) {
+export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning, onFollowUp }: { scope: WorkspaceDiffScope; isRunning: boolean; onFollowUp?: (reference: DiffFollowUpReference) => void }) {
   const query = useWorkspaceDiff(scope);
   const snapshotsQuery = useWorkspaceDiffSnapshots(scope, query.data?.diff.revision);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -60,7 +60,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     {publish.data?.result.pushed && <p className="workspace-diff-publish-success" role="status">Committed and pushed{publish.data.result.commit ? ` ${publish.data.result.commit}` : ''}.</p>}
     {files.length === 0 ? <p className="muted">No uncommitted changes to review.</p> : <div className="workspace-diff-layout diff-review-layout">
       <nav className="diff-file-list" aria-label="Changed workspace files"><span>Files ({files.length})</span><div>{files.map((file) => <button key={file.path} type="button" className={selectedFile?.path === file.path ? 'selected' : ''} onClick={() => setSelectedPath(file.path)}><FileDiff size={13} /><span>{file.path}</span><b>+{file.additions}</b><i>−{file.deletions}</i></button>)}</div></nav>
-      {selectedFile && <article className="workspace-diff-file"><header><strong>{fileLabel(selectedFile)}</strong><span>{selectedFile.isBinary ? 'Binary file' : selectedFile.status}</span></header>{selectedFile.patch ? <pre>{blocks.map((block) => { const changed = isChangedBlock(block); return <div key={block.key} className={changed ? 'diff-block' : undefined}>{changed && !confidence.isError && <DiffConfidenceBubble confidence={confidence.data?.[block.key] ?? null} />}{block.lines.map((line) => <code key={line.key} className={`diff-line ${line.kind}`}><span>{line.oldLine ?? ''}</span><span>{line.newLine ?? ''}</span><span>{line.text || ' '}</span></code>)}</div>; })}</pre> : <p className="muted">This binary file cannot be rendered as a text diff.</p>}</article>}
+      {selectedFile && <article className="workspace-diff-file"><header><strong>{fileLabel(selectedFile)}</strong><span>{selectedFile.isBinary ? 'Binary file' : selectedFile.status}</span></header>{selectedFile.patch ? <pre>{blocks.map((block) => { const changed = isChangedBlock(block); const assessment = confidence.data?.[block.key] ?? null; return <div key={block.key} className={changed ? 'diff-block' : undefined}>{changed && !confidence.isError && <DiffConfidenceBubble assessment={assessment} onFollowUp={assessment && onFollowUp ? () => onFollowUp({ filePath: selectedFile.path, lines: block.lines, assessment }) : undefined} />}{block.lines.map((line) => <code key={line.key} className={`diff-line ${line.kind}`}><span>{line.oldLine ?? ''}</span><span>{line.newLine ?? ''}</span><span>{line.text || ' '}</span></code>)}</div>; })}</pre> : <p className="muted">This binary file cannot be rendered as a text diff.</p>}</article>}
     </div>}
   </section>;
 });

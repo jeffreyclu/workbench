@@ -15,6 +15,25 @@ export interface DiffBlock {
   lines: DiffBlockLine[];
 }
 
+export interface DiffConfidenceAssessment {
+  confidence: number;
+  reasoning: string;
+}
+
+export interface DiffFollowUpReference {
+  filePath: string;
+  lines: DiffBlockLine[];
+  assessment: DiffConfidenceAssessment;
+}
+
+/** Produces agent-readable context without inventing a file attachment or a new persistence layer. */
+export function formatDiffFollowUpReference({ filePath, lines, assessment }: DiffFollowUpReference): string {
+  const lineNumbers = lines.map((line) => line.newLine ?? line.oldLine).filter((line): line is number => line !== null);
+  const location = lineNumbers.length ? `:${Math.min(...lineNumbers)}${Math.max(...lineNumbers) === Math.min(...lineNumbers) ? '' : `-${Math.max(...lineNumbers)}`}` : '';
+  const patch = lines.map((line) => line.text).join('\n');
+  return `Please follow up on this confidence assessment.\n\n**${filePath}${location}** · AI confidence: ${assessment.confidence}/100\n\n> ${assessment.reasoning}\n\n\`\`\`diff\n${patch}\n\`\`\``;
+}
+
 /** Group parsed diff lines into logical blocks: each contiguous run of changed
  * lines is one block; each context/header line stands alone. */
 export function groupDiffBlocks(lines: DiffBlockLine[]): DiffBlock[] {

@@ -146,10 +146,11 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
   const server = new McpServer({ name: 'workbench', version: '1.0.0' }, {
     instructions: [
       'Workbench is the canonical shared state for Jeffrey, Codex, and Claude.',
-      'Codex and Claude hold complete Workbench admin control: destructive task actions, execution dispatch/cancel/retry, plan approval, artifact publication/revocation, source/provider administration, discovery scans, and runtime promotion are all available here.',
+      'Codex and Claude hold complete control over Workbench-local task actions, execution dispatch/cancel/retry, plan approval, and local state. External-provider access, public artifact publication, and runtime promotion are deliberately unavailable through this agent surface.',
       'Read current state before mutating it, and use the actor that represents the calling assistant so the shared log stays truthful.',
-      'The only things outside this surface are outside Workbench itself: provider credentials, direct database access, and general machine administration.',
-      'You are an autonomous Workbench administrator. Execute requested Workbench actions directly; do not ask Jeffrey for approval, force flags, or a handoff. Only concrete state-integrity conflicts — such as an active run, dependency cycle, or stale plan — can reject an action.',
+      'External websites, services, and networked CLIs require Jeffrey\'s explicit current instruction for the particular operation. This MCP surface cannot perform them.',
+      'The only things outside this surface are provider credentials, external-provider operations, public deployment, direct database access, and general machine administration.',
+      'You are an autonomous Workbench-local administrator. Execute requested local Workbench actions directly; do not ask Jeffrey for approval, force flags, or a handoff. Only concrete state-integrity conflicts — such as an active run, dependency cycle, or stale plan — can reject a local action.',
     ].join(' '),
   });
 
@@ -641,45 +642,12 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     return { conversation: repository.setConversationArchived(conversationId, action === 'archive') };
   }));
 
-  server.registerTool('publish_artifact', {
-    title: 'Publish a markdown file as a shared artifact',
-    description: 'Renders a local markdown file to an immutable page, deploys it, and returns its public URL. Republishing an unchanged file is a no-op. Paths resolve against the task workspace and must stay inside the allowed development roots.',
-    inputSchema: {
-      path: z.string().trim().min(1).max(8_000),
-      title: z.string().trim().min(1).max(300).optional(),
-      workItemId: z.string().uuid().optional(),
-      conversationId: z.string().uuid().optional(),
-    },
-    annotations: mutationAnnotations(),
-  }, async (input) => runTool('publish_artifact', async () => unwrap(await admin.publishArtifact(input))));
-
   server.registerTool('list_artifacts', {
     title: 'List published artifacts',
     description: 'Returns the artifact library with per-view counts.',
     inputSchema: { view: artifactLibraryViewSchema.default('published') },
     annotations: readOnlyAnnotations,
   }, async ({ view }) => runTool('list_artifacts', () => admin.listArtifacts(view)));
-
-  server.registerTool('revoke_artifact', {
-    title: 'Revoke a published artifact',
-    description: 'Takes a published page off the public host and marks it revoked. The response reports whether Workbench could verify the URL stopped serving.',
-    inputSchema: { artifactId: z.string().min(1).max(200) },
-    annotations: destructiveAnnotations,
-  }, async ({ artifactId }) => runTool('revoke_artifact', async () => unwrap(await admin.revokeArtifact(artifactId))));
-
-  server.registerTool('run_discovery_scan', {
-    title: 'Scan connected sources for new work',
-    description: 'Runs the discovery scan across connected sources and returns the refreshed pending inbox. Credentials stay server-side; only the resulting candidates come back.',
-    inputSchema: {},
-    annotations: mutationAnnotations(),
-  }, async () => runTool('run_discovery_scan', async () => unwrap(await admin.runDiscoveryScan())));
-
-  server.registerTool('promote_runtime', {
-    title: 'Promote the approved Workbench preview',
-    description: 'Builds, verifies, and promotes the candidate Workbench release, then reports progress into the given conversation. New requests switch immediately; the previous backend drains in-flight work before it exits.',
-    inputSchema: { conversationId: z.string().uuid() },
-    annotations: mutationAnnotations(),
-  }, async ({ conversationId }) => runTool('promote_runtime', () => unwrap(admin.promoteRuntime(conversationId))));
 
   server.registerTool('list_source_connections', {
     title: 'List source connections',
@@ -688,44 +656,12 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     annotations: readOnlyAnnotations,
   }, async () => runTool('list_source_connections', () => admin.listSourceConnections()));
 
-  server.registerTool('authorize_source_connection', {
-    title: 'Start source authorization',
-    description: 'Starts a server-managed authorization flow and returns its browser URL. Workbench stores the resulting credential; the credential itself is never returned to the assistant.',
-    inputSchema: {
-      provider: z.enum(['confluence', 'slack', 'figma', 'gmail']),
-      mode: z.enum(['remote', 'managed']).default('remote'),
-      serverUrl: z.string().url().max(2_000).optional().describe('Optional approved MCP endpoint override for remote authorization.'),
-    },
-    annotations: mutationAnnotations(),
-  }, async (input) => runTool('authorize_source_connection', async () => unwrap(await admin.authorizeSource(input))));
-
   server.registerTool('set_figma_discovery_scope', {
     title: 'Set Figma discovery scope',
     description: 'Replaces the Figma file roots Workbench scans while preserving the server-side managed connection settings.',
     inputSchema: figmaScopeSchema.shape,
     annotations: mutationAnnotations(true),
   }, async ({ roots }) => runTool('set_figma_discovery_scope', () => unwrap(admin.setFigmaScope(roots))));
-
-  server.registerTool('disconnect_source_connection', {
-    title: 'Disconnect a source',
-    description: 'Removes a Workbench source connection and its server-side stored authentication. The destructive action is audited.',
-    inputSchema: { provider: sourceProviderSchema, actor: actorSchema },
-    annotations: destructiveAnnotations,
-  }, async ({ provider, actor }) => runTool('disconnect_source_connection', () => unwrap(admin.disconnectSource(provider, actor))));
-
-  server.registerTool('get_linear_provider', {
-    title: 'Read Linear provider administration',
-    description: 'Returns the stored team/project scope plus available Linear teams, or the projects for one team. The Linear API key stays server-side.',
-    inputSchema: { teamId: z.string().trim().min(1).max(200).optional() },
-    annotations: readOnlyAnnotations,
-  }, async ({ teamId }) => runTool('get_linear_provider', async () => unwrap(await admin.getLinearProvider(teamId))));
-
-  server.registerTool('sync_linear_provider', {
-    title: 'Synchronize Linear',
-    description: 'Fetches open issues from the configured Linear scope and applies the normal provider-safe sync rules without exposing the API key.',
-    inputSchema: {},
-    annotations: mutationAnnotations(),
-  }, async () => runTool('sync_linear_provider', async () => unwrap(await admin.syncLinearProvider())));
 
   server.registerTool('configure_linear_provider', {
     title: 'Configure Linear scope',

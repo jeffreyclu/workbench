@@ -76,6 +76,7 @@ import { GitHubDiffView } from '../github-diff/view';
 import { pullRequestUrl } from '../github-diff/logic';
 import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { WorkspaceDiffScope } from '../../data/source-client';
+import { formatDiffFollowUpReference, type DiffFollowUpReference } from '../diff-confidence';
 
 const CONVERSATION_ROW_GAP = 6;
 // Stack cards and task cards share an 88px minimum height. Keeping the
@@ -259,6 +260,11 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     setBody(nextBody);
     if (conversationId) writeConversationDraft(conversationId, nextBody);
   }
+  function addDiffFollowUp(reference: DiffFollowUpReference) {
+    const nextBody = [body.trim(), formatDiffFollowUpReference(reference)].filter(Boolean).join('\n\n');
+    updateBody(nextBody);
+    setConversationSurface('messages');
+  }
   function updateComposerPreferences(updates: Partial<{ executionProfile: AgentRun['executionProfile']; accountProfile: string | null; dispatchTarget: ConversationDispatchTarget | null }>) {
     if (!conversationId) return;
     const targetConversationId = conversationId;
@@ -328,6 +334,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const isNearThreadBottomRef = useRef(true);
   const lastThreadScrollTopRef = useRef(0);
   const [consoleHeaderHidden, setConsoleHeaderHidden] = useState(false);
+  const [composerFocused, setComposerFocused] = useState(false);
   const THREAD_PAGE_SIZE = 5;
   const [threadVisibleCount, setThreadVisibleCount] = useState(THREAD_PAGE_SIZE);
   const [hasNewActivityBelow, setHasNewActivityBelow] = useState(false);
@@ -1267,13 +1274,13 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
         </div>
         {conversationDetail.isLoading ? <ConversationComposerSkeleton /> : conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <form className="shared-composer" onSubmit={submit}>
           {files.length > 0 && <div className="pending-files">{files.map((file) => <button type="button" key={`${file.name}-${file.size}`} onClick={() => setFiles((current) => current.filter((item) => item !== file))}><Paperclip size={11} /> {file.name} <X size={10} /></button>)}</div>}
-          <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} placeholder="Message Codex or Claude…" ariaLabel="Message Codex or Claude" onSubmit={() => {
+          <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} placeholder="Message Codex or Claude…" ariaLabel="Message Codex or Claude" onFocus={() => setComposerFocused(true)} onBlur={() => setComposerFocused(false)} onSubmit={() => {
             if ((body.trim() || files.length) && conversationId && !send.isPending && conversationReadyToSend) {
               sentDraftRef.current = { conversationId, body };
               send.mutate({ intent: 'queue' });
             }
           }} disabled={send.isPending} />
-          <div className="composer-toolbar">
+          <div className={`composer-toolbar${consoleHeaderHidden && !composerFocused && !body.trim() && files.length === 0 ? ' is-toolbar-hidden' : ''}`}>
             <input ref={fileRef} className="visually-hidden" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
             <button type="button" className="composer-tool attach-button" onClick={() => fileRef.current?.click()} aria-label="Attach files" title="Attach files"><Paperclip size={14} /></button>
             <span className="composer-hint">Files, screenshots, or context</span>
@@ -1289,7 +1296,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           {send.error && <p className="error-message">{send.error.message}</p>}
         </form>}
         </div>
-        {conversationSurface === 'changes' && workspaceDiffScope && <div className="conversation-changes" aria-label="Conversation changes"><WorkspaceDiffView scope={workspaceDiffScope} isRunning={linkedWorkItem.data?.runs.some((run) => run.status === 'queued' || run.status === 'running') ?? false} />{linkedWorkItem.data?.item && linkedPullRequestUrl && <GitHubDiffView sourceUrl={linkedWorkItem.data.item.sourceUrl} references={linkedWorkItem.data.references} />}</div>}
+        {conversationSurface === 'changes' && workspaceDiffScope && <div className="conversation-changes" aria-label="Conversation changes"><WorkspaceDiffView scope={workspaceDiffScope} isRunning={linkedWorkItem.data?.runs.some((run) => run.status === 'queued' || run.status === 'running') ?? false} onFollowUp={addDiffFollowUp} />{linkedWorkItem.data?.item && linkedPullRequestUrl && <GitHubDiffView sourceUrl={linkedWorkItem.data.item.sourceUrl} references={linkedWorkItem.data.references} onFollowUp={addDiffFollowUp} />}</div>}
         </div>
       </section>
       {planArchivePromptOpen && <FollowUpArchiveDialog count={selectedPlanTaskIndexes.size} pending={resolvePlan.isPending} onClose={() => setPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolvePlan.mutate({ resolution: 'accepted', archiveParent })} />}

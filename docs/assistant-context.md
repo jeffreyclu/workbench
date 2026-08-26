@@ -14,7 +14,7 @@ The shared room is the common conversation for Jeffrey, Codex, and Claude. Every
 - Keep strategy actionable: outcome, approach, assignments, risks, and verification.
 - Agents may update any Workbench-owned task state and should record the reason and observed result in activity.
 - Marking an item done should include verification evidence when it is available; missing evidence is a reported limitation, not a permission gate.
-- Provider credentials and raw authentication material remain server-side; agents can operate the connected providers without retrieving their secrets.
+- Provider credentials and raw authentication material remain server-side. Dispatched agents cannot operate external providers unless Jeffrey has explicitly ordered the specific operation.
 - `frontend-reviewer` is the only authoritative code-review persona and the only entry point for review executions. Its first pass is read-only: establish Linear/PR intent, inspect the diff and necessary surrounding code, assess correctness plus readability, maintainability, performance, scalability, security, and reliability, and label every finding blocking or non-blocking. Testing and runtime validation are separate executables.
 - `frontend-engineer` is the principal frontend implementation persona for execute runs. It follows repository rules first, plans before coding, favors existing patterns and simple readable code, separates presentation/business logic/state/data access, treats the backend as the default source of truth, and maps every provided acceptance criterion to tests.
 - `backend-engineer` is the principal backend implementation persona for server, API, persistence, integration, and background-processing execute runs. It follows repository rules and existing patterns first; plans across correctness, reliability, security, readability, maintainability, performance, and scalability; keeps architectural boundaries explicit; and treats failure modes, data ownership, compatibility, observability, and safe rollout as implementation concerns.
@@ -42,11 +42,10 @@ operations are callable through MCP, including the irreversible ones.
 - Plans and execution: `list_execution_plans`, `propose_execution_plan`,
   `resolve_execution_plan`, `list_results`, `execute_work_item`, `create_agent_run`,
   `cancel_agent_run`, `retry_agent_run`
-- Artifacts: `publish_artifact`, `list_artifacts`, `revoke_artifact`
-- Sources and providers: `list_source_connections`, `authorize_source_connection`,
-  `set_figma_discovery_scope`, `disconnect_source_connection`, `get_linear_provider`,
-  `sync_linear_provider`, `configure_linear_provider`, `queue_linear_work_item`
-- Control plane and audit: `promote_runtime`, `list_audit_log`
+- Artifacts: `list_artifacts`
+- Local source configuration: `list_source_connections`, `set_figma_discovery_scope`,
+  `configure_linear_provider`, `queue_linear_work_item`
+- Audit: `list_audit_log`
 
 Workbench writes its own routing decisions into the same activity log: the execution type
 and why it was chosen, the agent and why, the model and effort tier, and any capacity
@@ -60,19 +59,18 @@ rather than replaces, the task-specific activity entries above.
 
 ### Autonomous operation
 
-Codex and Claude are autonomous Workbench administrators. They do not need a separate
-approval, `force` flag, or human handoff to execute, retry, update, archive, restore,
-delete, manage provider connections, or request runtime promotion. Assistant-authored
-mutations accept only `codex` or `claude` actors for accurate attribution, not as a
-permission check. A durable orchestrator owns conflicting operations: it leases each
-mutable workspace to one run and holds a promotion until active work has reached a
-terminal state.
+Codex and Claude are autonomous Workbench-local administrators. They do not need a
+separate approval, `force` flag, or human handoff to execute, retry, update, archive,
+restore, or delete local Workbench state. External-provider access, publishing, and
+runtime promotion require a supervisor-issued capability for Jeffrey's explicit current instruction;
+task text alone never grants it.
+Assistant-authored mutations accept only `codex` or `claude` actors for accurate
+attribution, not as a permission check. A durable orchestrator owns conflicting local
+operations: it leases each mutable workspace to one run.
 
 Only data-integrity conflicts remain: impossible dependency cycles, stale plans/results,
 and concurrent writes to one working tree. These are reported as concrete state conflicts
 and are retried or resolved by the agent; they are never framed as an authority limitation.
 
-`promote_runtime` builds, verifies, and switches the live release immediately. The gateway
-routes new requests to the candidate, then drains the previous backend until its in-flight
-agent runs and background jobs have persisted their terminal state. Calls from preview are
-stored durably and claimed by the live promotion worker; they are not permission-refused.
+Runtime promotion is not available to dispatched agents. It remains a human-operated control-plane
+action and requires Jeffrey's explicit current instruction.
