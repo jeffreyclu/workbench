@@ -158,7 +158,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(125);
+    expect(baselineInventory).toHaveLength(126);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {
