@@ -248,7 +248,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   function addDiffFollowUp(reference: DiffFollowUpReference) {
     const nextBody = [body.trim(), formatDiffFollowUpReference(reference)].filter(Boolean).join('\n\n');
     updateBody(nextBody);
-    setConversationSurface('messages');
+    setConversationPanelOpen(true);
   }
   function updateComposerPreferences(updates: Partial<ComposerSelection>) {
     if (!conversationId) return;
@@ -271,7 +271,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const [feedbackTarget, setFeedbackTarget] = useState<{ conversationId?: string | null; workItemId?: string | null } | null>(null);
   const [conversationSearch, setConversationSearch] = useState('');
   const [dismissedCompletionPromptPromotionId, setDismissedCompletionPromptPromotionId] = useState<string | null>(null);
-  const [conversationSurface, setConversationSurface] = useState<'messages' | 'changes'>('messages');
+  const [conversationPanelOpen, setConversationPanelOpen] = useState(true);
+  const [changesPanelOpen, setChangesPanelOpen] = useState(false);
   const debouncedConversationSearch = useDebouncedValue(conversationSearch.trim(), 300);
   const conversationSearchResults = useQuery({
     queryKey: conversationQueryKeys.search(debouncedConversationSearch),
@@ -432,9 +433,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     const item = linkedWorkItem.data?.item;
     return item ? pullRequestUrl([...(item.sourceUrl ? [item.sourceUrl] : []), ...(linkedWorkItem.data?.references ?? []).map((reference) => reference.url)]) : null;
   }, [linkedWorkItem.data]);
-  // A conversation without a linked task still runs somewhere (the Workbench
-  // server's own workspace), so it has real changes to review too.
-  const workspaceDiffScope: WorkspaceDiffScope | null = linkedWorkItemId ? { workItemId: linkedWorkItemId } : conversationId ? { conversationId } : null;
+  // Changes belong to the conversation, not merely its linked task: Repo
+  // Explorer can deliberately select any attached local repository.
+  const workspaceDiffScope: WorkspaceDiffScope | null = conversationId ? { conversationId } : null;
   const conversationIsRunning = selectedConversation?.state === 'working';
   const changesAvailability = useConversationChangesAvailability(
     workspaceDiffScope,
@@ -442,7 +443,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     linkedWorkItem.data?.references ?? [],
     conversationIsRunning,
   );
-  useEffect(() => { setConversationSurface('messages'); }, [conversationId]);
+  useEffect(() => { setConversationPanelOpen(true); setChangesPanelOpen(false); }, [conversationId]);
   const linkableTasks = useQuery({
     queryKey: ['conversation-linkable-tasks'],
     queryFn: async () => {
@@ -1096,8 +1097,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                   : conversationDetail.isLoading ? <span className="conversation-title-skeleton"><Skeleton width="240px" height="19px" /></span>
                   : selectedConversationMissing ? 'Conversation not found'
                   : 'New conversation')}</h2>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={12} /> Back to task</button>}</div>{conversationId && selectedConversation && <div className="conversation-window-actions"><button type="button" className="icon-button" onClick={() => setDecisionTreeOpen(true)} aria-label="Open agent decision tree" title="Open agent decision tree"><GitBranch size={14} /></button>{!selectedConversation.workItemId && <ConversationTaskPicker tasks={linkableTasks.data?.items ?? []} isLoading={linkableTasks.isLoading} isError={linkableTasks.isError} isPending={setConversationTask.isPending} onRetry={() => void linkableTasks.refetch()} onSelect={(workItemId) => setConversationTask.mutate(workItemId)} />}{selectedConversation.workItemId && <button type="button" className="icon-button conversation-unlink-task" onClick={() => setConversationTask.mutate(null)} disabled={setConversationTask.isPending} aria-label="Unlink task" title="Unlink task"><Link2Off size={14} /></button>}{linkedWorkItem.data?.item && <button type="button" className="icon-button complete-task-button" disabled={linkedTaskCompleted || completeLinkedTask.isPending} onClick={() => completeLinkedTask.mutate()} aria-label={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'} title={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'}>{completeLinkedTask.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}</button>}<button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<span className={`conversation-delete-control ${selectedConversation.workItemId ? 'is-disabled' : ''}`} tabIndex={selectedConversation.workItemId ? 0 : undefined}><button className="icon-button delete-conversation-button" disabled={Boolean(selectedConversation.workItemId)} onClick={() => setDeleteConversationPromptOpen(true)} aria-label="Delete conversation" aria-describedby={selectedConversation.workItemId ? 'linked-conversation-delete-help' : undefined} title={selectedConversation.workItemId ? undefined : 'Delete permanently'}><Trash2 size={14} /></button>{selectedConversation.workItemId && <span id="linked-conversation-delete-help" className="action-tooltip" role="tooltip">Delete the related task to delete this conversation.</span>}</span></div>}</header>
-        {conversationId && <div className="thread-filter-bar"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-pressed={conversationSurface === 'messages'} onClick={() => setConversationSurface('messages')}>Conversation</button><button type="button" aria-pressed={conversationSurface === 'changes'} onClick={() => setConversationSurface('changes')} disabled={!changesAvailability.hasChanges && !changesAvailability.isError} title={changesAvailability.hasChanges ? 'Review changes' : changesAvailability.isError ? 'Could not check for changes' : changesAvailability.isLoading ? 'Checking for changes…' : 'No changes to review'}><FileDiff size={13} /> Changes</button></div>{changesAvailability.isError && <button type="button" className="button secondary compact" onClick={() => void changesAvailability.retry()} disabled={changesAvailability.isLoading}>Retry</button>}{selectedConversation && <button type="button" className={`icon-button${selectedConversation.pinned ? ' icon-button-active' : ''}`} onClick={() => setConversationPinned.mutate(!selectedConversation.pinned)} disabled={setConversationPinned.isPending} aria-pressed={Boolean(selectedConversation.pinned)} aria-label={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'} title={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'}><Pin size={13} fill={selectedConversation.pinned ? 'currentColor' : 'none'} /></button>}{linkedWorkItem.data?.item && <TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} disclosure />}</div>}
-        <div className={`conversation-review-layout${conversationSurface === 'changes' ? ' changes-open' : ''}`}>
+        {conversationId && <div className="thread-filter-bar"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-pressed={conversationPanelOpen} onClick={() => setConversationPanelOpen((open) => !open)} disabled={!changesPanelOpen}>Conversation</button><button type="button" aria-pressed={changesPanelOpen} onClick={() => setChangesPanelOpen((open) => !open)} disabled={(!changesAvailability.hasChanges && !changesAvailability.isError) || !conversationPanelOpen} title={changesAvailability.hasChanges ? 'Review changes' : changesAvailability.isError ? 'Could not check for changes' : changesAvailability.isLoading ? 'Checking for changes…' : 'No changes to review'}><FileDiff size={13} /> Changes</button></div>{changesAvailability.isError && <button type="button" className="button secondary compact" onClick={() => void changesAvailability.retry()} disabled={changesAvailability.isLoading}>Retry</button>}{selectedConversation && <button type="button" className={`icon-button${selectedConversation.pinned ? ' icon-button-active' : ''}`} onClick={() => setConversationPinned.mutate(!selectedConversation.pinned)} disabled={setConversationPinned.isPending} aria-pressed={Boolean(selectedConversation.pinned)} aria-label={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'} title={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'}><Pin size={13} fill={selectedConversation.pinned ? 'currentColor' : 'none'} /></button>}{linkedWorkItem.data?.item && <TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} disclosure />}</div>}
+        <div className={`conversation-review-layout${conversationPanelOpen ? ' conversation-panel-open' : ''}${changesPanelOpen ? ' changes-panel-open' : ''}`}>
+        {!conversationPanelOpen && <button type="button" className="collapsed-conversation-panel" onClick={() => setConversationPanelOpen(true)} aria-label="Expand conversation panel">Conversation</button>}
         <div className="conversation-thread-pane">
         <div className="shared-thread" ref={threadScrollRef}>
           {conversationDetail.isLoading && <ConversationThreadSkeleton />}

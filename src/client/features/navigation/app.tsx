@@ -137,19 +137,21 @@ export function App() {
   const selectedId = route.name === 'task' ? route.taskId : null;
   const animateTaskExit = (id: string) => new Promise<void>((resolve) => {
     setExitingTaskIds((current) => new Set(current).add(id));
+    window.setTimeout(resolve, 560);
+    // Clearing `is-exiting` while the row is still mounted flips its
+    // `animation` back to the base rule's `queue-card-enter`, replaying the
+    // entrance animation on a card that is supposed to be leaving. The
+    // effect below clears the flag only once the row has actually left
+    // `renderedItems`. This fallback exists purely so a failed archive
+    // (row never leaves the list) doesn't hide the row forever.
     window.setTimeout(() => {
-      // The item is gone from the active query results by now (or is about to
-      // be), but if it comes back later — e.g. Undo restoring an archived
-      // task — this class must not still be attached, or the animation's
-      // `both` fill-mode keeps it hidden until a full page reload.
       setExitingTaskIds((current) => {
         if (!current.has(id)) return current;
         const next = new Set(current);
         next.delete(id);
         return next;
       });
-      resolve();
-    }, 560);
+    }, 10_000);
   });
   const animateTaskEnter = (id: string) => {
     setEnteringTaskIds((current) => new Set(current).add(id));
@@ -370,6 +372,17 @@ export function App() {
     return sections;
   }, [renderedRows]);
   useTaskStackReorderAnimation(queueScrollRef, renderedItems.map((item) => item.id), skipNextDragReorderAnimation, queueView);
+  useEffect(() => {
+    if (exitingTaskIds.size === 0) return;
+    const presentIds = new Set(renderedItems.map((item) => item.id));
+    const stale = [...exitingTaskIds].filter((id) => !presentIds.has(id));
+    if (stale.length === 0) return;
+    setExitingTaskIds((current) => {
+      const next = new Set(current);
+      for (const id of stale) next.delete(id);
+      return next;
+    });
+  }, [renderedItems, exitingTaskIds]);
   useEffect(() => {
     if (route.name !== 'task' || !pendingTaskNavigation || pendingTaskNavigation !== route.taskId) return;
     // Wait until the stack behind the task is known: before that the queue can
