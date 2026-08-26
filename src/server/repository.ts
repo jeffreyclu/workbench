@@ -685,6 +685,11 @@ export class WorkItemRepository {
     });
   }
 
+  addAgentRunDiagnostic(runId: string, messageId: string | null, agent: AgentRun['agent'], kind: 'prompt' | 'usage' | 'tool', detail: Record<string, unknown>): void {
+    this.database.prepare(`INSERT INTO agent_run_diagnostics (id, run_id, message_id, agent, kind, detail_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(randomUUID(), runId, messageId, agent, kind, JSON.stringify(detail), new Date().toISOString());
+  }
+
   listAgentStreamEvents(conversationId: string): AgentStreamEvent[] {
     return (this.database.prepare(`SELECT events.id, events.message_id, events.run_id, events.kind, events.detail, events.created_at
       FROM agent_stream_events AS events

@@ -1579,6 +1579,27 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // Final token totals show that a run was expensive, but not whether the
+    // prompt, a tool loop, or repeated provider usage caused it. Keep compact,
+    // append-only diagnostics; never persist raw tool output here.
+    id: '054_agent_run_diagnostics',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS agent_run_diagnostics (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+          message_id TEXT REFERENCES shared_messages(id) ON DELETE SET NULL,
+          agent TEXT NOT NULL CHECK (agent IN ('codex', 'claude')),
+          kind TEXT NOT NULL CHECK (kind IN ('prompt', 'usage', 'tool')),
+          detail_json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_run_diagnostics_run_created
+          ON agent_run_diagnostics(run_id, created_at ASC);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

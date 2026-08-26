@@ -1,5 +1,9 @@
 ## Workbench product decisions
 
+### Pool-warming spend comparison uses tokens, not dollars
+
+*Decision from Jeffrey, 2026-08-26.* Evaluate warm-pool overhead from recorded token counts, not estimated dollar cost; the dollar estimates are not reliable enough for this decision. Keep tracking in the database only—do not add this comparison to Insights.
+
 ### Open diffs stay stable; updates require an explicit refresh
 
 *Decision from Jeffrey, 2026-08-25.* During an active task, Workbench may poll
@@ -984,6 +988,19 @@ Verified via `tsc --noEmit` (clean) and `npx vitest run` (987/988 passing; the
 pre-existing and unrelated — reproduced identically with the fix stashed
 out). Tracked on work item `f762adb1`, description updated to reflect DONE on
 both scope items.
+
+### Claude continuation prompts are deltas, not replayed context
+
+*Decision from Jeffrey, 2026-08-26.* Once an execute run has a persisted
+Claude session ID, `--resume` already supplies the prior task and conversation
+context. Its next user prompt must contain only the current task identity,
+status, strategy, instructions, attachments, and the current external-action
+contract. Do not re-inject shared context or retrieved memory on that turn;
+the first run without a session ID still receives the complete prompt. Fixed
+runner rules are passed through Claude CLI's `--append-system-prompt` channel,
+not repeated in each user prompt. If a Claude run falls back to Codex, append
+those rules back to the Codex user prompt because Codex has no equivalent
+static channel here.
 # Confidence assessments support direct follow-up context
 
 *Decision from Jeffrey, 2026-08-26.* A confidence bubble in a code diff is an interactive details control, not just a score. Its details show the model's concise visible-code reasoning and a **Follow up** action. Follow up must carry the exact logical diff block, file location, confidence, and reasoning into the conversation draft so the next agent turn has the original code context. Use the existing message draft and canonical send path; do not invent a fake file upload or a separate backend persistence model for this context.

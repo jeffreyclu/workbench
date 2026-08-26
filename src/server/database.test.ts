@@ -64,6 +64,7 @@ const EXPECTED_MIGRATIONS = [
   '051_shared_conversation_claude_session_id',
   '052_workspace_diff_snapshots',
   '053_shared_conversation_codex_thread_id',
+  '054_agent_run_diagnostics',
 ];
 
 describe('openDatabase', () => {
@@ -468,6 +469,21 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(agent_stream_events)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toEqual(expect.arrayContaining(['message_id', 'run_id', 'kind', 'detail', 'created_at']));
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_agent_stream_events_message_created'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds compact per-run diagnostics on upgrade from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE agent_run_diagnostics;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '054_agent_run_diagnostics'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(agent_run_diagnostics)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['run_id', 'message_id', 'agent', 'kind', 'detail_json', 'created_at']));
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_agent_run_diagnostics_run_created'").get()).toBeTruthy();
     upgraded.close();
   });
 
