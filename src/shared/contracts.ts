@@ -300,10 +300,20 @@ export const resolveSourceUrlSchema = z.object({ url: z.string().url().max(4_000
 export interface ResolvedSourceDraft { source: string; sourceUrl: string; title: string; description: string; }
 
 /** A read-only snapshot of the uncommitted changes in a task's local workspace. */
+export interface WorkspaceDiffFile {
+  path: string;
+  status: 'added' | 'modified' | 'removed' | 'renamed' | 'copied' | 'changed';
+  additions: number;
+  deletions: number;
+  previousPath: string | null;
+  patch: string | null;
+  isBinary: boolean;
+}
+
 export interface WorkspaceDiff {
   workspacePath: string;
   branch: string;
-  files: GitHubPullRequestFile[];
+  files: WorkspaceDiffFile[];
   changedFiles: number;
   additions: number;
   deletions: number;
