@@ -1,5 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
 import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type AgentInputSteering, type AgentUsage, type RetrievedMemory } from './agent-runner.js';
@@ -415,7 +417,12 @@ export function sharedTurnKindForMessage(repository: WorkItemRepository, linkedI
 }
 
 /** Linked conversations inherit their task workspace rather than the Workbench server cwd. */
-export function resolveSharedReplyWorkingDirectory(linkedItem: WorkItem | null): string {
+export function resolveSharedReplyWorkingDirectory(linkedItem: WorkItem | null, selectedWorkspacePath?: string | null): string {
+  if (selectedWorkspacePath) {
+    const selected = resolve(selectedWorkspacePath);
+    if (!existsSync(selected)) throw new Error(`Selected conversation workspace no longer exists: ${selected}`);
+    return selected;
+  }
   return linkedItem ? resolveWorkingDirectory(linkedItem) : process.cwd();
 }
 
@@ -711,8 +718,9 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const linkedItem = linkedRun
       ? repository.get(linkedRun.workItemId)
       : linkedConversation?.workItemId ? repository.get(linkedConversation.workItemId) : null;
-    const cwd = resolveSharedReplyWorkingDirectory(linkedItem);
-    if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}.`);
+    const selectedWorkspace = repository.database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(target.conversationId) as { workspace_path: string } | undefined;
+    const cwd = resolveSharedReplyWorkingDirectory(linkedItem, selectedWorkspace?.workspace_path);
+    if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}${selectedWorkspace ? ' from Repo Explorer.' : '.'}`);
     const externalAuthorization = await classifyExternalActionAuthorization(latestUserMessage, precedingUserMessage);
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const retrievedMemory = await (retrievalSnapshot?.matches ?? repository.searchActivityMemory(memoryQuery, PROMPT_MEMORY_CANDIDATE_LIMIT, {

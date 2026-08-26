@@ -221,6 +221,15 @@ describe('compactConversationHistory', () => {
     database.close();
   });
 
+  it('honors a server-persisted Repo Explorer selection over the linked task workspace', () => {
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Cross-repository review', description: '', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: '/Users/jeffrey.lu/dev/writer-monorepo', dueDate: null });
+
+    expect(resolveSharedReplyWorkingDirectory(task, process.cwd())).toBe(process.cwd());
+    database.close();
+  });
+
   it('uses an explicit room profile, then falls back to the task-scoped default', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);
