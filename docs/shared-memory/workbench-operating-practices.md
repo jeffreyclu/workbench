@@ -452,3 +452,23 @@ Only run individual test files in isolation (target a specific test file or a sc
 filter). Never invoke the whole-suite command (`npm test`, `npx vitest run` with no path/filter,
 `pnpm test`, etc.) in a Writer repo. This applies to every agent working in this shared environment.
 Also recorded in `shared-memory/writer-context.md` since it is specifically about Writer repos.
+
+### Never act on an external system without Jeffrey's explicit, request-specific permission **(core rule, always)**
+
+Jeffrey's explicit, forceful instruction (2026-08-26): no agent may take an action on GitHub, Slack,
+Confluence, Linear, or any other external website/service/CLI without his explicit permission for
+that specific action. This is a hard-deny rule, not a default-caution one — an agent that finds a
+plausible reason to comment, publish, sync, or otherwise act externally must still stop and ask,
+because a prior approval for one action does not carry over to the next one.
+
+An unambiguous user command to `PUSH` is itself the explicit, request-specific authorization to run
+the corresponding `git push`; do it without requesting an additional permission grant. It authorizes
+only that push for the current requested work, not other external actions, and a quoted or conditional
+mention of the word is not a command to push.
+
+The Workbench supervisor should enforce this structurally, not rely on each agent remembering it:
+detect when a dispatched agent attempts an action against an external website or CLI without a
+permission grant tied to that specific request, and auto-deny it before it executes. Treat a direct
+`PUSH` command as the permission grant for the current git push. Passive,
+read-only lookups (checking PR/CI status, reading a Slack thread) are lower-risk than mutations, but
+when in doubt about whether a call counts as "acting," treat it as requiring permission.

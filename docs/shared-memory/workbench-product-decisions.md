@@ -200,6 +200,15 @@ clipped or sit behind the workspace. Hybrid-memory search must never silently
 truncate its visible result cap; state how many results are shown and provide
 an explicit way to load the next set when more ranked matches exist.
 
+### Mobile conversation chrome starts collapsed
+
+*Decision from Jeffrey, 2026-08-26.* On phones, a conversation opens directly
+to the thread. Keep the entire conversation header behind a **Conversation
+details** control, and keep the entire composer behind a **Compose** control.
+Both regions start closed for every conversation and may be collapsed again by
+their controls. Preserve the full existing controls and behavior when each is
+opened; desktop layout remains unchanged.
+
 ### Agent conversations are visual, not text walls
 
 *Decision from Jeffrey, 2026-08-23.*

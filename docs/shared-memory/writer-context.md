@@ -148,6 +148,10 @@ local source on 2026-08-24.
 
 **Verified by static source inspection on 2026-08-24; not runtime-tested.** The Writer Agent Manage Connectors search at `frontend/src/components/agents/manage-tabs/connectors-tab.tsx` filters loaded rows by canonical connector name, connector display name, profile label/name (`config.name`), and description. The table displays the connector display name separately from `config.name`; the latter is the profile label. Treat a report that a profile label cannot be found in this UI as a likely deployed-version, data-shape, or runtime issue—not intended behavior—until reproduced.
 
+### Manage Connectors profile-fetch deduplication (CON-186)
+
+**Verified from source and focused regression tests on 2026-08-26.** When Connector Gateway fetches multiple Manage Connectors pages concurrently, every call must pass the shared TanStack Query `QueryClient` to `fetchUnifiedUserProfilesPage`. The shared query key then coalesces the `profiles/my` request, so it is fetched once rather than once per page. `actionagentmanageconnectorsv2` is a default-off structural/UI-rewrite gate only; it must never switch this cache-sharing behavior on or off. The regression coverage exercises both gate states.
+
 ### Treat terminology in Jeffrey's meeting notes as phonetic
 
 Jeffrey writes meeting notes by typing what he hears in the moment. He confirmed this on 2026-08-19

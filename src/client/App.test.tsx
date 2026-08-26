@@ -1252,6 +1252,28 @@ describe('shared room', () => {
     expect(composer.getAttribute('contenteditable')).toBe('true');
   });
 
+  it('keeps mobile conversation details and the composer collapsed until their controls are pressed', async () => {
+    const conversationId = '00000000-0000-4000-8000-000000000031';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Compact mobile conversation', workItemId: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    const heading = await screen.findByRole('heading', { name: 'Compact mobile conversation' });
+    expect(heading.closest('header')).toHaveClass('is-header-hidden');
+    const composer = screen.getByLabelText('Message Codex or Claude').closest('form');
+    expect(composer).toHaveClass('is-mobile-composer-collapsed');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Conversation details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Compose' }));
+
+    expect(heading.closest('header')).not.toHaveClass('is-header-hidden');
+    expect(composer).not.toHaveClass('is-mobile-composer-collapsed');
+  });
+
   it('sends an ordinary composer message without turning it into an interjection', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000026';
