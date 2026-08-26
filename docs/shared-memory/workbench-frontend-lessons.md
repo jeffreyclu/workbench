@@ -19,6 +19,12 @@ conversation bubble header is content-sized, not a fixed or full-row control.
 It may shrink and ellipsize only when the bubble cannot accommodate its full
 text; otherwise its pill boundary should end at the content.
 
+*Correction from Jeffrey, 2026-08-26.* Keep this telemetry as the blue badge;
+do not flatten it into inline text. The awkward layout was the adjacent RAG
+memory button inheriting a header-wide `margin-left: auto`, which pushed it to
+the far edge. Scope that positioning to the direct cancel button so the RAG
+button stays directly beside the blue badge.
+
 ### Dual agent replies size independently
 
 *Decision from Jeffrey, 2026-08-25.* When Codex and Claude replies render
