@@ -1638,6 +1638,20 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // Task Views can span repositories just like conversations. Keep the
+    // selected checkout server-side so every device sees the same diff.
+    id: '058_work_item_workspace_selection',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS work_item_workspace_selection (
+          work_item_id TEXT PRIMARY KEY REFERENCES work_items(id) ON DELETE CASCADE,
+          workspace_path TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

@@ -68,6 +68,7 @@ const EXPECTED_MIGRATIONS = [
   '055_shared_conversation_pinning',
   '056_diff_confidence_cache',
   '057_shared_conversation_workspace_selection',
+  '058_work_item_workspace_selection',
 ];
 
 describe('openDatabase', () => {
@@ -531,6 +532,21 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(diff_confidence_cache)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toEqual(expect.arrayContaining(['hash', 'risk', 'reasoning', 'created_at']));
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '056_diff_confidence_cache'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds persisted Task View repository selection on upgrade from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE work_item_workspace_selection;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '058_work_item_workspace_selection'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(work_item_workspace_selection)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['work_item_id', 'workspace_path', 'updated_at']));
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '058_work_item_workspace_selection'").get()).toBeTruthy();
     upgraded.close();
   });
 

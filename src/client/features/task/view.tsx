@@ -639,7 +639,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
                 {(run.status === 'queued' || run.status === 'running') && <button className="cancel-run" onClick={() => cancelRun.mutate(run.id)}><X size={11} /> {run.origin === 'autonomous' ? 'Stop' : 'Cancel'}</button>}
                 {runIndex === 0 && (run.status === 'failed' || run.status === 'canceled') && <button className="retry-run" onClick={() => retryRun.mutate(run.id)} disabled={retryRun.isPending}><RefreshCw size={11} /> Retry / continue</button>}
               </header>
-              {run.instructions && <p className="run-prompt">{run.instructions}</p>}
+              {run.instructions && <p className="run-prompt" title={run.instructions}>{run.instructions}</p>}
               {run.status === 'running' && !run.conversationId && <div className="live-output-label"><span /> Live activity & reasoning summaries</div>}
               {run.output && run.status !== 'completed' && !run.conversationId && <LiveRunOutput output={run.output} />}
               {run.model && <span className="model-badge" title={formatRunTelemetry(run)}>Requested {run.requestedAgent[0].toUpperCase() + run.requestedAgent.slice(1)} · Actual {run.agent[0].toUpperCase() + run.agent.slice(1)}{run.fallbackFrom ? ' (fallback)' : ''} · {run.accountProfile} · {run.model} · {formatRunBadge(run)}</span>}

@@ -579,6 +579,7 @@ nav { display: grid; gap: 3px; }
 .card-classification-popover { position: absolute; top: 0; right: 0; z-index: 20; display: inline-flex; align-items: stretch; width: max-content; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
 .run-card pre { max-height: 360px; overflow: auto; margin: 0; padding: 13px; color: #bdbcb5; background: #0d0d0c; font: 10px/1.65 'DM Mono'; white-space: pre-wrap; word-break: break-word; }
 .run-card .run-prompt { margin: 0; padding: 10px 12px; color: #77766f; font-size: 10px; font-style: italic; }
+.run-card .run-prompt { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .run-card > .model-badge { display: flex; width: fit-content; margin: 4px 12px 0; }
 .live-output-label { display: flex; align-items: center; gap: 6px; padding: 7px 12px; color: #aabd64; background: #11130d; font: 8px 'DM Mono'; text-transform: uppercase; }
 .live-output-label span { width: 6px; height: 6px; background: var(--acid); border-radius: 50%; animation: pulse 1.2s ease-in-out infinite; }

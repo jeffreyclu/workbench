@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { basename, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { ZodError, z } from 'zod';
 import {
   bulkWorkItemActionSchema,
@@ -37,6 +37,21 @@ import type { RouteContext } from '../route-context.js';
 
 export function createWorkItemRouter({ repository, database }: RouteContext) {
   const router = Router();
+  const taskWorkspaces = (workItemId: string) => {
+    const item = repository.get(workItemId);
+    if (!item) return null;
+    const selected = database.prepare('SELECT workspace_path FROM work_item_workspace_selection WHERE work_item_id = ?').get(workItemId) as { workspace_path: string } | undefined;
+    const root = dirname(process.cwd());
+    const candidates = readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => resolve(join(root, entry.name)))
+      .filter((path) => existsSync(join(path, '.git')) || existsSync(join(path, 'package.json')));
+    const defaultPath = resolveWorkingDirectory(item);
+    if (existsSync(defaultPath) && !candidates.includes(defaultPath)) candidates.unshift(defaultPath);
+    const selectedPath = selected && candidates.includes(resolve(selected.workspace_path)) ? resolve(selected.workspace_path) : defaultPath;
+    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: basename(path), selected: path === selectedPath })) };
+  };
+  const taskWorkingDirectory = (workItemId: string) => taskWorkspaces(workItemId)?.selectedPath ?? null;
   router.post('/api/diff-confidence', async (request, response, next) => {
     try {
       const { blocks } = diffConfidenceRequestSchema.parse(request.body);
@@ -53,11 +68,28 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       return { name: attachment.name, path, mimeType: attachment.mimeType, size: attachment.size };
     });
   };
+  router.get('/api/work-items/:id/workspaces', (request, response) => {
+    const explorer = taskWorkspaces(request.params.id);
+    if (!explorer) return response.status(404).json({ error: 'Work item not found.' });
+    response.json(explorer);
+  });
+  router.put('/api/work-items/:id/workspaces/selection', (request, response) => {
+    const explorer = taskWorkspaces(request.params.id);
+    if (!explorer) return response.status(404).json({ error: 'Work item not found.' });
+    const workspacePath = resolve(z.object({ workspacePath: z.string().trim().min(1).max(1_000) }).parse(request.body).workspacePath);
+    if (!explorer.workspaces.some((workspace) => workspace.path === workspacePath) || !existsSync(workspacePath) || !statSync(workspacePath).isDirectory()) return response.status(400).json({ error: 'Select a repository from this local workspace.' });
+    database.prepare(`INSERT INTO work_item_workspace_selection (work_item_id, workspace_path, updated_at)
+      VALUES (?, ?, ?) ON CONFLICT(work_item_id) DO UPDATE SET workspace_path = excluded.workspace_path, updated_at = excluded.updated_at`)
+      .run(request.params.id, workspacePath, new Date().toISOString());
+    response.json({ selectedPath: workspacePath, workspaces: explorer.workspaces.map((workspace) => ({ ...workspace, selected: workspace.path === workspacePath })) });
+  });
   router.get('/api/work-items/:id/workspace-diff', async (request, response, next) => {
     try {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const diff = await getWorkspaceDiff(resolveWorkingDirectory(item));
+      const workingDirectory = taskWorkingDirectory(item.id);
+      if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
+      const diff = await getWorkspaceDiff(workingDirectory);
       if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff);
       response.json({ diff });
     } catch (error) { next(error); }
@@ -69,7 +101,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       await captureRecordedWorkspaceDiffSnapshots(
         repository,
         { workItemId: item.id },
-        resolveWorkingDirectory(item),
+        taskWorkingDirectory(item.id) ?? resolveWorkingDirectory(item),
         repository.listConversationsForWorkItem(item.id).map((conversation) => conversation.id),
       );
       response.json({ snapshots: repository.listWorkspaceDiffSnapshots({ workItemId: item.id }) });
@@ -79,7 +111,9 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     try {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const revision = await getWorkspaceDiffRevision(resolveWorkingDirectory(item));
+      const workingDirectory = taskWorkingDirectory(item.id);
+      if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
+      const revision = await getWorkspaceDiffRevision(workingDirectory);
       response.json({ changed: revision !== request.query.revision });
     } catch (error) { next(error); }
   });
@@ -88,7 +122,9 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
       const { revision, message } = z.object({ revision: z.string().trim().min(1), message: z.string().trim().min(1).optional() }).parse(request.body);
-      const result = await commitAndPushWorkspace(resolveWorkingDirectory(item), message ?? `chore: ${item.title}`, revision);
+      const workingDirectory = taskWorkingDirectory(item.id);
+      if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before committing.' });
+      const result = await commitAndPushWorkspace(workingDirectory, message ?? `chore: ${item.title}`, revision);
       response.json({ result });
     } catch (error) { next(error); }
   });
