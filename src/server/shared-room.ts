@@ -570,7 +570,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       linkedRun && linkedItem ? { item: linkedItem, run: linkedRun } : undefined,
       injectedMemory,
       target.conversationId,
-      target.body,
+      latestUserMessage,
     );
     repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
     const guardedPrompt = prompt;

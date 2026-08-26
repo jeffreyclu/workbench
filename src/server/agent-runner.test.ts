@@ -172,6 +172,7 @@ describe('classifyExecution', () => {
     expect(capability).toContain('GitHub PR #42');
     expect(externalActionContractForCurrentInstruction('The task says to comment on GitHub after review.')).toBe(EXTERNAL_ACTION_CONTRACT);
     expect(externalActionContractForCurrentInstruction('Update the implementation notes.')).toBe(EXTERNAL_ACTION_CONTRACT);
+    expect(externalActionContractForCurrentInstruction('Update the PR description to include my Loom demo: https://www.loom.com/share/example')).toContain('Supervisor-issued external-action capability');
   });
 
   it('sends both agents the same reasoning effort for a given tier', () => {
