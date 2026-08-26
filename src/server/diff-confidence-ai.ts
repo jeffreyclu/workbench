@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
 
 export type DiffConfidenceBlock = { key: string; lines: string[] };
@@ -66,35 +66,81 @@ export function parseDiffConfidenceAssessment(output: string, keys: string[]): R
   return assessments;
 }
 
-function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, DiffConfidenceAssessment>> {
-  const keys = blocks.map((block) => block.key);
-  const prompt = `${SYSTEM_PROMPT}\n\nBlocks:\n${JSON.stringify(blocks)}`;
-  return new Promise((resolve, reject) => {
-    const child = spawn('claude', ['-p', '--model', 'haiku', '--effort', 'low', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '', '--no-session-persistence', '--no-chrome', '--output-format', 'json', '--system-prompt', SYSTEM_PROMPT], { cwd: '/tmp', env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = ''; let stderr = ''; let settled = false;
-    const timeout = setTimeout(() => child.kill('SIGTERM'), 120_000);
-    // Pipes to the subprocess can drop mid-read (ECONNRESET/EPIPE); without an
-    // 'error' listener on each stream, Node treats that as an uncaught
-    // exception and crashes the whole server process instead of just this request.
-    const settle = (error: Error | null, value?: Record<string, DiffConfidenceAssessment>) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      if (error) reject(error); else resolve(value!);
-    };
-    child.stdin.on('error', (error) => settle(error instanceof Error ? error : new Error(String(error))));
-    child.stdout.on('error', (error) => settle(error instanceof Error ? error : new Error(String(error))));
-    child.stderr.on('error', (error) => settle(error instanceof Error ? error : new Error(String(error))));
-    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.once('error', (error) => settle(error));
-    child.once('close', (code) => {
-      if (code !== 0) { settle(new Error(stderr.trim() || `AI diff assessment failed (exit ${code}).`)); return; }
-      try { settle(null, parseDiffConfidenceAssessment(stdout, keys)); }
-      catch (error) { settle(error instanceof Error ? error : new Error(String(error))); }
-    });
-    child.stdin.end(prompt);
+type PendingAssessment = {
+  blocks: DiffConfidenceBlock[];
+  resolve: (value: Record<string, DiffConfidenceAssessment>) => void;
+  reject: (error: Error) => void;
+};
+
+let worker: ChildProcessWithoutNullStreams | null = null;
+let outputBuffer = '';
+let active: PendingAssessment | null = null;
+const queue: PendingAssessment[] = [];
+
+/** A persistent stream-json worker removes Claude CLI startup/auth overhead
+ * from every review. Requests remain serialized and independently parsed; the
+ * scorer has no tools and receives only the block batch for that request. */
+function ensureWorker(): ChildProcessWithoutNullStreams {
+  if (worker && !worker.killed && worker.exitCode == null) return worker;
+  worker = spawn('claude', [
+    '-p', '--verbose', '--model', 'haiku', '--effort', 'low', '--tools', '',
+    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '',
+    '--no-session-persistence', '--no-chrome', '--system-prompt', SYSTEM_PROMPT,
+    '--input-format', 'stream-json', '--output-format', 'stream-json',
+  ], { cwd: '/tmp', env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+  (worker.stdout as unknown as { setEncoding?: (encoding: string) => void }).setEncoding?.('utf8');
+  worker.stdout.on('data', (chunk: string) => {
+    outputBuffer += chunk;
+    for (;;) {
+      const newline = outputBuffer.indexOf('\n');
+      if (newline < 0) break;
+      const line = outputBuffer.slice(0, newline); outputBuffer = outputBuffer.slice(newline + 1);
+      try {
+        const event = JSON.parse(line) as { type?: string; result?: string; is_error?: boolean };
+        if (event.type !== 'result' || !active) continue;
+        const pending = active; active = null;
+        if (event.is_error || typeof event.result !== 'string') pending.reject(new Error('AI diff assessment failed.'));
+        else {
+          try { pending.resolve(parseDiffConfidenceAssessment(event.result, pending.blocks.map((block) => block.key))); }
+          catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); }
+        }
+        dispatchNext();
+      } catch { /* Ignore non-result stream events. */ }
+    }
   });
+  const stopWorker = (error: Error) => {
+    worker = null; outputBuffer = '';
+    if (active) { active.reject(error); active = null; }
+    while (queue.length) queue.shift()!.reject(error);
+  };
+  worker.once('exit', () => stopWorker(new Error('AI diff scorer stopped unexpectedly.')));
+  worker.once('error', stopWorker);
+  worker.stdin.on('error', stopWorker);
+  return worker;
+}
+
+function dispatchNext(): void {
+  if (active || queue.length === 0) return;
+  const scorer = ensureWorker();
+  active = queue.shift()!;
+  // The rubric is already the system prompt. Sending it again used to double
+  // every uncached request's input and delayed the first score unnecessarily.
+  scorer.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: `Blocks:\n${JSON.stringify(active.blocks)}` }] } })}\n`);
+}
+
+function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, DiffConfidenceAssessment>> {
+  ensureWorker();
+  return new Promise((resolve, reject) => {
+    queue.push({ blocks, resolve, reject });
+    dispatchNext();
+  });
+}
+
+function trivialAssessment(block: DiffConfidenceBlock): DiffConfidenceAssessment | null {
+  const changed = block.lines.filter((line) => line.startsWith('+') || line.startsWith('-'))
+    .map((line) => line.slice(1).trim());
+  if (!changed.length || !changed.every((line) => !line || /^(?:\/\/|\/\*|\*|\*\/|#)/.test(line))) return null;
+  return { risk: 0, reasoning: 'Comment-only change; it cannot alter runtime behavior.' };
 }
 
 /** Reads the per-block cache first; only blocks whose content hash misses are
@@ -110,6 +156,8 @@ export function assessDiffBlocks(database: WorkbenchDatabase, blocks: DiffConfid
     const hash = hashes.get(block.key)!;
     const cached = readCached(database, hash);
     if (cached) { entries.set(block.key, Promise.resolve(cached)); continue; }
+    const trivial = trivialAssessment(block);
+    if (trivial) { writeCached(database, hash, trivial); entries.set(block.key, Promise.resolve(trivial)); continue; }
     if (inFlight.has(hash)) { entries.set(block.key, inFlight.get(hash)!); continue; }
     uncached.push(block);
   }
@@ -129,4 +177,10 @@ export function assessDiffBlocks(database: WorkbenchDatabase, blocks: DiffConfid
   }
   return Promise.all([...entries].map(([blockKey, assessment]) => assessment.then((value) => [blockKey, value] as const)))
     .then((pairs) => Object.fromEntries(pairs));
+}
+
+/** Start the dedicated scorer during server boot, before a reviewer opens a
+ * diff. It remains idle and does no scoring until the first real request. */
+export function warmDiffConfidenceModel(): void {
+  ensureWorker();
 }

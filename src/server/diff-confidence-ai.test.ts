@@ -27,21 +27,35 @@ describe('parseDiffConfidenceAssessment', () => {
 });
 
 describe('assessDiffBlocks caching', () => {
+  it('scores comment-only blocks locally without spawning Claude', async () => {
+    vi.resetModules();
+    const spawn = vi.fn();
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { assessDiffBlocks: assess } = await import('./diff-confidence-ai.js');
+    const database = openDatabase(':memory:');
+
+    await expect(assess(database, [{ key: 'comment', lines: ['+// Explain why this branch exists.', '-// Old explanation.'] }])).resolves.toEqual({
+      comment: { risk: 0, reasoning: 'Comment-only change; it cannot alter runtime behavior.' },
+    });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it('reuses a cached block score across unrelated batches instead of re-invoking the model', async () => {
     vi.resetModules();
     let spawnCalls = 0;
     vi.doMock('node:child_process', () => ({
       spawn: (..._args: unknown[]) => {
         spawnCalls += 1;
-        const emitter = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: EventEmitter & { end: (prompt: string) => void } };
+        const emitter = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: EventEmitter & { write: (prompt: string) => void } };
         emitter.stdout = new EventEmitter();
         emitter.stderr = new EventEmitter();
-        emitter.stdin = Object.assign(new EventEmitter(), { end: (prompt: string) => {
+        emitter.stdin = Object.assign(new EventEmitter(), { write: (prompt: string) => {
           queueMicrotask(() => {
-            const blocks = JSON.parse(prompt.slice(prompt.indexOf('Blocks:\n') + 'Blocks:\n'.length)) as Array<{ key: string }>;
+            const input = JSON.parse(prompt) as { message: { content: Array<{ text: string }> } };
+            const text = input.message.content[0].text;
+            const blocks = JSON.parse(text.slice(text.indexOf('Blocks:\n') + 'Blocks:\n'.length)) as Array<{ key: string }>;
             const assessments = blocks.map((block) => ({ key: block.key, risk: 70, reasoning: 'Looks fine.' }));
-            emitter.stdout.emit('data', Buffer.from(JSON.stringify(assessments)));
-            emitter.emit('close', 0);
+            emitter.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'result', result: JSON.stringify(assessments) })}\n`));
           });
         } });
         return emitter;
@@ -55,7 +69,8 @@ describe('assessDiffBlocks caching', () => {
 
     // Same content under a different key in a different batch: still a cache hit, so only the new block is sent.
     const result = await assessDiffBlocks(database, [{ key: 'shared', lines: ['+const x = 1;'] }, { key: 'unique-2', lines: ['+const z = 3;'] }]);
-    expect(spawnCalls).toBe(2);
+    // The persistent scorer stays warm between cache misses.
+    expect(spawnCalls).toBe(1);
     expect(result.shared).toEqual({ risk: 70, reasoning: 'Looks fine.' });
     expect(result['unique-2']).toEqual({ risk: 70, reasoning: 'Looks fine.' });
   });
@@ -66,15 +81,16 @@ describe('assessDiffBlocks caching', () => {
     const mockSpawn = () => ({
       spawn: (..._args: unknown[]) => {
         spawnCalls += 1;
-        const emitter = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: EventEmitter & { end: (prompt: string) => void } };
+        const emitter = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: EventEmitter & { write: (prompt: string) => void } };
         emitter.stdout = new EventEmitter();
         emitter.stderr = new EventEmitter();
-        emitter.stdin = Object.assign(new EventEmitter(), { end: (prompt: string) => {
+        emitter.stdin = Object.assign(new EventEmitter(), { write: (prompt: string) => {
           queueMicrotask(() => {
-            const blocks = JSON.parse(prompt.slice(prompt.indexOf('Blocks:\n') + 'Blocks:\n'.length)) as Array<{ key: string }>;
+            const input = JSON.parse(prompt) as { message: { content: Array<{ text: string }> } };
+            const text = input.message.content[0].text;
+            const blocks = JSON.parse(text.slice(text.indexOf('Blocks:\n') + 'Blocks:\n'.length)) as Array<{ key: string }>;
             const assessments = blocks.map((block) => ({ key: block.key, risk: 42, reasoning: 'Persisted.' }));
-            emitter.stdout.emit('data', Buffer.from(JSON.stringify(assessments)));
-            emitter.emit('close', 0);
+            emitter.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'result', result: JSON.stringify(assessments) })}\n`));
           });
         } });
         return emitter;

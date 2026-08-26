@@ -5,6 +5,7 @@ import { WorkItemRepository } from './repository.js';
 import { startScheduler } from './scheduler.js';
 import { startRuntimePromotionWorker } from './runtime-promotion-worker.js';
 import { warmFastTaskDraftModel } from './fast-task-draft-ai.js';
+import { warmDiffConfidenceModel } from './diff-confidence-ai.js';
 import { liveRuntimeCapabilities } from './runtime-capabilities.js';
 import { createServer } from 'node:http';
 import { attachRealtimeServer } from './realtime.js';
@@ -21,6 +22,7 @@ const repository = new WorkItemRepository(database);
 if (liveRuntimeCapabilities.ownScheduler) startScheduler(repository);
 if (liveRuntimeCapabilities.promoteRuntime) startRuntimePromotionWorker(repository);
 warmFastTaskDraftModel();
+warmDiffConfidenceModel();
 
 // Keeps the vectorized memory index (memory-index.ts) warm so the very first
 // /api/activity-memory or /api/memory/search call after a restart does not
