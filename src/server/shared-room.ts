@@ -334,9 +334,9 @@ export function compactSharedBrief(sharedContext: string, budget = 700): string 
  * Keep every room turn grounded without turning retrieval into the dominant
  * prompt payload. The full index remains available through /api/activity-memory.
  */
-function formatRetrievedMemory(matches: RetrievedMemory[]): string {
+function formatRetrievedMemory(matches: RetrievedMemory[], localId?: string | null): string {
   if (!matches.length) return 'Retrieved memory: no indexed match. Query /api/activity-memory with focused terms if needed.';
-  const focused = selectRelevantMemoryForPrompt(matches);
+  const focused = selectRelevantMemoryForPrompt(matches, undefined, localId);
   if (!focused.length) return 'Retrieved memory: no match cleared this query’s relevance threshold.';
   return `Retrieved memory (${focused.length} relevant matches, selected from up to ${matches.length}; same index as /api/activity-memory — docs, messages, activities, run output). Settled; don't re-derive.\n${focused.map((match) => `- [${match.source}, ${match.createdAt}] ${match.title}: ${match.body.slice(0, 420).replace(/\s+/g, ' ')}`).join('\n')}`;
 }
@@ -348,6 +348,7 @@ export function buildSharedReplyPrompt(
   thread: SharedMessage[],
   linked?: { item: WorkItem; run: AgentRun },
   retrievedMemory?: RetrievedMemory[],
+  localId?: string | null,
 ): string {
   const roleContext = linked
     ? buildPrompt(linked.item, linked.run, sharedContext)
@@ -356,7 +357,7 @@ export function buildSharedReplyPrompt(
 
 ${connectionContext}
 
-${formatRetrievedMemory(retrievedMemory ?? [])}
+${formatRetrievedMemory(retrievedMemory ?? [], localId)}
 
 Current conversation:
 ${compactConversationHistory(thread)}
@@ -551,7 +552,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
     }));
-    const injectedMemory = selectRelevantMemoryForPrompt(retrievedMemory);
+    const injectedMemory = selectRelevantMemoryForPrompt(retrievedMemory, undefined, target.conversationId);
     repository.updateSharedMessage(messageId, {
       retrievedMemoryCount: injectedMemory.length,
       retrievedMemoryDetail: { query: memoryQuery, items: injectedMemory },
@@ -563,6 +564,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       thread,
       linkedRun && linkedItem ? { item: linkedItem, run: linkedRun } : undefined,
       injectedMemory,
+      target.conversationId,
     );
     repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
     const guardedPrompt = prompt;

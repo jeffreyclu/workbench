@@ -526,6 +526,15 @@ strongest result and make the relative threshold discard the historical context
 entirely. The read-only activity-memory endpoint retains the raw result so
 diagnosis can still see it.
 
+Conversation-local retrieval priority (2026-08-25): apply both safeguards.
+Recent history from the active conversation is first-class prompt context with
+its own bounded allocation; it must not compete on equal footing with the
+global RAG corpus. Global RAG still uses the query-relative relevance cutoff
+to reject noise, but retains a small absolute-rank floor so a narrow,
+single-topic query cannot collapse to one result solely because RRF scores
+fall below an arbitrary ratio. The combined policy is budget-bounded and
+deduplicated; it is not a fixed total-result cap.
+
 ### Agent cancellation must be visible and authoritative
 
 *Decision from Jeffrey, 2026-08-25.* Active conversation replies need an
@@ -760,3 +769,49 @@ of cards rather than one card per streamed line.
 must not open when a Codex-and-Claude turn finishes with a system synthesis.
 That synthesis is system-generated completion, not an explicit request for
 session feedback. Manual archive and task-completion feedback remain available.
+### RAG memory retrieval: tiering plus a rank floor, both fixes together
+
+*Decision from Jeffrey, 2026-08-25 ("hit it")* on the earlier synthesized
+Codex+Claude proposal: implement both of two orthogonal fixes to
+`selectRelevantMemoryForPrompt` in `src/server/agent-runner.ts`, not one
+instead of the other.
+
+1. **Tiering** — conversation-local (or work-item-local) history now gets its
+   own additive budget (`PROMPT_MEMORY_LOCAL_BUDGET = 1_500` chars) with no
+   relevance-score gate at all, filled before the existing global RAG budget
+   (`PROMPT_MEMORY_BUDGET = 6_000`). A match is "local" if its
+   `conversationId` or `workItemId` equals the caller-supplied `localId` —
+   `item.id` for task runs (`agent-runner.ts`), `target.conversationId` for
+   shared-room replies (`shared-room.ts`). This required surfacing
+   `conversationId`/`workItemId` through `repository.ts#searchActivityMemory`,
+   which had been dropping those fields even though `memory-index.ts` already
+   returned them.
+2. **Rank floor** — within the global RAG tier, the existing relative-score
+   cutoff (`score < strongest * 0.5`, meant to reject noise on broad queries)
+   now only applies past the top `RAG_RANK_FLOOR = 5` ranked candidates, so a
+   narrow single-topic thread with no strong outlier score is no longer
+   starved down to 1-2 results.
+
+Both tiers dedupe against each other by normalized snippet key
+(`snippetKeyOf`) so the same fact is never injected twice.
+
+One bug caught during implementation, not by a test: `buildSharedReplyPrompt`
+internally re-invokes `selectRelevantMemoryForPrompt` a second time via
+`formatRetrievedMemory`. Without threading `localId` through that second call
+too, local-tier items (admitted score-free on the first pass) would be
+re-subjected to the score cutoff on the second pass and silently stripped,
+defeating the tiering fix. Fixed by adding a `localId` parameter to both
+`formatRetrievedMemory` and `buildSharedReplyPrompt`.
+
+Verified: `npx tsc --noEmit -p .` clean; `npx vitest run` → 945/946 passing,
+the one failure (`runtime-promotion-worker.test.ts`) reproduces identically on
+`main` before this change (confirmed via `git stash`) and is unrelated.
+Updated two pre-existing tests
+(`agent-runner.test.ts`/`shared-room.test.ts`) whose assertions encoded the
+old cutoff-only match counts (2 and 3 matches) — under the new rank floor
+those same fixtures correctly resolve to 5 matches each.
+
+Not yet done: `retrievedMemoryForPrompt()` in `agent-runner.ts` (used by
+`buildPrompt()`) still calls `selectRelevantMemoryForPrompt` with no
+`localId`, so that path gets rank-floor behavior but not tiering. Needs a
+follow-up review to find its correct local-scope id.

@@ -555,7 +555,7 @@ export class WorkItemRepository {
    * the request path (a poller keyed off a watermark) rather than doing it
    * here.
    */
-  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; projectKey?: string } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number }>> {
+  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; projectKey?: string } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null }>> {
     if (query.trim().length < 2) return [];
     if (options.refresh !== false) {
       try {
@@ -574,6 +574,8 @@ export class WorkItemRepository {
       body: result.snippet.slice(0, 4_000),
       createdAt: result.createdAt,
       score: result.score,
+      conversationId: result.conversationId,
+      workItemId: result.workItemId,
     })).filter((result) => !excludedBody || result.body.trim().replace(/\s+/g, ' ').toLocaleLowerCase() !== excludedBody);
   }
 

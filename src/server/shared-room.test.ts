@@ -96,9 +96,9 @@ describe('compactConversationHistory', () => {
 
     const prompt = buildSharedReplyPrompt('codex', 'Shared context.', '', [], undefined, retrieved);
 
-    expect(prompt).toContain('Retrieved memory (3 relevant matches');
-    expect(prompt).toContain('Memory 3');
-    expect(prompt).not.toContain('Memory 4');
+    expect(prompt).toContain('Retrieved memory (5 relevant matches');
+    expect(prompt).toContain('Memory 5');
+    expect(prompt).not.toContain('Memory 6');
   });
 
   it('uses frontend-reviewer for a review-linked reply with no stored classification', () => {

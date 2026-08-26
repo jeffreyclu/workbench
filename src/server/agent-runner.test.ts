@@ -640,9 +640,9 @@ describe('classifyExecution', () => {
 
     const prompt = retrievedMemoryForPrompt(matches);
 
-    expect(prompt).toContain('Retrieved memory (2 relevant hybrid FTS+embedding matches');
-    expect(prompt).toContain('Memory 2');
-    expect(prompt).not.toContain('Memory 3');
+    expect(prompt).toContain('Retrieved memory (5 relevant hybrid FTS+embedding matches');
+    expect(prompt).toContain('Memory 5');
+    expect(prompt).not.toContain('Memory 6');
   });
 
   it('turns Codex and Claude JSON events into readable live progress', () => {

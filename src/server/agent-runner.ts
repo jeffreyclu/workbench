@@ -207,37 +207,74 @@ Emit brief progress updates before/after meaningful steps — what you're checki
 Complete the requested capability. Report decisions, evidence, risks, files changed, and verification. Do not change the Workbench database directly.`;
 }
 
-export type RetrievedMemory = { source: string; title: string; body: string; createdAt: string; score?: number };
+export type RetrievedMemory = { source: string; title: string; body: string; createdAt: string; score?: number; conversationId?: string | null; workItemId?: string | null };
 /** Candidate ceiling, not an injection target. Selection is relevance- and budget-driven. */
 export const PROMPT_MEMORY_CANDIDATE_LIMIT = 400;
 const PROMPT_MEMORY_BUDGET = 6_000;
 const PROMPT_MEMORY_ITEM_BUDGET = 420;
+/** Conversation-local history's own additive slot -- it never competes with
+ * the global RAG budget below for the same space. */
+const PROMPT_MEMORY_LOCAL_BUDGET = 1_500;
+/** Narrow, single-topic threads rank every candidate close together, so a
+ * fixed relative-score cutoff can starve them to near-zero results. Always
+ * keeping the top-ranked candidates regardless of score gives those threads a
+ * floor while the relative cutoff still rejects noise on broad queries. */
+const RAG_RANK_FLOOR = 5;
 
 /**
- * Keeps only the useful portion of a ranked result set. Hybrid RRF scores are
- * meaningful relative to the strongest result for this query, not as a global
- * fixed threshold, so a sparse query can inject one fact while a broad query
- * can retain many. The character budget is a second, independent stop.
+ * Keeps only the useful portion of a ranked result set, in two tiers:
+ *
+ * 1. Conversation-local history (matching `localId`) gets its own
+ *    budget-bounded slot and skips the relevance cutoff entirely -- it's
+ *    already known to be on-topic by virtue of being in this thread.
+ * 2. The remaining global RAG corpus is filtered by score relative to the
+ *    strongest result for this query (not a global fixed threshold, so a
+ *    sparse query can inject one fact while a broad query retains many),
+ *    with a rank floor so a narrow thread whose candidates all score close
+ *    together isn't starved to zero.
+ *
+ * The character budget on each tier is an independent stop.
  */
-export function selectRelevantMemoryForPrompt(matches: RetrievedMemory[], budget = PROMPT_MEMORY_BUDGET): RetrievedMemory[] {
+export function selectRelevantMemoryForPrompt(matches: RetrievedMemory[], budget = PROMPT_MEMORY_BUDGET, localId?: string | null): RetrievedMemory[] {
   if (!matches.length) return [];
-  const ranked = [...matches].sort((a, b) => (b.score ?? 1) - (a.score ?? 1));
-  const strongest = ranked[0].score ?? 1;
-  const minimumScore = strongest * 0.5;
-  let used = 0;
   const selected: RetrievedMemory[] = [];
   const seenSnippets = new Set<string>();
-  for (const match of ranked) {
-    // Callers without scores (unit fixtures and compatibility callers) retain
-    // their supplied ordering and are governed only by the prompt budget.
-    if (match.score !== undefined && match.score < minimumScore) continue;
-    const snippetKey = match.body.slice(0, PROMPT_MEMORY_ITEM_BUDGET).replace(/\s+/g, ' ').trim().toLowerCase();
+  const itemSize = (match: RetrievedMemory) => Math.min(match.body.length, PROMPT_MEMORY_ITEM_BUDGET) + match.title.length + 64;
+  const snippetKeyOf = (match: RetrievedMemory) => match.body.slice(0, PROMPT_MEMORY_ITEM_BUDGET).replace(/\s+/g, ' ').trim().toLowerCase();
+
+  const isLocal = (match: RetrievedMemory) => localId != null && (match.conversationId === localId || match.workItemId === localId);
+  const local = localId != null ? [...matches].filter(isLocal).sort((a, b) => (b.score ?? 1) - (a.score ?? 1)) : [];
+  let localUsed = 0;
+  for (const match of local) {
+    const snippetKey = snippetKeyOf(match);
     if (snippetKey && seenSnippets.has(snippetKey)) continue;
-    const size = Math.min(match.body.length, PROMPT_MEMORY_ITEM_BUDGET) + match.title.length + 64;
-    if (selected.length > 0 && used + size > budget) break;
+    const size = itemSize(match);
+    if (localUsed > 0 && localUsed + size > PROMPT_MEMORY_LOCAL_BUDGET) break;
     selected.push(match);
     if (snippetKey) seenSnippets.add(snippetKey);
-    used += size;
+    localUsed += size;
+  }
+
+  const global = [...matches].filter((match) => !isLocal(match)).sort((a, b) => (b.score ?? 1) - (a.score ?? 1));
+  if (global.length) {
+    const strongest = global[0].score ?? 1;
+    const minimumScore = strongest * 0.5;
+    let used = 0;
+    let globalCount = 0;
+    for (let rank = 0; rank < global.length; rank += 1) {
+      const match = global[rank];
+      // Callers without scores (unit fixtures and compatibility callers) retain
+      // their supplied ordering and are governed only by the prompt budget.
+      if (match.score !== undefined && match.score < minimumScore && rank >= RAG_RANK_FLOOR) continue;
+      const snippetKey = snippetKeyOf(match);
+      if (snippetKey && seenSnippets.has(snippetKey)) continue;
+      const size = itemSize(match);
+      if (globalCount > 0 && used + size > budget) break;
+      selected.push(match);
+      if (snippetKey) seenSnippets.add(snippetKey);
+      used += size;
+      globalCount += 1;
+    }
   }
   return selected;
 }
@@ -1136,7 +1173,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       console.error('[agent-runner] memory retrieval failed for prompt injection', error);
       return [];
     });
-    const injectedMemory = selectRelevantMemoryForPrompt(retrievedMemory);
+    const injectedMemory = selectRelevantMemoryForPrompt(retrievedMemory, undefined, item.id);
     repository.addActivity(item.id, 'system', 'progress', injectedMemory.length > 0
       ? `Retrieved ${injectedMemory.length} relevant memory match${injectedMemory.length === 1 ? '' : 'es'} for context.`
       : 'No relevant memory found.');

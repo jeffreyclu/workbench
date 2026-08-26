@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manage Connectors V2 — Card redesign with data-fidelity gates</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --font: 'Poppins', ui-sans-serif, system-ui, sans-serif;
+      --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      --bg: #ffffff;
+      --bg-muted: #f5f5f9;
+      --bg-hover: #f3f5ff;
+      --fg: #000000;
+      --fg-secondary: #333333;
+      --fg-muted: #4f4f4f;
+      --fg-subtle: #828282;
+      --purple: #5551ff;
+      --purple-light: #f3f5ff;
+      --purple-hover: #4a46da;
+      --green: #078660;
+      --green-light: #a9f9e1;
+      --orange: #ff8866;
+      --orange-light: #ffcfc2;
+      --red: #ff643c;
+      --border: #e4e7ed;
+      --radius: 8px;
+    }
+    html.dark {
+      --bg: #0a0a0f;
+      --bg-muted: #1b202a;
+      --bg-hover: #212142;
+      --fg: #fafafa;
+      --fg-secondary: #e0e5f1;
+      --fg-muted: #c3cce0;
+      --fg-subtle: #8a96b0;
+      --purple: #6985ff;
+      --purple-light: #212142;
+      --purple-hover: #5551ff;
+      --green: #3be19b;
+      --green-light: #22322d;
+      --orange: #ff8866;
+      --orange-light: #33140c;
+      --red: #ff643c;
+      --border: #2b3343;
+      --radius: 8px;
+    }
+    html { font-size: 14px; }
+    body { font-family: var(--font); background: var(--bg); color: var(--fg); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+
+    /* ── Topbar ── */
+    .topbar { display: flex; align-items: center; justify-content: space-between; padding: 16px 40px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 10; }
+    .topbar-left { display: flex; align-items: center; gap: 12px; }
+    .topbar-left span { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; }
+    .badge-proposal { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; padding: 4px 12px; border-radius: 100px; background: var(--green-light); color: #0b0d12; }
+
+    /* ── Layout ── */
+    .container { max-width: 960px; margin: 0 auto; padding: 0 40px; }
+    .section { padding: 40px 0; border-bottom: 1px solid var(--border); }
+    .section:last-child { border-bottom: none; }
+    .section-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.12em; color: var(--purple); margin-bottom: 6px; }
+    .section-title { font-size: 16px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+    .section-desc { font-size: 13px; color: var(--fg-muted); max-width: 620px; margin-bottom: 24px; }
+
+    /* ── Details / Expandable ── */
+    details { border: 1px solid var(--border); border-radius: var(--radius); margin-top: 12px; overflow: hidden; }
+    details + details { margin-top: 8px; }
+    details[open] { border-color: #bfcbff; }
+    details[open] > summary { border-bottom: 1px solid var(--border); background: var(--purple-light); }
+    summary {
+      padding: 10px 16px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg);
+      transition: background 0.15s;
+    }
+    summary:hover { background: var(--bg-hover); }
+    summary::-webkit-details-marker { display: none; }
+    summary::before {
+      content: '';
+      width: 0; height: 0;
+      border-left: 5px solid var(--fg-subtle);
+      border-top: 4px solid transparent;
+      border-bottom: 4px solid transparent;
+      flex-shrink: 0;
+      transition: transform 0.15s;
+    }
+    details[open] > summary::before { transform: rotate(90deg); }
+    summary .summary-tag {
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 2px 7px;
+      border-radius: 100px;
+      margin-left: auto;
+    }
+    .detail-body { padding: 16px; font-size: 12px; color: var(--fg-secondary); line-height: 1.7; }
+    .detail-body h4 { font-size: 12px; font-weight: 600; margin: 12px 0 4px; }
+    .detail-body h4:first-child { margin-top: 0; }
+    .detail-body p { margin-bottom: 8px; }
+    .detail-body ul { margin: 4px 0 8px 16px; }
+    .detail-body li { padding: 1px 0; }
+    .detail-body code { font-family: var(--mono); font-size: 11px; padding: 1px 5px; background: var(--bg-muted); border-radius: 3px; }
+    .detail-body pre {
+      background: #1e1a3d;
+      border-radius: 6px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.7;
+      color: #c3cce0;
+      margin: 8px 0;
+    }
+    .detail-body .schema-table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 8px 0; }
+    .detail-body .schema-table th { text-align: left; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-subtle); padding: 6px 8px; background: var(--bg-muted); border-bottom: 1px solid var(--border); }
+    .detail-body .schema-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 10px; }
+    .detail-body .schema-table td:first-child { color: var(--purple); font-weight: 500; }
+    .detail-body .schema-table tr:last-child td { border-bottom: none; }
+    .detail-body .file-ref { color: var(--purple); font-family: var(--mono); font-size: 11px; }
+
+    /* ── Tables ── */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead th { text-align: left; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-subtle); padding: 10px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    tbody td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--fg-secondary); vertical-align: top; }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: var(--bg-hover); }
+
+    /* ── Tags ── */
+    .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .dot-green { background: var(--green-light); }
+    .dot-orange { background: var(--orange-light); }
+    .dot-red { background: var(--red); }
+    .dot-gray { background: var(--border); }
+    .tag { display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 100px; }
+    .tag-worker { background: #d4fff2; color: #078660; }
+    .tag-container { background: #ede2ff; color: #721cc9; }
+    .tag-new { background: var(--purple-light); color: var(--purple); }
+    .tag-yes { background: #d4fff2; color: #078660; }
+    .tag-no { background: var(--bg-muted); color: var(--fg-subtle); }
+    .tag-partial { background: #fff4f1; color: #ff643c; }
+    .tag-backend { background: #fff4f1; color: #ff643c; }
+    .tag-frontend { background: #e4e9ff; color: var(--purple); }
+    .tag-infra { background: #f6effd; color: #721cc9; }
+    .tag-migration { background: #d4fff2; color: #078660; }
+
+    /* ── Dark mode overrides ── */
+    html.dark .tag-worker { background: #22322d; color: #3be19b; }
+    html.dark .tag-container { background: #2d2340; color: #c084fc; }
+    html.dark .tag-new { background: var(--purple-light); color: var(--purple); }
+    html.dark .tag-yes { background: #22322d; color: #3be19b; }
+    html.dark .tag-no { background: var(--bg-muted); color: var(--fg-subtle); }
+    html.dark .tag-partial { background: #33140c; color: #ff8866; }
+    html.dark .tag-backend { background: #33140c; color: #ff8866; }
+    html.dark .tag-frontend { background: #212142; color: #6985ff; }
+    html.dark .tag-infra { background: #2d2340; color: #c084fc; }
+    html.dark .tag-migration { background: #22322d; color: #3be19b; }
+    html.dark .badge-proposal { background: #22322d; color: #3be19b; }
+    html.dark details[open] { border-color: #3b3b7b; }
+    html.dark code { background: rgba(255, 255, 255, 0.1); }
+    html.dark .detail-body code { background: rgba(255, 255, 255, 0.1); }
+    html.dark .topbar-left svg circle { fill: #fff; }
+    html.dark .topbar-left svg polygon { fill: #000; }
+
+    /* ── Buttons ── */
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 18px; font-family: var(--font); font-size: 13px; font-weight: 500; border-radius: 100px; border: none; cursor: pointer; }
+    .btn-primary { background: var(--purple); color: #fff; }
+    .btn-primary:hover { background: var(--purple-hover); }
+    .btn-secondary { background: var(--bg); color: var(--fg-secondary); border: 1px solid var(--border); }
+    .btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .btn-sm { padding: 5px 14px; font-size: 12px; }
+    .btn-ghost { background: none; border: 1px solid var(--border); padding: 3px 10px; font-size: 10px; font-weight: 500; border-radius: 100px; font-family: var(--font); color: var(--fg-muted); cursor: pointer; }
+    .btn-ghost:hover { background: var(--bg-muted); }
+
+    /* ── Comparison ── */
+    .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 700px) { .comparison { grid-template-columns: 1fr; } }
+    .comparison-card { padding: 20px 24px; border: 1px solid var(--border); border-radius: var(--radius); }
+    .comparison-card h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+    .comparison-card .sub { font-size: 12px; color: var(--fg-subtle); margin-bottom: 12px; }
+    .checklist { list-style: none; }
+    .checklist li { font-size: 12px; padding: 3px 0 3px 20px; position: relative; color: var(--fg-secondary); }
+    .checklist li::before { position: absolute; left: 0; top: 5px; font-size: 12px; }
+    .checklist li.yes::before { content: '\2713'; color: var(--green); font-weight: 700; }
+    .checklist li.no::before { content: '\2014'; color: var(--fg-subtle); }
+
+    /* ── Steps ── */
+    .steps { display: flex; flex-direction: column; }
+    .step { display: flex; gap: 16px; }
+    .step-marker { display: flex; flex-direction: column; align-items: center; }
+    .step-num { width: 24px; height: 24px; border-radius: 50%; background: var(--purple); color: #fff; font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center; flex-shrink: 0; z-index: 1; }
+    .step-line { flex: 1; width: 1px; background: var(--border); }
+    .step-body { padding-bottom: 24px; flex: 1; }
+    .step-body h4 { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+    .step-body p { font-size: 12px; color: var(--fg-muted); line-height: 1.6; max-width: 560px; }
+    .step:last-child .step-line { display: none; }
+    .step:last-child .step-body { padding-bottom: 0; }
+
+    /* ── Questions ── */
+    .questions { display: flex; flex-direction: column; gap: 12px; }
+    .question { padding: 16px 20px; border: 1px solid var(--border); border-radius: var(--radius); }
+    .question h4 { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+    .question p { font-size: 12px; color: var(--fg-muted); line-height: 1.6; }
+    .theme-toggle { display: inline-flex; align-items: center; padding: 5px 8px; }
+    .proposal-heading { font-size: 20px; letter-spacing: 0.02em; text-transform: none; line-height: 1.35; }
+    .proposal-summary { max-width: 680px; font-size: 14px; }
+
+    code { font-family: var(--mono); font-size: 11px; padding: 1px 5px; background: var(--bg-muted); border-radius: 3px; color: var(--fg-secondary); }
+    .doc-footer { padding: 24px 0; text-align: center; font-size: 11px; color: var(--fg-subtle); border-top: 1px solid var(--border); }
+
+    /* ── Mermaid Diagrams ── */
+    .mermaid-wrapper { margin: 16px 0; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-muted); overflow-x: auto; }
+    .mermaid-wrapper .caption { font-size: 11px; color: var(--fg-subtle); margin-top: 12px; text-align: center; font-style: italic; }
+    .mermaid { display: flex; justify-content: center; }
+    .mermaid svg { max-width: 100%; height: auto; }
+
+    /* ── Features grid ── */
+    .features-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 700px) { .features-grid { grid-template-columns: 1fr; } }
+    .feature-item { padding: 16px 20px; border: 1px solid var(--border); border-radius: var(--radius); }
+    .feature-item h4 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+    .feature-item p { font-size: 12px; color: var(--fg-muted); line-height: 1.6; }
+  </style>
+</head>
+<body>
+
+<!-- ── Topbar ── -->
+<header class="topbar">
+  <div class="topbar-left">
+    <svg width="28" height="28" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#000"/><polygon points="28,28 36,28 30,72 22,72" fill="#fff"/><polygon points="44,28 52,28 46,72 38,72" fill="#fff"/><polygon points="56,28 68,28 62,72 54,72" fill="#fff"/></svg>
+    <span>Manage Connectors V2</span>
+  </div>
+  <button id="theme-toggle" class="btn-ghost theme-toggle" type="button" aria-label="Toggle theme">Theme</button>
+  <span class="badge-proposal">Proposal &middot; August 2026</span>
+</header>
+
+<div class="container">
+
+  <!-- ═══════════════ WHOLE IDEA ═══════════════ -->
+  <div class="section">
+    <div class="section-label">The whole idea</div>
+    <div class="section-title proposal-heading">Unify the connector interface into one card system with clear sections.</div>
+    <div class="section-desc proposal-summary">
+      Today, connectors appear in two different places and look different: a table on the main page and cards in the Explore dialog. This redesign combines them into one unified card system with two clear sections: "Connected" (connectors you're already using) and "Available to connect" (what you can add). We're implementing this in stages: clean up the data layer, fix logo display, introduce the card design, and fix pagination so the screen requests one page at a time instead of downloading everything on open. We won't claim certainty about information that's incomplete or synthesized in the backend.
+    </div>
+  </div>
+
+  <!-- ═══════════════ PROBLEM ═══════════════ -->
+  <div class="section">
+    <div class="section-label">Why we're making this change</div>
+    <div class="section-title">Two connector UIs in one codebase; designs expects one interface</div>
+    <div class="section-desc">
+      Maintaining two rendering systems means every fix—loading states, empty states, hover behavior—gets built and tested twice, and the two have already drifted apart in small ways. The design's two-section layout is built entirely from cards, so keeping the table means retrofitting grouping onto a component that was never built for it. Consolidating removes the duplicate work and matches the structure the design actually calls for.
+    </div>
+
+    <div class="comparison">
+      <div class="comparison-card">
+        <h3>Today</h3>
+        <ul class="checklist">
+          <li class="no">Single flat list with a status badge on each row</li>
+          <li class="no">Explore dialog uses a different card style in a different place</li>
+          <li class="no">No clear visual distinction between connected and available</li>
+          <li class="no">Duplicate code for empty/loading states in two places</li>
+        </ul>
+      </div>
+      <div class="comparison-card">
+        <h3>After the redesign</h3>
+        <ul class="checklist">
+          <li class="yes">Two clear sections: "Connected" and "Available to connect"</li>
+          <li class="yes">One card design, used everywhere</li>
+          <li class="yes">Same cards adapt to different screen sizes (narrow to wide)</li>
+          <li class="yes">One code path for loading and empty states</li>
+        </ul>
+      </div>
+    </div>
+
+    <details>
+      <summary>Things to watch out for <span class="summary-tag tag-backend">Data fidelity</span></summary>
+      <div class="detail-body">
+        <h4>Connector Gateway does not provide an <code>enabled</code> field</h4>
+        <p>The Connector Gateway responses do not contain <code>enabled</code>. The frontend compatibility adapter synthesizes <code>enabled: true</code> for each adapted profile, so this value must not be treated as backend state. When the legacy MCP Gateway path is used, its response does include <code>enabled</code>; that is a legacy compatibility field, not part of the Connector Gateway contract. The Connected/Available split doesn't rely on either field. Instead:</p>
+        <ul>
+          <li><strong>Connected:</strong> The connector has a profile in the merged list (real data from either backend)</li>
+          <li><strong>Available:</strong> The connector exists in the catalog but this user has no profile for it yet</li>
+        </ul>
+        <p>This check works the same way other parts of the codebase already handle it — by asking "does this user have a relationship to this connector?" rather than reading a status flag. So the layout is built on real data and safe to ship. The fabricated <code>enabled</code> field is dead code in the adapter and shouldn't be relied on for anything.</p>
+        <p><strong>Why <code>enabled</code> exists at all:</strong> it's a legacy compatibility field, present only to satisfy the shape of the old <code>UserProfileConnector</code> object that some older code still expects. It has no real purpose in V2 — nothing in this design reads it, and no live code path depends on it being accurate. If a clean break from the legacy shape becomes possible, the adapter's <code>enabled</code> field can be dropped entirely; until then it's kept only for callers we haven't audited.</p>
+      </div>
+    </details>
+  </div>
+
+  <!-- ═══════════════ IMPLEMENTATION APPROACH ═══════════════ -->
+  <div class="section">
+    <div class="section-label">How to build it</div>
+    <div class="section-title">Pick the right strategy for the implementation</div>
+    <div class="section-desc">
+      We have several ways to build this redesign. Each approach trades off risk, speed, and complexity differently. Here are the main options. Every option ships behind a feature flag — that's not a differentiator between them, see the Release Plan below for details.
+    </div>
+
+    <div class="features-grid">
+      <div class="feature-item">
+        <h4>A — Build separately</h4>
+        <p>New card page built alongside the old one. Delete the old page after it's verified.</p>
+        <p style="margin-top: 8px; font-size: 11px; color: var(--fg-subtle);">Cost: two live versions for a while; most problems surface at once when the flag flips.</p>
+      </div>
+      <div class="feature-item">
+        <h4>B — Reshape step by step</h4>
+        <p>Gradually turn the current table into the new card design, one piece at a time.</p>
+        <p style="margin-top: 8px; font-size: 11px; color: var(--fg-subtle);">Cost: table and cards are organized too differently — every in-between step ships a confusing half-old, half-new page.</p>
+      </div>
+      <div class="feature-item">
+        <h4>C — Same engine, swap the display</h4>
+        <p>One shared engine for data/clicks/permissions; only the row-vs-card drawing swaps.</p>
+        <p style="margin-top: 8px; font-size: 11px; color: var(--fg-subtle);">Cost: only works if table and card can share the exact same data — and today's data has known gaps, so this can quietly turn into A anyway, just discovered later.</p>
+      </div>
+    </div>
+
+    <div style="margin-top: 24px; padding: 20px; background: var(--purple-light); border-radius: var(--radius); border: 1px solid var(--border);">
+      <h4 style="margin-bottom: 8px;">Recommendation: Option A</h4>
+      <p>C's data assumption doesn't hold today, so it risks becoming A anyway, later and with less warning. B ships a confusing half-old, half-new page at every intermediate step, with no way to hide that behind a flag. A gives a clean side-by-side comparison before launch and one clean cleanup step after — at the honest cost of running two versions until the flag flips.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════ PROPOSED BEHAVIOR ═══════════════ -->
+  <div class="section">
+    <div class="section-label">Technical approach</div>
+    <div class="section-title">Cards instead of a table</div>
+    <div class="section-desc">
+      Replace the table with cards organized into "Connected" and "Available to connect." The two sections are a presentation choice, not a claim that every connected profile is healthy or usable. Each card shows the connector name, a logo (properly loaded), its applicable state, and only the actions the user can take. The cards rearrange based on screen width: more columns on a wide screen, fewer on a phone. Today, one 639-line component (<code>connectors-tab.tsx</code>) handles everything — fetching data, search, sort, pagination, and nine different pieces of modal/dialog state. We're splitting that into four focused pieces: fetching data, organizing the list, handling actions/dialogs, and displaying it.
+    </div>
+
+    <details>
+      <summary>Profile states within the two-section UI <span class="summary-tag tag-frontend">Product contract</span></summary>
+      <div class="detail-body">
+        <p><strong>Decision:</strong> keep exactly two page sections. <strong>Connected</strong> means an applicable connector profile exists; it does not imply the profile is enabled, authorized, or currently usable. <strong>Available to connect</strong> means no applicable profile exists. Health, ownership, authorization method, and permission determine the card treatment inside those sections; they do not create additional sections.</p>
+        <table class="schema-table">
+          <thead><tr><th>Section</th><th>Profile condition</th><th>Card treatment</th><th>Primary action</th></tr></thead>
+          <tbody>
+            <tr><td>Connected</td><td>Active and healthy</td><td>Connected status; show ownership/default metadata when applicable</td><td>Manage</td></tr>
+            <tr><td>Connected</td><td>Disabled or turned off</td><td>Off status; keep the existing profile visible</td><td>Turn on, if permitted; otherwise Manage</td></tr>
+            <tr><td>Connected</td><td>Authorization expired or connection error</td><td>Needs reconnect/error status; do not imply the connector is usable</td><td>Reconnect, if permitted; otherwise show the actionable owner/context</td></tr>
+            <tr><td>Connected</td><td>Org-level profile</td><td>Shared/org ownership label; actions respect org permissions</td><td>Manage org connection, when permitted</td></tr>
+            <tr><td>Connected</td><td>User-level profile</td><td>Personal ownership label</td><td>Manage my connection</td></tr>
+            <tr><td>Available to connect</td><td>No applicable profile</td><td>Available state</td><td>Connect</td></tr>
+          </tbody>
+        </table>
+        <p>Auth route changes the connection or repair flow, not section placement: <code>code_grant</code> uses the OAuth/reconnect path; <code>api_key</code> and <code>http_basic</code> use their credential flows. The card must not present an OAuth-specific action for a credential-based connector, or vice versa.</p>
+        <p><strong>Calendar proof case:</strong> an existing Calendar <code>code_grant</code> profile stays in Connected. When healthy, it exposes its normal management action; when its authorization expires, the same card changes to “Needs reconnect” and exposes the OAuth reconnect flow. It never moves to Available solely because it is broken or disabled.</p>
+        <p><strong>Dependent behavior guardrail:</strong> this page rewrite must preserve the Chat connector dropdown’s current eligibility and selection behavior for each profile type and state. Chat is not being redesigned, but its assumptions must be identified and covered by regression scenarios before rollout.</p>
+      </div>
+    </details>
+
+    <!-- ═══════════════ DATA AND ARCHITECTURE ═══════════════ -->
+    <details>
+      <summary>Where the code lives today <span class="summary-tag tag-frontend">Frontend</span></summary>
+      <div class="detail-body">
+        <p>The starting point is one component plus a ring of siblings, all under <code>frontend/src/components/agents/manage-tabs/</code>:</p>
+        <div class="mermaid-wrapper">
+          <div class="mermaid">
+flowchart TD
+    ROOT["manage-tabs/&lt;br/&gt;shared by every Manage tab"]
+    ROOT --> MAIN["connectors-tab.tsx&lt;br/&gt;639 lines, does everything"]
+    MAIN --> TABLE["Table pieces, 4 files&lt;br/&gt;retired by card layout"]
+    MAIN --> EMPTY["connectors-empty-state.tsx&lt;br/&gt;reused, not retired"]
+    MAIN --> KEEP["Consent dialog&lt;br/&gt;kept as-is"]
+    MAIN --> REPLACE["Details, Connect, API-key dialogs&lt;br/&gt;replaced by new Details and Connect"]
+    REPLACE --> DETAILS["details-connector-modal.tsx&lt;br/&gt;search, browse, preview in one modal"]
+    REPLACE --> LIB["connector-library.tsx&lt;br/&gt;renders ConnectorCard inside Details"]
+          </div>
+          <div class="caption">Where the current code lives before the split</div>
+        </div>
+        <ul>
+          <li><code>connectors-tab.tsx</code> — 639 lines. Holds 9 <code>useState</code> hooks (add-connector modal, selected connector, preview modal, API-key modal, pending allow action, sort field, sort order, open row menu, in-flight organization connects), the <code>useMemo</code> chain <code>allConfigs → filteredConfigs → paginatedConfigs</code>, two <code>useEffect</code>s (one drains the next page, one resets scroll), and 14 <code>useCallback</code> action handlers.</li>
+          <li><code>connector-table-row.tsx</code>, <code>connector-row-status.tsx</code>, <code>connectors-tab-sort-indicator.tsx</code>, <code>connectors-tab-explore-action.tsx</code> — the table presentation layer that the card layout retires. <code>connector-row-status.tsx</code> hangs off <code>connector-table-row.tsx</code>, not off the tab.</li>
+          <li><code>connectors-empty-state.tsx</code> — the zero-connectors panel. It is not table markup, so the card layout <em>reuses</em> it rather than retiring it.</li>
+          <li><code>allow-connectors-modal.tsx</code> — consent screen, kept as-is; only its trigger wiring moves.</li>
+          <li><code>details-connector-modal.tsx</code> — new modal that consolidates search, browse, and preview into one screen. Replaces <code>explore-connectors-modal.tsx</code> and <code>preview-connector-modal.tsx</code>.</li>
+          <li><code>connect-connector-modal.tsx</code>, <code>connect-api-key-modal.tsx</code> — the two generic connect dialogs the new Connect dialog replaces (see Decision 4).</li>
+          <li><code>connector-library.tsx</code> — renders <code>ConnectorCard</code> from <code>frontend/src/components/connectors/connector-card.tsx</code>. Now opened from the Details modal rather than a separate Explore modal. This is the second rendering system the proposal is unifying.</li>
+        </ul>
+        <p>The new presentation component is <code>connectors-page-shell.tsx</code>. It replaces the JSX body of <code>connectors-tab.tsx</code> directly — there's no separate shell file in between.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>New modules and data flow <span class="summary-tag tag-frontend">Frontend</span></summary>
+      <div class="detail-body">
+        <p>Four files split the work that <code>connectors-tab.tsx</code> does today: one fetches data, one owns search/sort/paging, one owns dialogs, one renders. Each only talks to the tab, never to each other.</p>
+        <div class="mermaid-wrapper">
+          <div class="mermaid">
+flowchart TD
+    TAB["connectors-tab.tsx"]
+    DATA["use-connectors-tab-data.ts"]
+    LIST["use-connectors-list-state.ts"]
+    MODAL["use-connectors-modal-orchestration.ts"]
+    SHELL["connectors-page-shell.tsx"]
+    TAB --> DATA
+    TAB --> LIST
+    TAB --> MODAL
+    DATA --> SHELL
+    LIST --> SHELL
+    MODAL --> SHELL
+          </div>
+          <div class="caption">connectors-tab.tsx wires four independent pieces; only the shell renders anything</div>
+        </div>
+
+        <h4>use-connectors-tab-data.ts — fetching</h4>
+        <p>Reads the feature flag, fetches connectors, checks permissions, and owns logo URLs and enable/disable/revoke actions. The implementation must not retain work from the inactive backend path merely to tolerate a mid-session flag flip: the active path is chosen before data requests begin, and a flag change uses that path's normal query-key transition.</p>
+
+        <h4>use-connectors-list-state.ts — search, sort, paging</h4>
+        <p>Owns the search box, sort order, and current page number. It doesn't fetch — it tells the data hook which page to request. This fixes today's bug where the page silently downloads everything and slices it locally instead of asking the backend for one page at a time.</p>
+        <div class="mermaid-wrapper">
+          <div class="mermaid">
+flowchart LR
+    OPEN["Page opens"] --> P1["Ask backend for page 1"]
+    P1 --> SHOW["Show page 1"]
+    SHOW --> NEXT["User clicks next page"]
+    NEXT --> P2["Ask backend for that page"]
+    P2 --> SHOW
+          </div>
+          <div class="caption">Each page is requested from the backend on demand — nothing is pre-downloaded</div>
+        </div>
+
+        <h4>use-connectors-modal-orchestration.ts — dialogs</h4>
+        <p>Owns which dialog is open and the connect/consent workflow. The one tricky part: if a user needs to accept the "allow connectors" dialog first, their original action is held and replayed after they accept — that hold-and-replay step gets its own test.</p>
+        <div class="mermaid-wrapper">
+          <div class="mermaid">
+flowchart LR
+    CLICK["Click Connect"] --> CONSENT["Consent screen"]
+    CONSENT -->|Accept| OAUTH["Log in&lt;br/&gt;(new tab)"]
+    CONSENT -->|Cancel| CLICK
+    OAUTH -->|Success| DONE["Success&lt;br/&gt;(closes in 10s)"]
+    OAUTH -->|Fail| ERR["Error&lt;br/&gt;(Try again or closes in 10s)"]
+    ERR -->|Try again| CONSENT
+          </div>
+          <div class="caption">What a user sees after clicking Connect on a card</div>
+        </div>
+
+        <h4>connectors-page-shell.tsx — rendering</h4>
+        <p>Pure display: toolbar, the Connected/Available sections, the card grid, empty/loading/error states. Takes everything as props — no query hook, no store, no flag read. If a value changes, it comes in as a prop.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Page states: empty, loading, error <span class="summary-tag tag-frontend">Frontend</span></summary>
+      <div class="detail-body">
+        <p>What the page shows, depending on what's happening:</p>
+        <div class="mermaid-wrapper">
+          <div class="mermaid">
+stateDiagram-v2
+    [*] --> Loading
+    Loading: Loading&lt;br/&gt;Skeletons in both sections
+    Loading --> Empty: no connectors at all
+    Loading --> Partial: first page in, more pages fetching
+    Loading --> MixedSections: connected empty, available has items
+    Loading --> ConnectedAndAvailable: both sections have items
+    Loading --> FetchError: request fails
+
+    Empty: Empty&lt;br/&gt;"No connectors yet" + Explore button
+    Partial: Loading more&lt;br/&gt;First page shown + banner "may be incomplete"
+    Partial --> ConnectedAndAvailable: remaining pages succeed
+    Partial --> PartialError: a later page fails
+    PartialError: Partial error&lt;br/&gt;Keep first page, show retry
+    PartialError --> Partial: retry
+    MixedSections: Mixed&lt;br/&gt;Connected: empty-state · Available: full list
+    ConnectedAndAvailable: Loaded&lt;br/&gt;Both sections populated
+    FetchError: Fetch error&lt;br/&gt;Error message + retry, old data kept if any
+    FetchError --> Loading: retry
+
+    ConnectedAndAvailable --> NoResults: search matches nothing
+    MixedSections --> NoResults: search matches nothing
+    NoResults: No results&lt;br/&gt;"No results matching [term]" + clear button
+    NoResults --> ConnectedAndAvailable: clear search
+          </div>
+          <div class="caption">Every state a user can land on, and what moves them to the next one</div>
+        </div>
+      </div>
+    </details>
+
+    <details>
+      <summary>Dialog states and transitions <span class="summary-tag tag-frontend">Frontend</span></summary>
+      <div class="detail-body">
+        <p>The page has two dialogs: Details (search and browse connectors, or drill into one for preview/connect) and Connect (add to agent). Only one is ever open at a time. The modal orchestration hook owns both and the consent flow. Rather than one diagram for everything, here are the three things that actually happen: which dialog opens, what happens if the user hasn't given consent yet, and how a connect attempt ends.</p>
+
+        <p><strong>1. Opening a dialog.</strong> Details opens directly for browsing. Clicking Connect from anywhere is the only thing gated on prior consent acceptance.</p>
+        <div class="mermaid-wrapper">
+          <div class="mermaid">
+flowchart LR
+    Closed["No dialog open"]
+    Closed -->|Click Browse| Details["Details modal&lt;br/&gt;search, browse, preview"]
+    Closed -->|Click Connect| Consent{"Already&lt;br/&gt;consented?"}
+    Consent -->|Yes| ConnectDialog["Connect dialog&lt;br/&gt;OAuth or API key"]
+    Consent -->|No| ConsentScreen["Consent screen"]
+    Details -->|Click Connect| ConsentCheck{"Already&lt;br/&gt;consented?"}
+    ConsentCheck -->|Yes| ConnectDialog
+    ConsentCheck -->|No| ConsentScreen
+          </div>
+          <div class="caption">Details modal opens directly for browsing; Connect is gated on prior consent</div>
+        </div>
+
+        <p><strong>2. Consent, and the hold-and-replay pattern.</strong> If a user clicks Connect — from the main card list, from inside Details, or anywhere else — before accepting the consent screen, that action is held. Accepting consent replays it automatically so they never have to click twice.</p>
+        <div class="mermaid-wrapper">
+          <div class="mermaid">
+flowchart LR
+    Trigger["User clicks Connect&lt;br/&gt;(from card or Details modal)"] --> Consent{"Already&lt;br/&gt;consented?"}
+    Consent -->|Yes| Go["Open Connect dialog"]
+    Consent -->|No| Hold["Hold the action&lt;br/&gt;show consent screen"]
+    Hold -->|Accept| Replay["Replay the held action"] --> Go
+    Hold -->|Cancel| Closed["Back to closed"]
+          </div>
+          <div class="caption">Consent blocks once; accepting it replays whatever the user was trying to do</div>
+        </div>
+
+        <p><strong>3. How a connect attempt ends.</strong> Once the Connect dialog is open and OAuth (or an API key) is submitted, there are only two outcomes.</p>
+        <div class="mermaid-wrapper">
+          <div class="mermaid">
+flowchart LR
+    Start["Connect dialog&lt;br/&gt;OAuth in progress"] -->|Success| Success["Success&lt;br/&gt;closes automatically after 10s"]
+    Start -->|Failure| Error["Error&lt;br/&gt;Retry or dismiss"]
+    Error -->|Retry| Start
+    Success -->|Dismiss or timeout| Closed["Closed"]
+    Error -->|Dismiss or timeout| Closed
+          </div>
+          <div class="caption">Every connect attempt ends in success or a retryable error, both of which close the dialog</div>
+        </div>
+
+        <p><strong>Where this lives:</strong> The orchestration hook (<code>use-connectors-modal-orchestration.ts</code>) owns which dialog is open and the pending consent intent in Jotai atoms. Per-card pending flags (loading, error) for add/remove actions are separate atoms, keyed by connector ID.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>State ownership map <span class="summary-tag tag-frontend">Frontend</span></summary>
+      <div class="detail-body">
+        <p>Three stores, three jobs, no overlap:</p>
+        <ul>
+          <li><strong>Server data</strong> — React Query (<code>@tanstack/react-query</code> ^5.75.2). Connectors, profiles, agent config, signed logo URLs. Never mirrored into a client store.</li>
+          <li><strong>URL</strong> — search term and sort field/direction, so a filtered view is shareable and survives reload. This is a change from today, where both live in component <code>useState</code>. The app is Next.js 16, so this is <code>useSearchParams</code> plus a shallow replace, not a new dependency.</li>
+          <li><strong>Ephemeral UI</strong> — which dialog is open, which row menu is expanded, the pending consent intent, per-card pending/loading flags. This is where the state-library choice matters; see below.</li>
+        </ul>
+        <h4>Ephemeral UI state: zustand vs. Context vs. Jotai</h4>
+        <table>
+          <thead><tr><th>Option</th><th>Fit for this page</th></tr></thead>
+          <tbody>
+            <tr><td>React Context</td><td>Any value change re-renders every consumer unless the tree is manually split into narrow providers. With N connector cards each holding their own menu/pending state, that's either one re-render storm or a lot of hand-rolled provider nesting. Not chosen.</td></tr>
+            <tr><td>zustand</td><td>Codebase standard (^5.0.3, 41 files, including <code>frontend/src/stores/connectors-flow.ts</code>, which already covers this page's flow state). One shared store; avoiding over-rendering requires disciplined selectors per component. Works, but doesn't fit the "many independent per-card slots" shape especially well.</td></tr>
+            <tr><td><strong>Jotai (chosen)</strong></td><td>Atomic by default — each piece of state is its own atom, so a component subscribed to one card's menu-open atom never re-renders when another card's atom changes. <code>atomFamily</code> keyed by connector/profile id gives exactly the "which row is this" shape this page needs (open menu, pending-add, pending-remove) without hand-writing per-id selectors. Trade-off: net-new dependency, zero existing usage in this codebase, so the team pays a one-time learning/setup cost.</td></tr>
+          </tbody>
+        </table>
+        <p>This page uses Jotai for its ephemeral UI state — a deliberate, scoped exception to the zustand-everywhere norm, not a general replacement. <code>connectors-flow.ts</code> keeps owning the flow state it already has; Jotai only covers the new card layout's per-item state (menu open, pending add/remove).</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Data loading and progressive rendering <span class="summary-tag tag-backend">Backend</span></summary>
+      <div class="detail-body">
+        <h4>Current behavior</h4>
+        <p>The page already loads connectors a page at a time and shows them as soon as the first page arrives — it doesn't wait for everything. <code>ConnectorsTab</code> renders as soon as page one lands, keeps fetching more pages in the background, and shows the notice <em>"Loading more connectors. Search results may be incomplete."</em> while that's happening. It also already handles the first load, the in-progress load, and a later page failing separately.</p>
+        <h4>What the redesign must do</h4>
+        <p>Preserve, not rebuild. The progressive-render behavior is an existing invariant to carry across the rewrite and pin with tests: page one renders before page two resolves, the partial notice appears during drain and disappears after, and a page-two failure keeps page-one rows with a working retry. The risk in a decomposition is silently regressing this into a blocking spinner.</p>
+        <h4>Server-side pagination — already built, just bypassed</h4>
+        <p>Confirmed in code: the backend already does real paging, and the frontend already has a working query (<code>useListUnifiedUserProfiles</code>) that requests it with a real <code>limit</code>/<code>offset</code>. Nothing needs to be added on the backend.</p>
+        <p>The bug is a frontend one: an effect in <code>connectors-tab.tsx</code> (lines 250–256) automatically calls <code>fetchNextPage</code> the moment each page arrives, looping until every connector has been pulled into the browser. The on-screen "pages" then come from slicing that one giant downloaded array locally — the real <code>offset</code> the query supports is never used to ask for just the page the user is looking at.</p>
+        <p>This redesign must fix that effect so the screen requests one page at a time using the offset that already exists, instead of draining everything on open. No new API contract needed — this is a frontend fix, not backend work.</p>
+
+        <h4>Observed six-request cascade in the Connector Gateway path</h4>
+        <p><strong>Observed in the Network panel and confirmed in code:</strong> the six profile requests are three org-profile pages (<code>offset=0</code>, <code>100</code>, and <code>200</code>) plus the same user-profile request repeated after each one. <code>ConnectorsTab</code>'s auto-drain effect immediately calls <code>fetchNextPage</code> while <code>hasNextPage</code> is true. Each infinite-query page invokes <code>fetchUnifiedUserProfilesPage</code>, which starts both requests: the org-profile request uses that page's offset, while the user-profile request is reset to <code>offset=0&amp;limit=1000</code>.</p>
+        <table>
+          <thead><tr><th>Infinite-query page</th><th>Org profiles request</th><th>User profiles request</th></tr></thead>
+          <tbody>
+            <tr><td>0</td><td><code>offset=0&amp;limit=100</code></td><td><code>offset=0&amp;limit=1000</code></td></tr>
+            <tr><td>100</td><td><code>offset=100&amp;limit=100</code></td><td><code>offset=0&amp;limit=1000</code> — duplicate</td></tr>
+            <tr><td>200</td><td><code>offset=200&amp;limit=100</code></td><td><code>offset=0&amp;limit=1000</code> — duplicate</td></tr>
+          </tbody>
+        </table>
+        <p>This is not a TanStack Query cache miss: the repeated user request is made inside the paged query function, outside the cache's request-deduplication boundary. The cascade is a second, independent problem: the page asks for all org pages on mount. Replace this shape with two independent, organization/team-keyed initial-load queries: one org-profile request at <code>offset=0&amp;limit=100</code> and one user-profile request at <code>offset=0&amp;limit=1000</code>. Merge their cached results for rendering. Remove the auto-drain effect; a later org page may be requested only by an explicit pagination/load-more interaction. Initial page load must therefore make exactly those two profile requests.</p>
+
+        <h4>The same cascade re-fires on every connect and disconnect</h4>
+        <p><strong>Confirmed with a fresh HAR capture, not just the initial-load trace above:</strong> connecting or disconnecting a profile re-triggers the identical six-request cascade — it isn't limited to first paint. <code>invalidateConnectorProfileQueries</code> (<code>frontend/src/hooks/react-query/mcp-gateway/use-gateway.ts</code>, lines 561–585) is the shared invalidation helper called by <code>useConnectCgProfile</code>, <code>useDisconnectCgUserProfile</code>, <code>useCreateOAuthProfileMy</code>, <code>useDeleteProfile</code>, and <code>useUpdateCgUserProfile</code>. It unconditionally invalidates the unified-profiles infinite query (<code>getUnifiedProfilesV3QueryKey</code>) among others. Invalidating an infinite query tells TanStack Query to refetch every page that is currently loaded, not just the first — so once the auto-drain effect above has pulled in all three org pages, any one of these five mutations re-runs the full three-page-plus-duplicate-user-request cascade again.</p>
+        <table>
+          <thead><tr><th>Trigger</th><th>Requests observed immediately after</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST .../profiles/{id}/connect</code></td><td>org <code>offset=0</code>, org <code>offset=100</code> + duplicate user <code>offset=0&amp;limit=1000</code>, org <code>offset=200</code></td></tr>
+            <tr><td><code>POST .../profiles/{id}/disconnect</code></td><td>org <code>offset=0</code>, org <code>offset=100</code> + duplicate user <code>offset=0&amp;limit=1000</code>, org <code>offset=200</code></td></tr>
+          </tbody>
+        </table>
+        <p>The fix above (two independent initial-load queries, auto-drain effect removed, later org pages fetched only on explicit load-more) resolves this for free: with only page one ever loaded by default, invalidating the infinite query after a mutation refetches just that one already-loaded page instead of redraining everything. No separate fix is needed for the mutation path — it inherits the pagination fix. The acceptance criteria below should be read as covering both the initial load and every subsequent connect/disconnect, not initial load alone.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>The card: nothing existing matches, build one from WDS parts <span class="summary-tag tag-frontend">Frontend</span></summary>
+      <div class="detail-body">
+        <h4>Neither existing card matches the Figma design</h4>
+        <p>There are two existing connector cards in the codebase. Checked both directly against the V2 Figma frame (node <code>31768:101793</code>) — neither is a drop-in fit.</p>
+        <ul>
+          <li><code>frontend/src/components/connectors/connector-card.tsx</code> — the Explore-dialog card. Wrong shape entirely: a vertical, portrait catalog card (225px tall) with a centered icon and hover-reveal "Details" button. Its own source comment says <em>"this card is only for the library."</em> No kebab menu, no Connect/Add button. Not a candidate.</li>
+          <li><code>frontend/src/components/projects/project-settings-connectors/project-settings-connectors.tsx</code> — closer, but still wrong on four counts: connected state renders a <code>✓ Added</code> text badge where Figma shows a plain green status dot; it has no "Default" pill next to the connector name; its button says "Add" where Figma says "Connect"; and it renders a single-column list, not the 2-column grid Figma specifies.</li>
+        </ul>
+        <h4>WDS has no ready-made card for this either</h4>
+        <p>WDS ships two card-shaped primitives, <code>SelectorCard</code> (row/column variants) and <code>SelectorButton</code>. Both were checked against the Figma anatomy and ruled out: they're selection controls — the entire card <em>is</em> the radio or checkbox input, and clicking anywhere toggles selection. The V2 card is a display-plus-action surface (status dot or Connect button, plus a separate kebab menu) — a different interaction model, not a styling difference. Using a selector card here would fight the component's own semantics.</p>
+        <h4>What to build</h4>
+        <p>A new, page-local <code>ConnectorManagementCard</code>, composed from existing WDS primitives rather than built from raw markup:</p>
+        <ul>
+          <li>WDS <code>Status</code> (<code>color="green" size="sm"</code>) for the connected dot</li>
+          <li>WDS <code>Tag</code> for the "Default" pill</li>
+          <li>WDS <code>Button</code> for "Connect"</li>
+          <li>WDS <code>IconButton</code> + <code>DropdownMenu</code> for the kebab menu</li>
+          <li>The app's existing <code>ConnectorIcon</code> for the logo (WDS has no provider-logo component)</li>
+          <li>A plain responsive CSS grid for the 1/2/4-column layout — no WDS or AG Grid component fits a card collection; WDS's <code>DataGrid</code> (from the alpha entry point) is a spreadsheet table with sort/filter/pagination, not a card grid</li>
+        </ul>
+        <p><code>project-settings-connectors.tsx</code> is still the right structural skeleton to fork — two-section split, horizontal card anatomy, WDS dropdown menu — but it needs real changes, not promotion as-is. Shipping a <em>third</em> card system with none of these fixes would make the problem this proposal exists to solve strictly worse.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Screen sizes: how the layout changes <span class="summary-tag tag-frontend">Frontend</span></summary>
+      <div class="detail-body">
+        <p>Figma has 5 versions of this page, one per screen width. The cards always stay full-width inside their column — what changes is how many columns fit:</p>
+        <table>
+          <thead><tr><th>Screen width</th><th>Columns of cards</th></tr></thead>
+          <tbody>
+            <tr><td>Under ~700px (phone)</td><td>1 column — cards stack in a single list</td></tr>
+            <tr><td>~700–1030px (small tablet / narrow window)</td><td>2 columns, narrower cards</td></tr>
+            <tr><td>~1030–1400px (normal laptop/desktop)</td><td>2 columns, wider cards</td></tr>
+            <tr><td>Above ~2000px (large monitor)</td><td>4 columns</td></tr>
+          </tbody>
+        </table>
+        <p>This is the same grid-that-reflows behavior the page already has today — we're not introducing a new pattern, just carrying it into the new card layout. The search box, sort dropdown, and "Add connector" button stay in one row at every width in the Figma file, shrinking to fit — they don't stack, even on the narrowest phone size.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Logo resolution and signing contract <span class="summary-tag tag-frontend">Frontend</span></summary>
+      <div class="detail-body">
+        <h4>The problem</h4>
+        <p>Custom connector logos are stored as <code>logo_…</code> paths. They require signing via <code>useResolvedLogoUrl</code> before <code>&lt;img&gt;</code> can render them. The Manage Connectors table today uses <code>logoUrlMap[path] ?? rawPath</code>, which can send unsigned paths to the image element. This is a bug that the redesign should fix.</p>
+        <h4>The contract</h4>
+        <p>Use the existing <code>resolveConnectorLogo</code> resolver (or equivalent shared function) so:</p>
+        <ul>
+          <li>Built-in connector URLs pass through unchanged</li>
+          <li>Custom paths are resolved via the <code>['signed-logos', orgId, [sortedPaths]]</code> query</li>
+          <li>Signing in-flight or missing org scope returns <code>undefined</code>, not a raw path</li>
+          <li>Fallback is the existing connector plug icon</li>
+        </ul>
+        <p>Normalize this behavior in the data hook (step 2) before the card layout lands, so the shell never handles raw storage paths. Note the ordering dependency: <code>ConnectorCard</code> currently takes <code>logoUrl</code> as a prop and falls back to <code>connectorApp?.logo</code> — so any shared card must receive an already-resolved value, never resolve one itself.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Connector Gateway adapter fidelity gates <span class="summary-tag tag-backend">Data fidelity</span></summary>
+      <div class="detail-body">
+        <h4>What is lossy</h4>
+        <p>Fields affected by the frontend adapter:</p>
+        <ul>
+          <li><code>enabled</code> — not returned by CG; synthesized as <code>true</code> for legacy-shape compatibility</li>
+          <li><code>totalToolCount</code> — derived from tool list length; unreliable without explicit count</li>
+          <li><code>provider</code> — available only for MCP_REMOTE tools; guessing for others</li>
+          <li>Tool schemas, annotations, tags, ownership, tenant modes — all dropped</li>
+          <li>Timestamps, creation metadata — dropped</li>
+          <li>Custom logo paths — present but require signing before use</li>
+        </ul>
+        <h4>The gate</h4>
+        <p>Any design requirement that depends on one of these fields must first resolve:</p>
+        <ul>
+          <li>Use a field marked <code>GO</code> (preserved with no loss)</li>
+          <li>Define a parallel CG-native view model that owns the field natively</li>
+          <li>Add an explicit, backend-owned contract that enriches the legacy shape</li>
+        </ul>
+        <p>This keeps the design honest about what's trustworthy and prevents silent failures when CG values change or are unavailable.</p>
+        <p>The Connected/Available split does not use the invented <code>enabled</code> field. It works the same way two other places in the codebase already do it: <code>project-settings-connectors.tsx</code> splits "Added" vs. "Available" by whether the connector is on that project's list, not by any status field. The Explore catalog does the same — a connector counts as connected simply because it has a profile, not because of a true/false flag.</p>
+        <p>The redesign follows that same pattern: "Added" means the connector has a profile in the merged list; "Available" means it's in the catalog but has no profile yet. That check works the same in both flag states, so there's no data-fidelity problem blocking step 5.</p>
+      </div>
+    </details>
+  </div>
+
+  <!-- ═══════════════ ACCEPTANCE CRITERIA ═══════════════ -->
+  <div class="section">
+    <div class="section-label">How we'll know it's done</div>
+    <div class="section-title">Testing and verification</div>
+    <div class="section-desc">
+      We test each of the four pieces from the technical approach on its own, plus a few things that cut across all of them: loading, logos, and making sure nothing else on the page breaks.</div>
+
+
+    <table>
+      <thead><tr><th>Piece</th><th>What we check</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Fetching data</td>
+          <td>Reads the flag correctly and works in both old and new modes, handles permissions, shows empty/first-loading states, retries after a failure, and never starts inactive-path requests. With Connector Gateway enabled and more than 100 org profiles, initial load makes exactly two profile requests: org <code>offset=0&amp;limit=100</code> and user <code>offset=0&amp;limit=1000</code>. It makes no <code>offset=100</code> org request and no duplicate user request until an explicit load-more action — and connecting or disconnecting a profile after that refetches only the one already-loaded page, not the full cascade.</td>
+        </tr>
+        <tr>
+          <td>Organizing the list</td>
+          <td>Splits connectors into "Connected" and "Available" correctly, sorts by name and status, search matches across all four fields, section counts are right, clearing search resets the list, paging controls work</td>
+        </tr>
+        <tr>
+          <td>Actions and dialogs</td>
+          <td>Connect, disconnect, set default, OAuth, API key, and the consent flow (including pausing and resuming it) all work, and organization-wide connects don't fire twice</td>
+        </tr>
+        <tr>
+          <td>Page layout</td>
+          <td>One/two/four-column layouts show correctly at every screen size we tested, toolbar wraps instead of breaking, "Available" section can be jumped to and focused, empty sections and "no results" look right, loading/error/retry states work</td>
+        </tr>
+        <tr>
+          <td>Card</td>
+          <td>Every visual state and color theme; active, off, needs-reconnect/error, org-level, and user-level profile treatments; valid <code>code_grant</code>, API-key, and HTTP-basic actions; "Default" pill, status indicator, Connect button and menu nesting, logo loads or falls back, long names truncate, screen readers get a sensible name</td>
+        </tr>
+        <tr>
+          <td>Loading more data</td>
+          <td>First page shows before the second page finishes, a "still loading" notice appears, a failed second page doesn't erase the first page's data, and once everything's loaded, search and sort behave the same as if all data arrived at once</td>
+        </tr>
+        <tr>
+          <td>Logos</td>
+          <td>Built-in logos load directly, custom logos go through the signing step first, a signing request that's still in progress doesn't briefly show the wrong path, and the fallback icon shows when nothing else works</td>
+        </tr>
+        <tr>
+          <td>Nothing else breaks</td>
+          <td>Page looks and behaves the same in both old and new modes, other places in the app that use the connector icon are untouched, opening Preview twice quickly doesn't send two requests, no provider or tool data goes missing, and the Chat connector dropdown preserves its current eligibility and selection behavior for each affected profile type/state</td>
+        </tr>
+        <tr>
+          <td>Accessibility</td>
+          <td>Headings and regions are labeled, everything works by keyboard (toolbar, menus, cards), focus is visible, status changes are announced, reduced motion is respected, text has enough contrast</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <details>
+      <summary>Implementation verification checklist <span class="summary-tag tag-frontend">Frontend</span></summary>
+      <div class="detail-body">
+        <h4>Before approval</h4>
+        <ul>
+          <li>Type-check and lint pass</li>
+          <li>New tests for the data-fetching hooks and page shell pass</li>
+          <li>Capture a Network-panel screenshot with Connector Gateway enabled and more than 100 org profiles: initial load shows exactly one org request at <code>offset=0&amp;limit=100</code> and one user request at <code>offset=0&amp;limit=1000</code>; no <code>offset=100</code> request and no duplicate <code>my</code> request. Attach it to the implementation ticket/PR.</li>
+          <li>Manual look-over on desktop/tablet/phone, checking every empty/loading/error state</li>
+          <li>Manual keyboard pass: search, sort, card actions, paging, consent flow, and dialog focus lands in the right place — in both old and new modes</li>
+        </ul>
+
+        <h4>Visual regression checks</h4>
+        <ul>
+          <li>Take a screenshot baseline before we start splitting up the code</li>
+          <li>Confirm each build step leaves the screen unchanged, right up until the final step swaps in the new page</li>
+          <li>After that step, compare against the approved Figma design at every screen size we tested</li>
+        </ul>
+      </div>
+    </details>
+  </div>
+
+  <!-- ═══════════════ OPEN DECISIONS ═══════════════ -->
+  <div class="section">
+    <div class="section-label">Questions to settle</div>
+    <div class="section-title">Design decisions to make before coding</div>
+    <div class="questions">
+      <div class="question">
+        <h4>1. Decided — keep both Explore and the new "Available to connect" section</h4>
+        <p>The Figma design doesn't show the Explore modal being replaced. Explore stays as the place to browse and add brand-new connectors; the "Available to connect" section on the main page is for connectors the org already offers but this user hasn't turned on yet.</p>
+      </div>
+      <div class="question">
+        <h4>2. Decided — sort by name only, for now</h4>
+        <p>Name (A to Z) stays the only sort option. The Figma design doesn't show a sort-by-date or sort-by-status control. Add one later if users ask for it.</p>
+      </div>
+      <div class="question">
+        <h4>3. Decided — one column on very small phones</h4>
+        <p>The design covers down to 640px width as one column. Below that, we keep one column rather than adjusting further.</p>
+      </div>
+      <div class="question">
+        <h4>4. Decided — build a new Connect dialog</h4>
+        <p>The Figma design shows three purpose-built states for the Connect dialog (connecting, success, failure) that don't match the current generic connect dialog. Build these as new components rather than restyling the old one. This applies only to Connect — Explore and Preview are unchanged, only their trigger wiring moves.</p>
+      </div>
+      <div class="question">
+        <h4>5. Still open — first-time setup dialog</h4>
+        <p>Figma shows a setup dialog for new users. Where we store "this user has already seen it" is still to be confirmed — leaving this open for now.</p>
+      </div>
+      <div class="question">
+        <h4>6. Decided — initial load makes two profile requests, not six</h4>
+        <p>Network trace: the six requests are three sequential org pages and three copies of the same user-profile request. Cause: the auto-drain effect starts page 100 and page 200 on mount, and each page's query function also reads the unpaged user profiles. A follow-up HAR capture confirms the same six-request cascade re-fires on every connect and disconnect too, because <code>invalidateConnectorProfileQueries</code> invalidates the infinite query and TanStack Query refetches every already-loaded page. Decision: use separate org and user queries, merge their cached results, and remove auto-drain. On initial load, make exactly one org-profile request (<code>offset=0&amp;limit=100</code>) and one user-profile request (<code>offset=0&amp;limit=1000</code>). Request later org pages only after an explicit user-driven pagination/load-more action. Because only one page stays loaded by default, a later connect/disconnect invalidation refetches that one page instead of redraining everything — no separate fix needed for the mutation path.</p>
+      </div>
+      <div class="question">
+        <h4>7. Decided — fix pagination to request one page at a time</h4>
+        <p>Required. The backend and the query layer already support real paging with a working <code>limit</code>/<code>offset</code> — no new backend contract needed. The bug is a frontend effect (<code>connectors-tab.tsx:250-256</code>) that auto-fetches every page on open and then slices that full array locally. This redesign must remove that drain-everything effect and have the screen request only the page it's showing. Nothing is open here; this is a scoped frontend fix.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ SCOPE BOUNDARIES ═══════════════ -->
+  <div class="section">
+    <div class="section-label">Scope</div>
+    <div class="section-title">What's included and what's not</div>
+    <div class="section-desc">
+      This redesign focuses on the connector page interface: the new card layout, fixing how data flows through the page, and improving logo display. It does not include changes to the backend, design system, or other parts of the product that happen to use the same icons or components.
+    </div>
+
+    <div class="features-grid">
+      <div class="feature-item">
+        <h4>Included</h4>
+        <ul style="margin-left: 16px;">
+          <li>Redesigned profiles list: new card layout, status badges, and responsive sizing</li>
+          <li>New Details modal: consolidates search, browse, and preview into one screen (replaces separate Explore and Preview dialogs)</li>
+          <li>New Connect dialog: three purpose-built states (connecting, success, failure) replacing the current generic connect dialogs</li>
+          <li>Unified data fetching: org profiles and user profiles merged cleanly</li>
+          <li>Isolated state: per-card UI state separate from data</li>
+          <li>Pagination fix: fetch one page at a time instead of draining all pages upfront</li>
+          <li>Connector Gateway duplicate-fetch fix: cache the user-profile read separately from paged org-profile reads</li>
+          <li>Logo handling and name-only sort</li>
+        </ul>
+      </div>
+      <div class="feature-item">
+        <h4>Not included</h4>
+        <ul style="margin-left: 16px;">
+          <li>Design system changes or new components</li>
+          <li>Changes to other pages or unrelated parts of ConnectorsTab</li>
+          <li>Setup dialog storage mechanism (TBC)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ BLOCKERS ═══════════════ -->
+  <div class="section">
+    <div class="section-label">Ready to start</div>
+    <div class="section-title">Blockers to clear</div>
+    <div class="section-desc">
+      Only one thing is actually open. The rest are settled facts, listed here so a reader can see what's already been checked off.
+    </div>
+
+    <ul style="margin-left: 16px; font-size: 13px; line-height: 1.8;">
+      <li><span class="tag tag-yes">Decided</span> No backend API changes needed — existing endpoints and paging contracts are sufficient</li>
+      <li><span class="tag tag-yes">Decided</span> All design decisions settled (questions 1–7) except setup dialog storage mechanism (question 5)</li>
+      <li><span class="tag tag-yes">Decided</span> Design approved in Figma: node 31768:101793 in the WRITER-Agent file</li>
+      <li><span class="tag tag-yes">Decided</span> Connectors team alignment — David Chen (FE lead) and Colin/Vinh/Kapil (BE) aware and tracking</li>
+      <li><span class="tag tag-no">Unresolved</span> Question 5: first-time setup dialog — confirm where "user has seen this" is stored</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════ RELEASE PLAN ═══════════════ -->
+  <div class="section">
+    <div class="section-label">Rollout</div>
+    <div class="section-title">Release plan</div>
+    <div class="section-desc">
+      Ship behind a new, dedicated feature flag for this page redesign — separate from <code>connector-gateway</code>, which only controls the backend split and shouldn't also gate this frontend change.
+    </div>
+    <ul style="margin-left: 16px; font-size: 13px; line-height: 1.8;">
+      <li>Internal team first (connectors team + Writer employees), then a small org allowlist</li>
+      <li>Widen by percentage of orgs once the first allowlist shows no regressions</li>
+      <li>Old and new page versions run side by side behind the flag, so rollback is just flipping it back off</li>
+      <li>No database or backend migration involved — this is a frontend-only change, so rollout risk is contained to the page itself</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════ SUCCESS METRICS ═══════════════ -->
+  <div class="section">
+    <div class="section-label">Measurement</div>
+    <div class="section-title">Success metrics</div>
+    <div class="section-desc">
+      How we'll know the redesign worked, checked a few weeks after full rollout.
+    </div>
+    <ul style="margin-left: 16px; font-size: 13px; line-height: 1.8;">
+      <li>Page error rate stays flat or improves versus the current page</li>
+      <li>Load time for the connectors list improves, since pagination no longer drains every page upfront</li>
+      <li>No increase in support tickets or bug reports about the connectors page</li>
+      <li>Connector connect/setup completion rate stays flat or improves</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════ SECURITY ═══════════════ -->
+  <div class="section">
+    <div class="section-label">Security</div>
+    <div class="section-title">Security and privacy check</div>
+    <div class="section-desc">
+      This page reads org and user connector data, so it needs a basic check even though there's no new backend contract.
+    </div>
+    <ul style="margin-left: 16px; font-size: 13px; line-height: 1.8;">
+      <li>No new API endpoints or scopes — this redesign reuses existing, already-reviewed endpoints</li>
+      <li>No new data is displayed beyond what the current page already shows</li>
+      <li>Org-level ceiling on permissions is unchanged; this work doesn't touch authorization logic</li>
+      <li>Verify no PII ends up in client-side logs from the new dialogs</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════ FOOTER ═══════════════ -->
+  <div class="doc-footer">Connectors Redesign Proposal · August 2026</div>
+
+</div>
+
+<script>
+(function() {
+  var toggle = document.getElementById('theme-toggle');
+  var html = document.documentElement;
+  var sunIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
+  var moonIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+
+  function getPreferred() {
+    var stored = localStorage.getItem('proposal-theme');
+    if (stored) return stored;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+
+  function apply(theme) {
+    html.classList.toggle('dark', theme === 'dark');
+    toggle.innerHTML = theme === 'dark' ? sunIcon : moonIcon;
+    toggle.title = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    if (typeof initMermaid === 'function') { setTimeout(initMermaid, 50); }
+  }
+
+  apply(getPreferred());
+  toggle.addEventListener('click', function() {
+    var next = html.classList.contains('dark') ? 'light' : 'dark';
+    localStorage.setItem('proposal-theme', next);
+    apply(next);
+  });
+})();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  function initMermaid() {
+    if (typeof mermaid === 'undefined') return;
+
+    const isDark = document.documentElement.classList.contains('dark');
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'loose',
+      theme: isDark ? 'dark' : 'default',
+      themeVariables: isDark ? {
+        primaryColor: '#212142', primaryTextColor: '#e0e5f1', primaryBorderColor: '#3b3b7b',
+        lineColor: '#8a96b0', secondaryColor: '#1b202a', tertiaryColor: '#2b3343',
+        fontFamily: "'Poppins', sans-serif", fontSize: '13px',
+      } : {
+        primaryColor: '#f3f5ff', primaryTextColor: '#333333', primaryBorderColor: '#bfcbff',
+        lineColor: '#828282', secondaryColor: '#f5f5f9', tertiaryColor: '#e4e7ed',
+        fontFamily: "'Poppins', sans-serif", fontSize: '13px',
+      },
+    });
+
+    document.querySelectorAll('.mermaid').forEach(el => {
+      if (!el.dataset.original) el.dataset.original = el.textContent.trim();
+      el.textContent = el.dataset.original;
+      el.removeAttribute('data-processed');
+    });
+    mermaid.run({ nodes: document.querySelectorAll('.mermaid') });
+  }
+
+  initMermaid();
+</script>
+</body>
+</html>
