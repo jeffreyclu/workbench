@@ -31,6 +31,17 @@ export function interjectionSteeringPrompt(body: string): string {
   return `The user is interjecting into your active response. Acknowledge and apply this direction immediately; do not wait for a later turn or start a separate response:\n\n${body}`;
 }
 
+/**
+ * A live reply body is already throttled by each provider runner. Emit the
+ * shared WebSocket invalidation alongside that persisted update so an open
+ * conversation renders the activity immediately instead of waiting for its
+ * polling fallback.
+ */
+function updateLiveSharedBody(repository: WorkItemRepository, messageId: string, body: string): void {
+  repository.updateSharedMessage(messageId, { body });
+  publishRealtimeEvent('shared');
+}
+
 export function agentStreamEventForCodexAppServerItem(method: string, item: Record<string, unknown> | undefined): { kind: 'decision' | 'tool'; detail: string } | null {
   if (!item) return null;
   const type = String(item.type ?? '');
@@ -594,7 +605,7 @@ export async function runSharedBackgroundJob(
   const controller = new AbortController();
   activeReplies.set(messageId, controller);
   try {
-    const body = await job(controller.signal, (partial) => repository.updateSharedMessage(messageId, { body: partial }));
+    const body = await job(controller.signal, (partial) => updateLiveSharedBody(repository, messageId, partial));
     repository.updateSharedMessage(messageId, { body, status: 'completed' });
   } catch (error) {
     repository.updateSharedMessage(messageId, controller.signal.aborted
@@ -698,7 +709,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       result = agent === 'codex'
       ? await runSteerableCodex(guardedPrompt, cwd, controller.signal, (partial) => {
         if (controller.signal.aborted) return;
-        repository.updateSharedMessage(messageId, { body: partial });
+        updateLiveSharedBody(repository, messageId, partial);
         if (runId) repository.updateRun(runId, { output: partial });
       }, (steer) => {
         registerActiveReplySteering(messageId, steer);
@@ -710,7 +721,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
         .then(({ output, threadId }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage: { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null }, fallbackFrom: null, fallbackReason: null }))
       : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       if (controller.signal.aborted) return;
-      repository.updateSharedMessage(messageId, { body: partial });
+      updateLiveSharedBody(repository, messageId, partial);
       if (runId) repository.updateRun(runId, { output: partial });
     }, controller.signal, (fallback, reason) => {
       repository.updateSharedMessage(messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: agent, fallbackReason: reason.slice(0, 500) });
@@ -732,7 +743,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       repository.updateSharedMessage(messageId, { body: '● Claude session expired. Restarting this turn in a fresh session…' });
       result = await runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(guardedPrompt, cwd), (partial) => {
         if (controller.signal.aborted) return;
-        repository.updateSharedMessage(messageId, { body: partial });
+        updateLiveSharedBody(repository, messageId, partial);
         if (runId) repository.updateRun(runId, { output: partial });
       }, controller.signal, undefined, profile, (usage) => {
         const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
@@ -754,7 +765,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       repository.updateSharedMessage(messageId, { body: '● Claude reported an invalid workspace-scope blocker. Handing this tracked turn to Codex…', fallbackFrom: 'claude', fallbackReason: reason });
       const recovered = await runAgentCommandWithFallback('codex', cwd, `${guardedPrompt}\n\nRecovery handoff: Claude incorrectly claimed it lacked workspace access. Complete the original request directly. Do not repeat that claim; report only observed commands, files changed, verification, and concrete blockers.`, (partial) => {
         if (controller.signal.aborted) return;
-        repository.updateSharedMessage(messageId, { body: partial });
+        updateLiveSharedBody(repository, messageId, partial);
         if (runId) repository.updateRun(runId, { output: partial });
       }, controller.signal, undefined, profile, (usage) => {
         const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
