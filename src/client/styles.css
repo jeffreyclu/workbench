@@ -554,6 +554,10 @@ nav { display: grid; gap: 3px; }
 .card-classification-select { min-width: 82px; padding: 4px 24px 4px 7px; color: #eee9ff; background: #191622; border: 1px solid #5a4f83; border-left: 0; border-radius: 0 5px 5px 0; font: 700 8px/1 'DM Mono'; text-transform: uppercase; cursor: pointer; }
 .card-classification-select:disabled { opacity: .6; cursor: wait; }
 .card-classification-spinner { position: absolute; top: 7px; right: 7px; color: #d7ccff; pointer-events: none; }
+.card-classification-control.disclosure { position: relative; }
+.card-classification-control.disclosure .icon-button { color: #d7ccff; border-color: #5a4f83; }
+.card-classification-control.disclosure .icon-button:hover { color: #fff; background: #25203a; }
+.card-classification-popover { position: absolute; top: 0; right: 0; z-index: 20; display: inline-flex; align-items: stretch; width: max-content; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
 .run-card pre { max-height: 360px; overflow: auto; margin: 0; padding: 13px; color: #bdbcb5; background: #0d0d0c; font: 10px/1.65 'DM Mono'; white-space: pre-wrap; word-break: break-word; }
 .run-card .run-prompt { margin: 0; padding: 10px 12px; color: #77766f; font-size: 10px; font-style: italic; }
 .run-card > .model-badge { display: flex; width: fit-content; margin: 4px 12px 0; }

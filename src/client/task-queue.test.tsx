@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkItem } from '../shared/contracts';
@@ -37,6 +37,22 @@ describe('TaskClassificationSelect', () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/work-items/${item.id}/classify`, expect.objectContaining({ method: 'POST', body: JSON.stringify({ kind: 'bugfix' }) })));
     resolveRequest?.();
     await waitFor(() => expect(client.getQueryData<{ item: WorkItem }>(['work-item', item.id])?.item.classificationKind).toBe('bugfix'));
+  });
+
+  it('keeps the disclosure variant collapsed to an icon toggle until opened', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(JSON.stringify({ classification: { kind: 'bugfix' } }), { headers: { 'Content-Type': 'application/json' } }))));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = render(<QueryClientProvider client={client}><TaskClassificationSelect itemId={item.id} kind={item.classificationKind} disclosure /></QueryClientProvider>);
+    const { findByRole, getByRole, queryByRole } = within(container);
+
+    expect(queryByRole('combobox', { name: 'Task type' })).toBeNull();
+    const toggle = getByRole('button', { name: 'Task type: Execute' });
+
+    fireEvent.click(toggle);
+
+    const select = await findByRole('combobox', { name: 'Task type' });
+    fireEvent.change(select, { target: { value: 'bugfix' } });
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/work-items/${item.id}/classify`, expect.objectContaining({ method: 'POST', body: JSON.stringify({ kind: 'bugfix' }) })));
   });
 });
 

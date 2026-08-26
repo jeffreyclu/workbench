@@ -158,6 +158,33 @@ export async function getWorkspaceDiff(workspacePath: string): Promise<Workspace
 }
 
 /**
+ * Rebuild a reviewable patch from a commit that an agent explicitly recorded
+ * in the conversation. This is the recovery path for work committed outside
+ * the Changes pane, before its uncommitted snapshot could be captured.
+ */
+export async function getWorkspaceCommitDiff(workspacePath: string, commitReference: string): Promise<WorkspaceDiff> {
+  const commit = await gitOutput(workspacePath, ['rev-parse', '--verify', `${commitReference}^{commit}`]);
+  const [branchResult, patchResult] = await Promise.all([
+    git(workspacePath, ['branch', '--show-current']),
+    git(workspacePath, ['show', '--format=', '--no-ext-diff', '--binary', '--no-color', '--no-renames', commit]),
+  ]);
+  const files = parseWorkspacePatch(patchResult.stdout);
+  const totals = files.reduce((counts, file) => ({ additions: counts.additions + file.additions, deletions: counts.deletions + file.deletions }), { additions: 0, deletions: 0 });
+  const branch = branchResult.stdout.trim() || 'detached HEAD';
+  return {
+    workspacePath,
+    branch,
+    revision: `commit:${commit}`,
+    files,
+    changedFiles: files.length,
+    ...totals,
+    // Historic records are read-only. The view disables publishing while a
+    // recorded version is selected, so this status is intentionally inert.
+    publish: { branch, hasOrigin: false, ahead: 0, hasChanges: false, reason: null },
+  };
+}
+
+/**
  * Keep an open diff stable while the workspace changes. This is intentionally
  * separate from the rendered snapshot so callers can opt into a refresh.
  */

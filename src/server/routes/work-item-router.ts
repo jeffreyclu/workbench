@@ -31,6 +31,7 @@ import { resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { generateFastAiTaskDraft } from '../fast-task-draft-ai.js';
 import { assessDiffBlocks } from '../diff-confidence-ai.js';
 import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision } from '../workspace-diff.js';
+import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
 
@@ -61,9 +62,18 @@ export function createWorkItemRouter({ repository }: RouteContext) {
       response.json({ diff });
     } catch (error) { next(error); }
   });
-  router.get('/api/work-items/:id/workspace-diff/snapshots', (request, response) => {
-    if (!repository.get(request.params.id)) return response.status(404).json({ error: 'Work item not found.' });
-    response.json({ snapshots: repository.listWorkspaceDiffSnapshots({ workItemId: request.params.id }) });
+  router.get('/api/work-items/:id/workspace-diff/snapshots', async (request, response, next) => {
+    try {
+      const item = repository.get(request.params.id);
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      await captureRecordedWorkspaceDiffSnapshots(
+        repository,
+        { workItemId: item.id },
+        resolveWorkingDirectory(item),
+        repository.listConversationsForWorkItem(item.id).map((conversation) => conversation.id),
+      );
+      response.json({ snapshots: repository.listWorkspaceDiffSnapshots({ workItemId: item.id }) });
+    } catch (error) { next(error); }
   });
   router.get('/api/work-items/:id/workspace-diff/status', async (request, response, next) => {
     try {

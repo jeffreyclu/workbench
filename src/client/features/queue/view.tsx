@@ -1,7 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { AlertTriangle, Bot, Check, Clock, GripVertical, LoaderCircle, Sparkles, User } from 'lucide-react';
-import { type CSSProperties, type KeyboardEvent } from 'react';
+import { useState, type CSSProperties, type KeyboardEvent } from 'react';
 import type { AgentRun, Assignee, WorkItem } from '../../../shared/contracts';
 import { ProjectColorDot, projectTheme } from '../../project-color';
 import { useTaskClassification } from '../../features/queue/hooks';
@@ -11,15 +11,34 @@ function AssigneeIcon({ assignee }: { assignee: Assignee }) {
   return <span className={`assignee-chip assignee-${assignee}`} title={assignee}><Icon size={12} /> {assignee}</span>;
 }
 
-export function TaskClassificationSelect({ itemId, kind, compact = false }: { itemId: string; kind?: string | null; compact?: boolean }) {
+const CLASSIFICATION_LABELS: Record<AgentRun['kind'], string> = {
+  research: 'Research', analysis: 'Analysis', strategy: 'Strategy', execute: 'Execute', review: 'Review', bugfix: 'Bug fix',
+};
+
+export function TaskClassificationSelect({ itemId, kind, compact = false, disclosure = false }: { itemId: string; kind?: string | null; compact?: boolean; disclosure?: boolean }) {
   const update = useTaskClassification(itemId);
+  const [open, setOpen] = useState(false);
   if (kind && !['research', 'analysis', 'strategy', 'execute', 'review', 'bugfix'].includes(kind)) return null;
   const selectedKind = (kind ?? 'execute') as AgentRun['kind'];
+  const select = <select className="card-classification-select" aria-label="Task type" value={selectedKind} autoFocus={disclosure} onChange={(event) => { update.mutate(event.target.value as AgentRun['kind']); if (disclosure) setOpen(false); }} onBlur={() => disclosure && setOpen(false)} disabled={update.isPending}>
+    <option value="research">Research</option><option value="analysis">Analysis</option><option value="strategy">Strategy</option><option value="execute">Execute</option><option value="review">Review</option><option value="bugfix">Bug fix</option>
+  </select>;
+
+  if (disclosure) {
+    return <span className="card-classification-control disclosure" onClick={(event) => event.stopPropagation()}>
+      {open
+        ? <span className="card-classification-popover">
+          <span className="card-classification"><Bot size={10} /> Task type</span>
+          {select}
+          {update.isPending && <LoaderCircle className="spin card-classification-spinner" size={10} />}
+        </span>
+        : <button type="button" className="icon-button" aria-expanded={open} aria-label={`Task type: ${CLASSIFICATION_LABELS[selectedKind]}`} title={`Task type: ${CLASSIFICATION_LABELS[selectedKind]}`} onClick={() => setOpen(true)}><Bot size={13} /></button>}
+    </span>;
+  }
+
   return <span className={`card-classification-control ${compact ? 'compact' : ''}`} onClick={(event) => event.stopPropagation()}>
     <span className="card-classification"><Bot size={10} /> Task type</span>
-    <select className="card-classification-select" aria-label="Task type" value={selectedKind} onChange={(event) => update.mutate(event.target.value as AgentRun['kind'])} disabled={update.isPending}>
-      <option value="research">Research</option><option value="analysis">Analysis</option><option value="strategy">Strategy</option><option value="execute">Execute</option><option value="review">Review</option><option value="bugfix">Bug fix</option>
-    </select>
+    {select}
     {update.isPending && <LoaderCircle className="spin card-classification-spinner" size={10} />}
   </span>;
 }

@@ -122,4 +122,30 @@ describe('WorkspaceDiffView', () => {
     expect(screen.getByText(/This record is preserved after commit and push/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'No changes to commit' })).toBeDisabled();
   });
+
+  it('opens the latest preserved version automatically when current Git changes are clean', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/work-items/work-item-1/workspace-diff') return new Response(JSON.stringify({ diff: {
+        workspacePath: '/tmp/workbench', branch: 'main', revision: 'clean', changedFiles: 0, additions: 0, deletions: 0,
+        publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [],
+      } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/work-items/work-item-1/workspace-diff/snapshots') return new Response(JSON.stringify({ snapshots: [{
+        id: 'recorded-version', revision: 'commit:abc1234', capturedAt: '2026-08-26T12:00:00.000Z', diff: {
+          workspacePath: '/tmp/workbench', branch: 'main', revision: 'commit:abc1234', changedFiles: 1, additions: 1, deletions: 0,
+          publish: { branch: 'main', hasOrigin: false, ahead: 0, hasChanges: false, reason: null },
+          files: [{ path: 'src/preserved.ts', previousPath: null, status: 'added', additions: 1, deletions: 0, isBinary: false, patch: '@@ -0,0 +1 @@\n+preserved' }],
+        },
+      }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/diff-confidence') return new Response(JSON.stringify({ assessments: {} }), { headers: { 'Content-Type': 'application/json' } });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={false} /></QueryClientProvider>);
+
+    expect(await screen.findByRole('heading', { name: 'Workspace diff record' })).toBeInTheDocument();
+    expect(screen.getByText('+preserved')).toBeInTheDocument();
+    expect(screen.getByLabelText('Workspace diff version')).toHaveValue('recorded-version');
+  });
 });

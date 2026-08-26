@@ -8,6 +8,7 @@ import { runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, resolveSharedReplyWorkingDirectory, runSharedBackgroundJob } from '../shared-room.js';
 import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision } from '../workspace-diff.js';
+import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { parseFollowUpPlan } from '../app-exports.js';
 import { isRuntimeApproval } from '../runtime-promotion.js';
 import { PROMOTION_QUEUED_MESSAGE } from '../promotion-messages.js';
@@ -58,9 +59,13 @@ export function createConversationRouter({ repository, database, capabilities }:
       response.json({ diff });
     } catch (error) { next(error); }
   });
-  router.get('/api/shared/conversations/:id/workspace-diff/snapshots', (request, response) => {
-    if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
-    response.json({ snapshots: repository.listWorkspaceDiffSnapshots({ conversationId: request.params.id }) });
+  router.get('/api/shared/conversations/:id/workspace-diff/snapshots', async (request, response, next) => {
+    try {
+      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
+      await captureRecordedWorkspaceDiffSnapshots(repository, { conversationId: request.params.id }, workingDirectory, [request.params.id]);
+      response.json({ snapshots: repository.listWorkspaceDiffSnapshots({ conversationId: request.params.id }) });
+    } catch (error) { next(error); }
   });
 
   router.get('/api/shared/conversations/:id/workspace-diff/status', async (request, response, next) => {

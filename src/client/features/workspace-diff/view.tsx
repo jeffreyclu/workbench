@@ -19,10 +19,14 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const query = useWorkspaceDiff(scope);
   const snapshotsQuery = useWorkspaceDiffSnapshots(scope, query.data?.diff.revision);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  // null means "automatically show the latest record when Git is clean";
+  // an empty string is the user's explicit choice to view current changes.
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
   const diff = query.data?.diff;
   const snapshots = snapshotsQuery.data?.snapshots ?? [];
-  const selectedSnapshot = snapshots.find((snapshot) => snapshot.id === selectedSnapshotId) ?? null;
+  const selectedSnapshot = selectedSnapshotId === null && diff?.changedFiles === 0
+    ? snapshots.find((snapshot) => snapshot.diff.changedFiles > 0) ?? null
+    : snapshots.find((snapshot) => snapshot.id === selectedSnapshotId) ?? null;
   const displayedDiff = selectedSnapshot?.diff ?? diff;
   const files = displayedDiff?.files ?? [];
   const selectedFile = files.find((file) => file.path === selectedPath) ?? files[0] ?? null;
@@ -45,7 +49,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     <header>
       <div><span className="workspace-diff-eyebrow"><FileDiff size={14} /> {selectedSnapshot ? 'Recorded version' : 'Review before push'}</span><h2>{selectedSnapshot ? 'Workspace diff record' : 'Current workspace changes'}</h2><small>{displayedDiff?.branch} · {displayedDiff?.changedFiles} files · <b>+{displayedDiff?.additions}</b> <i>−{displayedDiff?.deletions}</i></small><p>{selectedSnapshot ? `Captured ${new Date(selectedSnapshot.capturedAt).toLocaleString()}. This record is preserved after commit and push.` : 'Uncommitted changes in this task’s workspace. This includes staged, unstaged, and untracked files.'}</p></div>
       <div className="workspace-diff-actions">
-        {snapshots.length > 0 && <label className="workspace-diff-timeline"><History size={13} /><span className="visually-hidden">Workspace diff version</span><select value={selectedSnapshot?.id ?? ''} onChange={(event) => { setSelectedSnapshotId(event.target.value || null); setSelectedPath(null); }}><option value="">Current changes</option>{snapshots.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{new Date(snapshot.capturedAt).toLocaleString()} · {snapshot.diff.changedFiles} files</option>)}</select></label>}
+        {snapshots.length > 0 && <label className="workspace-diff-timeline"><History size={13} /><span className="visually-hidden">Workspace diff version</span><select value={selectedSnapshotId ?? selectedSnapshot?.id ?? ''} onChange={(event) => { setSelectedSnapshotId(event.target.value); setSelectedPath(null); }}><option value="">Current changes</option>{snapshots.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{new Date(snapshot.capturedAt).toLocaleString()} · {snapshot.diff.changedFiles} files</option>)}</select></label>}
         <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={() => void query.refetch()} disabled={query.isFetching || publish.isPending}><RefreshCw size={13} className={query.isFetching ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>
         <button className="workspace-diff-publish" type="button" onClick={() => publish.mutate(diff.revision)} disabled={publishDisabled || Boolean(selectedSnapshot)}>
           {publish.isPending ? <RefreshCw size={13} className="spin" /> : diff.publish.hasChanges ? <GitCommitHorizontal size={13} /> : <Upload size={13} />} {publishLabel}

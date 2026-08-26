@@ -26,6 +26,13 @@ patches even after a commit and push makes Git’s working tree clean. Reopening
 the same revision must not create duplicate timeline entries; never overwrite
 or delete a recorded patch as part of refresh, commit, or push.
 
+If an agent commits before the uncommitted patch was captured, recover a record
+only from a Git commit hash explicitly written in that conversation's persisted
+messages. Verify the hash resolves to a commit, preserve its patch as an
+immutable snapshot, and automatically open the latest non-empty record when
+the current workspace is clean. Do not infer conversation ownership from
+nearby commit times or branch order.
+
 ### Changes can commit and push the reviewed workspace
 
 *Decision from Jeffrey, 2026-08-26.* The local-workspace Changes pane includes
