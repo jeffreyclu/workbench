@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { workspaceDiffData, workspaceDiffQueryKeys } from './data.js';
 
-export function useWorkspaceDiff(workItemId: string) {
+export function useWorkspaceDiff(workItemId: string | null) {
   return useQuery({
-    queryKey: workspaceDiffQueryKeys.detail(workItemId),
-    queryFn: () => workspaceDiffData.get(workItemId),
+    queryKey: workspaceDiffQueryKeys.detail(workItemId ?? ''),
+    queryFn: () => workspaceDiffData.get(workItemId!),
+    enabled: Boolean(workItemId),
     // A diff is a review surface, not a live log. Background refetches replace
     // the rendered patch while someone is reading it, so updates are explicit.
     staleTime: Infinity,

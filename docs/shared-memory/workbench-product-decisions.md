@@ -9,6 +9,14 @@ revision is detected, show an orange **Refresh changes** button; only that
 explicit action loads the new patch. This follows GitHub's review behavior and
 keeps the live conversation/activity stream separate from the review surface.
 
+### Changes tab is actionable only when a diff exists
+
+*Decision from Jeffrey, 2026-08-25.* In a task-linked conversation, keep the
+**Changes** tab visible but disable it until Workbench has confirmed at least
+one local workspace or linked GitHub pull-request diff contains changed files.
+Leave it disabled when both are empty or unavailable; it must not open an empty
+review surface.
+
 ### Diff review uses one compact layout on desktop and phone
 
 *Decision from Jeffrey, 2026-08-25.* Local workspace and GitHub pull-request

@@ -994,10 +994,12 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     expect(await screen.findByText('The implementation is ready to review.')).toBeTruthy();
-    expect(await screen.findByRole('button', { name: 'Changes' })).toHaveAttribute('aria-pressed', 'false');
-    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/github/pull-request-diff'))).toBe(false);
+    const changes = await screen.findByRole('button', { name: 'Changes' });
+    await waitFor(() => expect(changes).toBeEnabled());
+    expect(changes).toHaveAttribute('aria-pressed', 'false');
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/github/pull-request-diff'))).toBe(true);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Changes' }));
+    fireEvent.click(changes);
     expect(await screen.findByRole('heading', { name: 'Current workspace changes' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Conversation review' })).toBeTruthy();
     expect(await screen.findAllByRole('button', { name: /src\/client\/App\.tsx/ })).toHaveLength(2);
@@ -1034,14 +1036,48 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
-    expect(await screen.findByRole('button', { name: 'Changes' })).toBeTruthy();
-    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/workspace-diff'))).toBe(false);
+    const changes = await screen.findByRole('button', { name: 'Changes' });
+    await waitFor(() => expect(changes).toBeEnabled());
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/workspace-diff'))).toBe(true);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Changes' }));
+    fireEvent.click(changes);
     expect(await screen.findByRole('heading', { name: 'Current workspace changes' })).toBeTruthy();
     expect(await screen.findByRole('button', { name: /src\/client\/feature\.tsx/ })).toBeTruthy();
     expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/work-items/${taskId}/workspace-diff`)).toBe(true);
     expect(screen.queryByText('GitHub reports no changed files for this pull request.')).toBeNull();
+  });
+
+  it('disables Changes when the linked task has no local or pull-request diff', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000218';
+    const taskId = '00000000-0000-4000-8000-000000000219';
+    const timestamp = '2026-01-01T00:00:00Z';
+    const conversation = { id: conversationId, title: 'No changes', workItemId: taskId, archivedAt: null, createdAt: timestamp, updatedAt: timestamp };
+    const item = {
+      id: taskId, title: 'No diff available', description: '', status: 'in_progress', priority: 2, queuePosition: 0,
+      source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete',
+      agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: ['Manual'], projectName: 'Workbench', stack: 'attention', workspacePath: '/tmp/workbench',
+      strategy: '', assignees: ['codex'], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [],
+      createdAt: timestamp, updatedAt: timestamp, lastTouchedAt: timestamp,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/work-items/${taskId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'clean', changedFiles: 0, additions: 0, deletions: 0, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    const changes = await screen.findByRole('button', { name: 'Changes' });
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/work-items/${taskId}/workspace-diff`)).toBe(true));
+    expect(changes).toBeDisabled();
+    expect(changes).toHaveAttribute('title', 'No changes to review');
+    fireEvent.click(changes);
+    expect(screen.queryByLabelText('Task changes')).toBeNull();
   });
 
   it('pins the linked task from the conversation window and moves its conversation into the pinned stack', async () => {

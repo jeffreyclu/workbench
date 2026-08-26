@@ -1,5 +1,24 @@
-import { describe, expect, it } from 'vitest';
-import { parseWorkspacePatch, workspaceStatuses } from './workspace-diff.js';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { afterEach, describe, expect, it } from 'vitest';
+import { getWorkspaceDiff, parseWorkspacePatch, workspaceStatuses } from './workspace-diff.js';
+
+const temporaryDirectories: string[] = [];
+
+function temporaryGitWorkspace() {
+  const directory = mkdtempSync(join(tmpdir(), 'workbench-workspace-diff-'));
+  temporaryDirectories.push(directory);
+  execFileSync('git', ['init', '--quiet'], { cwd: directory });
+  execFileSync('git', ['config', 'user.email', 'workbench@example.com'], { cwd: directory });
+  execFileSync('git', ['config', 'user.name', 'Workbench'], { cwd: directory });
+  return directory;
+}
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
 
 describe('workspace diff parsing', () => {
   it('returns reviewable file patches with line totals and status', () => {
@@ -24,5 +43,23 @@ describe('workspace diff parsing', () => {
 
   it('handles a copy porcelain record without treating its original path as a status record', () => {
     expect([...workspaceStatuses('C  copy.ts\0source.ts\0')]).toEqual([['copy.ts', 'added']]);
+  });
+
+  it('reads a patch larger than the previous 8 MiB output limit', async () => {
+    const workspace = temporaryGitWorkspace();
+    const file = join(workspace, 'large.ts');
+    writeFileSync(file, 'export const payload = \'before\';\n');
+    execFileSync('git', ['add', 'large.ts'], { cwd: workspace });
+    execFileSync('git', ['commit', '--quiet', '-m', 'initial'], { cwd: workspace });
+
+    // One added line is concise enough for the parsed diff, but still makes
+    // git emit more than the legacy 8 MiB process buffer.
+    writeFileSync(file, `export const payload = '${'a'.repeat(8 * 1024 * 1024)}';\n`);
+
+    const diff = await getWorkspaceDiff(workspace);
+
+    expect(diff.changedFiles).toBe(1);
+    expect(diff.files[0]).toEqual(expect.objectContaining({ path: 'large.ts', status: 'modified' }));
+    expect(diff.files[0].patch?.length).toBeGreaterThan(8 * 1024 * 1024);
   });
 });

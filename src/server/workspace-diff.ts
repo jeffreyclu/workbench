@@ -4,7 +4,11 @@ import { promisify } from 'node:util';
 import type { WorkspaceDiff, WorkspaceDiffFile } from '../shared/contracts.js';
 
 const execFile = promisify(execFileCallback);
-const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+// Workspace diffs in the Writer monorepo routinely exceed Node's 1 MiB
+// default and can exceed 8 MiB. Keep a finite cap so an unexpectedly huge
+// repository does not consume unbounded server memory, while allowing the
+// complete reviewable patch through to the diff UI.
+const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
 type ChangedFileStatus = WorkspaceDiffFile['status'];
 
