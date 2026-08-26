@@ -34,6 +34,6 @@ export const conversationClient = {
   cancelSharedReply: (id: string) => request<{ message: SharedMessage }>(`/api/shared/messages/${id}/cancel`, { method: 'POST' }),
   interjectSharedMessage: (id: string) => request<{ replies: SharedMessage[]; pending: boolean }>(`/api/shared/messages/${id}/interject`, { method: 'POST' }),
   createTasksFromReport: (id: string) => request<{ plan?: ExecutionPlan; jobMessage?: SharedMessage }>(`/api/shared/messages/${id}/create-tasks`, { method: 'POST' }),
-  retrySharedMessage: (id: string) => request<{ reply: SharedMessage }>(`/api/shared/messages/${id}/retry`, { method: 'POST' }),
+  retrySharedMessage: (id: string) => request<{ reply: SharedMessage; replies: SharedMessage[] }>(`/api/shared/messages/${id}/retry`, { method: 'POST' }),
   getRetrievedMemory: (id: string) => request<{ detail: RetrievedMemoryDetail | null }>(`/api/shared/messages/${id}/retrieved-memory`),
 };

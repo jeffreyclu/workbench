@@ -293,15 +293,22 @@ export function createConversationRouter({ repository, database, capabilities }:
       return response.status(409).json({ error: 'Only failed or canceled agent responses can be continued.' });
     }
     if (repository.getRunByMessage(prior.id)) return response.status(409).json({ error: 'Retry this response from its related task run.' });
-    if (repository.listAllSharedMessages(prior.conversationId).some((message) => message.status === 'running' || message.status === 'queued')) {
+    const retryGroup = prior.dispatchGroupId
+      ? repository.listAllSharedMessages(prior.conversationId).filter((message) => message.dispatchGroupId === prior.dispatchGroupId && (message.author === 'codex' || message.author === 'claude') && (message.status === 'failed' || message.status === 'canceled'))
+      : [prior];
+    const retryIds = new Set(retryGroup.map((message) => message.id));
+    if (repository.listAllSharedMessages(prior.conversationId).some((message) => !retryIds.has(message.id) && (message.status === 'running' || message.status === 'queued'))) {
       return response.status(409).json({ error: 'Wait for the active response to finish before continuing this one.' });
     }
-    const executionProfile = prior.executionProfile === 'routing' ? null : prior.executionProfile;
-    const reply = repository.prepareSharedMessageRetry(prior.id);
-    if (!reply) return response.status(409).json({ error: 'This response is no longer retryable.' });
-    if (executionProfile !== prior.executionProfile) repository.updateSharedMessage(reply.id, { executionProfile });
-    void replyInSharedRoom(repository, prior.author, reply.id);
-    response.status(202).json({ reply });
+    const replies = retryGroup.map((message) => {
+      const executionProfile = message.executionProfile === 'routing' ? null : message.executionProfile;
+      const reply = repository.prepareSharedMessageRetry(message.id);
+      if (!reply) return null;
+      return executionProfile !== message.executionProfile ? repository.updateSharedMessage(reply.id, { executionProfile }) ?? reply : reply;
+    });
+    if (replies.some((reply) => !reply)) return response.status(409).json({ error: 'This response is no longer retryable.' });
+    for (const reply of replies) void replyInSharedRoom(repository, reply!.author as 'codex' | 'claude', reply!.id);
+    response.status(202).json({ reply: replies[0], replies });
   });
 
   router.post('/api/shared/messages/:id/interject', async (request, response) => {
