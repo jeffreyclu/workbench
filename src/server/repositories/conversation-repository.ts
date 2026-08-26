@@ -6,7 +6,7 @@ import type { UnitOfWork } from '../unit-of-work.js';
 function mapConversationRow(row: Record<string, string | number | null>): SharedConversation {
   return {
     id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
-    linkedProjectName: row.linked_project_name ? String(row.linked_project_name) : null, forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, draftBody: String(row.draft_body ?? ''), preferredAccountProfile: row.preferred_account_profile ? String(row.preferred_account_profile) : null, preferredDispatchTarget: row.preferred_dispatch_target as SharedConversation['preferredDispatchTarget'] ?? null, claudeSessionId: row.claude_session_id ? String(row.claude_session_id) : null, codexThreadId: row.codex_thread_id ? String(row.codex_thread_id) : null, isUnread: Boolean(row.is_unread), linkedWorkItemPinned: Boolean(row.linked_work_item_pinned), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
+    pinned: Boolean(row.pinned), linkedProjectName: row.linked_project_name ? String(row.linked_project_name) : null, forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, draftBody: String(row.draft_body ?? ''), preferredAccountProfile: row.preferred_account_profile ? String(row.preferred_account_profile) : null, preferredDispatchTarget: row.preferred_dispatch_target as SharedConversation['preferredDispatchTarget'] ?? null, claudeSessionId: row.claude_session_id ? String(row.claude_session_id) : null, codexThreadId: row.codex_thread_id ? String(row.codex_thread_id) : null, isUnread: Boolean(row.is_unread), linkedWorkItemPinned: Boolean(row.linked_work_item_pinned), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
   };
 }
 
@@ -52,7 +52,7 @@ export class ConversationRepository {
         (SELECT project_name FROM work_items WHERE work_items.id = shared_conversations.work_item_id) AS linked_project_name
       FROM shared_conversations
       WHERE deleted_at IS NULL AND (? = 'all' OR (? = 'active' AND archived_at IS NULL) OR (? = 'archive' AND archived_at IS NOT NULL))
-      ORDER BY linked_work_item_pinned DESC, is_working DESC, updated_at DESC
+      ORDER BY (pinned OR linked_work_item_pinned) DESC, is_working DESC, updated_at DESC
     `).all(view, view, view) as Array<Record<string, string | number | null>>).map(mapConversationRow);
   }
 
@@ -82,8 +82,8 @@ export class ConversationRepository {
       )
       SELECT * FROM conversations
       WHERE deleted_at IS NULL AND ((? = 'active' AND archived_at IS NULL) OR (? = 'archive' AND archived_at IS NOT NULL))
-        AND (? IS NULL OR linked_work_item_pinned < ? OR (linked_work_item_pinned = ? AND (is_working < ? OR (is_working = ? AND (updated_at < ? OR (updated_at = ? AND id < ?))))))
-      ORDER BY linked_work_item_pinned DESC, is_working DESC, updated_at DESC, id DESC LIMIT ?
+        AND (? IS NULL OR (pinned OR linked_work_item_pinned) < ? OR ((pinned OR linked_work_item_pinned) = ? AND (is_working < ? OR (is_working = ? AND (updated_at < ? OR (updated_at = ? AND id < ?))))))
+      ORDER BY (pinned OR linked_work_item_pinned) DESC, is_working DESC, updated_at DESC, id DESC LIMIT ?
     `).all(view, view, cursorValues?.id ?? null, Number(cursorValues?.isPinned ?? false), Number(cursorValues?.isPinned ?? false), Number(cursorValues?.isWorking ?? false), Number(cursorValues?.isWorking ?? false), cursorValues?.updatedAt ?? null, cursorValues?.updatedAt ?? null, cursorValues?.id ?? null, safeLimit + 1) as Array<Record<string, string | number | null>>;
     const hasMore = rows.length > safeLimit;
     const conversations = rows.slice(0, safeLimit).map(mapConversationRow);
@@ -107,6 +107,10 @@ export class ConversationRepository {
 
   setDraftBody(id: string, body: string): boolean {
     return Number(this.database.prepare('UPDATE shared_conversations SET draft_body = ? WHERE id = ?').run(body, id).changes) > 0;
+  }
+
+  setPinned(id: string, pinned: boolean): boolean {
+    return Number(this.database.prepare('UPDATE shared_conversations SET pinned = ?, updated_at = ? WHERE id = ?').run(Number(pinned), new Date().toISOString(), id).changes) > 0;
   }
 
   countActive(): number {

@@ -4,7 +4,7 @@
  * environment is a separate boundary protecting Workbench's own secrets. The CLIs authenticate from local
  * config under HOME, not from env vars, and have no legitimate need for anything Workbench itself
  * reads via `process.env` — LINEAR_API_KEY, GITHUB_TOKEN, WORKBENCH_TOKEN, SLACK_*, CLOUDFLARE_*,
- * WORKBENCH_*_MODEL*, pricing vars, etc. This is an explicit allowlist of what the agent actually
+ * WORKBENCH_*_MODEL*, etc. This is an explicit allowlist of what the agent actually
  * needs to run, not a denylist of what it shouldn't have — new Workbench secrets are excluded by
  * default instead of requiring someone to remember to add them here.
  */

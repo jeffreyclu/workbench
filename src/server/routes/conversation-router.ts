@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { createSessionFeedbackSchema, createSharedConversationSchema, createSharedMessageSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema } from '../../shared/contracts.js';
+import { createSessionFeedbackSchema, createSharedConversationSchema, createSharedMessageSchema, setConversationPinnedSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema } from '../../shared/contracts.js';
 import { runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, resolveSharedReplyWorkingDirectory, runSharedBackgroundJob } from '../shared-room.js';
@@ -173,6 +173,13 @@ export function createConversationRouter({ repository, database, capabilities }:
     const { workItemId } = setConversationTaskSchema.parse(request.body);
     const conversation = repository.setConversationWorkItem(request.params.id, workItemId);
     if (!conversation) return response.status(404).json({ error: workItemId ? 'Conversation or task not found.' : 'Conversation not found.' });
+    response.json({ conversation });
+  });
+
+  router.patch('/api/shared/conversations/:id/pin', (request, response) => {
+    const { pinned } = setConversationPinnedSchema.parse(request.body);
+    const conversation = repository.setConversationPinned(request.params.id, pinned);
+    if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
     response.json({ conversation });
   });
 

@@ -1600,6 +1600,16 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: '055_shared_conversation_pinning',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'pinned')) {
+        database.exec('ALTER TABLE shared_conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;');
+      }
+      database.exec('CREATE INDEX IF NOT EXISTS idx_shared_conversations_pinned_updated ON shared_conversations(pinned DESC, updated_at DESC);');
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

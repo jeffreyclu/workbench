@@ -9,9 +9,6 @@ import { attachRealtimeServer } from '../src/server/realtime.js';
 
 const port = Number(process.env.PORT ?? 45175);
 const database = openDatabase();
-// Preview always runs against the disposable snapshot prepared immediately before
-// startup. It may exercise schema migrations without mutating production state.
-new WorkItemRepository(database).backfillEstimatedCosts();
 const app = createApp(database, previewRuntimeCapabilities);
 warmFastTaskDraftModel();
 

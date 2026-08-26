@@ -1,13 +1,5 @@
 import type { AgentRun, ProviderSyncConflict, SharedMessage, UpdateWorkItemInput, WorkItemReferenceType } from '../shared/contracts';
 
-export function formatCostUsd(value: number | null): string {
-  if (value === null) return '—';
-  if (value === 0) return '$0.00';
-  if (value < 0.01) return `$${value.toFixed(4)}`;
-  if (value < 1) return `$${value.toFixed(3)}`;
-  return `$${value.toFixed(2)}`;
-}
-
 export function sourceLinkLabel(sourceUrl: string): string {
   try {
     const host = new URL(sourceUrl).hostname;
@@ -110,7 +102,7 @@ export function selectBalancedVisibleAgent(messages: Array<{ author: string }>):
   return codexCount <= claudeCount ? 'codex' : 'claude';
 }
 
-export function formatRunTelemetry(entry: Pick<AgentRun | SharedMessage, 'executionProfile' | 'inputTokens' | 'outputTokens' | 'estimatedCostUsd' | 'fallbackFrom' | 'fallbackReason' | 'createdAt' | 'completedAt'> & { startedAt?: string | null }): string {
+export function formatRunTelemetry(entry: Pick<AgentRun | SharedMessage, 'executionProfile' | 'inputTokens' | 'outputTokens' | 'fallbackFrom' | 'fallbackReason' | 'createdAt' | 'completedAt'> & { startedAt?: string | null }): string {
   const started = entry.startedAt ?? entry.createdAt;
   const duration = entry.completedAt ? Math.max(0, new Date(entry.completedAt).getTime() - new Date(started).getTime()) : null;
   const running = !entry.completedAt;
@@ -119,24 +111,19 @@ export function formatRunTelemetry(entry: Pick<AgentRun | SharedMessage, 'execut
     : entry.inputTokens === null && entry.outputTokens === null ? 'tokens not reported' : `${entry.inputTokens?.toLocaleString() ?? '—'} in · ${entry.outputTokens?.toLocaleString() ?? '—'} out`;
   const durationText = duration === null ? '' : ` · ${(duration / 1_000).toFixed(duration < 10_000 ? 1 : 0)}s`;
   const fallbackText = entry.fallbackFrom ? ` · fallback from ${entry.fallbackFrom}${entry.fallbackReason ? ` (${entry.fallbackReason})` : ''}` : '';
-  const costText = entry.estimatedCostUsd === null ? '' : ` · ${formatCostUsd(entry.estimatedCostUsd)}${running ? ' so far' : ' estimated'}`;
-  return `${entry.executionProfile ?? 'unrouted'} · ${tokenText}${costText}${durationText}${fallbackText}`;
+  return `${entry.executionProfile ?? 'unrouted'} · ${tokenText}${durationText}${fallbackText}`;
 }
 
 export function compactTokenCount(value: number): string {
   return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 }
 
-export function formatRunBadge(entry: Pick<AgentRun | SharedMessage, 'inputTokens' | 'outputTokens' | 'estimatedCostUsd' | 'completedAt'>): string {
-  // Cost is the number Jeffrey actually reads at a glance, so it leads the badge
-  // when it is known; raw token counts stay in the hover title.
-  const cost = entry.estimatedCostUsd === null ? '' : formatCostUsd(entry.estimatedCostUsd);
+export function formatRunBadge(entry: Pick<AgentRun | SharedMessage, 'inputTokens' | 'outputTokens' | 'completedAt'>): string {
   if (!entry.completedAt) {
-    if (cost) return `${cost} so far`;
     return entry.outputTokens && entry.outputTokens > 0 ? `~${compactTokenCount(entry.outputTokens)} out` : 'counting…';
   }
-  if (entry.inputTokens === null && entry.outputTokens === null) return cost || 'usage unavailable';
+  if (entry.inputTokens === null && entry.outputTokens === null) return 'usage unavailable';
   const input = entry.inputTokens === null ? '—' : compactTokenCount(entry.inputTokens);
   const output = entry.outputTokens === null ? '—' : compactTokenCount(entry.outputTokens);
-  return `${cost ? `${cost} · ` : ''}${input} in · ${output} out`;
+  return `${input} in · ${output} out`;
 }

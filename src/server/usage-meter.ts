@@ -2,7 +2,6 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, ClaudeInteractiveUsage, CodexRateLimit, UsageCalibration, UsageTotals, WeeklyUsageReport, WorkbenchUsageByOrigin } from '../shared/contracts.js';
-import { CACHE_READ_RATE_MULTIPLIER, CACHE_WRITE_RATE_MULTIPLIER, resolveModelRate } from './model-pricing.js';
 import type { WorkItemRepository } from './repository.js';
 
 /**
@@ -33,37 +32,17 @@ export const AUTONOMOUS_TARGET_FRACTION = 0.16;
 export const CALIBRATION_MAX_AGE_DAYS = 14;
 
 /**
- * Sonnet-equivalent tokens: every provider's usage normalized to what one
- * Sonnet input token costs, so Claude and Codex spend can be compared and
- * checked against one weekly ceiling. Weights are the ratio of each token
- * kind's cost to a fresh Sonnet input token, taken from published list
- * prices (see docs/autonomy-strategy.md) since neither provider publishes
- * a token-denominated weekly limit to calibrate against directly.
+ * Token usage across every provider and usage class. The historical SET name
+ * remains in persistence contracts, but the value is now a direct token total.
  */
-const SONNET_OUTPUT_RATE_USD_PER_MILLION = 15;
-
-const TOKEN_KIND_WEIGHT = {
-  freshInput: 1,
-  cacheWrite: CACHE_WRITE_RATE_MULTIPLIER,
-  cacheRead: CACHE_READ_RATE_MULTIPLIER,
-  output: 5,
-} as const;
-
-/** Ratio of a model's output rate to Sonnet's, used as the price-based tier multiplier from the strategy doc. */
-function tierMultiplier(agent: AgentRun['agent'], model: string | null): number {
-  const rate = resolveModelRate(agent, model);
-  if (!rate) return 1;
-  return rate.outputUsdPerMillion / SONNET_OUTPUT_RATE_USD_PER_MILLION;
-}
 
 /**
  * Exact SET conversion for the four usage classes captured on new runs. Rows
  * written before migration 029 lack cache fields; their historic input is
  * intentionally treated as fresh input rather than inventing a cache split.
  */
-export function sonnetEquivalentTokens(agent: AgentRun['agent'], model: string | null, tokens: { inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null }): number {
-  const multiplier = tierMultiplier(agent, model);
-  return multiplier * ((tokens.inputTokens ?? 0) * TOKEN_KIND_WEIGHT.freshInput + (tokens.cacheCreationInputTokens ?? 0) * TOKEN_KIND_WEIGHT.cacheWrite + (tokens.cacheReadInputTokens ?? 0) * TOKEN_KIND_WEIGHT.cacheRead + (tokens.outputTokens ?? 0) * TOKEN_KIND_WEIGHT.output);
+export function sonnetEquivalentTokens(_agent: AgentRun['agent'], _model: string | null, tokens: { inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null }): number {
+  return (tokens.inputTokens ?? 0) + (tokens.cacheCreationInputTokens ?? 0) + (tokens.cacheReadInputTokens ?? 0) + (tokens.outputTokens ?? 0);
 }
 
 /** Exact SET for one Claude Code transcript usage sample, using the real cache-read/cache-write split. */

@@ -63,11 +63,9 @@ He has permanently rejected "add a filter" and "add saved views" as improvement 
 resuggest either, in any phrasing, in future improvement-finding sessions — he has said this more
 than once and it should not come up again.
 
-One exception he explicitly kept: surfacing agent-run cost data (`estimatedCostUsd`,
-`costByDay`) that the backend already computes but the UI never renders. The pattern worth
-reusing — backend already has the data/logic fully built, only the UI surface is missing — is a
-good class of finding for this kind of request, distinct from proposing new backend capability
-from scratch.
+The pattern worth reusing — backend already has the data/logic fully built, only the UI surface is
+missing — is a good class of finding for this kind of request, distinct from proposing new backend
+capability from scratch. Cost metrics are explicitly excluded; Workbench tracks token usage instead.
 
 ### Publish every md file as artifact
 

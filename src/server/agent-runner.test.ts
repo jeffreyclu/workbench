@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, PUSH_CAPABILITY_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, externalActionContractForAuthorization, externalActionContractForCurrentInstruction, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, PUSH_CAPABILITY_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, externalActionContractForCurrentInstruction, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -82,7 +82,7 @@ describe('classifyExecution', () => {
     expect(codex).toEqual(expect.arrayContaining(['--ignore-user-config', '--sandbox', 'workspace-write']));
     expect(codex).toContain('mcp_servers.workbench.url="http://localhost:5180/mcp"');
     expect(codex).not.toContain('--dangerously-bypass-approvals-and-sandbox');
-    expect(claude).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--no-chrome', '--disallowedTools', 'Task,WebFetch,WebSearch']));
+    expect(claude).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--no-chrome', '--disallowedTools', 'Task']));
     expect(claude).not.toContain('--safe-mode');
     expect(claude).not.toContain('--dangerously-skip-permissions');
     expect(claude).toEqual(expect.arrayContaining(['--input-format', 'stream-json']));
@@ -131,7 +131,7 @@ describe('classifyExecution', () => {
 
   it('narrows read-only task kinds to a read-only tool surface', () => {
     expect(commandFor('codex', '/tmp/project', 'standard', undefined, undefined, 'research').args).toEqual(expect.arrayContaining(['--sandbox', 'read-only']));
-    expect(commandFor('claude', '/tmp/project', 'standard', undefined, undefined, 'review').args).toEqual(expect.arrayContaining(['--disallowedTools', 'Task,WebFetch,WebSearch,Edit,Write,NotebookEdit']));
+    expect(commandFor('claude', '/tmp/project', 'standard', undefined, undefined, 'review').args).toEqual(expect.arrayContaining(['--disallowedTools', 'Task,Edit,Write,NotebookEdit']));
     expect(commandFor('codex', '/tmp/project', 'standard', undefined, undefined, 'execute').args).toEqual(expect.arrayContaining(['--sandbox', 'workspace-write']));
   });
 
@@ -179,7 +179,7 @@ describe('classifyExecution', () => {
   it('keeps Claude in one foreground context to avoid multiplied cache reads', () => {
     for (const profile of ['economy', 'standard', 'deep'] as const) {
       const args = commandFor('claude', '/tmp/project', profile).args;
-      expect(args).toEqual(expect.arrayContaining(['--disallowedTools', 'Task,WebFetch,WebSearch']));
+      expect(args).toEqual(expect.arrayContaining(['--disallowedTools', 'Task']));
       expect(args).not.toContain('--forward-subagent-text');
     }
   });
@@ -477,44 +477,18 @@ describe('classifyExecution', () => {
     await expect(runAgentCommandWithFallback('codex', directory, 'Fail to spawn.')).rejects.toThrow(/ENOENT|spawn codex/);
   });
 
-  it('prices usage per model, preferring environment overrides over built-in rates', () => {
-    // No model and no override: nothing can be priced.
-    expect(estimateUsageCost('codex', null, 100, 50)).toBeNull();
-
-    // Built-in list prices differ per tier, which is the whole point of keying by model.
-    expect(estimateUsageCost('claude', 'haiku', 1_000_000, 1_000_000)).toBe(6);
-    expect(estimateUsageCost('claude', 'opus', 1_000_000, 1_000_000)).toBe(90);
-    expect(estimateUsageCost('claude', 'claude-opus-5-20260401', 1_000_000, 0)).toBe(15);
-
-    // A per-model override beats the built-in rate.
-    process.env.WORKBENCH_MODEL_SONNET_INPUT_TOKEN_USD_PER_MILLION = '2';
-    process.env.WORKBENCH_MODEL_SONNET_OUTPUT_TOKEN_USD_PER_MILLION = '8';
-    expect(estimateUsageCost('claude', 'sonnet', 100_000, 50_000)).toBe(0.6);
-    delete process.env.WORKBENCH_MODEL_SONNET_INPUT_TOKEN_USD_PER_MILLION;
-    delete process.env.WORKBENCH_MODEL_SONNET_OUTPUT_TOKEN_USD_PER_MILLION;
-
-    // The legacy agent-level override still applies to unknown models.
-    process.env.WORKBENCH_CODEX_INPUT_TOKEN_USD_PER_MILLION = '2';
-    process.env.WORKBENCH_CODEX_OUTPUT_TOKEN_USD_PER_MILLION = '8';
-    expect(estimateUsageCost('codex', 'some-unlisted-model', 100_000, 50_000)).toBe(0.6);
-    delete process.env.WORKBENCH_CODEX_INPUT_TOKEN_USD_PER_MILLION;
-    delete process.env.WORKBENCH_CODEX_OUTPUT_TOKEN_USD_PER_MILLION;
-  });
-
-  it('sums Claude per-message usage and lets the terminal result event supersede it with the billed total', async () => {
+  it('sums Claude per-message usage and lets the terminal result event supersede it', async () => {
     // Two assistant messages plus a terminal result. Before this change reportUsage
     // overwrote on each event, so a multi-turn run kept only the last message.
     const assistantOne = '{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":40}}}';
     const assistantTwo = '{"type":"assistant","message":{"usage":{"input_tokens":200,"output_tokens":60}}}';
-    const result = '{"type":"result","result":"done","total_cost_usd":0.1234,"usage":{"input_tokens":300,"output_tokens":100}}';
+    const result = '{"type":"result","result":"done","usage":{"input_tokens":300,"output_tokens":100}}';
     fakeAgentDirectory('exit 1', `cat > /dev/null\nprintf '%s\\n%s\\n%s\\n' '${assistantOne}' '${assistantTwo}' '${result}'`);
 
     const run = await runAgentCommandWithFallback('claude', tmpdir(), 'Report usage.');
 
     expect(run.usage.inputTokens).toBe(300);
     expect(run.usage.outputTokens).toBe(100);
-    // The provider's own billed total wins over any rate-table estimate.
-    expect(run.usage.estimatedCostUsd).toBe(0.1234);
   });
 
   it('counts repeated Claude stream blocks for one provider request once', async () => {
@@ -532,17 +506,6 @@ describe('classifyExecution', () => {
     expect(run.usage.inputTokens).toBe(30);
     expect(run.usage.cacheReadInputTokens).toBe(270);
     expect(run.usage.outputTokens).toBe(5);
-  });
-
-  it('prices a Claude run from the model rate table when the provider reports no billed total', async () => {
-    const assistant = '{"type":"assistant","message":{"usage":{"input_tokens":1000000,"output_tokens":1000000}}}';
-    const result = '{"type":"result","result":"done"}';
-    fakeAgentDirectory('exit 1', `cat > /dev/null\nprintf '%s\\n%s\\n' '${assistant}' '${result}'`);
-
-    // 'economy' resolves to haiku: $1/M in + $5/M out.
-    const run = await runAgentCommandWithFallback('claude', tmpdir(), 'Report usage.', undefined, undefined, undefined, 'economy');
-
-    expect(run.usage.estimatedCostUsd).toBe(6);
   });
 
   it('bounds large prompt sections while retaining the beginning and conclusion', () => {

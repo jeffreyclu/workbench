@@ -623,9 +623,6 @@ export interface AgentRun {
   cacheCreationInputTokens: number | null;
   cacheReadInputTokens: number | null;
   outputTokens: number | null;
-  estimatedCostUsd: number | null;
-  /** Whether the stored cost came from the provider or a token-rate estimate. */
-  costSource: 'provider' | 'estimated' | null;
   fallbackFrom: 'codex' | 'claude' | null;
   fallbackReason: string | null;
   attempt: number;
@@ -757,8 +754,6 @@ export interface SharedMessage {
   /** Provider prompt-cache read tokens, when reported. */
   cacheReadInputTokens: number | null;
   outputTokens: number | null;
-  estimatedCostUsd: number | null;
-  costSource?: 'provider' | 'estimated' | null;
   fallbackFrom: 'codex' | 'claude' | null;
   fallbackReason: string | null;
   dispatchTarget: 'auto' | 'both' | 'codex' | 'claude' | 'none';
@@ -894,9 +889,10 @@ export const updateArtifactSchema = z.object({
 });
 
 export const artifactLibraryViewSchema = z.enum(['published', 'revoked', 'all']).catch('published');
-export interface SharedConversation { id: string; title: string; workItemId: string | null; linkedProjectName?: string | null; forkedFromConversationId: string | null; archivedAt: string | null; sharedBrief?: string; preferredExecutionProfile?: AgentRun['executionProfile']; draftBody?: string; preferredAccountProfile?: string | null; preferredDispatchTarget?: 'both' | 'codex' | 'claude' | null; claudeSessionId?: string | null; codexThreadId?: string | null; state?: 'working' | 'needs_attention' | 'waiting_approval' | 'promoting' | 'waiting_promotion' | 'finished' | null; isUnread?: boolean; linkedWorkItemPinned?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
+export interface SharedConversation { id: string; title: string; workItemId: string | null; pinned?: boolean; linkedProjectName?: string | null; forkedFromConversationId: string | null; archivedAt: string | null; sharedBrief?: string; preferredExecutionProfile?: AgentRun['executionProfile']; draftBody?: string; preferredAccountProfile?: string | null; preferredDispatchTarget?: 'both' | 'codex' | 'claude' | null; claudeSessionId?: string | null; codexThreadId?: string | null; state?: 'working' | 'needs_attention' | 'waiting_approval' | 'promoting' | 'waiting_promotion' | 'finished' | null; isUnread?: boolean; linkedWorkItemPinned?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
 
 export const setConversationTaskSchema = z.object({ workItemId: z.string().uuid().nullable() });
+export const setConversationPinnedSchema = z.object({ pinned: z.boolean() });
 export const updateSharedBriefSchema = z.object({ brief: z.string().trim().max(12_000) });
 export const updateSharedConversationDraftSchema = z.object({ body: z.string().max(50_000) });
 
@@ -964,19 +960,6 @@ export interface RunInsights {
   /** Agent-handoff lifecycle events per terminal agent run. */
   fallbackRate: number | null;
   handoffCount: number;
-  costByDay: RunInsightsCostByDay[];
-  /** Provider-reported billed cost. Never derived from tokens. */
-  providerCostUsd: number;
-  previousProviderCostUsd: number | null;
-  /** Uncached, short-context list-price estimate from reported tokens; not a bill. */
-  estimatedCostUsd: number;
-  previousEstimatedCostUsd: number | null;
-  providerPricedRuns: number;
-  estimatedPricedRuns: number;
-  /** Historical rows that stored a cost before Workbench recorded its provenance. Excluded from totals. */
-  unverifiedCostRuns: number;
-  /** Runs that reported tokens but had no rate for their model. */
-  unpricedRuns: number;
   /** Runs recorded before cache telemetry was available. Their input cannot be
    * truthfully split into fresh and cached traffic, so token totals omit them. */
   incompleteTokenTelemetryRuns: number;
@@ -1021,11 +1004,6 @@ export interface RunInsightsAgentFit {
   medianDurationMs: number | null;
 }
 
-export interface RunInsightsCostByDay {
-  day: string;
-  costUsd: number;
-}
-
 export interface RunInsightsTokenUsage {
   provider: 'codex' | 'claude';
   model: string | null;
@@ -1034,12 +1012,7 @@ export interface RunInsightsTokenUsage {
   cacheCreationInputTokens: number;
   cacheReadInputTokens: number;
   outputTokens: number;
-  /** Runs in this model bucket with a token-derived list-price estimate. */
-  estimatedPricedRuns: number;
-  costUsd: number;
   runs: number;
-  /** 'env' when a deployment rate override priced this model, 'default' when the built-in list price did. */
-  rateSource: 'env' | 'default' | null;
 }
 
 export interface RunInsightsByAgent {
@@ -1054,12 +1027,6 @@ export interface RunInsightsByAgent {
   fallbackRate: number | null;
   medianDurationMs: number | null;
   p90DurationMs: number | null;
-  providerCostUsd: number;
-  /** Runs with provider-reported billing for this agent. */
-  providerPricedRuns: number;
-  estimatedCostUsd: number;
-  /** Runs with a token-derived list-price estimate for this agent. */
-  estimatedPricedRuns: number;
 }
 
 export interface RunInsightsByKind {

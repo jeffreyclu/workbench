@@ -50,12 +50,12 @@ export class ConversationService {
   adoptRuns(workItemId: string, conversationId: string): number {
     const kind = this.collaborators.getClassification(workItemId)?.kind ?? 'analysis';
     const messages = this.collaborators.listAllSharedMessages(conversationId).filter((message) => message.author === 'codex' || message.author === 'claude');
-    const insertRun = this.database.prepare(`INSERT INTO agent_runs (id, work_item_id, kind, requested_target, requested_agent, agent, status, instructions, output, error, started_at, completed_at, created_at, conversation_id, message_id, model, execution_profile, input_tokens, output_tokens, estimated_cost_usd, fallback_from, fallback_reason, adopted_conversation_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const insertRun = this.database.prepare(`INSERT INTO agent_runs (id, work_item_id, kind, requested_target, requested_agent, agent, status, instructions, output, error, started_at, completed_at, created_at, conversation_id, message_id, model, execution_profile, input_tokens, output_tokens, fallback_from, fallback_reason, adopted_conversation_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     let adopted = 0;
     for (const message of messages) {
       if (this.database.prepare('SELECT 1 FROM agent_runs WHERE message_id = ?').get(message.id)) continue;
-      insertRun.run(randomUUID(), workItemId, kind, message.author, message.author, message.author, message.status, 'Adopted from linked conversation.', message.body, message.error, message.createdAt, message.completedAt, message.createdAt, conversationId, message.id, message.model, message.executionProfile, message.inputTokens, message.outputTokens, message.estimatedCostUsd, message.fallbackFrom, message.fallbackReason, conversationId);
+      insertRun.run(randomUUID(), workItemId, kind, message.author, message.author, message.author, message.status, 'Adopted from linked conversation.', message.body, message.error, message.createdAt, message.completedAt, message.createdAt, conversationId, message.id, message.model, message.executionProfile, message.inputTokens, message.outputTokens, message.fallbackFrom, message.fallbackReason, conversationId);
       adopted += 1;
     }
     return adopted;

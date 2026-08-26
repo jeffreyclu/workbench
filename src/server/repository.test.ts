@@ -209,67 +209,8 @@ describe('WorkItemRepository', () => {
     expect(scoped.map((result) => result.body)).toContain('The connector gateway has a project-scoped retrieval marker.');
   });
 
-  it('backfills cost for historical runs that recorded tokens but no cost, and does not overwrite an existing cost', () => {
-    const item = repository.create({ title: 'Backfill cost', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    const priced = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');
-    const alreadyPriced = repository.createRun(item.id, 'review', 'claude', 'claude', 'Review it.');
-    const unknownModel = repository.createRun(item.id, 'research', 'codex', 'codex', 'Research it.');
-    repository.updateRun(priced.id, { status: 'completed', model: 'opus', inputTokens: 1_000_000, outputTokens: 1_000_000 });
-    repository.updateRun(alreadyPriced.id, { status: 'completed', model: 'opus', inputTokens: 1_000_000, outputTokens: 1_000_000, estimatedCostUsd: 0.5 });
-    repository.updateRun(unknownModel.id, { status: 'completed', model: 'not-a-real-model', inputTokens: 500, outputTokens: 500 });
-
-    expect(repository.backfillEstimatedCosts()).toBe(1);
-    // opus list price: $15/M in + $75/M out.
-    expect(repository.getRun(priced.id)?.estimatedCostUsd).toBe(90);
-    // A provider-reported total must survive the backfill untouched.
-    expect(repository.getRun(alreadyPriced.id)?.estimatedCostUsd).toBe(0.5);
-    // No rate for the model means no invented number.
-    expect(repository.getRun(unknownModel.id)?.estimatedCostUsd).toBeNull();
-    // Idempotent: a second pass finds nothing left to fill.
-    expect(repository.backfillEstimatedCosts()).toBe(0);
-  });
-
-  it('separates provider bills from list-price estimates and excludes legacy costs', () => {
-    const item = repository.create({ title: 'Cost insights', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    const claudeRun = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');
-    const codexRun = repository.createRun(item.id, 'review', 'codex', 'codex', 'Review it.');
-    const unpriced = repository.createRun(item.id, 'research', 'codex', 'codex', 'Research it.');
-    const completedAt = new Date().toISOString();
-    repository.updateRun(claudeRun.id, { status: 'completed', completedAt, model: 'opus', inputTokens: 100, outputTokens: 200, estimatedCostUsd: 2, costSource: 'provider' });
-    repository.updateRun(codexRun.id, { status: 'completed', completedAt, model: 'gpt-5.6-terra', inputTokens: 100, outputTokens: 200, estimatedCostUsd: 0.5, costSource: 'estimated' });
-    repository.updateRun(unpriced.id, { status: 'completed', completedAt, model: 'not-a-real-model', inputTokens: 100, outputTokens: 200 });
-
-    const insights = repository.getRunInsights();
-    expect(insights.providerCostUsd).toBe(2);
-    expect(insights.estimatedCostUsd).toBe(0.5);
-    expect(insights.providerPricedRuns).toBe(1);
-    expect(insights.estimatedPricedRuns).toBe(1);
-    expect(insights.unpricedRuns).toBe(1);
-    // No history before this window, so there is nothing to trend against.
-    expect(insights.previousProviderCostUsd).toBeNull();
-    expect(insights.previousEstimatedCostUsd).toBeNull();
-    expect(insights.byAgent.find((agent) => agent.agent === 'claude')).toMatchObject({ providerCostUsd: 2, providerPricedRuns: 1, estimatedCostUsd: 0, estimatedPricedRuns: 0 });
-    expect(insights.byAgent.find((agent) => agent.agent === 'codex')).toMatchObject({ providerCostUsd: 0, providerPricedRuns: 0, estimatedCostUsd: 0.5, estimatedPricedRuns: 1 });
-    expect(insights.tokenUsageByModel).toEqual([]);
-    expect(insights.incompleteTokenTelemetryRuns).toBe(3);
-    expect(insights.costByDay.reduce((total, day) => total + day.costUsd, 0)).toBe(0.5);
-  });
-
   it('does not emit empty agent buckets as insight data', () => {
     expect(repository.getRunInsights().byAgent).toEqual([]);
-  });
-
-  it('compares cost windows using both terminal runs and unlinked shared-room replies', () => {
-    const previousCompletedAt = new Date(Date.now() - 35 * 24 * 60 * 60 * 1_000).toISOString();
-    const conversation = repository.createConversation('Historical shared reply');
-    const reply = repository.createSharedMessage('claude', 'Historical billed reply.', 'running', conversation.id);
-    repository.updateSharedMessage(reply.id, {
-      status: 'completed', completedAt: previousCompletedAt, estimatedCostUsd: 3.25, costSource: 'provider',
-    });
-
-    const insights = repository.getRunInsights(30);
-    expect(insights.previousProviderCostUsd).toBe(3.25);
-    expect(insights.previousEstimatedCostUsd).toBeNull();
   });
 
   it('uses terminal completion time and counts canceled runs as unsuccessful attempts', () => {

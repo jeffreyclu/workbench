@@ -238,7 +238,7 @@ export class WorkItemRepository {
     const { conversations: rawConversations, hasMore, totalCount } = this.conversations.listPage(limit, cursor, view);
     const conversations = rawConversations.map((conversation) => this.withConversationState(conversation));
     const last = conversations.at(-1);
-    return { conversations, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ isPinned: Boolean(last.linkedWorkItemPinned), isWorking: last.state === 'working', updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null,
+    return { conversations, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ isPinned: Boolean(last.pinned || last.linkedWorkItemPinned), isWorking: last.state === 'working', updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null,
       totalCount };
   }
 
@@ -256,6 +256,10 @@ export class WorkItemRepository {
 
   setConversationDraft(id: string, body: string): SharedConversation | null {
     return this.conversations.setDraftBody(id, body) ? this.getConversation(id) : null;
+  }
+
+  setConversationPinned(id: string, pinned: boolean): SharedConversation | null {
+    return this.conversations.setPinned(id, pinned) ? this.getConversation(id) : null;
   }
 
   countActiveConversations(): number {
@@ -420,7 +424,6 @@ export class WorkItemRepository {
       cacheCreationInputTokens: row.cache_creation_input_tokens === null ? null : Number(row.cache_creation_input_tokens),
       cacheReadInputTokens: row.cache_read_input_tokens === null ? null : Number(row.cache_read_input_tokens),
       outputTokens: row.output_tokens === null ? null : Number(row.output_tokens),
-      estimatedCostUsd: row.estimated_cost_usd === null ? null : Number(row.estimated_cost_usd),
       fallbackFrom: row.fallback_from as SharedMessage['fallbackFrom'] ?? null, fallbackReason: row.fallback_reason ? String(row.fallback_reason) : null,
       dispatchTarget: row.dispatch_target as SharedMessage['dispatchTarget'] ?? 'none',
       dispatchGroupId: row.dispatch_group_id ? String(row.dispatch_group_id) : null,
@@ -607,7 +610,7 @@ export class WorkItemRepository {
     const conversation = conversationId ? this.listConversations('all').find((item) => item.id === conversationId) : this.ensureDefaultConversation();
     if (!conversation) throw new Error('Conversation not found.');
     const message: SharedMessage = {
-      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), completedAt: ['completed', 'failed', 'canceled'].includes(status) ? new Date().toISOString() : null, attachments, model: null, accountProfile, executionProfile, inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: dispatchTarget as SharedMessage['dispatchTarget'],
+      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), completedAt: ['completed', 'failed', 'canceled'].includes(status) ? new Date().toISOString() : null, attachments, model: null, accountProfile, executionProfile, inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: dispatchTarget as SharedMessage['dispatchTarget'],
       attempt: 0, maxAttempts: 3, nextAttemptAt: null, queuePriority: 0, interjectionStreamOffset: null, retrievedMemoryCount: null, dispatchGroupId,
     };
     this.database.prepare(`
@@ -659,14 +662,14 @@ export class WorkItemRepository {
     return this.getSharedMessageById(id);
   }
 
-  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; accountProfile?: string | null; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; estimatedCostUsd?: number | null; costSource?: SharedMessage['costSource']; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null; interjectionStreamOffset?: number | null; retrievedMemoryCount?: number | null; retrievedMemoryDetail?: { query: string; items: Array<{ source: string; title: string; body: string; createdAt: string }> } | null }): SharedMessage | null {
+  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; accountProfile?: string | null; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null; interjectionStreamOffset?: number | null; retrievedMemoryCount?: number | null; retrievedMemoryDetail?: { query: string; items: Array<{ source: string; title: string; body: string; createdAt: string }> } | null }): SharedMessage | null {
     // A retry reuses the same message row. Never let the error from the prior
     // attempt survive a successful or user-canceled terminal transition.
     const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
     const entries = Object.entries({
       pinned: changes.pinned === undefined ? undefined : Number(changes.pinned),
       body: changes.body, status: changes.status, error, author: changes.author, model: changes.model, account_profile: changes.accountProfile, execution_profile: changes.executionProfile,
-      input_tokens: changes.inputTokens, cache_creation_input_tokens: changes.cacheCreationInputTokens, cache_read_input_tokens: changes.cacheReadInputTokens, output_tokens: changes.outputTokens, estimated_cost_usd: changes.estimatedCostUsd, cost_source: changes.costSource, fallback_from: changes.fallbackFrom, fallback_reason: changes.fallbackReason, interjection_stream_offset: changes.interjectionStreamOffset, retrieved_memory_count: changes.retrievedMemoryCount,
+      input_tokens: changes.inputTokens, cache_creation_input_tokens: changes.cacheCreationInputTokens, cache_read_input_tokens: changes.cacheReadInputTokens, output_tokens: changes.outputTokens, fallback_from: changes.fallbackFrom, fallback_reason: changes.fallbackReason, interjection_stream_offset: changes.interjectionStreamOffset, retrieved_memory_count: changes.retrievedMemoryCount,
       retrieved_memory_detail_json: changes.retrievedMemoryDetail === undefined ? undefined : changes.retrievedMemoryDetail === null ? null : JSON.stringify(changes.retrievedMemoryDetail),
       completed_at: changes.completedAt ?? (changes.status && ['completed', 'failed', 'canceled'].includes(changes.status) ? new Date().toISOString() : undefined),
     }).filter((entry): entry is [string, string | number | null] => entry[1] !== undefined);
@@ -2010,18 +2013,6 @@ export class WorkItemRepository {
 
   logDiagnostic(event: DiagnosticEvent['event'], subsystem: DiagnosticEvent['subsystem'], outcome: 'success' | 'failure', detail: string, durationMs?: number, errorCode?: string): void {
     this.telemetry.logDiagnostic(event, subsystem, outcome, detail, durationMs, errorCode);
-  }
-
-  /**
-   * Historical runs recorded tokens but no cost, because pricing used to be
-   * keyed by agent and was never configured. Fill those gaps in from the model
-   * rate table so the cost trend has history instead of starting from today.
-   *
-   * Only null costs are filled, so this is idempotent and never overwrites a
-   * provider-reported total. Safe to call on every boot.
-   */
-  backfillEstimatedCosts(): number {
-    return this.telemetry.backfillEstimatedCosts();
   }
 
   getRunInsights(days: 7 | 30 = 30): RunInsights {

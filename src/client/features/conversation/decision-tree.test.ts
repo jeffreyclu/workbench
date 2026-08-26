@@ -7,8 +7,8 @@ function message(overrides: Partial<SharedMessage>): SharedMessage {
     id: 'message', conversationId: 'conversation', author: 'jeffrey', body: '', pinned: false,
     status: 'completed', error: '', createdAt: '2026-08-25T12:00:00.000Z', completedAt: null,
     attachments: [], model: null, accountProfile: null, executionProfile: null, inputTokens: null,
-    cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null,
-    costSource: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'none', dispatchGroupId: null,
+    cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null,
+    fallbackFrom: null, fallbackReason: null, dispatchTarget: 'none', dispatchGroupId: null,
     attempt: 0, maxAttempts: 3, nextAttemptAt: null, queuePriority: 0, retrievedMemoryCount: null,
     ...overrides,
   };

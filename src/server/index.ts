@@ -18,10 +18,6 @@ const app = createApp(database, liveRuntimeCapabilities);
 // and keep retrying/dispatching queued work going forward. Must start before the
 // server accepts traffic so nothing queued while the process was down sits idle.
 const repository = new WorkItemRepository(database);
-// Existing runs recorded tokens but no cost (pricing was keyed by agent and never
-// configured). Fill those gaps once at boot so cost history is not empty. Idempotent.
-const backfilledCosts = repository.backfillEstimatedCosts();
-if (backfilledCosts > 0) console.log(`Backfilled estimated cost for ${backfilledCosts} historical rows.`);
 if (liveRuntimeCapabilities.ownScheduler) startScheduler(repository);
 if (liveRuntimeCapabilities.promoteRuntime) startRuntimePromotionWorker(repository);
 warmFastTaskDraftModel();

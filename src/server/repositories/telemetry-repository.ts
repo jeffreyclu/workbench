@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
 import type { AgentRun, AuditLogEntry, AuditLogPage, DiagnosticEvent, UsageCalibration } from '../../shared/contracts.js';
-import { estimateModelCost } from '../model-pricing.js';
 import { sonnetEquivalentTokens } from '../usage-meter.js';
 import type { UnitOfWork } from '../unit-of-work.js';
 
@@ -39,7 +38,7 @@ function mapUsageCalibrationRow(row: UsageCalibrationRow): UsageCalibration {
 }
 
 /**
- * Audit trail, diagnostics, cost backfill, and autonomous-budget bookkeeping.
+ * Audit trail, diagnostics, and autonomous-budget bookkeeping.
  * Every table here (`audit_log`, `diagnostics`, `usage_calibrations`,
  * `budget_reservations`) is owned exclusively by this repository — nothing
  * here reaches into work-item, conversation, or run state, so it never needs
@@ -103,44 +102,6 @@ export class TelemetryRepository {
       INSERT INTO diagnostics (id, event, subsystem, outcome, error_code, detail, duration_ms, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, event, subsystem, outcome, errorCode ?? null, detail, durationMs ?? null, now);
-  }
-
-  /**
-   * Historical runs recorded tokens but no cost, because pricing used to be
-   * keyed by agent and was never configured. Fill those gaps in from the model
-   * rate table so the cost trend has history instead of starting from today.
-   *
-   * Only null costs are filled, so this is idempotent and never overwrites a
-   * provider-reported total. Safe to call on every boot.
-   */
-  backfillEstimatedCosts(): number {
-    const rows = this.database.prepare(`
-      SELECT id, agent, model, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens FROM agent_runs
-      WHERE estimated_cost_usd IS NULL AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL)
-    `).all() as Array<{ id: string; agent: 'codex' | 'claude'; model: string | null; input_tokens: number | null; output_tokens: number | null; cache_creation_input_tokens: number | null; cache_read_input_tokens: number | null }>;
-    const messages = this.database.prepare(`
-      SELECT id, author, model, input_tokens, output_tokens FROM shared_messages
-      WHERE estimated_cost_usd IS NULL AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL)
-        AND author IN ('codex', 'claude')
-    `).all() as Array<{ id: string; author: 'codex' | 'claude'; model: string | null; input_tokens: number | null; output_tokens: number | null }>;
-    const updateRun = this.database.prepare('UPDATE agent_runs SET estimated_cost_usd = ? WHERE id = ?');
-    const updateMessage = this.database.prepare('UPDATE shared_messages SET estimated_cost_usd = ? WHERE id = ?');
-    let filled = 0;
-    this.unitOfWork.transaction(() => {
-      for (const row of rows) {
-        const cost = estimateModelCost(row.agent, row.model, row.input_tokens, row.output_tokens, row.cache_creation_input_tokens, row.cache_read_input_tokens);
-        if (cost === null) continue;
-        updateRun.run(cost, row.id);
-        filled += 1;
-      }
-      for (const row of messages) {
-        const cost = estimateModelCost(row.author, row.model, row.input_tokens, row.output_tokens, null, null);
-        if (cost === null) continue;
-        updateMessage.run(cost, row.id);
-        filled += 1;
-      }
-    });
-    return filled;
   }
 
   getAutonomyPolicy(): AutonomyPolicy {

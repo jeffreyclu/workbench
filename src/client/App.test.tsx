@@ -113,7 +113,7 @@ describe('primary navigation', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       const body = url.startsWith('/api/insights')
-        ? { windowDays: 30, retryRate: 0, fallbackRate: 0, costByDay: [], costUsd: 0, previousCostUsd: null, pricedRuns: 0, unpricedRuns: 0, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0, medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] } }
+        ? { windowDays: 30, retryRate: 0, fallbackRate: 0, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0, medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] } }
         : url.includes('/api/work-items/counts')
           ? { active: 0, workbench: 0, archive: 0 }
           : url.includes('/api/shared/conversations/unread-count')
@@ -371,17 +371,14 @@ describe('shared room', () => {
     expect(screen.getByRole('button', { name: 'Complete task' })).toBeTruthy();
   });
 
-  it('pins the linked task from the conversation window actions', async () => {
+  it('pins a manual conversation from the conversation window', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000095';
-    const taskId = '00000000-0000-4000-8000-000000000096';
     const timestamp = '2026-01-01T00:00:00Z';
-    const conversation = { id: conversationId, title: 'Pinned from conversation', workItemId: taskId, archivedAt: null, createdAt: timestamp, updatedAt: timestamp };
-    const item = { id: taskId, title: 'Linked task', description: '', status: 'in_progress', priority: 2, queuePosition: 0, source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete', agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: 'Workbench', stack: 'attention', workspacePath: null, strategy: '', assignees: ['codex'], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [], createdAt: timestamp, updatedAt: timestamp, lastTouchedAt: timestamp };
+    const conversation = { id: conversationId, title: 'Pinned from conversation', workItemId: null, pinned: false, archivedAt: null, createdAt: timestamp, updatedAt: timestamp };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === `/api/work-items/${taskId}` && init?.method === 'PATCH') return new Response(JSON.stringify({ item: { ...item, status: 'pinned' } }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], references: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}/pin` && init?.method === 'PATCH') return new Response(JSON.stringify({ conversation: { ...conversation, pinned: true } }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
@@ -390,9 +387,9 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Put a pin in it' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin conversation' }));
 
-    await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url) === `/api/work-items/${taskId}` && init?.method === 'PATCH' && init.body === JSON.stringify({ status: 'pinned' }))).toBe(true));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url) === `/api/shared/conversations/${conversationId}/pin` && init?.method === 'PATCH' && init.body === JSON.stringify({ pinned: true }))).toBe(true));
   });
 
   it('keeps the thread in document flow for queued promotion and completed messages', async () => {
@@ -476,7 +473,7 @@ describe('shared room', () => {
   it('shows the agent, model, account profile, usage, and duration on an agent reply', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000005';
-    const reply = { id: 'agent-proof', conversationId, author: 'claude', body: 'Completed.', pinned: false, status: 'completed', error: '', createdAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:00:02Z', attachments: [], model: 'sonnet', accountProfile: 'personal', executionProfile: 'standard', inputTokens: 1, outputTokens: 1, estimatedCostUsd: 0.05, fallbackFrom: 'codex', fallbackReason: 'quota', dispatchTarget: 'none' };
+    const reply = { id: 'agent-proof', conversationId, author: 'claude', body: 'Completed.', pinned: false, status: 'completed', error: '', createdAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:00:02Z', attachments: [], model: 'sonnet', accountProfile: 'personal', executionProfile: 'standard', inputTokens: 1, outputTokens: 1, fallbackFrom: 'codex', fallbackReason: 'quota', dispatchTarget: 'none' };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Identity proof', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -1633,8 +1630,8 @@ describe('shared room', () => {
       const url = String(input);
       if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Continue with Claude', workItemId: null, preferredExecutionProfile: null, createdAt: timestamp, updatedAt: timestamp }], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [
-        { id: 'request-1', conversationId, author: 'jeffrey', body: 'Please investigate.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: null, accountProfile: 'default', executionProfile: 'deep', inputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'claude' },
-        { id: 'reply-1', conversationId, author: 'claude', body: 'I found the regression.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: 'opus', accountProfile: 'default', executionProfile: 'deep', inputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'none' },
+        { id: 'request-1', conversationId, author: 'jeffrey', body: 'Please investigate.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: null, accountProfile: 'default', executionProfile: 'deep', inputTokens: null, outputTokens: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'claude' },
+        { id: 'reply-1', conversationId, author: 'claude', body: 'I found the regression.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: 'opus', accountProfile: 'default', executionProfile: 'deep', inputTokens: null, outputTokens: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'none' },
       ] }), { headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
     }));
@@ -1756,7 +1753,7 @@ describe('task execution', () => {
     const baseRun = {
       workItemId: taskId, kind: 'execute' as const, requestedTarget: 'codex' as const, status: 'completed' as const, instructions: '', output: '', error: '',
       startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:01:00Z', createdAt: '2026-01-01T00:00:00Z', conversationId: null, messageId: null,
-      model: null, executionProfile: null, inputTokens: null, outputTokens: null, estimatedCostUsd: null, fallbackFrom: null, fallbackReason: null,
+      model: null, executionProfile: null, inputTokens: null, outputTokens: null, fallbackFrom: null, fallbackReason: null,
       attempt: 0, maxAttempts: 3, nextAttemptAt: null, resolvedWorkspace: null, origin: 'manual' as const,
     };
     const runs = [

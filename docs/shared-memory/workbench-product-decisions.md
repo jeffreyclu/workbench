@@ -1,8 +1,8 @@
 ## Workbench product decisions
 
-### Pool-warming spend comparison uses tokens, not dollars
+### Workbench tracks tokens, never cost
 
-*Decision from Jeffrey, 2026-08-26.* Evaluate warm-pool overhead from recorded token counts, not estimated dollar cost; the dollar estimates are not reliable enough for this decision. Keep tracking in the database only—do not add this comparison to Insights.
+*Decision from Jeffrey, 2026-08-26.* Remove every cost metric, price table, estimate, provider-cost collector, API field, and UI surface from Workbench. Token counts are the only usage metric. Do not backfill, clear, or migrate historical database cost columns; released schema remains for compatibility, but application code must not read or write those fields.
 
 ### Open diffs stay stable; updates require an explicit refresh
 

@@ -1220,23 +1220,7 @@ nav { display: grid; gap: 3px; }
 .insight-token-row dl { display: grid; grid-template-columns: repeat(4, minmax(52px, auto)); gap: 12px; margin: 0; }
 .insight-token-row dl div { display: grid; gap: 4px; text-align: right; }
 .insight-token-row dd { margin: 0; color: #d6dfb5; font: 10px 'DM Mono'; }
-.insight-cost-summary { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 1px; overflow: hidden; margin-bottom: 14px; background: #2d2d29; border: 1px solid #2d2d29; border-radius: 8px; }
-.insight-cost-total { display: grid; gap: 6px; padding: 14px; background: #111110; }
-.insight-cost-total strong { color: #d6dfb5; font: 500 26px 'DM Mono'; }
-.insight-cost-total small { display: flex; align-items: center; gap: 5px; color: var(--muted); font: 9px 'DM Mono'; line-height: 1.4; }
-.cost-trend-up { color: #d99a86; }
-.cost-trend-down { color: #a8c48a; }
-.insight-cost-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: #2d2d29; }
-.insight-cost-split > div { display: grid; align-content: start; gap: 4px; padding: 14px; background: #111110; }
-.insight-cost-split span { color: #6f6e68; font: 8px 'DM Mono'; letter-spacing: .05em; text-transform: uppercase; }
-.insight-cost-split strong { color: var(--soft); font: 500 15px 'DM Mono'; }
-.insight-cost-split small { color: var(--muted); font: 9px 'DM Mono'; }
-.insight-cost-chart { display: flex; align-items: flex-end; gap: 3px; height: 96px; padding: 10px 12px 0; overflow-x: auto; background: #111110; border: 1px solid #2d2d29; border-radius: 8px; }
-.insight-cost-bar { display: flex; flex: 1 0 14px; flex-direction: column; align-items: center; justify-content: flex-end; gap: 5px; height: 100%; }
-.insight-cost-bar-fill { width: 100%; min-height: 2px; background: #6f7f4f; border-radius: 2px 2px 0 0; }
-.insight-cost-bar-label { color: #6f6e68; font: 7px 'DM Mono'; white-space: nowrap; }
 @media (max-width: 720px) {
-  .insight-cost-summary { grid-template-columns: minmax(0, 1fr); }
   .insight-token-row dl { grid-template-columns: repeat(2, minmax(52px, auto)); }
 }
 .insight-fit-list { display: grid; gap: 1px; overflow: hidden; background: var(--line); border: 1px solid var(--line); border-radius: 8px; }

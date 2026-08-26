@@ -1,11 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { Info, LineChart, Minus, TrendingDown, TrendingUp } from 'lucide-react';
+import { Info, LineChart } from 'lucide-react';
 import { useState } from 'react';
 import { api } from './api';
-import { formatCostUsd } from './formatters';
 import { UsageDial } from './usage-dial';
 import { InsightsSkeleton, UsageDialSkeleton } from './skeleton';
-import type { LifecycleReportStatus, RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsCostByDay, RunInsightsTokenUsage } from '../shared/contracts';
+import type { LifecycleReportStatus, RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsTokenUsage } from '../shared/contracts';
 
 function InfoTooltip({ children }: { children: string }) {
   return (
@@ -49,31 +48,6 @@ function formatTokenCount(tokens: number): string {
   return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(tokens);
 }
 
-function formatMeasuredCost(value: number, measuredRuns: number): string {
-  return measuredRuns > 0 ? formatCostUsd(value) : '—';
-}
-
-function CostTrend({ current, previous }: { current: number; previous: number | null }) {
-  if (previous === null || previous === 0) return <small>No comparable previous window.</small>;
-  const change = (current - previous) / previous;
-  const flat = Math.abs(change) < 0.05;
-  const direction = flat ? 'flat' : change > 0 ? 'up' : 'down';
-  const Icon = flat ? Minus : change > 0 ? TrendingUp : TrendingDown;
-  return <small className={`cost-trend cost-trend-${direction}`}>
-    <Icon size={12} /> {flat ? 'About flat' : `${formatPercent(Math.abs(change))} ${change > 0 ? 'higher' : 'lower'}`} than the previous window ({formatCostUsd(previous)}).
-  </small>;
-}
-
-function CostByDayChart({ rows }: { rows: RunInsightsCostByDay[] }) {
-  const peak = Math.max(...rows.map((row) => row.costUsd), 0);
-  return <div className="insight-cost-chart" role="img" aria-label={`List-price estimate by day: ${rows.map((row) => `${row.day} ${formatCostUsd(row.costUsd)}`).join(', ')}`}>
-    {rows.map((row) => <div className="insight-cost-bar" key={row.day} title={`${row.day} · ${formatCostUsd(row.costUsd)}`}>
-      <div className="insight-cost-bar-fill" style={{ height: peak === 0 ? '2px' : `${Math.max(2, Math.round((row.costUsd / peak) * 100))}%` }} />
-      <span className="insight-cost-bar-label">{row.day.slice(5)}</span>
-    </div>)}
-  </div>;
-}
-
 function RateBar({ label, value, count }: { label: string; value: number | null; count?: string }) {
   return (
     <div className="insight-bar-row">
@@ -100,8 +74,6 @@ function AgentInsightCard({ agent }: { agent: RunInsightsByAgent }) {
         <div><dt>Agent handoffs</dt><dd>{formatEventsPerHundredRuns(agent.fallbackRate)}</dd></div>
         <div><dt>Median duration</dt><dd>{formatDuration(agent.medianDurationMs)}</dd></div>
         <div><dt>P90 duration</dt><dd>{formatDuration(agent.p90DurationMs)}</dd></div>
-        <div><dt>Provider billed</dt><dd>{formatMeasuredCost(agent.providerCostUsd ?? 0, agent.providerPricedRuns ?? 0)}</dd></div>
-        <div><dt>List-price estimate</dt><dd>{formatMeasuredCost(agent.estimatedCostUsd ?? 0, agent.estimatedPricedRuns ?? 0)}</dd></div>
       </dl>
     </article>
   );
@@ -135,7 +107,6 @@ function TokenUsageRows({ rows }: { rows: RunInsightsTokenUsage[] }) {
         <div><dt>Cache read</dt><dd>{formatTokenCount(row.cacheReadInputTokens)}</dd></div>
         <div><dt>Output</dt><dd>{formatTokenCount(row.outputTokens)}</dd></div>
         <div><dt>Total traffic</dt><dd>{formatTokenCount(row.inputTokens + row.cacheCreationInputTokens + row.cacheReadInputTokens + row.outputTokens)}</dd></div>
-        <div><dt>List-price estimate</dt><dd>{row.estimatedPricedRuns > 0 ? formatCostUsd(row.costUsd) : <span title="No token-derived list-price estimate was recorded for this model.">—</span>}</dd></div>
       </dl>
     </div>)}
   </div>;
@@ -212,7 +183,7 @@ export function InsightsView() {
             <UsageDialSkeleton />
           ) : null}
           {lifecycleReport.data && <LifecycleReportInsight status={lifecycleReport.data} />}
-          {data.byAgent.length === 0 && data.byKind.length === 0 && data.agentFit.length === 0 && data.tokenUsageByModel.length === 0 && data.cursing.messagesAnalyzed === 0 && (data.providerPricedRuns ?? 0) === 0 && (data.estimatedPricedRuns ?? 0) === 0 && (data.unverifiedCostRuns ?? 0) === 0 && (data.unpricedRuns ?? 0) === 0 && (data.incompleteTokenTelemetryRuns ?? 0) === 0 ? (
+          {data.byAgent.length === 0 && data.byKind.length === 0 && data.agentFit.length === 0 && data.tokenUsageByModel.length === 0 && data.cursing.messagesAnalyzed === 0 && (data.incompleteTokenTelemetryRuns ?? 0) === 0 ? (
             <div className="discovery-empty">
               <LineChart size={26} />
               <h3>Nothing to show yet</h3>
@@ -253,37 +224,8 @@ export function InsightsView() {
                 )}
               </div>
 
-              <div className="insight-section insight-cost">
-                <h3>Cost <InfoTooltip>Provider billed cost is reported directly by the provider. List-price estimates use reported tokens at uncached, short-context rates and are not bills: cache use, cache writes, long contexts, and provider discounts can change the actual charge.</InfoTooltip></h3>
-                <p className="insight-section-intro">Billed cost and token-based estimates are intentionally separate so they cannot be mistaken for one number.</p>
-                {(data.providerPricedRuns ?? 0) === 0 && (data.estimatedPricedRuns ?? 0) === 0 ? <p className="insight-empty-note">No trustworthy cost records in this window yet.</p> : <>
-                  <div className="insight-cost-summary">
-                    <div className="insight-cost-total">
-                      <span className="eyebrow">Provider billed</span>
-                      <strong>{formatMeasuredCost(data.providerCostUsd ?? 0, data.providerPricedRuns ?? 0)}</strong>
-                      <CostTrend current={data.providerCostUsd ?? 0} previous={data.previousProviderCostUsd ?? null} />
-                    </div>
-                    <div className="insight-cost-total">
-                      <span className="eyebrow">List-price estimate</span>
-                      <strong>{formatMeasuredCost(data.estimatedCostUsd ?? 0, data.estimatedPricedRuns ?? 0)}</strong>
-                      <CostTrend current={data.estimatedCostUsd ?? 0} previous={data.previousEstimatedCostUsd ?? null} />
-                    </div>
-                    <div className="insight-cost-split">
-                      {data.byAgent.filter((agent) => agent.total > 0 || agent.providerPricedRuns > 0 || agent.estimatedPricedRuns > 0).map((agent) => <div key={agent.agent}>
-                        <span>{agent.agent}</span>
-                        <strong>{formatMeasuredCost(agent.providerCostUsd ?? 0, agent.providerPricedRuns ?? 0)} billed</strong>
-                        <small>{formatMeasuredCost(agent.estimatedCostUsd ?? 0, agent.estimatedPricedRuns ?? 0)} estimate</small>
-                      </div>)}
-                    </div>
-                  </div>
-                  {(data.costByDay ?? []).length > 0 && <CostByDayChart rows={data.costByDay} />}
-                  {(data.unverifiedCostRuns ?? 0) > 0 && <p className="insight-empty-note">{data.unverifiedCostRuns} run{data.unverifiedCostRuns === 1 ? '' : 's'} had a stored cost without provenance and are excluded from these totals.</p>}
-                  {(data.unpricedRuns ?? 0) > 0 && <p className="insight-empty-note">{data.unpricedRuns} run{data.unpricedRuns === 1 ? '' : 's'} reported tokens but had no rate for their model, so the total is understated.</p>}
-                </>}
-              </div>
-
               <div className="insight-section">
-                <h3>Token usage <InfoTooltip>Only runs with a provider-reported cache split are included. Fresh input, cache writes, cache reads, and output are separate because cache traffic is billed differently and can dwarf fresh prompt input. Rows group usage by provider and model.</InfoTooltip></h3>
+                <h3>Token usage <InfoTooltip>Only runs with a provider-reported cache split are included. Fresh input, cache writes, cache reads, and output stay separate so the source of traffic remains visible. Rows group usage by provider and model.</InfoTooltip></h3>
                 {data.tokenUsageByModel.length === 0 ? <>
                   <p className="insight-empty-note">No token usage with a complete provider cache split was reported in this window.</p>
                   {(data.incompleteTokenTelemetryRuns ?? 0) > 0 && <p className="insight-empty-note">{data.incompleteTokenTelemetryRuns} run{data.incompleteTokenTelemetryRuns === 1 ? '' : 's'} lacked a cache split and are excluded rather than guessed.</p>}

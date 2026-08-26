@@ -17,8 +17,6 @@ export interface RunPatch {
   cacheCreationInputTokens?: number | null;
   cacheReadInputTokens?: number | null;
   outputTokens?: number | null;
-  estimatedCostUsd?: number | null;
-  costSource?: AgentRun['costSource'];
   fallbackFrom?: AgentRun['agent'] | null;
   fallbackReason?: string | null;
   ownerId?: string | null;
@@ -39,8 +37,6 @@ function mapRunRow(row: Record<string, string | null>): AgentRun {
     model: row.model, executionProfile: row.execution_profile as AgentRun['executionProfile'],
     accountProfile: row.account_profile ?? 'default',
     inputTokens: row.input_tokens === null ? null : Number(row.input_tokens), cacheCreationInputTokens: row.cache_creation_input_tokens === null ? null : Number(row.cache_creation_input_tokens), cacheReadInputTokens: row.cache_read_input_tokens === null ? null : Number(row.cache_read_input_tokens), outputTokens: row.output_tokens === null ? null : Number(row.output_tokens),
-    estimatedCostUsd: row.estimated_cost_usd === null ? null : Number(row.estimated_cost_usd),
-    costSource: row.cost_source as AgentRun['costSource'] ?? null,
     fallbackFrom: row.fallback_from as AgentRun['fallbackFrom'] ?? null, fallbackReason: row.fallback_reason,
     attempt: Number(row.attempt ?? 0), maxAttempts: Number(row.max_attempts ?? 3),
     nextAttemptAt: row.next_attempt_at ?? null,
@@ -142,7 +138,7 @@ export class RunRepository {
     const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
     const columns = new Map<string, string | number | null | undefined>([
       ['agent', changes.agent], ['status', changes.status], ['output', changes.output], ['error', error], ['model', changes.model], ['execution_profile', changes.executionProfile], ['account_profile', changes.accountProfile],
-      ['input_tokens', changes.inputTokens], ['cache_creation_input_tokens', changes.cacheCreationInputTokens], ['cache_read_input_tokens', changes.cacheReadInputTokens], ['output_tokens', changes.outputTokens], ['estimated_cost_usd', changes.estimatedCostUsd], ['cost_source', changes.costSource], ['fallback_from', changes.fallbackFrom], ['fallback_reason', changes.fallbackReason],
+      ['input_tokens', changes.inputTokens], ['cache_creation_input_tokens', changes.cacheCreationInputTokens], ['cache_read_input_tokens', changes.cacheReadInputTokens], ['output_tokens', changes.outputTokens], ['fallback_from', changes.fallbackFrom], ['fallback_reason', changes.fallbackReason],
       ['started_at', changes.startedAt], ['completed_at', changes.completedAt], ['owner_id', changes.ownerId], ['lease_expires_at', changes.leaseExpiresAt],
       ['next_attempt_at', changes.nextAttemptAt], ['attempt', changes.attempt], ['resolved_workspace', changes.resolvedWorkspace],
     ]);

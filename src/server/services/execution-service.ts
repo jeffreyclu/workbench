@@ -3,7 +3,6 @@ import type { WorkbenchDatabase } from '../database.js';
 import type { UnitOfWork } from '../unit-of-work.js';
 import { RunRepository } from '../repositories/run-repository.js';
 import type { TelemetryRepository } from '../repositories/telemetry-repository.js';
-import { resolveModelRate } from '../model-pricing.js';
 import { summarizeCursing } from '../profanity.js';
 
 export interface ExecutionCollaborators {
@@ -290,8 +289,6 @@ export class ExecutionService {
       cache_creation_input_tokens: number | null;
       cache_read_input_tokens: number | null;
       output_tokens: number | null;
-      estimated_cost_usd: number | null;
-      cost_source: 'provider' | 'estimated' | null;
       created_at: string;
       completed_at: string;
       duration_ms: number | null;
@@ -299,9 +296,9 @@ export class ExecutionService {
     // A shared-room reply linked to a task is the same provider invocation as
     // its agent_runs row, so it must never be counted twice. Unlinked replies
     // (including synthesis) have no run row, but are still real Workbench
-    // calls and belong in token and cost accounting.
+    // calls and belong in token accounting.
     const unlinkedReplyUsage = this.database.prepare(`
-      SELECT author AS agent, model, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, estimated_cost_usd, cost_source, completed_at
+      SELECT author AS agent, model, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, completed_at
       FROM shared_messages message
       WHERE author IN ('codex', 'claude') AND status IN ('completed', 'failed', 'canceled') AND completed_at >= ?
         AND NOT EXISTS (SELECT 1 FROM agent_runs run WHERE run.message_id = message.id)
@@ -312,11 +309,9 @@ export class ExecutionService {
       cache_creation_input_tokens: number | null;
       cache_read_input_tokens: number | null;
       output_tokens: number | null;
-      estimated_cost_usd: number | null;
-      cost_source: 'provider' | 'estimated' | null;
       completed_at: string;
     }>;
-    const usageRows: Array<Pick<typeof runs[number], 'agent' | 'model' | 'input_tokens' | 'cache_creation_input_tokens' | 'cache_read_input_tokens' | 'output_tokens' | 'estimated_cost_usd' | 'cost_source' | 'completed_at'>> = [...runs, ...unlinkedReplyUsage];
+    const usageRows: Array<Pick<typeof runs[number], 'agent' | 'model' | 'input_tokens' | 'cache_creation_input_tokens' | 'cache_read_input_tokens' | 'output_tokens' | 'completed_at'>> = [...runs, ...unlinkedReplyUsage];
 
     // Activities are the lifecycle ledger. `attempt` and `fallback_from` were
     // introduced later and are incomplete for existing chat runs.
@@ -381,36 +376,9 @@ export class ExecutionService {
       }).filter((row) => row.count > 0).sort((left, right) => right.count - left.count || left.model.localeCompare(right.model)),
     };
 
-    const estimatedCostByDay: Record<string, number> = {};
-    const providerCostByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
-    const providerPricedRunsByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
-    const estimatedCostByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
-    const estimatedPricedRunsByAgent: Record<'codex' | 'claude', number> = { codex: 0, claude: 0 };
-    const tokenUsageByModel = new Map<string, { provider: 'codex' | 'claude'; model: string | null; inputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number; outputTokens: number; costUsd: number; estimatedPricedRuns: number; runs: number }>();
-    let providerCostUsd = 0;
-    let estimatedCostUsd = 0;
-    let providerPricedRuns = 0;
-    let estimatedPricedRuns = 0;
-    let unverifiedCostRuns = 0;
-    let unpricedRuns = 0;
+    const tokenUsageByModel = new Map<string, { provider: 'codex' | 'claude'; model: string | null; inputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number; outputTokens: number; runs: number }>();
     let incompleteTokenTelemetryRuns = 0;
     for (const run of usageRows) {
-      const day = run.completed_at.slice(0, 10);
-      if (run.estimated_cost_usd !== null && run.cost_source === 'provider') {
-        providerCostUsd += run.estimated_cost_usd;
-        providerCostByAgent[run.agent] += run.estimated_cost_usd;
-        providerPricedRuns += 1;
-        providerPricedRunsByAgent[run.agent] += 1;
-      } else if (run.estimated_cost_usd !== null && run.cost_source === 'estimated') {
-        estimatedCostUsd += run.estimated_cost_usd;
-        estimatedCostByDay[day] = (estimatedCostByDay[day] ?? 0) + run.estimated_cost_usd;
-        estimatedCostByAgent[run.agent] += run.estimated_cost_usd;
-        estimatedPricedRuns += 1;
-        estimatedPricedRunsByAgent[run.agent] += 1;
-      } else if (run.estimated_cost_usd !== null) unverifiedCostRuns += 1;
-      // A run that reported tokens but carries no cost has no rate for its
-      // model. Surfacing that count keeps the total honest rather than silently low.
-      else if (run.input_tokens !== null || run.cache_creation_input_tokens !== null || run.cache_read_input_tokens !== null || run.output_tokens !== null) unpricedRuns += 1;
       const hasAnyTokenTelemetry = run.input_tokens !== null || run.cache_creation_input_tokens !== null || run.cache_read_input_tokens !== null || run.output_tokens !== null;
       // Before cache telemetry landed, input_tokens represented an unknown mix
       // of fresh and cached input. Displaying it as fresh input manufactured a
@@ -420,38 +388,15 @@ export class ExecutionService {
       if (hasAnyTokenTelemetry && !hasCompleteTokenTelemetry) incompleteTokenTelemetryRuns += 1;
       if (hasCompleteTokenTelemetry) {
         const key = `${run.agent}:${run.model ?? ''}`;
-        const bucket = tokenUsageByModel.get(key) ?? { provider: run.agent, model: run.model, inputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 0, costUsd: 0, estimatedPricedRuns: 0, runs: 0 };
+        const bucket = tokenUsageByModel.get(key) ?? { provider: run.agent, model: run.model, inputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 0, runs: 0 };
         bucket.inputTokens += run.input_tokens ?? 0;
         bucket.cacheCreationInputTokens += run.cache_creation_input_tokens ?? 0;
         bucket.cacheReadInputTokens += run.cache_read_input_tokens ?? 0;
         bucket.outputTokens += run.output_tokens ?? 0;
-        if (run.cost_source === 'estimated' && run.estimated_cost_usd !== null) {
-          bucket.costUsd += run.estimated_cost_usd;
-          bucket.estimatedPricedRuns += 1;
-        }
         bucket.runs += 1;
         tokenUsageByModel.set(key, bucket);
       }
     }
-    // Trend compares this window against the equally long window before it.
-    const previousWindowStart = new Date(Date.now() - days * 2 * 24 * 60 * 60 * 1000).toISOString();
-    // Keep the comparison cohort identical to the current-window cost totals:
-    // terminal runs plus unlinked shared-room replies. Linked replies are the
-    // same invocation as their run row and therefore remain excluded.
-    const previousCosts = this.database.prepare(`
-      SELECT estimated_cost_usd, cost_source FROM agent_runs
-      WHERE status IN ('completed', 'failed', 'canceled') AND completed_at >= ? AND completed_at < ?
-      UNION ALL
-      SELECT message.estimated_cost_usd, message.cost_source FROM shared_messages message
-      WHERE message.author IN ('codex', 'claude') AND message.status IN ('completed', 'failed', 'canceled')
-        AND message.completed_at >= ? AND message.completed_at < ?
-        AND NOT EXISTS (SELECT 1 FROM agent_runs run WHERE run.message_id = message.id)
-    `).all(previousWindowStart, since, previousWindowStart, since) as Array<{ estimated_cost_usd: number | null; cost_source: 'provider' | 'estimated' | null }>;
-    const previousProviderCosts = previousCosts.filter((run) => run.cost_source === 'provider' && run.estimated_cost_usd !== null);
-    const previousEstimatedCosts = previousCosts.filter((run) => run.cost_source === 'estimated' && run.estimated_cost_usd !== null);
-    const previousProviderCostUsd = previousProviderCosts.length ? previousProviderCosts.reduce((total, run) => total + (run.estimated_cost_usd ?? 0), 0) : null;
-    const previousEstimatedCostUsd = previousEstimatedCosts.length ? previousEstimatedCosts.reduce((total, run) => total + (run.estimated_cost_usd ?? 0), 0) : null;
-
     const fitBuckets = new Map<string, { kind: AgentRun['kind']; agent: 'codex' | 'claude'; completed: number; failed: number; canceled: number; durations: number[] }>();
     for (const run of runs) {
       const key = `${run.kind}:${run.agent}`;
@@ -506,20 +451,8 @@ export class ExecutionService {
       cacheCreationInputTokens: [...tokenUsageByModel.values()].reduce((total, bucket) => total + bucket.cacheCreationInputTokens, 0),
       cacheReadInputTokens: [...tokenUsageByModel.values()].reduce((total, bucket) => total + bucket.cacheReadInputTokens, 0),
       outputTokens: [...tokenUsageByModel.values()].reduce((total, bucket) => total + bucket.outputTokens, 0),
-      providerCostUsd: Number(providerCostUsd.toFixed(6)),
-      previousProviderCostUsd: previousProviderCostUsd === null ? null : Number(previousProviderCostUsd.toFixed(6)),
-      estimatedCostUsd: Number(estimatedCostUsd.toFixed(6)),
-      previousEstimatedCostUsd: previousEstimatedCostUsd === null ? null : Number(previousEstimatedCostUsd.toFixed(6)),
-      providerPricedRuns,
-      estimatedPricedRuns,
-      unverifiedCostRuns,
-      unpricedRuns,
       incompleteTokenTelemetryRuns,
-      tokenUsageByModel: [...tokenUsageByModel.values()].map((bucket) => ({
-        ...bucket,
-        costUsd: Number(bucket.costUsd.toFixed(6)),
-        rateSource: resolveModelRate(bucket.provider, bucket.model)?.source ?? null,
-      })).sort((left, right) => {
+      tokenUsageByModel: [...tokenUsageByModel.values()].sort((left, right) => {
         const usageDifference = (right.inputTokens + right.cacheCreationInputTokens + right.cacheReadInputTokens + right.outputTokens) - (left.inputTokens + left.cacheCreationInputTokens + left.cacheReadInputTokens + left.outputTokens);
         if (usageDifference !== 0) return usageDifference;
         return `${left.provider}:${left.model ?? ''}`.localeCompare(`${right.provider}:${right.model ?? ''}`);
@@ -538,9 +471,6 @@ export class ExecutionService {
         successRate: bucket.completed + bucket.failed + bucket.canceled > 0 ? bucket.completed / (bucket.completed + bucket.failed + bucket.canceled) : null,
         medianDurationMs: median(bucket.durations),
       })),
-      costByDay: Object.entries(estimatedCostByDay)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([day, costUsd]) => ({ day, costUsd: Number(costUsd.toFixed(6)) })),
       byAgent: Object.entries(byAgent).map(([agent, bucket]) => ({
         agent: agent as 'codex' | 'claude',
         total: bucket.total,
@@ -551,11 +481,7 @@ export class ExecutionService {
         fallbackRate: bucket.total > 0 ? bucket.fallback / bucket.total : null,
         medianDurationMs: median(bucket.durations),
         p90DurationMs: percentile(bucket.durations, 0.9),
-        providerCostUsd: Number(providerCostByAgent[agent as 'codex' | 'claude'].toFixed(6)),
-        providerPricedRuns: providerPricedRunsByAgent[agent as 'codex' | 'claude'],
-        estimatedCostUsd: Number(estimatedCostByAgent[agent as 'codex' | 'claude'].toFixed(6)),
-        estimatedPricedRuns: estimatedPricedRunsByAgent[agent as 'codex' | 'claude'],
-      })).filter((agent) => agent.total > 0 || agent.providerPricedRuns > 0 || agent.estimatedPricedRuns > 0),
+      })).filter((agent) => agent.total > 0),
       byKind: Object.entries(byKind)
         .filter(([, bucket]) => bucket.completed + bucket.failed + bucket.canceled > 0)
         .map(([kind, bucket]) => ({

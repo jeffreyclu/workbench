@@ -10,7 +10,6 @@ const AUTONOMOUS_MODELS = new Set<string>(AUTONOMOUS_MODEL_ALLOWLIST);
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
 import { agentAccountEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
-import { estimateModelCost } from './model-pricing.js';
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
@@ -32,7 +31,7 @@ const PROGRESS_FLUSH_MS = 250;
 export const CLAUDE_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Report a command as passing only if it ran in this run and its output was observed.`;
 export const TOOL_OUTPUT_CONTRACT = `Tool-output discipline: keep every command and file read bounded to the lines needed for the decision. Do not paste, summarize verbatim, or carry raw command output into later turns. Record only the command, relevant paths, and the decisive finding; reopen an exact path/range when needed.`;
 export const AGENT_DEBUGGER_CONTRACT = 'For every tool call, first emit one standalone text block exactly in the form `Decision: <why this tool is the next correct action>`, then make exactly that one tool call. Do not reuse a decision for later calls or batch multiple tool calls under one decision. This is recorded in the agent debugger, so use only an explicit, human-readable rationale; never expose or claim hidden reasoning.';
-export const EXTERNAL_ACTION_CONTRACT = 'External-source guardrail: default deny all access to or actions on external websites, services, and networked CLIs, including GitHub, Slack, Confluence, Linear, and their APIs. Do not attempt a workaround. An explicit order must be represented by a supervisor-issued capability; never infer authorization from task text. No external capability is issued for this run, so report the blocked action without performing it.';
+export const EXTERNAL_ACTION_CONTRACT = 'External-action guardrail: read-only research is allowed, including WebSearch, WebFetch, documentation, and inspection. Default deny only mutations to external websites, services, or networked CLIs, including posting, editing, deleting, publishing, deploying, or sending through GitHub, Slack, Confluence, Linear, and their APIs. An explicit order must be represented by a supervisor-issued capability; never infer authorization from task text. No external mutation capability is issued for this run, so report a blocked mutation without performing it.';
 export const PUSH_CAPABILITY_CONTRACT = 'Supervisor-issued capability: Jeffrey explicitly instructed this current turn to commit and/or push. You may create the corresponding local commit and run exactly the corresponding `git push` for this workspace. This does not authorize pull/fetch, creating or merging pull requests, posting comments, changing issues, publishing artifacts, deployments, or any other external action.';
 export const RUNNER_SYSTEM_CONTRACT = `Non-interactive: use tools directly; no permission prompts or dialogs exist to approve. If access is missing, name the exact missing integration/credential and continue with what's possible.
 
@@ -453,8 +452,6 @@ export interface AgentUsage {
   cacheCreationInputTokens: number | null;
   cacheReadInputTokens: number | null;
   outputTokens: number | null;
-  estimatedCostUsd: number | null;
-  costSource: 'provider' | 'estimated' | null;
 }
 interface AgentCommandResult { output: string; usage: AgentUsage; sessionId?: string | null; }
 
@@ -472,7 +469,7 @@ function numberAt(record: Record<string, unknown>, ...keys: string[]): number | 
  * (text, thinking, and tool use) while retaining the same request/message id.
  * Those replicas must be counted once; distinct provider responses are summed.
  */
-interface UsageSample { inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null; cumulative: boolean; costUsd: number | null; sampleId: string | null }
+interface UsageSample { inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null; cumulative: boolean; sampleId: string | null }
 
 function usageFromEvent(agent: AgentRun['agent'], event: unknown): UsageSample | null {
   if (!event || typeof event !== 'object') return null;
@@ -490,21 +487,18 @@ function usageFromEvent(agent: AgentRun['agent'], event: unknown): UsageSample |
     // Codex does not report cache writes separately. Keep this null instead of
     // inventing a split; the meter will use the provider's reported fields.
     const inputTokens = reportedInputTokens === null ? null : Math.max(0, reportedInputTokens - (cacheReadInputTokens ?? 0));
-    return inputTokens === null && outputTokens === null ? null : { inputTokens, cacheCreationInputTokens: null, cacheReadInputTokens, outputTokens, cumulative: true, costUsd: null, sampleId: null };
+    return inputTokens === null && outputTokens === null ? null : { inputTokens, cacheCreationInputTokens: null, cacheReadInputTokens, outputTokens, cumulative: true, sampleId: null };
   }
-  // Claude's terminal `result` event is authoritative: it carries cumulative
-  // usage for the whole invocation (subagents included) plus the provider's own
-  // billed total. Preferring it removes all guesswork from the stored cost.
+  // Claude's terminal `result` event is authoritative for cumulative usage.
   if (record.type === 'result') {
-    const total = numberAt(record, 'total_cost_usd', 'totalCostUsd');
     const usage = record.usage as Record<string, unknown> | undefined;
     const outputTokens = usage ? numberAt(usage, 'output_tokens', 'outputTokens') : null;
     const rawInput = usage ? numberAt(usage, 'input_tokens', 'inputTokens') : null;
     const cacheCreationInputTokens = numberAt(usage ?? {}, 'cache_creation_input_tokens', 'cacheCreationInputTokens');
     const cacheReadInputTokens = numberAt(usage ?? {}, 'cache_read_input_tokens', 'cacheReadInputTokens');
     const inputTokens = rawInput;
-    if (inputTokens === null && outputTokens === null && total === null) return null;
-    return { inputTokens, cacheCreationInputTokens, cacheReadInputTokens, outputTokens, cumulative: true, costUsd: total, sampleId: null };
+    if (inputTokens === null && outputTokens === null) return null;
+    return { inputTokens, cacheCreationInputTokens, cacheReadInputTokens, outputTokens, cumulative: true, sampleId: null };
   }
   const usage = record.type === 'assistant'
     ? ((record.message as Record<string, unknown> | undefined)?.usage as Record<string, unknown> | undefined)
@@ -519,7 +513,7 @@ function usageFromEvent(agent: AgentRun['agent'], event: unknown): UsageSample |
   const requestId = typeof record.request_id === 'string' ? record.request_id
     : typeof record.requestId === 'string' ? record.requestId
       : typeof message?.id === 'string' ? message.id : null;
-  return input === null && outputTokens === null ? null : { inputTokens: input, cacheCreationInputTokens, cacheReadInputTokens, outputTokens, cumulative: false, costUsd: null, sampleId: requestId };
+  return input === null && outputTokens === null ? null : { inputTokens: input, cacheCreationInputTokens, cacheReadInputTokens, outputTokens, cumulative: false, sampleId: requestId };
 }
 
 export function compactPromptSection(value: string, budget: number): string {
@@ -528,23 +522,6 @@ export function compactPromptSection(value: string, budget: number): string {
   const tailLength = Math.floor(budget * 0.25);
   const omitted = Math.max(0, value.length - headLength - tailLength);
   return `${value.slice(0, headLength)}\n\n[… ${omitted.toLocaleString()} characters compacted for this turn …]\n\n${value.slice(-tailLength)}`;
-}
-
-/**
- * Pricing resolves per model (env override first, then the built-in list-price
- * table in `model-pricing.ts`). Keyed by agent alone it was wrong by up to ~30x
- * across the tiers Workbench routes to, and unset in practice, so every run
- * stored a null cost.
- */
-export function estimateUsageCost(
-  agent: AgentRun['agent'],
-  model: string | null,
-  inputTokens: number | null,
-  outputTokens: number | null,
-  cacheCreationInputTokens?: number | null,
-  cacheReadInputTokens?: number | null,
-): number | null {
-  return estimateModelCost(agent, model, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens);
 }
 
 export function selectExecutionProfile(item: WorkItem, run: Pick<AgentRun, 'kind' | 'instructions'>): ExecutionProfile {
@@ -631,7 +608,7 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
     // --mcp-config/--strict-mcp-config scope every run to the one MCP server it
     // actually needs, instead of inheriting Jeffrey's full personal config
     // (atlassian, linear, the figma plugin). Codex's `exec --ephemeral` never
-    // carried that baggage; this closes the gap for the trivial per-turn cost.
+    // carried that baggage; this closes the gap for the trivial per-turn work.
     // --autocompact caps the real driver of the worst runs (up to 13M cached
     // tokens on a single ~10-minute, many-tool-call run): without a bound the CLI lets a
     // single run's conversation grow unpruned, so every later turn re-sends and
@@ -644,7 +621,7 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
     // Coding runs (kind === 'execute') resume the conversation's prior Claude
     // session instead of starting cold, so implementation work keeps its live
     // context across turns; --autocompact stays unconditional either way.
-    args: ['-p', '--permission-mode', 'bypassPermissions', '--no-chrome', '--disallowedTools', readOnly ? 'Task,WebFetch,WebSearch,Edit,Write,NotebookEdit' : 'Task,WebFetch,WebSearch', '--append-system-prompt', RUNNER_SYSTEM_CONTRACT, '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, ...(resumeSessionId ? ['--resume', resumeSessionId] : []), '--disable-slash-commands', '--autocompact', '100k', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
+    args: ['-p', '--permission-mode', 'bypassPermissions', '--no-chrome', '--disallowedTools', readOnly ? 'Task,Edit,Write,NotebookEdit' : 'Task', '--append-system-prompt', RUNNER_SYSTEM_CONTRACT, '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, ...(resumeSessionId ? ['--resume', resumeSessionId] : []), '--disable-slash-commands', '--autocompact', '100k', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
   };
 }
 
@@ -939,21 +916,13 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
       if (text) finalOutput = text;
     };
     const eventContext: AgentEventContext = { subagents: new Map() };
-    const runModel = modelOverride ?? modelFor(agent, profile);
     let reportedUsage: { inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null } = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
-    // Set only by the provider's own billed total (Claude `result.total_cost_usd`).
-    // When present it wins over any rate-table estimate.
-    let providerCostUsd: number | null = null;
     let estimatedOutputTokens = 0;
     let lastReportedUsage = '';
     // See UsageSample: `--forward-subagent-text` can surface the same provider
-    // response more than once. Account for one billed request, never its
+    // response more than once. Account for one provider request, never its
     // presentation replicas, before applying a circuit breaker.
     const seenUsageSamples = new Set<string>();
-    const costFor = (inputTokens: number | null, outputTokens: number | null, cacheCreationInputTokens: number | null, cacheReadInputTokens: number | null): number | null =>
-      providerCostUsd ?? estimateUsageCost(agent, runModel, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens);
-    const costSource = (inputTokens: number | null, outputTokens: number | null, cacheCreationInputTokens: number | null, cacheReadInputTokens: number | null): AgentUsage['costSource'] =>
-      providerCostUsd !== null ? 'provider' : estimateUsageCost(agent, runModel, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens) === null ? null : 'estimated';
     const emitLiveUsage = () => {
       const liveUsage = {
         inputTokens: reportedUsage.inputTokens,
@@ -961,13 +930,12 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
         cacheReadInputTokens: reportedUsage.cacheReadInputTokens,
         outputTokens: Math.max(reportedUsage.outputTokens ?? 0, estimatedOutputTokens) || null,
       };
-      const signature = `${liveUsage.inputTokens ?? ''}:${liveUsage.cacheCreationInputTokens ?? ''}:${liveUsage.cacheReadInputTokens ?? ''}:${liveUsage.outputTokens ?? ''}:${providerCostUsd ?? ''}`;
+      const signature = `${liveUsage.inputTokens ?? ''}:${liveUsage.cacheCreationInputTokens ?? ''}:${liveUsage.cacheReadInputTokens ?? ''}:${liveUsage.outputTokens ?? ''}`;
       if (signature === lastReportedUsage) return;
       lastReportedUsage = signature;
-      onUsage?.({ ...liveUsage, estimatedCostUsd: costFor(liveUsage.inputTokens, liveUsage.outputTokens, liveUsage.cacheCreationInputTokens, liveUsage.cacheReadInputTokens), costSource: costSource(liveUsage.inputTokens, liveUsage.outputTokens, liveUsage.cacheCreationInputTokens, liveUsage.cacheReadInputTokens) }, agent);
+      onUsage?.(liveUsage, agent);
     };
     const reportUsage = (usage: UsageSample) => {
-      if (usage.costUsd !== null) providerCostUsd = usage.costUsd;
       if (usage.cumulative) {
         // A cumulative event supersedes accumulated per-message samples, but must
         // not erase a count it simply did not carry.
@@ -1100,7 +1068,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
       else if (code === 0 && !terminalError) {
         const output = finalOutput.trim() || progress.trim() || stdout.trim();
         const outputTokens = reportedUsage.outputTokens ?? (estimatedOutputTokens || null);
-        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens, estimatedCostUsd: costFor(reportedUsage.inputTokens, outputTokens, reportedUsage.cacheCreationInputTokens, reportedUsage.cacheReadInputTokens), costSource: costSource(reportedUsage.inputTokens, outputTokens, reportedUsage.cacheCreationInputTokens, reportedUsage.cacheReadInputTokens) }, sessionId: eventContext.sessionId ?? null });
+        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens }, sessionId: eventContext.sessionId ?? null });
       }
       else {
         const providerDiagnostic = stderr.trim() || terminalError || finalOutput.trim() || stdout.trim();
@@ -1365,7 +1333,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [fallback]);
       repository.addActivity(item.id, 'system', 'agent_fallback', describeAgentFallback({ from: run.agent, to: fallback, model: modelFor(fallback, profile), reason }));
     }, profile, (usage) => {
-      const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
+      const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
       repository.updateRun(run.id, telemetry);
       if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
       repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, run.agent, 'usage', telemetry);
@@ -1386,7 +1354,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         repository.updateRun(run.id, { output: partialOutput });
         if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
       }, controller.signal, undefined, profile, (usage) => {
-        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
+        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
         repository.updateRun(run.id, telemetry);
         if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
         repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, 'codex', 'usage', telemetry);
@@ -1403,7 +1371,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [result.agent]);
     }
     const { output } = result;
-    const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, estimatedCostUsd: result.usage.estimatedCostUsd, costSource: result.usage.costSource, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
+    const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
     let executionPlan: { summary: string; tasks: Array<{ title: string; description: string; workspacePath: string | null }> } | null = null;
     if (run.instructions.includes('WORKBENCH_DECOMPOSITION')) {
       const match = output.match(/<workbench-plan>([\s\S]*?)<\/workbench-plan>/);

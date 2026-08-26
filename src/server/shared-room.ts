@@ -718,7 +718,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
         // as soon as the same live session exposes turn/steer.
         void deliverPendingSharedInterjections(repository, messageId);
       }, (event) => repository.addAgentStreamEvents(messageId, runId ?? null, [event]), linkedConversation?.codexThreadId, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE)
-        .then(({ output, threadId }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage: { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null }, fallbackFrom: null, fallbackReason: null }))
+        .then(({ output, threadId }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage: { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null }, fallbackFrom: null, fallbackReason: null }))
       : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       if (controller.signal.aborted) return;
       updateLiveSharedBody(repository, messageId, partial);
@@ -727,7 +727,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       repository.updateSharedMessage(messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: agent, fallbackReason: reason.slice(0, 500) });
       if (runId) repository.updateRun(runId, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: agent, fallbackReason: reason.slice(0, 500) });
     }, profile, (usage) => {
-      const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
+      const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
       repository.updateSharedMessage(messageId, telemetry);
       if (runId) repository.updateRun(runId, telemetry);
       if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'usage', telemetry);
@@ -746,7 +746,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
         updateLiveSharedBody(repository, messageId, partial);
         if (runId) repository.updateRun(runId, { output: partial });
       }, controller.signal, undefined, profile, (usage) => {
-        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
+        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
         repository.updateSharedMessage(messageId, telemetry);
         if (runId) repository.updateRun(runId, telemetry);
       }, (entries) => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
@@ -768,7 +768,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
         updateLiveSharedBody(repository, messageId, partial);
         if (runId) repository.updateRun(runId, { output: partial });
       }, controller.signal, undefined, profile, (usage) => {
-        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource };
+        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
         repository.updateSharedMessage(messageId, telemetry);
         if (runId) repository.updateRun(runId, telemetry);
       }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, undefined, undefined, true);
@@ -777,7 +777,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       if (runId) repository.updateRun(runId, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
     }
     if (controller.signal.aborted) throw new Error('Agent run canceled.');
-    const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, estimatedCostUsd: result.usage.estimatedCostUsd, costSource: result.usage.costSource, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
+    const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
     if (hasUntrackedContinuationClaim(result.output)) {
       const error = 'Agent claimed background or later-reported work. Workbench cannot track detached actions; the response was not marked finished.';
       repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'failed', error, ...telemetry });
@@ -919,11 +919,11 @@ async function synthesizeSharedTurn(repository: WorkItemRepository, conversation
   repository.updateSharedMessage(message.id, { model: modelFor(agent, profile), executionProfile: profile });
   await runSharedBackgroundJob(repository, message.id, async (signal, onProgress) => {
     const result = await runAgentCommandWithFallback(agent, process.cwd(), source.prompt, onProgress, signal, undefined, profile, (usage) => {
-      repository.updateSharedMessage(message.id, { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens, estimatedCostUsd: usage.estimatedCostUsd, costSource: usage.costSource });
+      repository.updateSharedMessage(message.id, { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens });
     }, undefined, undefined, undefined, undefined, undefined, undefined, true);
     repository.updateSharedMessage(message.id, {
       model: modelFor(result.agent, profile), inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens,
-      estimatedCostUsd: result.usage.estimatedCostUsd, costSource: result.usage.costSource, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason,
+      fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason,
     });
     return `Synthesis:\n${result.output}`;
   });

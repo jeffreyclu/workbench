@@ -7,7 +7,6 @@ describe('replyBadge', () => {
       author: 'codex',
       model: 'gpt-5.6',
       accountProfile: 'default',
-      estimatedCostUsd: 0.001,
       inputTokens: 120,
       outputTokens: 340,
       createdAt: '2026-08-25T12:00:00.000Z',
@@ -16,7 +15,7 @@ describe('replyBadge', () => {
       fallbackFrom: null,
       fallbackReason: null,
       cacheReadInputTokens: null,
-    })).toBe('Codex · gpt-5.6 (standard) · default · $0.0010 · 120 in · 340 out · 1.5s');
+    })).toBe('Codex · gpt-5.6 (standard) · default · 120 in · 340 out · 1.5s');
   });
 
   it('makes missing model and usage data explicit while defaulting a legacy profile', () => {
@@ -24,7 +23,6 @@ describe('replyBadge', () => {
       author: 'claude',
       model: null,
       accountProfile: null,
-      estimatedCostUsd: null,
       inputTokens: null,
       outputTokens: null,
       createdAt: '2026-08-25T12:00:00.000Z',
@@ -41,7 +39,6 @@ describe('replyBadge', () => {
       author: 'codex',
       model: 'gpt-5.6',
       accountProfile: 'default',
-      estimatedCostUsd: 0.001,
       inputTokens: 120,
       outputTokens: 340,
       createdAt: '2026-08-25T12:00:00.000Z',
@@ -50,6 +47,6 @@ describe('replyBadge', () => {
       fallbackFrom: 'claude',
       fallbackReason: 'rate limited',
       cacheReadInputTokens: 5_400,
-    })).toBe('Codex · gpt-5.6 (economy) · default · $0.0010 · 120 in · 340 out · 5.4K cached · 1.5s · fallback from claude (rate limited)');
+    })).toBe('Codex · gpt-5.6 (economy) · default · 120 in · 340 out · 5.4K cached · 1.5s · fallback from claude (rate limited)');
   });
 });

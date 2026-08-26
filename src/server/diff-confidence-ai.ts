@@ -5,7 +5,15 @@ export type DiffConfidenceBlock = { key: string; lines: string[] };
 export type DiffConfidenceAssessment = { confidence: number; reasoning: string };
 
 const SYSTEM_PROMPT = `You are reviewing a code diff. For every supplied changed block, estimate how likely the block is to be correct in its local context. Return only minified JSON in this exact form: {"assessments":{"block-key":{"confidence":0,"reasoning":"brief visible-code rationale"}}}. Every supplied key must appear exactly once. Confidence is an integer from 0 to 100 and reasoning is a concise sentence. This is an AI assessment, not a claim of calibrated probability. Base it on visible code only; do not invent context.`;
-const cache = new Map<string, Promise<Record<string, DiffConfidenceAssessment>>>();
+
+/** Keyed by block content hash, not block key or batch identity, so the same
+ * change surfaced from a different conversation window (or a different mix of
+ * sibling blocks) reads the cached score instead of re-spawning the model. */
+const cache = new Map<string, Promise<DiffConfidenceAssessment>>();
+
+function hashBlock(block: DiffConfidenceBlock): string {
+  return createHash('sha256').update(JSON.stringify(block.lines)).digest('hex');
+}
 
 export function parseDiffConfidenceAssessment(output: string, keys: string[]): Record<string, DiffConfidenceAssessment> {
   let candidate = output;
@@ -51,12 +59,28 @@ function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, Di
   });
 }
 
+/** Reads the per-block cache first; only blocks whose content hash misses are
+ * sent to the model, in a single batched spawn, and each result is cached
+ * individually so future requests — from any conversation window — can reuse
+ * it regardless of what else is batched alongside it. */
 export function assessDiffBlocks(blocks: DiffConfidenceBlock[]): Promise<Record<string, DiffConfidenceAssessment>> {
-  const key = createHash('sha256').update(JSON.stringify(blocks)).digest('hex');
-  const existing = cache.get(key);
-  if (existing) return existing;
-  const assessment = runAssessment(blocks);
-  cache.set(key, assessment);
-  void assessment.catch(() => cache.delete(key));
-  return assessment;
+  const hashes = new Map(blocks.map((block) => [block.key, hashBlock(block)] as const));
+  const uncached = blocks.filter((block) => !cache.has(hashes.get(block.key)!));
+  const entries = new Map<string, Promise<DiffConfidenceAssessment>>();
+  for (const block of blocks) {
+    const hash = hashes.get(block.key)!;
+    if (cache.has(hash)) entries.set(block.key, cache.get(hash)!);
+  }
+  if (uncached.length > 0) {
+    const batch = runAssessment(uncached);
+    for (const block of uncached) {
+      const hash = hashes.get(block.key)!;
+      const single = batch.then((result) => result[block.key]);
+      cache.set(hash, single);
+      void single.catch(() => cache.delete(hash));
+      entries.set(block.key, single);
+    }
+  }
+  return Promise.all([...entries].map(([blockKey, assessment]) => assessment.then((value) => [blockKey, value] as const)))
+    .then((pairs) => Object.fromEntries(pairs));
 }

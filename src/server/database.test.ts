@@ -65,6 +65,7 @@ const EXPECTED_MIGRATIONS = [
   '052_workspace_diff_snapshots',
   '053_shared_conversation_codex_thread_id',
   '054_agent_run_diagnostics',
+  '055_shared_conversation_pinning',
 ];
 
 describe('openDatabase', () => {
@@ -484,6 +485,22 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(agent_run_diagnostics)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toEqual(expect.arrayContaining(['run_id', 'message_id', 'agent', 'kind', 'detail_json', 'created_at']));
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_agent_run_diagnostics_run_created'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds persistent conversation pins on upgrade from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.prepare('DROP INDEX idx_shared_conversations_pinned_updated').run();
+    current.prepare("DELETE FROM schema_migrations WHERE id = '055_shared_conversation_pinning'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toContain('pinned');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '055_shared_conversation_pinning'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_shared_conversations_pinned_updated'").get()).toBeTruthy();
     upgraded.close();
   });
 
