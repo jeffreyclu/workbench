@@ -1,5 +1,17 @@
 ## Writer context
 
+### Never run a full test suite locally in a Writer repository **(always)**
+
+**Never run the full local test suite in any Writer repository.** It can exhaust Jeffrey's
+computer and take Workbench down with it. This includes broad commands such as `npm test`,
+`pnpm test`, unscoped `vitest`, `jest`, or any repository-wide test command.
+
+Run only the directly relevant test file or files in isolation, using an explicit path or
+test-file filter. If targeted tests are not practical, report that limitation rather than
+substituting a full-suite run.
+
+Source: Jeffrey, 2026-08-25. Absolute safety rule.
+
 ### No pluto in writer context **(always)**
 
 *Never reference PLUTO in anything related to Writer work*
@@ -178,3 +190,18 @@ session — a 2026-08-25 session confirmed no MCP integration exists for either 
 against Confluence redirects to an Atlassian SSO login it cannot complete, so verify claims of
 "researched in Confluence/Slack" against what a given session could actually reach before trusting
 them.
+
+### Never run the full test suite locally in a Writer repo **(always)**
+
+*Running a Writer repo's full local test suite overloads Jeffrey's machine and takes Workbench down with it*
+
+Jeffrey stated this explicitly and forcefully on 2026-08-25: never run a full test suite locally
+when working in any Writer repository. The full suite is heavy enough to overload his machine, and
+because Workbench itself runs on that same machine, an overloaded machine takes Workbench down too —
+this is a shared-infrastructure risk, not just a slow command.
+
+Only run individual test files in isolation (e.g. target a specific `*.test.ts` file or a scoped
+`-t`/pattern filter), never the whole-suite command (`npm test`, `npx vitest run` with no path,
+`pnpm test`, etc.) in a Writer repo. This is also recorded as a core Workbench operating rule in
+`shared-memory/workbench-operating-practices.md` since it applies to any agent working in this
+shared environment, not just Writer-specific work.

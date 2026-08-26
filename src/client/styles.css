@@ -395,12 +395,18 @@ nav { display: grid; gap: 3px; }
 .github-diff-error { padding-bottom: 2px; }.github-diff-error strong { color: #e1a68f; }.github-diff-error p { margin: 5px 0 11px; }
 .github-diff-skeleton { display: grid; grid-template-columns: minmax(160px, 28%) minmax(0, 1fr); gap: 14px; padding: 12px; border: 1px solid #302f2b; border-radius: 8px; }
 @media (max-width: 640px) {
-  .github-diff > header { flex-wrap: wrap; }
-  .github-diff > header > a { min-height: 44px; }
-  .github-diff-layout, .github-diff-skeleton { grid-template-columns: minmax(0, 1fr); }
-  .github-diff nav { border-right: 0; border-bottom: 1px solid #302f2b; }
-  .github-diff nav > div { display: flex; max-height: 150px; overflow-x: auto; overflow-y: hidden; }
-  .github-diff nav button { flex: 0 0 min(260px, 78vw); min-height: 44px; }
+  .workspace-diff > header, .github-diff > header { flex-wrap: wrap; gap: 10px; }
+  .workspace-diff > header > .workspace-diff-refresh, .github-diff > header > a { min-height: 44px; }
+  .workspace-diff-layout, .github-diff-layout, .workspace-diff-skeleton, .github-diff-skeleton { grid-template-columns: minmax(0, 1fr); }
+  .diff-file-list { border-right: 0; border-bottom: 1px solid #302f2b; }
+  .diff-file-list > span { padding-block: 8px; }
+  .diff-file-list > div { display: flex; max-height: 68px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
+  .diff-file-list button { flex: 0 0 min(220px, 68vw); min-height: 52px; padding: 7px 10px; }
+  .workspace-diff-file, .github-diff-file { min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }
+  .workspace-diff-file > header, .github-diff-file > header { min-height: 44px; padding-inline: 10px; }
+  .workspace-diff-file pre, .github-diff-file pre { font-size: 10px; }
+  .diff-line { grid-template-columns: 34px 34px minmax(0, 1fr); }
+  .diff-line > span { padding-inline: 6px; }
 }
 .task-collapsible { border-top: 1px solid #272724; }
 .task-collapsible > summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; color: #96958e; cursor: pointer; list-style: none; font: 700 10px 'DM Mono'; letter-spacing: .12em; text-transform: uppercase; }

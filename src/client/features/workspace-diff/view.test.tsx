@@ -34,5 +34,6 @@ describe('WorkspaceDiffView', () => {
     expect(await screen.findByRole('button', { name: 'Refresh changes' })).toHaveClass('workspace-diff-refresh-pending');
     expect(screen.getByText('+after')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /src\/old\.ts/ })).toBeInTheDocument();
+    expect(document.querySelector('.diff-review-layout > .diff-file-list')).toBeInTheDocument();
   });
 });

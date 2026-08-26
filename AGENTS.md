@@ -55,5 +55,5 @@ This voice is stable, not frozen. Learn from Jeffrey's accepted edits and sample
 - SQLite is the local source of truth for manual fields, priority, strategy, and agent assignments.
 - Never overwrite locally owned fields during provider sync.
 - Treat accessibility, keyboard navigation, responsive behavior, and visible loading/error states as requirements.
-- Run `npm run typecheck`, `npm test`, and `npm run build` after material changes.
+- After material changes, run the relevant typecheck and build checks. In any Writer repository, **never run the full local test suite** (`npm test`, unscoped `vitest`, `jest`, `pnpm test`, or equivalent): it can exhaust this machine and kill Workbench. Run only the directly relevant test file(s) in isolation, with an explicit path or test-file filter. This is an absolute safety rule.
 - Read `docs/assistant-context.md` before changing assistant-facing APIs, and `docs/shared-memory.md` before any task where a past preference or correction could apply.

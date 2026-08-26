@@ -434,3 +434,15 @@ success/failure once the queue is empty. While touching `system-router.ts` also 
 `ERR_HTTP_HEADERS_SENT` on a second `.json()` call in one handler; it had not yet been hit in
 practice because the first call already ends the response before the second executes, but it was a
 live latent bug).
+
+### Never run a Writer repo's full test suite locally **(core rule, always)**
+
+Jeffrey's explicit, forceful instruction (2026-08-25): when working in any Writer repository, never
+run the full local test suite. Doing so is heavy enough to overload his machine, and Workbench runs
+on that same machine — an overloaded machine takes Workbench down with it, so this is a
+shared-infrastructure risk, not just a slow command.
+
+Only run individual test files in isolation (target a specific test file or a scoped `-t`/pattern
+filter). Never invoke the whole-suite command (`npm test`, `npx vitest run` with no path/filter,
+`pnpm test`, etc.) in a Writer repo. This applies to every agent working in this shared environment.
+Also recorded in `shared-memory/writer-context.md` since it is specifically about Writer repos.
