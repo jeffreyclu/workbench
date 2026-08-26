@@ -194,15 +194,18 @@ export class WorkbenchAdminService {
     return { roots };
   }
 
-  async authorizeSource(input: { provider: 'confluence' | 'slack' | 'figma' | 'gmail'; mode: 'remote' | 'managed'; serverUrl?: string }): Promise<ActionFailure | { url: string }> {
+  async authorizeSource(input: { provider: 'confluence' | 'slack' | 'figma' | 'grafana' | 'gmail'; mode: 'remote' | 'managed'; serverUrl?: string }): Promise<ActionFailure | { url: string }> {
     if (input.mode === 'managed') {
-      if (input.provider !== 'figma' && input.provider !== 'confluence') return { status: 400, body: { error: 'Managed authorization is available only for Figma and Atlassian.' } };
-      const managedProvider = input.provider === 'confluence' ? 'atlassian' : 'figma';
+      if (input.provider !== 'figma' && input.provider !== 'confluence' && input.provider !== 'grafana') return { status: 400, body: { error: 'Managed authorization is available only for Figma, Atlassian, and Grafana.' } };
+      const managedProvider = input.provider === 'confluence' ? 'atlassian' : input.provider;
       const login = await startManagedMcpLogin(managedProvider);
-      const stored = input.provider === 'figma' ? { key: 'figma' as const, label: 'Figma MCP · Codex' } : { key: 'confluence' as const, label: 'Atlassian MCP · Codex' };
+      const stored = input.provider === 'figma' ? { key: 'figma' as const, label: 'Figma MCP · Codex' }
+        : input.provider === 'grafana' ? { key: 'grafana' as const, label: 'Grafana Cloud MCP · Codex' }
+          : { key: 'confluence' as const, label: 'Atlassian MCP · Codex' };
       void login.completion.then(() => this.repository.setSourceConnection(stored.key, stored.label, { mode: 'managed' })).catch(() => undefined);
       return { url: login.url };
     }
+    if (input.provider === 'grafana') return { status: 400, body: { error: 'Grafana Cloud uses the managed Codex authorization flow.' } };
     const defaultUrl = input.provider === 'confluence' ? 'https://mcp.atlassian.com/v1/mcp/authv2'
       : input.provider === 'slack' ? 'https://mcp.slack.com/mcp'
         : input.provider === 'figma' ? 'https://mcp.figma.com/mcp' : null;

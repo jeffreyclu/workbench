@@ -35,10 +35,10 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
   });
   const mcpConnect = useMutation({
     mutationFn: async () => {
-      // Figma and Atlassian authorize through Codex's own loopback OAuth, which
+      // Figma, Atlassian, and Grafana authorize through Codex's own loopback OAuth, which
       // opens the provider's browser window itself. Workbench keeps the returned
       // URL so it can be opened manually if that window never appears.
-      if (provider === 'figma' || provider === 'atlassian') {
+      if (provider === 'figma' || provider === 'atlassian' || provider === 'grafana') {
         if (reconnecting && provider === 'atlassian') await sourceData.disconnect('confluence');
         const { url } = await sourceData.startManagedMcpOAuth(provider);
         return url;
@@ -71,7 +71,7 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
   }, [queryClient]);
   const connected = connection.state === 'connected';
   useEffect(() => {
-    if ((provider === 'figma' || provider === 'atlassian') && connected) setOpen(false);
+    if ((provider === 'figma' || provider === 'atlassian' || provider === 'grafana') && connected) setOpen(false);
   }, [connected, provider]);
   const disabled = connection.state === 'disabled';
   const canAuthorize = canAuthorizeSource(provider);

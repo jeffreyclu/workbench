@@ -3,7 +3,7 @@ import { WorkItemRepository } from './repository.js';
 import { scanSlackMcp } from './slack-mcp.js';
 import { isMcpReauthenticationError, mcpAuthenticationMessage, scanRemoteMcp } from './remote-mcp.js';
 import { scanSlackWithCodex } from './slack-codex.js';
-import { scanFigmaRootsWithCodex, searchAtlassianWithCodex } from './managed-connector.js';
+import { scanFigmaRootsWithCodex, searchAtlassianWithCodex, searchGrafanaWithCodex } from './managed-connector.js';
 import { assertApprovedMcpServer, createOutboundFetch, type OutboundPolicyName } from './outbound-policy.js';
 
 export interface SourceSignal { provider: string; title: string; summary: string; url: string | null; occurredAt: string | null; }
@@ -69,13 +69,13 @@ function figmaRoots(settings: Record<string, string>): string[] {
 
 export function scanSource(provider: SourceProvider, settings: Record<string, string>, fetchForPolicy: OutboundFetchFactory = createOutboundFetch): Promise<SourceSignal[]> {
   if (provider === 'gmail' && settings.serverUrl) return Promise.reject(assertApprovedMcpServer('gmail', settings.serverUrl));
-  if ((provider === 'figma' || provider === 'confluence') && settings.mode === 'managed') {
+  if ((provider === 'figma' || provider === 'confluence' || provider === 'grafana') && settings.mode === 'managed') {
     if (provider === 'figma') {
       const roots = figmaRoots(settings);
       if (!roots.length) throw new Error('Figma Discovery needs at least one scoped file, page, or node. Add Figma scope in Sources.');
       return scanFigmaRootsWithCodex(roots);
     }
-    return searchAtlassianWithCodex(MANAGED_SCAN_QUERY);
+    return provider === 'grafana' ? searchGrafanaWithCodex(MANAGED_SCAN_QUERY) : searchAtlassianWithCodex(MANAGED_SCAN_QUERY);
   }
   if ((provider === 'slack' || provider === 'figma' || provider === 'confluence') && settings.serverUrl) return scanRemoteMcp(provider, settings);
   const scanner = scanners[provider];

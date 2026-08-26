@@ -54,7 +54,7 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
       onCreated(item);
     },
   });
-  const searchedSources: BrokerSourceId[] = ['linear', 'github', 'atlassian', 'slack'];
+  const searchedSources: BrokerSourceId[] = ['linear', 'github', 'atlassian', 'grafana', 'slack'];
   const sourceSearches = useQueries({
     queries: searchedSources.map((source) => ({
       queryKey: ['source-search', source, submittedSourceQuery],

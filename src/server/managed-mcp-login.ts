@@ -6,10 +6,35 @@ import { spawn } from 'node:child_process';
  * the reason it survives the ngrok domain block that killed Workbench's own
  * remote-MCP broker.
  */
-export type ManagedMcpProvider = 'figma' | 'atlassian';
+export type ManagedMcpProvider = 'figma' | 'atlassian' | 'grafana';
 
-export function startManagedMcpLogin(provider: ManagedMcpProvider): Promise<{ url: string; completion: Promise<void> }> {
+const managedServerUrls: Partial<Record<ManagedMcpProvider, string>> = {
+  grafana: 'https://mcp.grafana.com/mcp',
+};
+
+function runCodex(command: string, args: string[]): Promise<{ code: number; output: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    child.once('error', reject);
+    child.once('exit', (code) => resolve({ code: code ?? 1, output: output.trim() }));
+  });
+}
+
+async function ensureManagedServer(command: string, provider: ManagedMcpProvider) {
+  const url = managedServerUrls[provider];
+  if (!url) return;
+  const existing = await runCodex(command, ['mcp', 'get', provider]);
+  if (existing.code === 0) return;
+  const added = await runCodex(command, ['mcp', 'add', provider, '--url', url]);
+  if (added.code !== 0) throw new Error(added.output || `Could not add the ${provider} MCP server to Codex.`);
+}
+
+export async function startManagedMcpLogin(provider: ManagedMcpProvider): Promise<{ url: string; completion: Promise<void> }> {
   const command = process.env.CODEX_BIN?.trim() || 'codex';
+  await ensureManagedServer(command, provider);
   const child = spawn(command, ['mcp', 'login', provider], { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   let settled = false;

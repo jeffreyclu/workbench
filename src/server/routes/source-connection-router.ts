@@ -29,8 +29,8 @@ export function createSourceConnectionRouter({ repository, admin }: RouteContext
   });
   router.post('/api/source-connections/:provider/managed/oauth/start', async (request, response, next) => {
     try {
-      const provider = z.enum(['figma', 'atlassian']).parse(request.params.provider);
-      admin.sendAction(response, await admin.authorizeSource({ provider: provider === 'atlassian' ? 'confluence' : 'figma', mode: 'managed' }), 200);
+      const provider = z.enum(['figma', 'atlassian', 'grafana']).parse(request.params.provider);
+      admin.sendAction(response, await admin.authorizeSource({ provider: provider === 'atlassian' ? 'confluence' : provider, mode: 'managed' }), 200);
     } catch (error) { next(error); }
   });
   router.get('/api/source-connections/:provider/mcp/oauth/callback', async (request, response) => {

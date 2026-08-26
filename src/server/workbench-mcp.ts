@@ -120,9 +120,9 @@ export interface WorkbenchAdminActions {
   runDiscoveryScan(): Promise<unknown>;
   promoteRuntime(conversationId: string): unknown;
   listSourceConnections(): unknown;
-  authorizeSource(input: { provider: 'confluence' | 'slack' | 'figma' | 'gmail'; mode: 'remote' | 'managed'; serverUrl?: string }): Promise<unknown>;
+  authorizeSource(input: { provider: 'confluence' | 'slack' | 'figma' | 'grafana' | 'gmail'; mode: 'remote' | 'managed'; serverUrl?: string }): Promise<unknown>;
   setFigmaScope(roots: string[]): unknown;
-  disconnectSource(provider: 'github' | 'slack' | 'figma' | 'confluence' | 'gmail', actor: 'codex' | 'claude'): unknown;
+  disconnectSource(provider: 'github' | 'slack' | 'figma' | 'confluence' | 'grafana' | 'gmail', actor: 'codex' | 'claude'): unknown;
   getLinearProvider(teamId?: string): Promise<unknown>;
   syncLinearProvider(): Promise<unknown>;
   configureLinearProvider(teamIds: string[], projectIds: string[]): unknown;

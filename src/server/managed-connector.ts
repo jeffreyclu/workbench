@@ -1,11 +1,12 @@
 import { runAgentCommand } from './agent-runner.js';
 import type { SourceSignal } from './source-scanner.js';
 
-type ManagedSearchProvider = 'figma' | 'confluence';
+type ManagedSearchProvider = 'figma' | 'confluence' | 'grafana';
 
 const DESCRIPTIONS: Record<ManagedSearchProvider, { label: string; connector: string; scope: string }> = {
   figma: { label: 'Figma', connector: 'Figma', scope: 'files, pages, components, or design nodes' },
   confluence: { label: 'Atlassian', connector: 'Atlassian', scope: 'Jira issues or Confluence pages' },
+  grafana: { label: 'Grafana', connector: 'Grafana', scope: 'dashboards, alerts, metrics, logs, or traces' },
 };
 
 /**
@@ -39,4 +40,8 @@ export function scanFigmaRootsWithCodex(roots: string[], signal?: AbortSignal): 
 
 export function searchAtlassianWithCodex(query: string, signal?: AbortSignal): Promise<SourceSignal[]> {
   return searchWithCodexConnector('confluence', query, signal);
+}
+
+export function searchGrafanaWithCodex(query: string, signal?: AbortSignal): Promise<SourceSignal[]> {
+  return searchWithCodexConnector('grafana', query, signal);
 }

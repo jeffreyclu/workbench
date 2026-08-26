@@ -878,6 +878,14 @@ describe('destructive operations soft-delete instead of hard-deleting', () => {
     expect(body.connections.find((connection) => connection.id === 'atlassian')?.state).toBe('connected');
   });
 
+  it('reports Grafana as connected once a managed Codex login is stored', async () => {
+    repository.setSourceConnection('grafana', 'Grafana Cloud MCP · Codex', { mode: 'managed' });
+
+    const response = await fetch(`${baseUrl}/api/source-connections`);
+    const body = (await response.json()) as { connections: Array<{ id: string; state: string }> };
+    expect(body.connections.find((connection) => connection.id === 'grafana')?.state).toBe('connected');
+  });
+
   it('persists Figma Discovery roots without replacing the managed connection settings', async () => {
     repository.setSourceConnection('figma', 'Figma MCP · Codex', { mode: 'managed' });
     const roots = ['https://www.figma.com/design/abc123/Workbench?node-id=1-2'];

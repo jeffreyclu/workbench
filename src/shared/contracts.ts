@@ -376,7 +376,7 @@ export interface GitHubPullRequestDiff {
   deletions: number;
 }
 
-export const sourceProviderSchema = z.enum(['github', 'slack', 'figma', 'confluence', 'gmail']);
+export const sourceProviderSchema = z.enum(['github', 'slack', 'figma', 'confluence', 'grafana', 'gmail']);
 export type SourceProvider = z.infer<typeof sourceProviderSchema>;
 export type SourceAuthMode = 'oauth' | 'api_key' | 'managed_externally';
 export type SourceConfigurationState = 'unconfigured' | 'authorizing' | 'connected' | 'reauth_required' | 'disabled';
@@ -423,7 +423,7 @@ export const bulkDiscoveryActionSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(200),
   action: z.enum(['convert', 'dismiss', 'snooze']),
 });
-export type BrokerSourceId = 'slack' | 'figma' | 'linear' | 'atlassian' | 'github' | 'google';
+export type BrokerSourceId = 'slack' | 'figma' | 'linear' | 'atlassian' | 'grafana' | 'github' | 'google';
 export type BrokerConnectionState = 'connected' | 'needs_auth' | 'reauth_required' | 'disabled' | 'error';
 export interface BrokerConnection {
   id: BrokerSourceId;
@@ -435,7 +435,7 @@ export interface BrokerConnection {
   configurable: boolean;
   lastError: string | null;
 }
-export const brokerSourceIdSchema = z.enum(['slack', 'figma', 'linear', 'atlassian', 'github', 'google']);
+export const brokerSourceIdSchema = z.enum(['slack', 'figma', 'linear', 'atlassian', 'grafana', 'github', 'google']);
 export const searchSourcesSchema = z.object({
   query: z.string().trim().min(2).max(2_000),
   sources: z.array(brokerSourceIdSchema).min(1).max(6),

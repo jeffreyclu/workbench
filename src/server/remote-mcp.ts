@@ -23,7 +23,9 @@ class WorkbenchOAuthProvider implements OAuthClientProvider {
   snapshot() { return this.stored; }
 }
 
-interface PendingMcp { provider: Exclude<SourceProvider, 'github'>; oauth: WorkbenchOAuthProvider; transport: StreamableHTTPClientTransport; client: Client; createdAt: number }
+type RemoteMcpProvider = Exclude<SourceProvider, 'github' | 'grafana'>;
+
+interface PendingMcp { provider: RemoteMcpProvider; oauth: WorkbenchOAuthProvider; transport: StreamableHTTPClientTransport; client: Client; createdAt: number }
 const pending = new Map<string, PendingMcp>();
 
 export function isMcpReauthenticationError(error: unknown): boolean {
@@ -36,7 +38,7 @@ export function mcpAuthenticationMessage(provider: SourceProvider): string {
   return `${name} authorization expired. Reconnect this source.`;
 }
 
-export async function startRemoteMcpOAuth(provider: PendingMcp['provider'], serverUrl: string, callbackBase: string): Promise<string> {
+export async function startRemoteMcpOAuth(provider: RemoteMcpProvider, serverUrl: string, callbackBase: string): Promise<string> {
   const approvedServerUrl = assertApprovedMcpServer(provider, serverUrl);
   const state = randomUUID();
   const stored: StoredOAuth = { serverUrl: approvedServerUrl.toString() };
@@ -52,7 +54,7 @@ export async function startRemoteMcpOAuth(provider: PendingMcp['provider'], serv
   return authorizationUrl.toString();
 }
 
-export async function finishRemoteMcpOAuth(provider: PendingMcp['provider'], code: string, state: string): Promise<StoredOAuth> {
+export async function finishRemoteMcpOAuth(provider: RemoteMcpProvider, code: string, state: string): Promise<StoredOAuth> {
   const entry = pending.get(state); pending.delete(state);
   if (!entry || entry.provider !== provider || Date.now() - entry.createdAt > 10 * 60_000) throw new Error('MCP authorization expired. Start the connection again.');
   await entry.transport.finishAuth(code);
@@ -66,7 +68,7 @@ export async function finishRemoteMcpOAuth(provider: PendingMcp['provider'], cod
   return entry.oauth.snapshot();
 }
 
-export async function scanRemoteMcp(provider: PendingMcp['provider'], settings: Record<string, unknown>, requestedQuery?: string): Promise<SourceSignal[]> {
+export async function scanRemoteMcp(provider: RemoteMcpProvider, settings: Record<string, unknown>, requestedQuery?: string): Promise<SourceSignal[]> {
   const stored = settings as unknown as StoredOAuth;
   if (!stored.serverUrl || !stored.tokens) throw new Error('MCP OAuth credentials are missing. Reconnect this source.');
   const oauth = new WorkbenchOAuthProvider('http://localhost/unused', stored);
