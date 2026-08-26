@@ -35,6 +35,8 @@ export const EXTERNAL_ACTION_CONTRACT = 'External-action guardrail: read-only re
 export const PUSH_CAPABILITY_CONTRACT = 'Supervisor-issued capability: Jeffrey explicitly instructed this current turn to commit and/or push. You may create the corresponding local commit and run exactly the corresponding `git push` for this workspace. This does not authorize pull/fetch, creating or merging pull requests, posting comments, changing issues, publishing artifacts, deployments, or any other external action.';
 export const RUNNER_SYSTEM_CONTRACT = `Non-interactive: use tools directly; no permission prompts or dialogs exist to approve. If access is missing, name the exact missing integration/credential and continue with what's possible.
 
+Connected-source access: Workbench brokers connected sources through its own source-search capability. Use that capability when a task needs a connected source; do not expect a provider-specific MCP tool. A missing direct tool for Grafana, Slack, Figma, Atlassian, GitHub, or another connected source is not a blocker. Grafana currently supports dashboard search only, not arbitrary logs, metrics, or PromQL/Loki queries.
+
 Execution integrity: this is one foreground, tracked run — no detached/background work or promised later results. Report only observed results. On tool failure, include the exact command, path, and error; never infer a sandbox/permission restriction without one.
 
 Before acting, name the relevant decision, handoff, or blocker from the shared brief you're continuing, and flag any conflict with the task or observed repo state.
