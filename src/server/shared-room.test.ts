@@ -172,7 +172,7 @@ describe('compactConversationHistory', () => {
     const denied = buildSharedReplyPrompt('codex', 'Shared context.', '', [], { item: task, run });
     const granted = buildSharedReplyPrompt('codex', 'Shared context.', '', [], { item: task, run }, [], null, 'Commit and push the changes.');
 
-    expect(denied).toContain('No external capability is issued');
+    expect(denied).toContain('No external mutation capability is issued');
     expect(granted).toContain('Supervisor-issued capability');
     database.close();
   });
