@@ -54,7 +54,7 @@ export function createConversationRouter({ repository, database, capabilities }:
       const workingDirectory = conversationWorkingDirectory(request.params.id);
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
       const diff = await getWorkspaceDiff(workingDirectory);
-      repository.captureWorkspaceDiffSnapshot({ conversationId: request.params.id }, diff);
+      if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot({ conversationId: request.params.id }, diff);
       response.json({ diff });
     } catch (error) { next(error); }
   });

@@ -2,5 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import { sourceData, sourceQueryKeys } from './data';
 
 export function useSourceConnections() {
-  return useQuery({ queryKey: sourceQueryKeys.connections, queryFn: sourceData.listConnections, refetchInterval: 2_000 });
+  // Connections change through explicit mutations and the shared realtime
+  // invalidation channel. Polling this dialog duplicates requests without
+  // making the server response more current.
+  return useQuery({ queryKey: sourceQueryKeys.connections, queryFn: sourceData.listConnections });
 }
