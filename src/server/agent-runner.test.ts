@@ -81,7 +81,8 @@ describe('classifyExecution', () => {
     const claude = commandFor('claude', '/tmp/project', 'economy').args;
     expect(codex).toEqual(expect.arrayContaining(['--ignore-user-config', '--sandbox', 'workspace-write']));
     expect(codex).not.toContain('--dangerously-bypass-approvals-and-sandbox');
-    expect(claude).toEqual(expect.arrayContaining(['--permission-mode', 'dontAsk', '--safe-mode', '--no-chrome', '--disallowedTools', 'Task,WebFetch,WebSearch']));
+    expect(claude).toEqual(expect.arrayContaining(['--permission-mode', 'dontAsk', '--no-chrome', '--disallowedTools', 'Task,WebFetch,WebSearch']));
+    expect(claude).not.toContain('--safe-mode');
     expect(claude).not.toContain('--dangerously-skip-permissions');
     expect(claude).toEqual(expect.arrayContaining(['--input-format', 'stream-json']));
     expect(claude).not.toContain('--forward-subagent-text');
