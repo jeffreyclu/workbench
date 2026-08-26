@@ -1194,21 +1194,21 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
               const renderHeader = (showSummaryBadges: boolean) => (
                 <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
                   {message.author === 'jeffrey' && message.dispatchTarget !== 'none' && <span className="recipient-badge">To {message.dispatchTarget === 'both' ? 'Codex + Claude' : message.dispatchTarget === 'auto' ? 'an agent' : message.dispatchTarget[0].toUpperCase() + message.dispatchTarget.slice(1)}</span>}
+                  {showSummaryBadges && isAgentMessage && <button
+                    type="button"
+                    className={`memory-badge${typeof message.retrievedMemoryCount === 'number' ? '' : ' memory-badge-not-run'}`}
+                    disabled={typeof message.retrievedMemoryCount !== 'number'}
+                    onClick={() => setRetrievedMemoryMessageId(message.id)}
+                    title={typeof message.retrievedMemoryCount === 'number'
+                      ? message.retrievedMemoryCount > 0
+                        ? `Retrieved ${message.retrievedMemoryCount} memory match${message.retrievedMemoryCount === 1 ? '' : 'es'} from RAG for this reply — click to view`
+                        : 'RAG memory search ran but found no matches'
+                      : 'RAG memory retrieval did not run for this message'}
+                  >
+                    <Search size={11} /> {typeof message.retrievedMemoryCount === 'number' ? message.retrievedMemoryCount : '—'}
+                  </button>}
                   {showSummaryBadges && <span className="header-badge-row">
                     {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyBadge(message)}</span>}
-                    {isAgentMessage && <button
-                      type="button"
-                      className={`memory-badge${typeof message.retrievedMemoryCount === 'number' ? '' : ' memory-badge-not-run'}`}
-                      disabled={typeof message.retrievedMemoryCount !== 'number'}
-                      onClick={() => setRetrievedMemoryMessageId(message.id)}
-                      title={typeof message.retrievedMemoryCount === 'number'
-                        ? message.retrievedMemoryCount > 0
-                          ? `Retrieved ${message.retrievedMemoryCount} memory match${message.retrievedMemoryCount === 1 ? '' : 'es'} from RAG for this reply — click to view`
-                          : 'RAG memory search ran but found no matches'
-                        : 'RAG memory retrieval did not run for this message'}
-                    >
-                      <Search size={11} /> {typeof message.retrievedMemoryCount === 'number' ? message.retrievedMemoryCount : '—'}
-                    </button>}
                   </span>}
                   {showSummaryBadges && isAgentMessage && liveInterjections.length > 0 && <span className={`interjection-badge${liveInterjections.some((interjection) => interjection.pending) ? ' pending' : ''}`}>{liveInterjections.some((interjection) => interjection.pending) ? 'Interjecting' : 'Interjected'}</span>}
                   {message.status === 'running' && <button type="button" className="cancel-response" onClick={() => cancelReply.mutate(message.id)} disabled={cancelReply.isPending} aria-label="Cancel response" title="Cancel response"><X size={12} /></button>}

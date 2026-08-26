@@ -822,8 +822,8 @@ nav { display: grid; gap: 3px; }
 .shared-message header .memory-badge { flex: 0 0 auto; }
 .shared-message header strong { color: #c8c7bf; font: 9px 'DM Mono'; text-transform: capitalize; }
 .shared-message header time { color: #575650; font: 8px 'DM Mono'; }
-.shared-message header > button { display: grid; place-items: center; margin-left: auto; padding: 3px; color: #55554f; background: transparent; border: 0; }
-.shared-message header > button:hover { color: var(--acid); }
+.shared-message header > .cancel-response { display: grid; place-items: center; margin-left: auto; padding: 3px; color: #55554f; background: transparent; border: 0; }
+.shared-message header > .cancel-response:hover { color: var(--acid); }
 .shared-message .cancel-response { position: absolute; top: 8px; right: 8px; z-index: 1; margin: 0; }
 .shared-message p { margin: 8px 0 0; color: #c7c6bf; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .message-markdown { margin-top: 8px; min-width: 0; max-width: 100%; color: #c7c6bf; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; word-break: break-word; }.message-markdown > :first-child { margin-top: 0; }.message-markdown > :last-child { margin-bottom: 0; }.message-markdown p { white-space: normal; }.message-markdown ul, .message-markdown ol { padding-left: 22px; }.message-markdown li { margin: 3px 0; }.message-markdown code { padding: 1px 4px; color: #d9ed9b; background: #24251f; border-radius: 3px; font: 10px 'DM Mono'; }.message-markdown pre { position: relative; max-width: 100%; padding: 9px; overflow-x: auto; background: #0c0c0b; border: 1px solid #30302c; border-radius: 6px; }.message-markdown pre code { padding: 0; background: none; }

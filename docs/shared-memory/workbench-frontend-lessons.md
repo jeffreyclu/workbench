@@ -20,10 +20,10 @@ It may shrink and ellipsize only when the bubble cannot accommodate its full
 text; otherwise its pill boundary should end at the content.
 
 *Correction from Jeffrey, 2026-08-26.* Keep this telemetry as the blue badge;
-do not flatten it into inline text. The awkward layout was the adjacent RAG
-memory button inheriting a header-wide `margin-left: auto`, which pushed it to
-the far edge. Scope that positioning to the direct cancel button so the RAG
-button stays directly beside the blue badge.
+do not flatten it into inline text. Keep the RAG memory control after the
+author/time on the first header line, with the blue badge alone on the second;
+the cancel X remains independently positioned in the top-right. Do not let a
+header-wide `margin-left: auto` position the RAG button.
 
 ### Dual agent replies size independently
 
