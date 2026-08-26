@@ -1,4 +1,5 @@
-import type { BrokerConnection, BrokerSearchResponse, BrokerSourceId, GitHubPullRequestDiff, ResolvedSourceDraft, WorkspaceDiff } from '../../shared/contracts';
+import type { BrokerConnection, BrokerSearchResponse, BrokerSourceId, ResolvedSourceDraft } from '../../shared/contracts';
+import type { WorkspaceDiff } from '../../shared/contracts';
 import { request } from './request';
 
 export const sourceClient = {
@@ -10,6 +11,5 @@ export const sourceClient = {
   startMcpOAuth: (provider: 'confluence' | 'slack' | 'figma' | 'gmail', serverUrl?: string) => request<{ url: string }>(`/api/source-connections/${provider}/mcp/oauth/start`, { method: 'POST', body: JSON.stringify({ serverUrl }) }),
   startManagedMcpOAuth: (provider: 'figma' | 'atlassian') => request<{ url: string }>(`/api/source-connections/${provider}/managed/oauth/start`, { method: 'POST' }),
   disconnectSource: (provider: 'confluence' | 'slack' | 'figma' | 'gmail' | 'github') => request<void>(`/api/source-connections/${provider}`, { method: 'DELETE' }),
-  getGitHubPullRequestDiff: (url: string) => request<{ diff: GitHubPullRequestDiff }>(`/api/github/pull-request-diff?url=${encodeURIComponent(url)}`),
   getWorkspaceDiff: (workItemId: string) => request<{ diff: WorkspaceDiff }>(`/api/work-items/${workItemId}/workspace-diff`),
 };

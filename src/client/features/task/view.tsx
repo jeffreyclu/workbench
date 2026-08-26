@@ -70,7 +70,6 @@ import { useTaskDetail } from './hooks';
 import { useTaskAccountProfile, useTaskExecutionProfile } from './state';
 import { celebrate } from '../../celebrate';
 import { SessionFeedbackPrompt } from '../../session-feedback-prompt';
-import { GitHubDiffView } from '../github-diff/view';
 import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { AgentAccountProfile } from '../../data/runtime-client';
 
@@ -666,8 +665,6 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       {feedbackTarget && <SessionFeedbackPrompt onSubmit={async (rating: SessionFeedbackRating) => { await api.createSessionFeedback({ ...feedbackTarget, rating }); setFeedbackTarget(null); onClose(); }} />}
 
       <WorkspaceDiffView workItemId={item.id} isRunning={detail.data.runs.some((run) => run.status === 'queued' || run.status === 'running')} />
-      <GitHubDiffView sourceUrl={item.sourceUrl} references={detail.data.references} />
-
       <details className="detail-section task-collapsible relationships-section">
         <summary><span>Linked items & history</span><small>{(detail.data.parentItem ? 1 : 0) + detail.data.children.length + linkedTasks.length + detail.data.conversations.length + detail.data.artifacts.length + references.length} linked</small></summary>
         <div className="task-collapsible-content">

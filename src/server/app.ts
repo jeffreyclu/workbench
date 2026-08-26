@@ -27,7 +27,6 @@ import { createExecutionRouter } from './routes/execution-router.js';
 import { createLinearRouter } from './routes/linear-router.js';
 import { createMcpRouter } from './routes/mcp-router.js';
 import { createAgentAccountRouter } from './routes/agent-account-router.js';
-import { createGitHubRouter } from './routes/github-router.js';
 
 export { oauthCallbackBase, parseFollowUpPlan, rejectPreviewMutation } from './app-exports.js';
 
@@ -69,7 +68,6 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
   app.use(createWorkItemRouter(context));
   app.use(createQueueRouter(context));
   app.use(createSourceConnectionRouter(context));
-  app.use(createGitHubRouter(context));
   app.use(createMcpRouter(context));
   app.use(createAgentAccountRouter());
   app.use(createExecutionRouter(context));
