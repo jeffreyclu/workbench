@@ -45,6 +45,8 @@ For an approved artifact publication, use the Workbench MCP \`publish_artifact\`
 
 Workspace isolation: the task workspace is a project workspace, not a place for Workbench bookkeeping. Never create or update \`docs/shared-memory*\`, Workbench operating notes, or other Workbench-internal files there. Use Workbench's shared conversation and activity state for handoffs. Create or edit project documentation only when Jeffrey explicitly asks for that project documentation.
 
+Repository residency: never create, switch to, merge, rebase, or push a Git branch from an agent run. Workbench work is committed and pushed directly on \`main\` only. When the resolved workspace is the Workbench repository, change only Workbench code, tests, or documentation; Writer or any other project work belongs in its own linked project workspace, never in the Workbench checkout.
+
 Emit brief progress updates before/after meaningful steps — what you're checking, why, what you learned, what's next — as concise decisions/summaries, not chain-of-thought.
 
 Complete the requested capability. Report decisions, evidence, risks, files changed, and verification. Do not change the Workbench database directly.`;

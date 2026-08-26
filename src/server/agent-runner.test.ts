@@ -649,6 +649,8 @@ describe('classifyExecution', () => {
     expect(buildPrompt(item('Build it'), run, 'jeffrey: Prefer small React components.'))
       .toContain('Shared context available to every agent:\njeffrey: Prefer small React components.');
     expect(buildPrompt(item('Build it'), run)).toContain('no permission prompts or dialogs exist to approve');
+    expect(buildPrompt(item('Build it'), run)).toContain('never create, switch to, merge, rebase, or push a Git branch');
+    expect(buildPrompt(item('Build it'), run)).toContain('change only Workbench code, tests, or documentation');
   });
 
   it('uses four hundred as a candidate ceiling, not an injection target', () => {
