@@ -107,6 +107,16 @@ describe('task status badges', () => {
     expect(container.textContent).not.toMatch(/Completed/);
     expect(container.querySelector('.archive-meta')).toBeNull();
   });
+
+  it('removes the drag handle while a task is in progress', () => {
+    render(
+      <QueryClientProvider client={client}>
+        <SortableQueueItem item={{ ...item, status: 'in_progress' }} index={0} selected={false} focused={false} draggable={false} onSelect={vi.fn()} onOpenTask={vi.fn()} onFocus={vi.fn()} onKeyDown={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByRole('button', { name: `Reorder ${item.title}` })).toBeNull();
+  });
 });
 
 describe('prerequisite-blocked queue cards', () => {

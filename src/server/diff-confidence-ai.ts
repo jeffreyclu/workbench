@@ -11,7 +11,7 @@ const SYSTEM_PROMPT = `You are triaging a code diff for review priority, not gra
 3. Reversibility: would a mistake here be obvious and cheap to catch and revert, or silent and hard to detect (data corruption, race condition, security hole)?
 Only syntactically broken code should score above 90 on that basis alone; otherwise being syntactically fine does not by itself justify a low score.
 Bands: 0-19 trivial (comments, copy, formatting, tests, no runtime behavior change), 20-39 low (localized, obvious and cheap to revert if wrong), 40-59 moderate (touches control flow, validation, or error handling with some unverifiable assumption), 60-79 elevated (meaningful blast radius or a real unverifiable dependency), 80-100 high (security, auth, data mutation/migration, or silent-failure potential).
-Return only minified JSON in this exact form: {"assessments":{"block-key":{"risk":0,"reasoning":"brief rationale naming which driver fired and, if driver 1 fired, exactly what unverifiable assumption it is flagging"}}}. Every supplied key must appear exactly once. Risk is an integer from 0 to 100. This is an AI assessment, not a claim of calibrated probability. Base it on visible code only; do not invent context.`;
+You will receive the changed blocks as a JSON array; evaluate each array item against the rubric independently. Return only minified JSON as an array in this exact form: [{"key":"block-key","risk":0,"reasoning":"brief rationale naming which driver fired and, if driver 1 fired, exactly what unverifiable assumption it is flagging"}]. Every supplied key must appear exactly once, in any order. Risk is an integer from 0 to 100. This is an AI assessment, not a claim of calibrated probability. Base it on visible code only; do not invent context.`;
 
 /** Keyed by block content hash, not block key or batch identity, so the same
  * change surfaced from a different conversation window (or a different mix of
@@ -44,15 +44,21 @@ export function parseDiffConfidenceAssessment(output: string, keys: string[]): R
   } catch {
     // The model can return raw JSON instead of the CLI's JSON envelope.
   }
-  const json = candidate.match(/\{[\s\S]*\}/)?.[0];
+  const json = candidate.match(/\[[\s\S]*\]/)?.[0];
   if (!json) throw new Error('AI diff assessment returned no JSON.');
-  const parsed = JSON.parse(json) as { assessments?: unknown };
-  if (!parsed.assessments || typeof parsed.assessments !== 'object' || Array.isArray(parsed.assessments)) throw new Error('AI diff assessment returned an invalid shape.');
-  const source = parsed.assessments as Record<string, unknown>;
+  const parsed = JSON.parse(json) as unknown;
+  if (!Array.isArray(parsed)) throw new Error('AI diff assessment returned an invalid shape.');
+  const source = new Map<string, unknown>();
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('AI diff assessment returned an invalid shape.');
+    const { key } = entry as { key?: unknown };
+    if (typeof key !== 'string') throw new Error('AI diff assessment returned an invalid shape.');
+    source.set(key, entry);
+  }
   const assessments: Record<string, DiffConfidenceAssessment> = {};
   for (const key of keys) {
-    const value = source[key];
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('AI diff assessment omitted or invalidated a block score.');
+    const value = source.get(key);
+    if (!value || typeof value !== 'object') throw new Error('AI diff assessment omitted or invalidated a block score.');
     const assessment = value as { risk?: unknown; reasoning?: unknown };
     if (typeof assessment.risk !== 'number' || !Number.isInteger(assessment.risk) || assessment.risk < 0 || assessment.risk > 100 || typeof assessment.reasoning !== 'string' || !assessment.reasoning.trim()) throw new Error('AI diff assessment omitted or invalidated a block score.');
     assessments[key] = { risk: assessment.risk, reasoning: assessment.reasoning.trim() };
@@ -66,7 +72,7 @@ function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, Di
   return new Promise((resolve, reject) => {
     const child = spawn('claude', ['-p', '--model', 'haiku', '--effort', 'low', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '', '--no-session-persistence', '--no-chrome', '--output-format', 'json', '--system-prompt', SYSTEM_PROMPT], { cwd: '/tmp', env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = ''; let stderr = ''; let settled = false;
-    const timeout = setTimeout(() => child.kill('SIGTERM'), 30_000);
+    const timeout = setTimeout(() => child.kill('SIGTERM'), 120_000);
     // Pipes to the subprocess can drop mid-read (ECONNRESET/EPIPE); without an
     // 'error' listener on each stream, Node treats that as an uncaught
     // exception and crashes the whole server process instead of just this request.

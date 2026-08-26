@@ -388,6 +388,9 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const openDependencies = dependencies.filter((dependency) => dependency.isOpen);
   const providerConflicts = detail.data.providerConflicts ?? [];
   const hasBeenExecuted = detail.data.runs.length > 0;
+  // A dispatch becomes active before the runner claims it. Keep task mutations
+  // locked from the optimistic request through its queued/running lifecycle.
+  const isExecutionActive = execute.isPending || item.status === 'in_progress' || detail.data.runs.some((run) => run.status === 'queued' || run.status === 'running');
   // Jeffrey owning the task is exclusive: agents can neither be assigned nor dispatched.
   const selfAssigned = isSelfAssigned(item.assignees);
   // sourceUrl is task-owned provenance, not a removable user-created reference.
@@ -423,7 +426,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   }
 
   return (
-    <section className={`detail-panel ${execute.isPending ? 'execution-starting' : ''}`} aria-busy={execute.isPending}>
+    <section className={`detail-panel ${isExecutionActive ? 'execution-starting' : ''}`} aria-busy={isExecutionActive}>
       <div className="detail-topline">
         <div className="source-badge">
           {item.source === 'linear' ? <Cloud size={13} /> : <Command size={13} />}
@@ -438,6 +441,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         <AlertTriangle size={16} />
         <span><strong>Execution blocked</strong><small>Complete {openDependencies.length === 1 ? 'this prerequisite' : 'these prerequisites'} before dispatching an agent: {openDependencies.map((dependency, index) => <Fragment key={dependency.id}>{index > 0 && ', '}<button type="button" className="dependency-blocker-link" onClick={() => onOpenTask(dependency.id)}>{dependency.title}</button></Fragment>)}.</small></span>
       </div>}
+      <fieldset className="task-execution-controls" disabled={isExecutionActive} aria-label={isExecutionActive ? 'Task actions are disabled while execution is in progress' : undefined}>
       {providerConflicts.length > 0 && <section className="provider-conflicts" aria-label="Linear sync conflicts">
         <div><strong>Linear changes need a decision</strong><small>{providerConflicts.length} field{providerConflicts.length === 1 ? '' : 's'} kept local after Linear changed too.</small></div>
         {providerConflicts.map((conflict) => {
@@ -780,6 +784,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         </div>
       </details>
 
+      </fieldset>
       <details className="detail-section task-collapsible activity-section">
         {/* The decision count is the reason to open this section: it says up front
             that the routing, model, and fallback choices are recorded in here. */}

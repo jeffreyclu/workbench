@@ -500,6 +500,7 @@ nav { display: grid; gap: 3px; }
 .detail-panel.execution-starting { cursor: wait; }
 .detail-panel.execution-starting button:not(.mobile-detail-close), .detail-panel.execution-starting input, .detail-panel.execution-starting textarea, .detail-panel.execution-starting select, .detail-panel.execution-starting a { pointer-events: none; opacity: .48; }
 .detail-panel.execution-starting .execute-button { opacity: 1; }
+.task-execution-controls { min-inline-size: 0; margin: 0; padding: 0; border: 0; }
 .inline-editable { cursor: text; border-radius: 5px; transition: background .15s, box-shadow .15s; }
 .inline-editable:hover { background: #ffffff06; box-shadow: 0 0 0 5px #ffffff06; }
 .inline-title-editor { width: min(760px, 100%); margin: 20px 0 18px; padding: 4px 8px; color: #e9e8e3; background: #151513; border: 1px solid #626b3c; border-radius: 7px; outline: 0; font-size: clamp(27px, 3vw, 42px); font-weight: 700; line-height: 1.12; letter-spacing: -.045em; }

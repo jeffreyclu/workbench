@@ -1857,10 +1857,56 @@ describe('task execution', () => {
     expect(await screen.findByText('grid-writerai.enterprise.slack.com')).toBeTruthy();
     expect(screen.getByText('source')).toBeTruthy();
     expect(screen.queryByText('No Linear issues, pull requests, Slack threads, or documents linked yet.')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Archive task' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Complete task' })).toBeDisabled();
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
 
     expect(await screen.findByText('canceled')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+  });
+
+  it('optimistically promotes a task to the in-progress queue section as soon as it is executed', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const taskId = '00000000-0000-4000-8000-000000000021';
+    let status: 'ready' | 'in_progress' = 'ready';
+    const item = {
+      id: taskId, title: 'Task to execute', description: '', priority: 2, queuePosition: 0,
+      source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete',
+      agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: 'Workbench', workspacePath: null,
+      strategy: '', assignees: [], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [],
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', lastTouchedAt: '2026-01-01T00:00:00Z',
+    };
+    let resolveExecute: (value: Response) => void = () => {};
+    const executeResponse = new Promise<Response>((resolve) => { resolveExecute = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/work-items/${taskId}/execute`) return executeResponse;
+      if (url === `/api/agent-accounts`) return new Response(JSON.stringify({ accounts: [{ name: 'default', providers: {} }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes(`/api/work-items/${taskId}`)) return new Response(JSON.stringify({ item: { ...item, status }, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [], providerConflicts: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [{ ...item, status }], nextCursor: null, totalCount: 1, proposal: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/work-item-counts') return new Response(JSON.stringify({ active: 1, workbench: 0, archive: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByText(item.title));
+    expect(document.querySelector('.stack-header-progress')).toBeNull();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Execute task' }));
+
+    await waitFor(() => expect(document.querySelector('.stack-header-progress')).toBeTruthy());
+
+    status = 'in_progress';
+    resolveExecute(new Response(JSON.stringify({
+      run: { id: 'run-1', workItemId: taskId, kind: 'execute', status: 'running' },
+      runs: [],
+      classification: null,
+      conversation: { id: 'conversation-1', title: '', messages: [] },
+      activity: { id: 'activity-1', workItemId: taskId, kind: 'execution', body: '', createdAt: '2026-01-01T00:00:00Z' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Executing task' })).toBeTruthy());
   });
 });
 
