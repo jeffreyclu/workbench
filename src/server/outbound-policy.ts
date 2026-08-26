@@ -22,7 +22,7 @@ export interface OutboundPolicyDependencies {
 }
 
 type HostRule = { hostname: string; subdomains?: boolean; path?: string };
-export type OutboundPolicyName = 'source-page' | 'github-api' | 'gmail-api' | 'linear-api' | 'atlassian-api' | 'slack-oauth' | 'mcp-slack' | 'mcp-figma' | 'mcp-atlassian';
+export type OutboundPolicyName = 'source-page' | 'github-api' | 'gmail-api' | 'linear-api' | 'atlassian-api' | 'grafana-api' | 'slack-oauth' | 'mcp-slack' | 'mcp-figma' | 'mcp-atlassian';
 
 const rules: Record<OutboundPolicyName, HostRule[]> = {
   'source-page': [
@@ -33,6 +33,7 @@ const rules: Record<OutboundPolicyName, HostRule[]> = {
   'gmail-api': [{ hostname: 'gmail.googleapis.com' }],
   'linear-api': [{ hostname: 'api.linear.app' }],
   'atlassian-api': [{ hostname: 'atlassian.net', subdomains: true }],
+  'grafana-api': [{ hostname: 'grafana.observability.writer.com' }],
   'slack-oauth': [{ hostname: 'slack.com' }],
   // Each MCP policy contains its fixed transport endpoint plus only the vendor
   // OAuth origins its SDK flow may discover, register against, or use for tokens.

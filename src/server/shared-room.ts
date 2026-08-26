@@ -507,7 +507,11 @@ export function buildSharedReplyPrompt(
 ): string {
   const roleContext = linked
     ? buildPrompt(linked.item, linked.run, sharedContext, [], currentUserInstruction, precedingUserInstruction, externalActionContract)
-    : `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.\n\n${compactSharedBrief(sharedContext)}`;
+    : `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.
+
+This conversation is not linked to a project task, so its workspace is Workbench-only. Do not modify Writer or any other repository from this conversation. To work in another repository, Jeffrey must link this conversation to a task whose workspace is that repository.
+
+${compactSharedBrief(sharedContext)}`;
   return `${roleContext}
 
 ${connectionContext}

@@ -523,6 +523,11 @@ describe('classifyExecution', () => {
       .toBe(join(homedir(), 'notes/knowledge'));
   });
 
+  it('refuses to run a non-Workbench task inside the Workbench checkout', () => {
+    expect(() => resolveWorkingDirectory({ ...item('Fix Writer connectors'), projectName: 'Writer', workspacePath: process.cwd() }))
+      .toThrow(/Non-Workbench task.*Link the task to its repository/);
+  });
+
   it('routes coding and review work to Codex', () => {
     expect(classifyExecution(item('Implement the connector UI')).kind).toBe('execute');
     expect(classifyExecution(item('Review PR for regressions')).kind).toBe('review');
@@ -649,7 +654,7 @@ describe('classifyExecution', () => {
     expect(buildPrompt(item('Build it'), run, 'jeffrey: Prefer small React components.'))
       .toContain('Shared context available to every agent:\njeffrey: Prefer small React components.');
     expect(buildPrompt(item('Build it'), run)).toContain('no permission prompts or dialogs exist to approve');
-    expect(buildPrompt(item('Build it'), run)).toContain('never create, switch to, merge, rebase, or push a Git branch');
+    expect(buildPrompt(item('Build it'), run)).toContain('Do not create or switch branches in the Workbench repository');
     expect(buildPrompt(item('Build it'), run)).toContain('change only Workbench code, tests, or documentation');
   });
 

@@ -457,6 +457,10 @@ export const sourceConnectionInputSchema = z.object({
   settings: z.record(z.string(), z.string().max(10_000)),
 });
 
+export const grafanaConnectionSchema = z.object({
+  token: z.string().trim().min(1, 'Grafana service-account token is required.').max(10_000),
+});
+
 // Figma's authenticated connector can open a known design URL, but cannot
 // enumerate a workspace. These roots define the explicit design surface that
 // Discovery is allowed to inspect.

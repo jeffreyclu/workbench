@@ -3,7 +3,7 @@ import { WorkItemRepository } from './repository.js';
 import { scanSlackMcp } from './slack-mcp.js';
 import { isMcpReauthenticationError, mcpAuthenticationMessage, scanRemoteMcp } from './remote-mcp.js';
 import { scanSlackWithCodex } from './slack-codex.js';
-import { scanFigmaRootsWithCodex, searchAtlassianWithCodex, searchGrafanaWithCodex } from './managed-connector.js';
+import { scanFigmaRootsWithCodex, searchAtlassianWithCodex } from './managed-connector.js';
 import { assertApprovedMcpServer, createOutboundFetch, type OutboundPolicyName } from './outbound-policy.js';
 
 export interface SourceSignal { provider: string; title: string; summary: string; url: string | null; occurredAt: string | null; }
@@ -56,7 +56,23 @@ async function scanGmail(settings: Record<string, string>, fetchForPolicy: Outbo
   }));
 }
 
-const scanners: Partial<Record<SourceProvider, (settings: Record<string, string>, fetchForPolicy?: OutboundFetchFactory) => Promise<SourceSignal[]>>> = { github: scanGitHub, slack: scanSlackMcp, confluence: scanConfluence, gmail: scanGmail };
+const GRAFANA_URL = 'https://grafana.observability.writer.com';
+
+async function scanGrafana(settings: Record<string, string>, fetchForPolicy: OutboundFetchFactory = createOutboundFetch): Promise<SourceSignal[]> {
+  if (!settings.token) throw new Error('Grafana service-account token is missing. Add it in Sources.');
+  const params = new URLSearchParams({ query: settings.query ?? '', type: 'dash-db', limit: '30' });
+  const dashboards = await requestJson<Array<{ uid?: string; title?: string; uri?: string; url?: string; folderTitle?: string; tags?: string[] }>>(
+    `${GRAFANA_URL}/api/search?${params}`,
+    { Accept: 'application/json', Authorization: `Bearer ${settings.token}` }, fetchForPolicy('grafana-api'),
+  );
+  return dashboards.flatMap((dashboard) => {
+    if (typeof dashboard.title !== 'string') return [];
+    const path = typeof dashboard.url === 'string' ? dashboard.url : typeof dashboard.uri === 'string' ? dashboard.uri : dashboard.uid ? `/d/${dashboard.uid}` : '';
+    return [{ provider: 'grafana', title: dashboard.title.slice(0, 240), summary: [dashboard.folderTitle, ...(dashboard.tags ?? [])].filter(Boolean).join(' · '), url: path ? `${GRAFANA_URL}${path}` : null, occurredAt: null }];
+  });
+}
+
+const scanners: Partial<Record<SourceProvider, (settings: Record<string, string>, fetchForPolicy?: OutboundFetchFactory) => Promise<SourceSignal[]>>> = { github: scanGitHub, slack: scanSlackMcp, confluence: scanConfluence, grafana: scanGrafana, gmail: scanGmail };
 
 const MANAGED_SCAN_QUERY = 'recent updates relevant to my open work';
 
@@ -69,13 +85,13 @@ function figmaRoots(settings: Record<string, string>): string[] {
 
 export function scanSource(provider: SourceProvider, settings: Record<string, string>, fetchForPolicy: OutboundFetchFactory = createOutboundFetch): Promise<SourceSignal[]> {
   if (provider === 'gmail' && settings.serverUrl) return Promise.reject(assertApprovedMcpServer('gmail', settings.serverUrl));
-  if ((provider === 'figma' || provider === 'confluence' || provider === 'grafana') && settings.mode === 'managed') {
+  if ((provider === 'figma' || provider === 'confluence') && settings.mode === 'managed') {
     if (provider === 'figma') {
       const roots = figmaRoots(settings);
       if (!roots.length) throw new Error('Figma Discovery needs at least one scoped file, page, or node. Add Figma scope in Sources.');
       return scanFigmaRootsWithCodex(roots);
     }
-    return provider === 'grafana' ? searchGrafanaWithCodex(MANAGED_SCAN_QUERY) : searchAtlassianWithCodex(MANAGED_SCAN_QUERY);
+    return searchAtlassianWithCodex(MANAGED_SCAN_QUERY);
   }
   if ((provider === 'slack' || provider === 'figma' || provider === 'confluence') && settings.serverUrl) return scanRemoteMcp(provider, settings);
   const scanner = scanners[provider];

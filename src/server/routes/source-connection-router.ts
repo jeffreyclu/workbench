@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { figmaScopeSchema, sourceProviderSchema } from '../../shared/contracts.js';
+import { figmaScopeSchema, grafanaConnectionSchema, sourceProviderSchema } from '../../shared/contracts.js';
 import type { RouteContext } from '../route-context.js';
 import { finishRemoteMcpOAuth } from '../remote-mcp.js';
 import { isActionFailure } from '../action-result.js';
@@ -20,6 +20,10 @@ export function createSourceConnectionRouter({ repository, admin }: RouteContext
     try { admin.sendAction(response, admin.setFigmaScope(figmaScopeSchema.parse(request.body ?? {}).roots), 200); }
     catch (error) { next(error); }
   });
+  router.put('/api/source-connections/grafana', async (request, response, next) => {
+    try { response.json(await admin.configureGrafana(grafanaConnectionSchema.parse(request.body ?? {}))); }
+    catch (error) { next(error); }
+  });
   router.post('/api/source-connections/:provider/mcp/oauth/start', async (request, response, next) => {
     try {
       const provider = z.enum(['confluence', 'slack', 'figma', 'gmail']).parse(request.params.provider);
@@ -29,7 +33,7 @@ export function createSourceConnectionRouter({ repository, admin }: RouteContext
   });
   router.post('/api/source-connections/:provider/managed/oauth/start', async (request, response, next) => {
     try {
-      const provider = z.enum(['figma', 'atlassian', 'grafana']).parse(request.params.provider);
+      const provider = z.enum(['figma', 'atlassian']).parse(request.params.provider);
       admin.sendAction(response, await admin.authorizeSource({ provider: provider === 'atlassian' ? 'confluence' : provider, mode: 'managed' }), 200);
     } catch (error) { next(error); }
   });

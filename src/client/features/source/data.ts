@@ -11,6 +11,7 @@ export const sourceData = {
   listConnections: api.listSourceConnections,
   disconnect: api.disconnectSource,
   startManagedMcpOAuth: api.startManagedMcpOAuth,
+  configureGrafana: api.configureGrafana,
   getFigmaScope: api.getFigmaScope,
   updateFigmaScope: api.updateFigmaScope,
   search: api.searchSources,

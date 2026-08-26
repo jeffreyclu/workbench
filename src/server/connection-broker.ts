@@ -3,7 +3,7 @@ import type { WorkItemRepository } from './repository.js';
 import { resolveSourceUrl as resolveGenericSourceUrl } from './source-resolver.js';
 import { isMcpReauthenticationError, mcpAuthenticationMessage, scanRemoteMcp } from './remote-mcp.js';
 import { searchSlackWithCodex } from './slack-codex.js';
-import { searchAtlassianWithCodex, searchFigmaWithCodex, searchGrafanaWithCodex } from './managed-connector.js';
+import { searchAtlassianWithCodex, searchFigmaWithCodex } from './managed-connector.js';
 import { scanSource, type SourceSignal } from './source-scanner.js';
 import { LinearProvider } from './providers/linear.js';
 
@@ -39,10 +39,11 @@ export function listBrokerConnections(repository: WorkItemRepository): BrokerCon
   const slack = legacyConnection(repository, 'slack');
   const figma = legacyConnection(repository, 'figma');
   const grafana = legacyConnection(repository, 'grafana');
+  const grafanaConfigured = Boolean(repository.getSourceSettings('grafana')?.token);
   return [
     { id: 'slack', name: 'Slack', state: slack?.lastError ? 'reauth_required' : 'connected', host: slack ? 'workbench' : 'managed_connector', capabilities: ['resolve_links', 'search'], configurable: true, lastError: slack?.lastError ?? null, detail: slack ? 'Connected through Slack MCP.' : 'Available through the acting agent’s authenticated ChatGPT connector.' },
     { id: 'figma', name: 'Figma', state: figma?.lastError ? 'reauth_required' : figma ? 'connected' : 'needs_auth', host: 'workbench', capabilities: ['resolve_links', 'search'], configurable: true, lastError: figma?.lastError ?? null, detail: figma ? 'Connected through Figma MCP.' : 'Authorize Figma MCP to enable design context.' },
-    { id: 'grafana', name: 'Grafana', state: grafana ? grafana.lastError ? 'reauth_required' : 'connected' : 'needs_auth', host: 'managed_connector', capabilities: ['search'], configurable: true, lastError: grafana?.lastError ?? null, detail: grafana ? 'Grafana Cloud context through Codex.' : 'Authorize Grafana Cloud MCP to search your accessible observability data.' },
+    { id: 'grafana', name: 'Grafana', state: grafanaConfigured ? grafana?.lastError ? 'reauth_required' : 'connected' : 'needs_auth', host: 'workbench', capabilities: ['search'], configurable: true, lastError: grafana?.lastError ?? null, detail: grafanaConfigured ? 'Dashboard search through Writer Grafana.' : 'Add a Grafana service-account token to search dashboards.' },
     { id: 'linear', name: 'Linear', state: process.env.LINEAR_API_KEY ? 'connected' : 'needs_auth', host: 'workbench', capabilities: ['resolve_links', 'search', 'sync'], configurable: Boolean(process.env.LINEAR_API_KEY), lastError: null, detail: process.env.LINEAR_API_KEY ? 'Synced and scoped by Workbench.' : 'Add LINEAR_API_KEY to Workbench.' },
     { id: 'atlassian', name: 'Atlassian', state: atlassian ? atlassian.lastError ? 'reauth_required' : 'connected' : 'needs_auth', host: 'workbench', capabilities: ['resolve_links', 'search'], configurable: true, lastError: atlassian?.lastError ?? null, detail: atlassian ? 'Jira and Confluence through one remote MCP connection.' : 'Authorization required for Jira and Confluence.' },
     { id: 'github', name: 'GitHub', state: github?.lastError ? 'reauth_required' : github || process.env.GITHUB_TOKEN ? 'connected' : 'needs_auth', host: 'workbench', capabilities: ['resolve_links', 'search'], configurable: true, lastError: github?.lastError ?? null, detail: github || process.env.GITHUB_TOKEN ? 'Uses one Workbench credential source for search and links.' : 'GitHub connection is not configured.' },
@@ -55,7 +56,7 @@ function queryFrom(message: string): string {
 }
 
 export function sourceQuery(message: string, provider: 'slack' | 'confluence' | 'grafana' | 'github'): string {
-  const host = provider === 'slack' ? 'slack.com' : provider === 'confluence' ? 'atlassian.net' : provider === 'grafana' ? 'grafana.net' : 'github.com';
+  const host = provider === 'slack' ? 'slack.com' : provider === 'confluence' ? 'atlassian.net' : provider === 'grafana' ? 'grafana.observability.writer.com' : 'github.com';
   const urls = message.match(/https?:\/\/[^\s<>)]+/g) ?? [];
   return [...urls].reverse().find((url) => url.toLowerCase().includes(host)) ?? queryFrom(message);
 }
@@ -75,7 +76,7 @@ export async function contextForPrompt(repository: WorkItemRepository, message: 
   const requested: Array<{ provider: 'slack' | 'confluence' | 'grafana' | 'github'; label: string }> = [];
   if (/\bslack\b|slack\.com/i.test(message)) requested.push({ provider: 'slack', label: 'Slack' });
   if (/\b(?:atlassian|confluence|jira)\b|atlassian\.net/i.test(message)) requested.push({ provider: 'confluence', label: 'Atlassian' });
-  if (/\bgrafana\b|grafana\.net/i.test(message)) requested.push({ provider: 'grafana', label: 'Grafana' });
+  if (/\bgrafana\b|grafana\.observability\.writer\.com/i.test(message)) requested.push({ provider: 'grafana', label: 'Grafana' });
   if (/\bgithub\b|github\.com/i.test(message)) requested.push({ provider: 'github', label: 'GitHub' });
   for (const { provider, label } of requested) {
     const settings = repository.getSourceSettings(provider);
@@ -90,7 +91,7 @@ export async function contextForPrompt(repository: WorkItemRepository, message: 
         blocks.push(`GitHub link context supplied by Workbench:\n- ${draft.title}\n  URL: ${draft.sourceUrl}\n  Context: ${draft.description.slice(0, 4_000)}`);
         continue;
       }
-      const signals = await cached(`${provider}:${providerQuery}`, () => provider === 'slack' ? (!settings || settings.mode === 'managed' ? searchSlackWithCodex(providerQuery) : scanRemoteMcp(provider, settings, providerQuery)) : provider === 'confluence' ? scanAtlassian(settings!, providerQuery) : provider === 'grafana' ? searchGrafanaWithCodex(providerQuery) : scanSource('github', settings ?? { token: process.env.GITHUB_TOKEN ?? '', query: providerQuery }));
+      const signals = await cached(`${provider}:${providerQuery}`, () => provider === 'slack' ? (!settings || settings.mode === 'managed' ? searchSlackWithCodex(providerQuery) : scanRemoteMcp(provider, settings, providerQuery)) : provider === 'confluence' ? scanAtlassian(settings!, providerQuery) : provider === 'grafana' ? scanSource('grafana', { ...settings!, query: providerQuery }) : scanSource('github', settings ?? { token: process.env.GITHUB_TOKEN ?? '', query: providerQuery }));
       const terms = query.toLowerCase().split(/\s+/).filter((term) => term.length > 2);
       const matches = terms.length ? signals.filter((signal) => terms.some((term) => `${signal.title}\n${signal.summary}\n${signal.url ?? ''}`.toLowerCase().includes(term))) : signals;
       blocks.push(matches.length ? format(label, matches) : `Workbench found no ${label} matches for ${query ? `“${query}”` : 'this request'}.`);
@@ -152,7 +153,7 @@ export async function searchBrokerSources(repository: WorkItemRepository, query:
       }
       if (source === 'slack') { const settings = repository.getSourceSettings('slack'); return cached(`slack:search:${query}`, () => !settings || settings.mode === 'managed' ? searchSlackWithCodex(query, undefined, signal) : scanRemoteMcp('slack', settings, query)); }
       if (source === 'figma') { const settings = repository.getSourceSettings('figma'); if (!settings) throw new Error('Figma is not connected.'); return cached(`figma:search:${query}`, () => settings.mode === 'managed' ? searchFigmaWithCodex(query, signal) : scanRemoteMcp('figma', settings, query)); }
-      if (source === 'grafana') { const settings = repository.getSourceSettings('grafana'); if (!settings) throw new Error('Grafana is not connected.'); return cached(`grafana:search:${query}`, () => searchGrafanaWithCodex(query, signal)); }
+      if (source === 'grafana') { const settings = repository.getSourceSettings('grafana'); if (!settings?.token) throw new Error('Grafana is not connected.'); return cached(`grafana:search:${query}`, () => scanSource('grafana', { ...settings, query })); }
       if (source === 'atlassian') {
         const settings = repository.getSourceSettings('confluence');
         if (!settings) throw new Error('Atlassian is not connected.');

@@ -146,6 +146,10 @@ describe('compactConversationHistory', () => {
     expect(prompt).not.toContain('Memory 6');
   });
 
+  it('keeps an unlinked conversation in the Workbench workspace', () => {
+    expect(buildSharedReplyPrompt('codex', 'Shared context.', '', [])).toContain('Do not modify Writer or any other repository from this conversation');
+  });
+
   it('uses frontend-reviewer for a review-linked reply with no stored classification', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);

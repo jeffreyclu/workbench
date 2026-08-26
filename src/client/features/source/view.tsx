@@ -27,6 +27,7 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
   const [open, setOpen] = useState(false);
   const [disconnectPromptOpen, setDisconnectPromptOpen] = useState(false);
   const provider = connection.id;
+  const [grafanaToken, setGrafanaToken] = useState('');
   const reconnecting = connection.state === 'error' || connection.state === 'reauth_required';
   const disconnect = useMutation({
     mutationFn: () => sourceData.disconnect(sourceDisconnectProvider(provider)),
@@ -35,10 +36,14 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
   });
   const mcpConnect = useMutation({
     mutationFn: async () => {
-      // Figma, Atlassian, and Grafana authorize through Codex's own loopback OAuth, which
+      if (provider === 'grafana') {
+        await sourceData.configureGrafana(grafanaToken);
+        return null;
+      }
+      // Figma and Atlassian authorize through Codex's own loopback OAuth, which
       // opens the provider's browser window itself. Workbench keeps the returned
       // URL so it can be opened manually if that window never appears.
-      if (provider === 'figma' || provider === 'atlassian' || provider === 'grafana') {
+      if (provider === 'figma' || provider === 'atlassian') {
         if (reconnecting && provider === 'atlassian') await sourceData.disconnect('confluence');
         const { url } = await sourceData.startManagedMcpOAuth(provider);
         return url;
@@ -58,6 +63,10 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
         throw error;
       }
     },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: sourceQueryKeys.connections });
+      if (provider === 'grafana') setOpen(false);
+    },
   });
   useEffect(() => {
     const receiveOAuth = (event: MessageEvent) => {
@@ -71,7 +80,7 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
   }, [queryClient]);
   const connected = connection.state === 'connected';
   useEffect(() => {
-    if ((provider === 'figma' || provider === 'atlassian' || provider === 'grafana') && connected) setOpen(false);
+    if ((provider === 'figma' || provider === 'atlassian') && connected) setOpen(false);
   }, [connected, provider]);
   const disabled = connection.state === 'disabled';
   const canAuthorize = canAuthorizeSource(provider);
@@ -101,7 +110,8 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
       {saveFigmaScope.error && <p className="error-message">Could not save Figma scope: {saveFigmaScope.error.message}</p>}
     </div>}
     {open && canAuthorize && <div className="connection-form mcp-connection-form">
-      <button className="button primary" onClick={() => mcpConnect.mutate()} disabled={mcpConnect.isPending}>{mcpConnect.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />} {provider === 'slack' ? 'Open ChatGPT connections' : 'Authorize MCP'}</button>
+      {provider === 'grafana' && <label htmlFor="grafana-token">Service-account token <input id="grafana-token" type="password" autoComplete="off" value={grafanaToken} onChange={(event) => setGrafanaToken(event.target.value)} placeholder="glsa_…" /></label>}
+      <button className="button primary" onClick={() => mcpConnect.mutate()} disabled={mcpConnect.isPending || (provider === 'grafana' && !grafanaToken.trim())}>{mcpConnect.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />} {provider === 'grafana' ? 'Save Grafana token' : provider === 'slack' ? 'Open ChatGPT connections' : 'Authorize MCP'}</button>
       {mcpConnect.isSuccess && mcpConnect.data && <p className="muted">Approve access in the {connection.name} window that just opened. If it did not appear, <a href={mcpConnect.data} target="_blank" rel="noreferrer">open the authorization page</a> in this browser — it must be this Mac, because the callback returns to 127.0.0.1.</p>}
       {mcpConnect.error && <p className="error-message">Connection failed: {mcpConnect.error.message}</p>}
     </div>}
