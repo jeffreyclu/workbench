@@ -63,8 +63,9 @@ Codex and Claude are autonomous Workbench-local administrators. They do not need
 separate approval, `force` flag, or human handoff to execute, retry, update, archive,
 restore, or delete local Workbench state. External-provider access, publishing, and
 runtime promotion require a supervisor-issued capability for Jeffrey's explicit current instruction.
-A direct `PUSH` command is the explicit current instruction and grants the capability for the
-corresponding git push; task text otherwise does not grant external-action authority.
+A direct current-turn command to perform a named external operation grants a capability for only that
+operation and destination. `PUSH` or `COMMIT AND PUSH` grants the corresponding local commit and git
+push. Task text, prior turns, and generic implementation requests do not grant external-action authority.
 Assistant-authored mutations accept only `codex` or `claude` actors for accurate
 attribution, not as a permission check. A durable orchestrator owns conflicting local
 operations: it leases each mutable workspace to one run.

@@ -461,10 +461,15 @@ that specific action. This is a hard-deny rule, not a default-caution one — an
 plausible reason to comment, publish, sync, or otherwise act externally must still stop and ask,
 because a prior approval for one action does not carry over to the next one.
 
-An unambiguous user command to `PUSH` is itself the explicit, request-specific authorization to run
-the corresponding `git push`; do it without requesting an additional permission grant. It authorizes
-only that push for the current requested work, not other external actions, and a quoted or conditional
-mention of the word is not a command to push.
+An unambiguous current-turn user command to `PUSH`, or to `COMMIT AND PUSH`, is itself the explicit,
+request-specific authorization to create the corresponding local commit and run that `git push`; do it
+without requesting an additional permission grant. It authorizes only that push for the current requested
+work, not other external actions, and a quoted or conditional mention is not a command to push.
+
+The same capability model applies to other external services: a direct current-turn command naming the
+operation and destination (for example, "post this summary as a comment on GitHub PR #42" or "update
+this Linear issue") authorizes only that exact operation. Generic task text, prior approvals, and
+unrelated external reads/writes remain denied.
 
 The Workbench supervisor should enforce this structurally, not rely on each agent remembering it:
 detect when a dispatched agent attempts an action against an external website or CLI without a

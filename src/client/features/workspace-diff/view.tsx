@@ -17,7 +17,7 @@ function DiffSkeleton() {
 
 export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning, onFollowUp }: { scope: WorkspaceDiffScope; isRunning: boolean; onFollowUp?: (reference: DiffFollowUpReference) => void }) {
   const query = useWorkspaceDiff(scope);
-  const snapshotsQuery = useWorkspaceDiffSnapshots(scope, query.data?.diff.revision);
+  const snapshotsQuery = useWorkspaceDiffSnapshots(scope, query.data?.diff?.revision);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   // null means "automatically show the latest record when Git is clean";
   // an empty string is the user's explicit choice to view current changes.

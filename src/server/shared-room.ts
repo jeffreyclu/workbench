@@ -353,9 +353,10 @@ export function buildSharedReplyPrompt(
   linked?: { item: WorkItem; run: AgentRun },
   retrievedMemory?: RetrievedMemory[],
   localId?: string | null,
+  currentUserInstruction?: string,
 ): string {
   const roleContext = linked
-    ? buildPrompt(linked.item, linked.run, sharedContext)
+    ? buildPrompt(linked.item, linked.run, sharedContext, [], currentUserInstruction)
     : `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.\n\n${compactSharedBrief(sharedContext)}`;
   return `${roleContext}
 
@@ -569,6 +570,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       linkedRun && linkedItem ? { item: linkedItem, run: linkedRun } : undefined,
       injectedMemory,
       target.conversationId,
+      target.body,
     );
     repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
     const guardedPrompt = prompt;

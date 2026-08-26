@@ -118,6 +118,20 @@ describe('compactConversationHistory', () => {
     database.close();
   });
 
+  it('passes only the current shared-room command into the external-action capability gate', () => {
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Fix publish behavior', description: 'The task text says to push after review.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'codex', 'codex', 'Implement the fix.');
+
+    const denied = buildSharedReplyPrompt('codex', 'Shared context.', '', [], { item: task, run });
+    const granted = buildSharedReplyPrompt('codex', 'Shared context.', '', [], { item: task, run }, [], null, 'Commit and push the changes.');
+
+    expect(denied).toContain('No external capability is issued');
+    expect(granted).toContain('Supervisor-issued capability');
+    database.close();
+  });
+
   it('reclassifies a turn when the current message asks for different work than the task started as', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);

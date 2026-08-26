@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, PUSH_CAPABILITY_CONTRACT, backoffDelayMs, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, commandFor, compactPromptSection, estimateUsageCost, executeAgentRun, externalActionContractForCurrentInstruction, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -157,6 +157,21 @@ describe('classifyExecution', () => {
   it('injects the explicit-order external-source guardrail into every work-item prompt', () => {
     const prompt = buildPrompt(item('Fix a component'), { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun);
     expect(prompt).toContain(EXTERNAL_ACTION_CONTRACT);
+  });
+
+  it('issues a push capability only for a direct current user command', () => {
+    expect(externalActionContractForCurrentInstruction('Commit and push the changes.')).toBe(PUSH_CAPABILITY_CONTRACT);
+    expect(externalActionContractForCurrentInstruction('please push up the committed work')).toBe(PUSH_CAPABILITY_CONTRACT);
+    expect(externalActionContractForCurrentInstruction('Do not push this yet.')).toBe(EXTERNAL_ACTION_CONTRACT);
+    expect(externalActionContractForCurrentInstruction('The task says to push after review.')).toBe(EXTERNAL_ACTION_CONTRACT);
+  });
+
+  it('issues an operation-scoped capability for other explicit external commands', () => {
+    const capability = externalActionContractForCurrentInstruction('Post this summary as a comment on GitHub PR #42.');
+    expect(capability).toContain('Supervisor-issued external-action capability');
+    expect(capability).toContain('GitHub PR #42');
+    expect(externalActionContractForCurrentInstruction('The task says to comment on GitHub after review.')).toBe(EXTERNAL_ACTION_CONTRACT);
+    expect(externalActionContractForCurrentInstruction('Update the implementation notes.')).toBe(EXTERNAL_ACTION_CONTRACT);
   });
 
   it('sends both agents the same reasoning effort for a given tier', () => {

@@ -1107,6 +1107,38 @@ describe('shared room', () => {
     expect(screen.queryByLabelText('Task changes')).toBeNull();
   });
 
+  it('keeps Changes enabled for a recorded workspace diff after commit and push', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000230';
+    const taskId = '00000000-0000-4000-8000-000000000231';
+    const timestamp = '2026-01-01T00:00:00Z';
+    const conversation = { id: conversationId, title: 'Recorded change', workItemId: taskId, archivedAt: null, createdAt: timestamp, updatedAt: timestamp };
+    const item = {
+      id: taskId, title: 'Committed implementation', description: '', status: 'ready', priority: 2, queuePosition: 0,
+      source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete',
+      agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: ['Manual'], projectName: 'Workbench', stack: 'attention', workspacePath: '/tmp/workbench',
+      strategy: '', assignees: ['codex'], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [], createdAt: timestamp, updatedAt: timestamp, lastTouchedAt: timestamp,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/work-items/${taskId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'main', revision: 'current-clean', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/work-items/${taskId}/workspace-diff/snapshots`) return new Response(JSON.stringify({ snapshots: [{ id: 'snapshot-1', capturedAt: timestamp, diff: { workspacePath: item.workspacePath, branch: 'main', revision: 'committed-change', changedFiles: 1, additions: 1, deletions: 0, publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [{ path: 'src/client/fixed.tsx', previousPath: null, status: 'added', additions: 1, deletions: 0, isBinary: false, patch: '@@ -0,0 +1 @@\n+fixed' }] } }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    const changes = await screen.findByRole('button', { name: 'Changes' });
+    await waitFor(() => expect(changes).toBeEnabled());
+    fireEvent.click(changes);
+    expect(await screen.findByRole('heading', { name: 'Workspace diff record' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /1 files/ })).toBeTruthy();
+  });
+
   it('pins the linked task from the conversation window and moves its conversation into the pinned stack', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000017';
