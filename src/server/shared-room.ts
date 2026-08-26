@@ -143,7 +143,11 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
         pendingSteers.set(id, resolveSteer);
       });
     };
-    signal.addEventListener('abort', stop, { once: true });
+    const cancel = () => {
+      stop();
+      fail(new Error('Agent run canceled.'));
+    };
+    signal.addEventListener('abort', cancel, { once: true });
     child.on('error', fail);
     child.stderr.on('data', (chunk: Buffer) => { if (!settled && chunk.toString().trim()) { /* diagnostics arrive on close */ } });
     child.stdout.on('data', (chunk: Buffer) => {
@@ -576,6 +580,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     repository.setConversationExecutionProfile(target.conversationId, profile);
     let result = agent === 'codex'
       ? await runSteerableCodex(guardedPrompt, cwd, controller.signal, (partial) => {
+        if (controller.signal.aborted) return;
         repository.updateSharedMessage(messageId, { body: partial });
         if (runId) repository.updateRun(runId, { output: partial });
       }, (steer) => {
@@ -587,6 +592,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       }, (event) => repository.addAgentStreamEvents(messageId, runId ?? null, [event]))
         .then((output) => ({ output, agent: 'codex' as const, usage: { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null }, fallbackFrom: null, fallbackReason: null }))
       : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
+      if (controller.signal.aborted) return;
       repository.updateSharedMessage(messageId, { body: partial });
       if (runId) repository.updateRun(runId, { output: partial });
     }, controller.signal, (fallback, reason) => {
@@ -603,10 +609,12 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       void deliverPendingSharedInterjections(repository, messageId);
     } : undefined);
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
+      if (controller.signal.aborted) throw new Error('Agent run canceled.');
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the turn to Codex.';
       if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'agent_fallback', reason);
       repository.updateSharedMessage(messageId, { body: '● Claude reported an invalid workspace-scope blocker. Handing this tracked turn to Codex…', fallbackFrom: 'claude', fallbackReason: reason });
       const recovered = await runAgentCommandWithFallback('codex', cwd, `${guardedPrompt}\n\nRecovery handoff: Claude incorrectly claimed it lacked workspace access. Complete the original request directly. Do not repeat that claim; report only observed commands, files changed, verification, and concrete blockers.`, (partial) => {
+        if (controller.signal.aborted) return;
         repository.updateSharedMessage(messageId, { body: partial });
         if (runId) repository.updateRun(runId, { output: partial });
       }, controller.signal, undefined, profile, (usage) => {
@@ -618,6 +626,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       repository.updateSharedMessage(messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
       if (runId) repository.updateRun(runId, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
     }
+    if (controller.signal.aborted) throw new Error('Agent run canceled.');
     const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, estimatedCostUsd: result.usage.estimatedCostUsd, costSource: result.usage.costSource, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
     if (hasUntrackedContinuationClaim(result.output)) {
       const error = 'Agent claimed background or later-reported work. Workbench cannot track detached actions; the response was not marked finished.';
@@ -670,8 +679,13 @@ export function cancelSharedReply(repository: WorkItemRepository, messageId: str
   // only the chat bubble marks it canceled but leaves a runner in another
   // process free to keep working; route it through the run cancel protocol so
   // its cancellation flag reaches that process and kills its whole CLI tree.
+  // A task-linked reply has both a durable run record and a local shared-room
+  // controller. The durable flag stops a runner in another process, but this
+  // process is the one currently consuming the provider stream. Abort both:
+  // otherwise the UI marks the reply canceled while this live controller keeps
+  // accepting and persisting chunks until the provider eventually exits.
   if (runId) cancelAgentRun(repository, runId);
-  else activeReplies.get(messageId)?.abort();
+  activeReplies.get(messageId)?.abort();
   repository.updateSharedMessage(messageId, { status: 'canceled' });
   const dispatched = dispatchNextSharedTurn(repository, message.conversationId);
   if (!dispatched.length) settleLinkedTask(repository, message.conversationId, 'Agent conversation was canceled; review or redirect the task.');

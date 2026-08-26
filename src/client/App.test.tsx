@@ -966,6 +966,84 @@ describe('shared room', () => {
     expect(screen.queryByText(/Archived conversation · restore or fork it to continue/)).toBeNull();
   });
 
+  it('opens a linked GitHub pull-request diff inside the conversation window on demand', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000214';
+    const taskId = '00000000-0000-4000-8000-000000000215';
+    const timestamp = '2026-01-01T00:00:00Z';
+    const conversation = { id: conversationId, title: 'Review pull request', workItemId: taskId, archivedAt: null, createdAt: timestamp, updatedAt: timestamp };
+    const item = {
+      id: taskId, title: 'Review GitHub changes', description: '', status: 'in_progress', priority: 2, queuePosition: 0,
+      source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete',
+      agentOutcome: null, sourceIdentifier: null, sourceUrl: 'https://github.com/writer/workbench/pull/42', sourceTags: ['GitHub'], projectName: 'Workbench', stack: 'attention', workspacePath: null,
+      strategy: '', assignees: ['codex'], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [],
+      createdAt: timestamp, updatedAt: timestamp, lastTouchedAt: timestamp,
+    };
+    const message = { id: 'review-message', conversationId, author: 'codex', body: 'The implementation is ready to review.', pinned: false, status: 'completed', error: '', createdAt: timestamp, attachments: [], model: null, executionProfile: null, dispatchTarget: 'none' };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/work-items/${taskId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'diff-in-chat', changedFiles: 1, additions: 2, deletions: 1, files: [{ path: 'src/client/App.tsx', previousPath: null, status: 'modified', additions: 2, deletions: 1, isBinary: false, patch: '@@ -1 +1,2 @@\n-old\n+new\n+next' }] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/github/pull-request-diff')) return new Response(JSON.stringify({ diff: { url: item.sourceUrl, repository: 'writer/workbench', number: 42, title: 'Conversation review', baseRef: 'main', headRef: 'diff-in-chat', changedFiles: 1, additions: 2, deletions: 1, files: [{ path: 'src/client/App.tsx', previousPath: null, status: 'modified', additions: 2, deletions: 1, isBinary: false, patch: '@@ -1 +1,2 @@\n-old\n+new\n+next' }] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [message] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    expect(await screen.findByText('The implementation is ready to review.')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Changes' })).toHaveAttribute('aria-pressed', 'false');
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/github/pull-request-diff'))).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Changes' }));
+    expect(await screen.findByRole('heading', { name: 'Current workspace changes' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Conversation review' })).toBeTruthy();
+    expect(await screen.findAllByRole('button', { name: /src\/client\/App\.tsx/ })).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Changes' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('The implementation is ready to review.')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Conversation' }));
+    expect(await screen.findByText('The implementation is ready to review.')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Conversation review' })).toBeNull();
+  });
+
+  it('opens the linked task workspace diff in the conversation even without a pull request', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000216';
+    const taskId = '00000000-0000-4000-8000-000000000217';
+    const timestamp = '2026-01-01T00:00:00Z';
+    const conversation = { id: conversationId, title: 'Implement task', workItemId: taskId, archivedAt: null, createdAt: timestamp, updatedAt: timestamp };
+    const item = {
+      id: taskId, title: 'Local implementation', description: '', status: 'in_progress', priority: 2, queuePosition: 0,
+      source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete',
+      agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: ['Manual'], projectName: 'Workbench', stack: 'attention', workspacePath: '/tmp/workbench',
+      strategy: '', assignees: ['codex'], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [],
+      createdAt: timestamp, updatedAt: timestamp, lastTouchedAt: timestamp,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/work-items/${taskId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'feature/local-diff', changedFiles: 1, additions: 1, deletions: 1, files: [{ path: 'src/client/feature.tsx', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    expect(await screen.findByRole('button', { name: 'Changes' })).toBeTruthy();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/workspace-diff'))).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Changes' }));
+    expect(await screen.findByRole('heading', { name: 'Current workspace changes' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /src\/client\/feature\.tsx/ })).toBeTruthy();
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/work-items/${taskId}/workspace-diff`)).toBe(true);
+    expect(screen.queryByText('GitHub reports no changed files for this pull request.')).toBeNull();
+  });
+
   it('pins the linked task from the conversation window and moves its conversation into the pinned stack', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000017';

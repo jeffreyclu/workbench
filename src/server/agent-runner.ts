@@ -9,6 +9,7 @@ import { AUTONOMOUS_MODEL_ALLOWLIST } from './autonomy-governor.js';
 const AUTONOMOUS_MODELS = new Set<string>(AUTONOMOUS_MODEL_ALLOWLIST);
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
 import { agentAccountEnv } from './agent-security.js';
+import { claimWarmProcess, hasWarmProcess, startPoolSweep, warmProcess } from './agent-pool.js';
 import { estimateModelCost } from './model-pricing.js';
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
@@ -767,17 +768,35 @@ function terminalAgentError(agent: AgentRun['agent'], line: string): string | nu
   return null;
 }
 
-async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void, accountProfile = DEFAULT_ACCOUNT_PROFILE, modelOverride?: string, onSteeringReady?: (steer: AgentInputSteering) => void, resumeSessionId?: string): Promise<AgentCommandResult> {
+async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void, accountProfile = DEFAULT_ACCOUNT_PROFILE, modelOverride?: string, onSteeringReady?: (steer: AgentInputSteering) => void, resumeSessionId?: string, poolEligible = false): Promise<AgentCommandResult> {
   const { command, args } = commandFor(agent, cwd, profile, modelOverride, resumeSessionId);
+  const spawnFresh = () => spawn(command, args, {
+    cwd,
+    env: agentAccountEnv(agent, accountProfile),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    // On Unix this makes child.pid the process-group leader, allowing Stop
+    // to kill Codex/Claude and every shell/tool process it created.
+    detached: process.platform !== 'win32',
+  });
   return new Promise<AgentCommandResult>((resolveOutput, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      env: agentAccountEnv(agent, accountProfile),
-      stdio: ['pipe', 'pipe', 'pipe'],
-      // On Unix this makes child.pid the process-group leader, allowing Stop
-      // to kill Codex/Claude and every shell/tool process it created.
-      detached: process.platform !== 'win32',
-    });
+    // Ephemeral-lane runs (research, review, one-shot execute — never a resumed
+    // coding conversation) may claim a pre-warmed process to skip boot + MCP
+    // init latency. A claimed process is used for exactly this one task and
+    // never returned to the pool; a fresh replacement is warmed in the
+    // background under the same (agent, cwd, command, args) key so the pool
+    // stays populated for the next matching task.
+    const claimed = poolEligible ? claimWarmProcess(agent, cwd, command, args) : null;
+    const child = claimed ?? spawnFresh();
+    // Skip background replenishment under the test runner: it spawns a real
+    // extra process, which pre-existing tests asserting exact spawn logs
+    // don't expect. The pool mechanics themselves are covered directly by
+    // agent-pool.test.ts.
+    if (poolEligible && !process.env.VITEST) {
+      startPoolSweep();
+      if (!hasWarmProcess(agent, cwd, command, args)) {
+        try { warmProcess(agent, cwd, command, args, spawnFresh()); } catch { /* best-effort warm; a fresh spawn still serves the next task */ }
+      }
+    }
     let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
     let stopping = false;
     let cancellationRequested = false;
@@ -879,6 +898,9 @@ ${CLAUDE_EXECUTION_CONTRACT}` : instrumentedPrompt;
     let lastFlushAt = 0;
     let pendingFlush: NodeJS.Timeout | null = null;
     const flushProgress = (force = false) => {
+      // A provider can write buffered stdout briefly after SIGTERM. Never turn
+      // a canceled reply back into visible live activity with those late chunks.
+      if (cancellationRequested || signal?.aborted) return;
       const sinceLastFlush = Date.now() - lastFlushAt;
       if (!force && sinceLastFlush < PROGRESS_FLUSH_MS) {
         // Trailing edge: the tokens written inside this window must still land,
@@ -1052,10 +1074,11 @@ export async function runAgentCommandWithFallback(
   modelOverride?: string,
   onSteeringReady?: (steer: AgentInputSteering) => void,
   resumeSessionId?: string,
+  poolEligible = false,
 ): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null }> {
   void kind;
   try {
-    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, resumeSessionId);
+    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, resumeSessionId, poolEligible);
     return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
   } catch (error) {
     // An autonomous reservation is provider+model specific. Crossing providers
@@ -1066,7 +1089,7 @@ export async function runAgentCommandWithFallback(
     onFallback?.(fallback, reason);
     const prefix = `${primary} is unavailable due to its usage limit. Continuing with ${fallback}.`;
     onProgress?.(prefix);
-    const result = await runAgentCommandWithUsage(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile, onUsage, onAudit, accountProfile);
+    const result = await runAgentCommandWithUsage(fallback, cwd, prompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile, onUsage, onAudit, accountProfile, undefined, undefined, undefined, poolEligible);
     return { ...result, agent: fallback, fallbackFrom: primary, fallbackReason: reason.slice(0, 500) };
   }
 }
@@ -1229,7 +1252,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
       })));
-    }, run.kind, run.accountProfile, autonomousModel ?? undefined, undefined, resumeSessionId);
+    }, run.kind, run.accountProfile, autonomousModel ?? undefined, undefined, resumeSessionId, !resumesSession);
     if (resumesSession && run.conversationId) repository.setConversationClaudeSessionId(run.conversationId, result.sessionId ?? null);
     if (run.origin !== 'autonomous' && result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the run to Codex.';

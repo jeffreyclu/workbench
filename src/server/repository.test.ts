@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync, rmSync } from 'node:fs';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
-import { cancelSharedReply, deliverPendingSharedInterjections, dispatchNextSharedTurn, interjectQueuedSharedMessage, interjectionSteeringPrompt, registerActiveReplySteering } from './shared-room.js';
+import { cancelSharedReply, deliverPendingSharedInterjections, dispatchNextSharedTurn, interjectQueuedSharedMessage, interjectionSteeringPrompt, isSharedReplyActive, registerActiveReplySteering, runSharedBackgroundJob } from './shared-room.js';
 import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
@@ -1264,6 +1264,26 @@ describe('WorkItemRepository', () => {
     expect(repository.getRun(run.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
     expect(repository.isCancellationRequested(run.id)).toBe(true);
     expect(repository.listSharedMessages(100, null, conversation.id).messages.find((message) => message.id === reply.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
+  });
+
+  it('aborts the local stream as well as the durable run for a task-linked reply', async () => {
+    const task = repository.create({ title: 'Stop the active reply', description: '', priority: 2, status: 'in_progress', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const conversation = repository.getOrCreateWorkConversation(task.id, task.title);
+    const reply = repository.createSharedMessage('claude', 'Working', 'running', conversation.id);
+    const run = repository.createRun(task.id, 'analysis', 'claude', 'claude', 'Keep working', conversation.id, reply.id);
+    repository.updateRun(run.id, { status: 'running' });
+    let aborted = false;
+    const streaming = runSharedBackgroundJob(repository, reply.id, (signal) => new Promise<string>((_resolve, reject) => {
+      signal.addEventListener('abort', () => { aborted = true; reject(new Error('canceled')); }, { once: true });
+    }));
+
+    expect(isSharedReplyActive(reply.id)).toBe(true);
+    cancelSharedReply(repository, reply.id);
+    await streaming;
+
+    expect(aborted).toBe(true);
+    expect(repository.getRun(run.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
+    expect(repository.getSharedMessageById(reply.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
   });
 
   it('cancels a legacy chat run that predates durable reply linkage', () => {

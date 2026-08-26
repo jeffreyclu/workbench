@@ -911,6 +911,19 @@ nav { display: grid; gap: 3px; }
 .task-attachment-picker { display: grid; gap: 7px; margin-block: 13px; }.task-attachment-picker .muted { margin: -3px 0 0; font-size: 12px; }.task-attachment-picker .pending-files { margin: 0; }.task-attachments .message-files > span { display: inline-flex; align-items: center; gap: 4px; }.task-attachments .message-files { align-items: center; }
 .message-file-meta { color: #75746d; }
 .thread-filter-bar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: min(900px, 100%); margin: 12px auto 0; padding: 0 28px; }
+.conversation-surface-tabs { display: inline-flex; align-items: stretch; margin-right: auto; overflow: hidden; border: 1px solid #373731; border-radius: 6px; background: #171715; }
+.conversation-surface-tabs button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 9px; color: #908f88; background: transparent; border: 0; border-right: 1px solid #373731; font: 700 10px 'DM Mono'; cursor: pointer; }
+.conversation-surface-tabs button:last-child { border-right: 0; }
+.conversation-surface-tabs button:hover { color: #e2e1d9; background: #252520; }
+.conversation-surface-tabs button[aria-pressed="true"] { color: #15200d; background: var(--acid); }
+.conversation-review-layout, .conversation-thread-pane { display: contents; }
+.conversation-review-layout.changes-open { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(340px, .82fr) minmax(0, 1.18fr); overflow: hidden; border-top: 1px solid var(--line); }
+.conversation-review-layout.changes-open .conversation-thread-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
+.conversation-review-layout.changes-open .shared-thread { width: 100%; padding: 20px 20px 28px; }
+.conversation-review-layout.changes-open .shared-composer { width: calc(100% - 40px); margin-bottom: 20px; }
+.conversation-changes { flex: 1; min-height: 0; padding: 0 28px 28px; overflow: auto; }
+.conversation-changes .workspace-diff { max-width: 1240px; margin: 0 auto; padding-top: 18px; border-top: 0; }
+.conversation-changes .github-diff { max-width: 1240px; margin: 0 auto; padding-top: 18px; border-top: 0; }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .spin { animation: spin .8s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes thinking-pulse { 0% { box-shadow: 0 0 0 0 #c6f43277; } 70% { box-shadow: 0 0 0 8px #c6f43200; } 100% { box-shadow: 0 0 0 0 #c6f43200; } }
@@ -1047,6 +1060,12 @@ nav { display: grid; gap: 3px; }
   .conversation-window-actions .icon-button { flex: 0 0 auto; width: 44px; height: 44px; }
   .conversation-window-actions .conversation-task-picker { flex: 0 0 auto; min-height: 44px; }
   .conversation-window-actions .conversation-delete-control { flex: 0 0 auto; }
+  .thread-filter-bar { align-items: stretch; flex-wrap: wrap; padding-inline: 14px; }
+  .conversation-surface-tabs { flex: 1 1 100%; margin-right: 0; }
+  .conversation-surface-tabs button { flex: 1 1 50%; justify-content: center; min-height: 44px; }
+  .conversation-review-layout.changes-open { display: flex; flex: 1; min-height: 0; grid-template-columns: none; overflow: hidden; border-top: 0; }
+  .conversation-review-layout.changes-open .conversation-thread-pane { display: none; }
+  .conversation-changes { padding: 0 14px 20px; }
   .agent-presence { display: none; }
   .composer-hint { display: none; }
   .agent-console .shared-composer textarea { min-height: 72px; max-height: 180px; padding: 12px 13px 8px; resize: none; }

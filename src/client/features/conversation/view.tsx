@@ -15,6 +15,7 @@ import {
   Cloud,
   Command,
   FileText,
+  FileDiff,
   GitBranch,
   LoaderCircle,
   MessageCircle,
@@ -71,6 +72,9 @@ import { DecisionTreeVisualizer } from './decision-tree-visualizer';
 import { celebrate } from '../../celebrate';
 import { SessionFeedbackPrompt } from '../../session-feedback-prompt';
 import { useDebouncedValue } from './hooks';
+import { GitHubDiffView } from '../github-diff/view';
+import { pullRequestUrl } from '../github-diff/logic';
+import { WorkspaceDiffView } from '../workspace-diff/view';
 
 const CONVERSATION_ROW_GAP = 6;
 // Stack cards and task cards share an 88px minimum height. Keeping the
@@ -286,6 +290,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const [feedbackTarget, setFeedbackTarget] = useState<{ conversationId?: string | null; workItemId?: string | null } | null>(null);
   const [conversationSearch, setConversationSearch] = useState('');
   const [dismissedCompletionPromptPromotionId, setDismissedCompletionPromptPromotionId] = useState<string | null>(null);
+  const [conversationSurface, setConversationSurface] = useState<'messages' | 'changes'>('messages');
   const debouncedConversationSearch = useDebouncedValue(conversationSearch.trim(), 300);
   const conversationSearchResults = useQuery({
     queryKey: conversationQueryKeys.search(debouncedConversationSearch),
@@ -426,6 +431,11 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   }, [selectedConversation, conversationId]);
   const linkedWorkItemId = selectedConversation?.workItemId ?? null;
   const linkedWorkItem = useQuery({ queryKey: ['work-item', linkedWorkItemId], queryFn: () => api.getWorkItem(linkedWorkItemId!), enabled: Boolean(linkedWorkItemId), refetchInterval: 1_000 });
+  const linkedPullRequestUrl = useMemo(() => {
+    const item = linkedWorkItem.data?.item;
+    return item ? pullRequestUrl([...(item.sourceUrl ? [item.sourceUrl] : []), ...(linkedWorkItem.data?.references ?? []).map((reference) => reference.url)]) : null;
+  }, [linkedWorkItem.data]);
+  useEffect(() => { setConversationSurface('messages'); }, [conversationId]);
   const linkableTasks = useQuery({ queryKey: ['conversation-linkable-tasks'], queryFn: () => api.listWorkItems('active', ''), staleTime: 30_000 });
   const retrievedMemoryDetail = useQuery({
     queryKey: ['retrieved-memory', retrievedMemoryMessageId],
@@ -1094,7 +1104,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
                   : conversationDetail.isLoading ? <span className="conversation-title-skeleton"><Skeleton width="240px" height="19px" /></span>
                   : selectedConversationMissing ? 'Conversation not found'
                   : 'New conversation')}</h2>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={12} /> Back to task</button>}</div>{conversationId && selectedConversation && <div className="conversation-window-actions"><button type="button" className="icon-button" onClick={() => setDecisionTreeOpen(true)} aria-label="Open agent decision tree" title="Open agent decision tree"><GitBranch size={14} /></button>{!selectedConversation.workItemId && <ConversationTaskPicker tasks={linkableTasks.data?.items ?? []} isLoading={linkableTasks.isLoading} isError={linkableTasks.isError} isPending={setConversationTask.isPending} onRetry={() => void linkableTasks.refetch()} onSelect={(workItemId) => setConversationTask.mutate(workItemId)} />}{selectedConversation.workItemId && <button type="button" className="icon-button conversation-unlink-task" onClick={() => setConversationTask.mutate(null)} disabled={setConversationTask.isPending} aria-label="Unlink task" title="Unlink task"><Link2Off size={14} /></button>}{linkedWorkItem.data?.item && <button type="button" className="icon-button complete-task-button" disabled={linkedTaskCompleted || completeLinkedTask.isPending} onClick={() => completeLinkedTask.mutate()} aria-label={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'} title={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'}>{completeLinkedTask.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}</button>}<button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<span className={`conversation-delete-control ${selectedConversation.workItemId ? 'is-disabled' : ''}`} tabIndex={selectedConversation.workItemId ? 0 : undefined}><button className="icon-button delete-conversation-button" disabled={Boolean(selectedConversation.workItemId)} onClick={() => setDeleteConversationPromptOpen(true)} aria-label="Delete conversation" aria-describedby={selectedConversation.workItemId ? 'linked-conversation-delete-help' : undefined} title={selectedConversation.workItemId ? undefined : 'Delete permanently'}><Trash2 size={14} /></button>{selectedConversation.workItemId && <span id="linked-conversation-delete-help" className="action-tooltip" role="tooltip">Delete the related task to delete this conversation.</span>}</span></div>}</header>
-        {linkedWorkItem.data?.item && <div className="thread-filter-bar"><TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} /><button type="button" className={`icon-button${linkedWorkItem.data.item.status === 'pinned' ? ' icon-button-active' : ''}`} onClick={() => toggleLinkedTaskPin.mutate()} disabled={toggleLinkedTaskPin.isPending} aria-pressed={linkedWorkItem.data.item.status === 'pinned'} aria-label={linkedWorkItem.data.item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'} title={linkedWorkItem.data.item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'}><Pin size={13} fill={linkedWorkItem.data.item.status === 'pinned' ? 'currentColor' : 'none'} /></button></div>}
+        {linkedWorkItem.data?.item && <div className="thread-filter-bar"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-pressed={conversationSurface === 'messages'} onClick={() => setConversationSurface('messages')}>Conversation</button><button type="button" aria-pressed={conversationSurface === 'changes'} onClick={() => setConversationSurface('changes')}><FileDiff size={13} /> Changes</button></div><TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} /><button type="button" className={`icon-button${linkedWorkItem.data.item.status === 'pinned' ? ' icon-button-active' : ''}`} onClick={() => toggleLinkedTaskPin.mutate()} disabled={toggleLinkedTaskPin.isPending} aria-pressed={linkedWorkItem.data.item.status === 'pinned'} aria-label={linkedWorkItem.data.item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'} title={linkedWorkItem.data.item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'}><Pin size={13} fill={linkedWorkItem.data.item.status === 'pinned' ? 'currentColor' : 'none'} /></button></div>}
+        <div className={`conversation-review-layout${conversationSurface === 'changes' ? ' changes-open' : ''}`}>
+        <div className="conversation-thread-pane">
         <div className="shared-thread" ref={threadScrollRef}>
           {conversationDetail.isLoading && <ConversationThreadSkeleton />}
           {selectedConversationMissing && (
@@ -1265,6 +1277,9 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
           </div>
           {send.error && <p className="error-message">{send.error.message}</p>}
         </form>}
+        </div>
+        {conversationSurface === 'changes' && linkedWorkItem.data && <div className="conversation-changes" aria-label="Task changes"><WorkspaceDiffView workItemId={linkedWorkItem.data.item.id} isRunning={linkedWorkItem.data.runs.some((run) => run.status === 'queued' || run.status === 'running')} />{linkedPullRequestUrl && <GitHubDiffView sourceUrl={linkedWorkItem.data.item.sourceUrl} references={linkedWorkItem.data.references} />}</div>}
+        </div>
       </section>
       {planArchivePromptOpen && <FollowUpArchiveDialog count={selectedPlanTaskIndexes.size} pending={resolvePlan.isPending} onClose={() => setPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolvePlan.mutate({ resolution: 'accepted', archiveParent })} />}
       {deleteConversationPromptOpen && conversationId && <ConfirmationDialog title="Delete this conversation?" description="This permanently deletes the conversation and cannot be undone." confirmLabel="Delete conversation" pending={deleteConversation.isPending} onClose={() => setDeleteConversationPromptOpen(false)} onConfirm={() => deleteConversation.mutate(conversationId)} />}

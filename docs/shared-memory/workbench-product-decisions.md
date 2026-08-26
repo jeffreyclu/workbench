@@ -863,3 +863,35 @@ relying on it if resume appears to silently no-op.
 
 Option 2 (warm process pool per agent+cwd) is still not built — remains open
 on the same work item.
+
+### Code review lives in the conversation
+
+*Decision from Jeffrey, 2026-08-26, superseding the PR-only scope.* The
+conversation's linked task always exposes a named **Changes** review control.
+Its primary content is the uncommitted, task-local workspace diff—the staged,
+unstaged, and untracked changes an agent just wrote—so Jeffrey can review the
+implementation without switching to Zed or another IDE. A linked GitHub PR is
+an additional remote comparison shown in the same pane, not the condition for
+local review.
+
+This is a responsive hybrid surface: on desktop, opening Changes keeps the
+conversation and composer visible in an independently scrollable left pane
+while the diff opens beside them; on phone, the controls switch between
+full-width conversation and diff panes. Fetch the local diff only when
+Changes is opened; retain the GitHub diff's existing on-demand authenticated
+path. Do not hide this workflow in task detail.
+
+Update 2026-08-26: Option 2 design resolved (Jeffrey delegated: "you decide
+what's best"). The pool serves ONLY the ephemeral/one-shot lane (research,
+reviews, short room answers, independent parallel work) — coding-conversation
+runs never draw from it, since they already get a specific `--resume
+<sessionId>` from Option 1 that a generic warm process can't hold; mixing the
+two lanes was the actual blocker. Pool key is `(agent, cwd)`. A claimed
+process is used for exactly one task then torn down and replaced — no
+cross-task context accumulation, since that's Option 1's job and doing it here
+too would reopen the 13M-token regression. Health check is a liveness probe at
+claim time only (no background scheduler for v1); idle TTL eviction (proposed
+2 min) plus immediate reap on exit/failed probe, never retrying a dead
+process. Pooled processes keep the unconditional `--autocompact 100k` — no
+exception path. Implementation (pool manager, claim/evict logic, wiring into
+agent-runner.ts) is still open on work item `f762adb1`.
