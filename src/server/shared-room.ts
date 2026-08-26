@@ -96,6 +96,12 @@ export function codexTurnStartParams(threadId: string, cwd: string, prompt: stri
   };
 }
 
+export function codexAppServerInitialRequest(cwd: string, resumeThreadId: string | null | undefined, alreadyInitialized: boolean): { method: string; params: Record<string, unknown> } {
+  return alreadyInitialized
+    ? codexThreadBootstrapRequest(cwd, resumeThreadId)
+    : { method: 'initialize', params: { clientInfo: { name: 'workbench', title: 'Workbench', version: '0.1.0' }, capabilities: { experimentalApi: true, requestAttestation: false } } };
+}
+
 export function codexThreadBootstrapRequest(cwd: string, resumeThreadId?: string | null): { method: 'thread/start' | 'thread/resume'; params: Record<string, unknown> } {
   return resumeThreadId
     ? { method: 'thread/resume', params: { threadId: resumeThreadId, cwd, approvalPolicy: 'never' } }
@@ -200,9 +206,11 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
       for (const resolveSteer of pendingSteers.values()) resolveSteer(false);
       pendingSteers.clear();
     };
+    let startupTimeout: ReturnType<typeof setTimeout> | null = null;
     const fail = (error: Error) => {
       if (!settled) {
         settled = true;
+        if (startupTimeout) clearTimeout(startupTimeout);
         rejectPendingSteers();
         reject(error);
       }
@@ -233,7 +241,7 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
           request(bootstrap.method, bootstrap.params);
         }
         else if (event.result?.thread?.id && !threadId) { threadId = event.result.thread.id; request('turn/start', codexTurnStartParams(threadId, cwd, prompt)); }
-        else if (event.result?.turn?.id && !turnId) { turnId = event.result.turn.id; onReady(steer); }
+        else if (event.result?.turn?.id && !turnId) { turnId = event.result.turn.id; if (startupTimeout) clearTimeout(startupTimeout); onReady(steer); }
         if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
           const resolveSteer = pendingSteers.get(event.id)!;
           pendingSteers.delete(event.id);
@@ -284,6 +292,7 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
         }
         if (event.method === 'turn/completed') {
           settled = true;
+          if (startupTimeout) clearTimeout(startupTimeout);
           rejectPendingSteers();
           resolveOutput({ output: output.trim(), threadId });
           child.stdin.end();
@@ -297,7 +306,10 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
       }
     });
     child.on('close', (code) => { if (!settled) fail(signal.aborted ? new Error('Agent run canceled.') : new Error(`Codex app-server exited with code ${code}.`)); });
-    if (!initialized) request('initialize', { clientInfo: { name: 'workbench', title: 'Workbench', version: '0.1.0' }, capabilities: { experimentalApi: true, requestAttestation: false } });
+    const initialRequest = codexAppServerInitialRequest(cwd, resumeThreadId, initialized);
+    request(initialRequest.method, initialRequest.params);
+    startupTimeout = setTimeout(() => fail(new Error('Codex app-server did not start a turn within 20 seconds.')), 20_000);
+    startupTimeout.unref();
   });
 }
 
