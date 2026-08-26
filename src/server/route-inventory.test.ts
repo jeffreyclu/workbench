@@ -48,6 +48,7 @@ const baselineInventory = [
   'GET /api/shared/conversations/:id/workspace-diff',
   'GET /api/shared/conversations/:id/workspace-diff/snapshots',
   'GET /api/shared/conversations/:id/workspace-diff/status',
+  'GET /api/shared/conversations/:id/workspaces',
   'POST /api/shared/conversations/:id/workspace-diff/commit-and-push',
   'GET /api/shared/conversations/:id/agent-events',
   'GET /api/shared/conversations/:id/feedback',
@@ -62,6 +63,7 @@ const baselineInventory = [
   'PATCH /api/shared/conversations/:id/preferences',
   'PATCH /api/shared/conversations/:id/brief',
   'PATCH /api/shared/conversations/:id/draft',
+  'PATCH /api/shared/conversations/:id/pin',
   'PATCH /api/shared/conversations/:id/task',
   'POST /api/shared/conversations/:id/read',
   'POST /api/shared/conversations/:id/fork',
@@ -99,6 +101,8 @@ const baselineInventory = [
   'GET /api/source-connections',
   'GET /api/source-connections/figma/scope',
   'PUT /api/source-connections/figma/scope',
+  'PUT /api/source-connections/grafana',
+  'PUT /api/shared/conversations/:id/workspaces/selection',
   'POST /api/source-connections/:provider/mcp/oauth/start',
   'POST /api/source-connections/:provider/managed/oauth/start',
   'GET /api/source-connections/:provider/mcp/oauth/callback',
@@ -167,7 +171,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(135);
+    expect(baselineInventory).toHaveLength(139);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

@@ -369,7 +369,7 @@ export function App() {
     }
     return sections;
   }, [renderedRows]);
-  useTaskStackReorderAnimation(queueScrollRef, renderedItems.map((item) => item.id), skipNextDragReorderAnimation);
+  useTaskStackReorderAnimation(queueScrollRef, renderedItems.map((item) => item.id), skipNextDragReorderAnimation, queueView);
   useEffect(() => {
     if (route.name !== 'task' || !pendingTaskNavigation || pendingTaskNavigation !== route.taskId) return;
     // Wait until the stack behind the task is known: before that the queue can

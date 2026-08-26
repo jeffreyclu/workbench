@@ -17,13 +17,21 @@ export function useTaskStackReorderAnimation(
   containerRef: RefObject<HTMLElement | null>,
   itemIds: readonly string[],
   skipNextReorderRef: RefObject<boolean>,
+  scopeKey: string,
 ) {
   const previousIds = useRef<string[]>([]);
   const previousRects = useRef(new Map<string, DOMRect>());
+  const previousScopeKey = useRef(scopeKey);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
+    if (previousScopeKey.current !== scopeKey) {
+      previousScopeKey.current = scopeKey;
+      previousIds.current = [];
+      previousRects.current = new Map();
+    }
 
     const cards = new Map<string, HTMLElement>();
     for (const card of container.querySelectorAll<HTMLElement>('[data-work-item-id]')) {
@@ -50,5 +58,5 @@ export function useTaskStackReorderAnimation(
 
     previousIds.current = [...itemIds];
     previousRects.current = new Map([...cards].map(([id, card]) => [id, card.getBoundingClientRect()]));
-  }, [containerRef, itemIds, skipNextReorderRef]);
+  }, [containerRef, itemIds, skipNextReorderRef, scopeKey]);
 }

@@ -325,12 +325,13 @@ export class WorkItemRepository {
     return this.getConversation(id);
   }
 
-  setConversationComposerPreferences(id: string, preferences: Pick<SharedConversation, 'preferredExecutionProfile' | 'preferredAccountProfile' | 'preferredDispatchTarget'>): SharedConversation | null {
+  setConversationComposerPreferences(id: string, preferences: Partial<Pick<SharedConversation, 'preferredExecutionProfile' | 'preferredAccountProfile' | 'preferredDispatchTarget'>>): SharedConversation | null {
     const before = this.getConversation(id);
     if (!before) return null;
-    if (!this.conversations.setComposerPreferences(id, preferences)) return null;
-    if (before.workItemId && before.preferredExecutionProfile !== preferences.preferredExecutionProfile) {
-      this.addActivity(before.workItemId, 'jeffrey', 'model_preference', preferences.preferredExecutionProfile ? `Set the model tier preference to ${preferences.preferredExecutionProfile}.` : 'Cleared the model tier preference (back to auto).');
+    const next = { preferredExecutionProfile: before.preferredExecutionProfile, preferredAccountProfile: before.preferredAccountProfile, preferredDispatchTarget: before.preferredDispatchTarget, ...preferences };
+    if (!this.conversations.setComposerPreferences(id, next)) return null;
+    if (before.workItemId && before.preferredExecutionProfile !== next.preferredExecutionProfile) {
+      this.addActivity(before.workItemId, 'jeffrey', 'model_preference', next.preferredExecutionProfile ? `Set the model tier preference to ${next.preferredExecutionProfile}.` : 'Cleared the model tier preference (back to auto).');
     }
     return this.getConversation(id);
   }

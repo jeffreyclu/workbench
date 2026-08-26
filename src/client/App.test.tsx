@@ -990,6 +990,34 @@ describe('shared room', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === `/api/shared/conversations/${conversationId}/task` && init?.method === 'PATCH' && init.body === JSON.stringify({ workItemId: alphaTaskId }))).toBe(true));
   });
 
+  it('includes Workbench-project tasks alongside attention-stack tasks in the conversation link picker', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000028';
+    const attentionTaskId = '00000000-0000-4000-8000-000000000029';
+    const workbenchTaskId = '00000000-0000-4000-8000-000000000030';
+    const conversation = { id: conversationId, title: 'Link a task', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const makeTask = (id: string, title: string) => ({
+      id, title, description: '', status: 'ready', priority: 2, queuePosition: 0, source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete', agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: 'Workbench', workspacePath: null, strategy: '', assignees: [], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [], createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', lastTouchedAt: '2026-01-01T00:00:00Z',
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/work-items?')) {
+        const params = new URL(url, 'http://local').searchParams;
+        const items = params.get('view') === 'workbench' ? [makeTask(workbenchTaskId, 'Fix Workbench bug')] : [makeTask(attentionTaskId, 'Attention task')];
+        return new Response(JSON.stringify({ items, nextCursor: null, totalCount: items.length, proposal: null }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Link conversation to task' }));
+    expect(await screen.findByRole('option', { name: 'Attention task' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Fix Workbench bug' })).toBeTruthy();
+  });
+
   it('completes a linked task from its conversation and shows only the conversation stack', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000013';

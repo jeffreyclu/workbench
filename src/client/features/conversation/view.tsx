@@ -201,7 +201,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   const sentDraftRef = useRef<{ conversationId: string; body: string } | null>(null);
   const preferenceMutationSequence = useRef(0);
   const updateConversationPreferences = useMutation({
-    mutationFn: ({ conversationId, selection, sequence }: { conversationId: string; selection: ComposerSelection; sequence: number }) => api.updateSharedConversationPreferences(conversationId, selection),
+    mutationFn: ({ conversationId, updates, sequence }: { conversationId: string; updates: Partial<ComposerSelection>; sequence: number }) => api.updateSharedConversationPreferences(conversationId, updates),
     onSuccess: async ({ conversation }, { conversationId: updatedConversationId, sequence }) => {
       // Several selectors may change before earlier requests return. Only the
       // newest response may hydrate this window, otherwise an older response
@@ -253,9 +253,8 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   function updateComposerPreferences(updates: Partial<ComposerSelection>) {
     if (!conversationId) return;
     const targetConversationId = conversationId;
-    const selection = { ...composerSelection, ...updates };
-    setComposerSelection(selection);
-    updateConversationPreferences.mutate({ conversationId: targetConversationId, selection, sequence: ++preferenceMutationSequence.current });
+    setComposerSelection((current) => ({ ...current, ...updates }));
+    updateConversationPreferences.mutate({ conversationId: targetConversationId, updates, sequence: ++preferenceMutationSequence.current });
   }
   function setExecutionProfile(profile: ComposerSelection['executionProfile']) {
     updateComposerPreferences({ executionProfile: profile });
@@ -444,7 +443,16 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
     conversationIsRunning,
   );
   useEffect(() => { setConversationSurface('messages'); }, [conversationId]);
-  const linkableTasks = useQuery({ queryKey: ['conversation-linkable-tasks'], queryFn: () => api.listWorkItems('active', ''), staleTime: 30_000 });
+  const linkableTasks = useQuery({
+    queryKey: ['conversation-linkable-tasks'],
+    queryFn: async () => {
+      const [active, workbench] = await Promise.all([api.listWorkItems('active', ''), api.listWorkItems('workbench', '')]);
+      const seen = new Set<string>();
+      const items = [...active.items, ...workbench.items].filter((task) => (seen.has(task.id) ? false : (seen.add(task.id), true)));
+      return { items };
+    },
+    staleTime: 30_000,
+  });
   const retrievedMemoryDetail = useQuery({
     queryKey: ['retrieved-memory', retrievedMemoryMessageId],
     queryFn: () => api.getRetrievedMemory(retrievedMemoryMessageId!),

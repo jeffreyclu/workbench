@@ -8,6 +8,9 @@ import { groupDiffBlocks, isChangedBlock, type DiffFollowUpReference } from '../
 import { highlightHtml, languageFromPath } from '../../syntax-highlight.js';
 import { fileLabel, parsePatch } from './logic.js';
 import { useCommitAndPushWorkspace, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { conversationClient } from '../../data/conversation-client.js';
+import { workspaceDiffQueryKeys } from './data.js';
 
 function DiffSkeleton() {
   return <section className="workspace-diff" aria-label="Workspace changes loading" aria-busy="true">
@@ -17,6 +20,17 @@ function DiffSkeleton() {
 }
 
 export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning, defaultCommitMessage = 'chore: update', onFollowUp }: { scope: WorkspaceDiffScope; isRunning: boolean; defaultCommitMessage?: string; onFollowUp?: (reference: DiffFollowUpReference) => void }) {
+  const queryClient = useQueryClient();
+  const conversationId = 'conversationId' in scope ? scope.conversationId : null;
+  const explorer = useQuery({ queryKey: ['conversation-workspaces', conversationId], queryFn: () => conversationClient.getConversationWorkspaces(conversationId!), enabled: Boolean(conversationId) });
+  const selectWorkspace = useMutation({
+    mutationFn: (workspacePath: string) => conversationClient.selectConversationWorkspace(conversationId!, workspacePath),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['conversation-workspaces', conversationId] });
+      await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.detail(scope) });
+      await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.snapshots(scope) });
+    },
+  });
   const query = useWorkspaceDiff(scope);
   const snapshotsQuery = useWorkspaceDiffSnapshots(scope, query.data?.diff?.revision);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -62,7 +76,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
 
   return <section className="workspace-diff" aria-label="Current workspace changes">
     <header>
-      <div><span className="workspace-diff-eyebrow"><FileDiff size={14} /> {selectedSnapshot ? 'Recorded version' : 'Review before push'}</span><h2>{selectedSnapshot ? 'Workspace diff record' : 'Current workspace changes'}</h2><small>{displayedDiff?.branch} · {displayedDiff?.changedFiles} files · <b>+{displayedDiff?.additions}</b> <i>−{displayedDiff?.deletions}</i></small><p>{selectedSnapshot ? `Captured ${new Date(selectedSnapshot.capturedAt).toLocaleString()}. This record is preserved after commit and push.` : 'Uncommitted changes in this task’s workspace. This includes staged, unstaged, and untracked files.'}</p></div>
+      <div><span className="workspace-diff-eyebrow"><FileDiff size={14} /> {selectedSnapshot ? 'Recorded version' : 'Review before push'}</span><h2>{selectedSnapshot ? 'Workspace diff record' : 'Current workspace changes'}</h2>{conversationId && explorer.data && <label className="workspace-diff-timeline"><span>Repo Explorer</span><select value={explorer.data.selectedPath ?? ''} onChange={(event) => selectWorkspace.mutate(event.target.value)} disabled={selectWorkspace.isPending}><option value="" disabled>Select repository</option>{explorer.data.workspaces.map((workspace) => <option key={workspace.path} value={workspace.path}>{workspace.label}</option>)}</select></label>}<small>{displayedDiff?.branch} · {displayedDiff?.changedFiles} files · <b>+{displayedDiff?.additions}</b> <i>−{displayedDiff?.deletions}</i></small><p>{selectedSnapshot ? `Captured ${new Date(selectedSnapshot.capturedAt).toLocaleString()}. This record is preserved after commit and push.` : 'Uncommitted changes in the selected repository. This includes staged, unstaged, and untracked files.'}</p></div>
       <div className="workspace-diff-actions">
         {snapshots.length > 0 && <label className="workspace-diff-timeline"><History size={13} /><span className="visually-hidden">Workspace diff version</span><select value={selectedSnapshotId ?? selectedSnapshot?.id ?? ''} onChange={(event) => { setSelectedSnapshotId(event.target.value); setSelectedPath(null); }}><option value="">Current changes</option>{snapshots.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{new Date(snapshot.capturedAt).toLocaleString()} · {snapshot.diff.changedFiles} files</option>)}</select></label>}
         <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={() => void query.refetch()} disabled={query.isFetching || publish.isPending}><RefreshCw size={13} className={query.isFetching ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>

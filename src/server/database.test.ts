@@ -67,6 +67,7 @@ const EXPECTED_MIGRATIONS = [
   '054_agent_run_diagnostics',
   '055_shared_conversation_pinning',
   '056_diff_confidence_cache',
+  '057_shared_conversation_workspace_selection',
 ];
 
 describe('openDatabase', () => {
@@ -172,6 +173,19 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(artifact_comments)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toContain('anchor');
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_artifact_comments_anchor'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds server-persisted conversation workspace selection on upgrade', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '057_shared_conversation_workspace_selection'").run();
+    current.exec('DROP TABLE shared_conversation_workspace_selection;');
+    current.close();
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'shared_conversation_workspace_selection'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '057_shared_conversation_workspace_selection'").get()).toBeTruthy();
     upgraded.close();
   });
 

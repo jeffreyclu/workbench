@@ -1623,6 +1623,21 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // A conversation can intentionally span repositories. Persist its active
+    // explorer selection server-side so desktop and mobile render the same
+    // Changes view, and never fall back to the Workbench checkout by accident.
+    id: '057_shared_conversation_workspace_selection',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS shared_conversation_workspace_selection (
+          conversation_id TEXT PRIMARY KEY REFERENCES shared_conversations(id) ON DELETE CASCADE,
+          workspace_path TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

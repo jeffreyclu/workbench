@@ -644,6 +644,19 @@ describe('GET /api/shared/conversations/:id', () => {
       preferredExecutionProfile: 'deep', preferredAccountProfile: 'personal', preferredDispatchTarget: 'claude',
     }) });
   });
+
+  it('merges independent composer dropdown updates instead of letting one reset the others', async () => {
+    const conversation = repository.createConversation('Independent composer choices');
+    for (const body of [{ executionProfile: 'deep' }, { accountProfile: 'personal' }, { dispatchTarget: 'claude' }]) {
+      const response = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/preferences`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(200);
+    }
+    expect(repository.getConversation(conversation.id)).toEqual(expect.objectContaining({
+      preferredExecutionProfile: 'deep', preferredAccountProfile: 'personal', preferredDispatchTarget: 'claude',
+    }));
+  });
 });
 
 describe('queue explainability and undo routes', () => {
@@ -878,8 +891,8 @@ describe('destructive operations soft-delete instead of hard-deleting', () => {
     expect(body.connections.find((connection) => connection.id === 'atlassian')?.state).toBe('connected');
   });
 
-  it('reports Grafana as connected once a managed Codex login is stored', async () => {
-    repository.setSourceConnection('grafana', 'Grafana Cloud MCP · Codex', { mode: 'managed' });
+  it('reports Grafana as connected once a service-account token is stored', async () => {
+    repository.setSourceConnection('grafana', 'Writer Grafana', { token: 'test-token' });
 
     const response = await fetch(`${baseUrl}/api/source-connections`);
     const body = (await response.json()) as { connections: Array<{ id: string; state: string }> };

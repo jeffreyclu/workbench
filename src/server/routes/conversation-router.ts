@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { createSessionFeedbackSchema, createSharedConversationSchema, createSharedMessageSchema, setConversationPinnedSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema } from '../../shared/contracts.js';
@@ -16,6 +16,23 @@ import type { RouteContext } from '../route-context.js';
 
 export function createConversationRouter({ repository, database, capabilities }: RouteContext) {
   const router = Router();
+  const conversationWorkspaces = (conversationId: string) => {
+    const conversation = repository.getConversation(conversationId);
+    if (!conversation) return null;
+    const linkedItem = conversation.workItemId ? repository.get(conversation.workItemId) : null;
+    const selected = database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversationId) as { workspace_path: string } | undefined;
+    const root = dirname(process.cwd());
+    const candidates = readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(root, entry.name))
+      .filter((path) => existsSync(join(path, '.git')) || existsSync(join(path, 'package.json')))
+      .map((path) => resolve(path));
+    const linkedPath = linkedItem?.workspacePath ? resolve(linkedItem.workspacePath) : null;
+    if (linkedPath && existsSync(linkedPath) && !candidates.includes(linkedPath)) candidates.unshift(linkedPath);
+    const defaultPath = linkedPath ?? (!linkedItem || linkedItem.projectName === 'Workbench' ? resolve(process.cwd()) : null);
+    const selectedPath = selected && candidates.includes(resolve(selected.workspace_path)) ? resolve(selected.workspace_path) : defaultPath;
+    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: basename(path), selected: path === selectedPath })) };
+  };
   router.get('/api/shared/conversations', (request, response) => {
     repository.ensureDefaultConversation();
     const limit = z.coerce.number().int().min(1).max(100).default(30).parse(request.query.limit);
@@ -40,20 +57,33 @@ export function createConversationRouter({ repository, database, capabilities }:
     response.json({ feedback: repository.getSessionFeedback(request.params.id) });
   });
 
-  // A conversation without a linked task still runs its agent turns somewhere
-  // (see resolveSharedReplyWorkingDirectory: the Workbench server cwd), so it
-  // has real, reviewable changes even though there is no task workspace.
   const conversationWorkingDirectory = (conversationId: string) => {
-    const conversation = repository.getConversation(conversationId);
-    if (!conversation) return null;
-    const linkedItem = conversation.workItemId ? repository.get(conversation.workItemId) : null;
-    return resolveSharedReplyWorkingDirectory(linkedItem ?? null);
+    const explorer = conversationWorkspaces(conversationId);
+    return explorer?.selectedPath ?? null;
   };
+
+  router.get('/api/shared/conversations/:id/workspaces', (request, response) => {
+    const explorer = conversationWorkspaces(request.params.id);
+    if (!explorer) return response.status(404).json({ error: 'Conversation not found.' });
+    response.json(explorer);
+  });
+  router.put('/api/shared/conversations/:id/workspaces/selection', (request, response) => {
+    const explorer = conversationWorkspaces(request.params.id);
+    if (!explorer) return response.status(404).json({ error: 'Conversation not found.' });
+    const workspacePath = resolve(z.object({ workspacePath: z.string().trim().min(1).max(1_000) }).parse(request.body).workspacePath);
+    if (!explorer.workspaces.some((workspace) => workspace.path === workspacePath) || !existsSync(workspacePath) || !statSync(workspacePath).isDirectory()) {
+      return response.status(400).json({ error: 'Select a repository from this local workspace.' });
+    }
+    database.prepare(`INSERT INTO shared_conversation_workspace_selection (conversation_id, workspace_path, updated_at)
+      VALUES (?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET workspace_path = excluded.workspace_path, updated_at = excluded.updated_at`)
+      .run(request.params.id, workspacePath, new Date().toISOString());
+    response.json({ selectedPath: workspacePath, workspaces: explorer.workspaces.map((workspace) => ({ ...workspace, selected: workspace.path === workspacePath })) });
+  });
 
   router.get('/api/shared/conversations/:id/workspace-diff', async (request, response, next) => {
     try {
       const workingDirectory = conversationWorkingDirectory(request.params.id);
-      if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
+      if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
       const diff = await getWorkspaceDiff(workingDirectory);
       if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot({ conversationId: request.params.id }, diff);
       response.json({ diff });
@@ -142,14 +172,14 @@ export function createConversationRouter({ repository, database, capabilities }:
 
   router.patch('/api/shared/conversations/:id/preferences', (request, response) => {
     const preferences = z.object({
-      executionProfile: z.enum(['economy', 'standard', 'deep']).nullable(),
-      accountProfile: z.string().trim().min(1).max(120).nullable(),
-      dispatchTarget: z.enum(['both', 'codex', 'claude']).nullable(),
-    }).parse(request.body);
+      executionProfile: z.enum(['economy', 'standard', 'deep']).nullable().optional(),
+      accountProfile: z.string().trim().min(1).max(120).nullable().optional(),
+      dispatchTarget: z.enum(['both', 'codex', 'claude']).nullable().optional(),
+    }).refine((value) => Object.values(value).some((entry) => entry !== undefined), 'Choose at least one preference.').parse(request.body);
     const conversation = repository.setConversationComposerPreferences(request.params.id, {
-      preferredExecutionProfile: preferences.executionProfile,
-      preferredAccountProfile: preferences.accountProfile,
-      preferredDispatchTarget: preferences.dispatchTarget,
+      ...(preferences.executionProfile === undefined ? {} : { preferredExecutionProfile: preferences.executionProfile }),
+      ...(preferences.accountProfile === undefined ? {} : { preferredAccountProfile: preferences.accountProfile }),
+      ...(preferences.dispatchTarget === undefined ? {} : { preferredDispatchTarget: preferences.dispatchTarget }),
     });
     if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
     response.json({ conversation });
