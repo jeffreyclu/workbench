@@ -1540,6 +1540,33 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // A workspace diff disappears from Git once it is committed. Persist each
+    // distinct review revision so task and conversation history remains useful
+    // after a successful commit and push.
+    id: '052_workspace_diff_snapshots',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS workspace_diff_snapshots (
+          id TEXT PRIMARY KEY,
+          work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
+          conversation_id TEXT REFERENCES shared_conversations(id) ON DELETE CASCADE,
+          revision TEXT NOT NULL,
+          diff_json TEXT NOT NULL,
+          captured_at TEXT NOT NULL,
+          CHECK (work_item_id IS NOT NULL OR conversation_id IS NOT NULL)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_diff_snapshots_work_item_revision
+          ON workspace_diff_snapshots(work_item_id, revision) WHERE work_item_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_diff_snapshots_conversation_revision
+          ON workspace_diff_snapshots(conversation_id, revision) WHERE conversation_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_workspace_diff_snapshots_work_item_captured
+          ON workspace_diff_snapshots(work_item_id, captured_at DESC) WHERE work_item_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_workspace_diff_snapshots_conversation_captured
+          ON workspace_diff_snapshots(conversation_id, captured_at DESC) WHERE conversation_id IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

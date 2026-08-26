@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type UsageCalibration, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type UsageCalibration, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot } from '../shared/contracts.js';
 import type { FeedbackWeight, QueueContext, QueuePlan } from './queue-intelligence.js';
 import { listProjects, resolveProjectName } from './project-registry.js';
 import type { WorkbenchDatabase } from './database.js';
@@ -44,6 +44,17 @@ interface ActivityRow {
 interface SavedWorkItemFilterRow {
   id: string; name: string; view: SavedWorkItemFilterView; filter_json: string;
   sort_order: number; created_at: string; updated_at: string;
+}
+
+interface WorkspaceDiffSnapshotRow {
+  id: string;
+  revision: string;
+  diff_json: string;
+  captured_at: string;
+}
+
+function mapWorkspaceDiffSnapshot(row: WorkspaceDiffSnapshotRow): WorkspaceDiffSnapshot {
+  return { id: row.id, revision: row.revision, diff: JSON.parse(row.diff_json) as WorkspaceDiff, capturedAt: row.captured_at };
 }
 
 function mapSavedWorkItemFilter(row: SavedWorkItemFilterRow): SavedWorkItemFilter {
@@ -688,6 +699,22 @@ export class WorkItemRepository {
       rating: row.rating as SessionFeedbackRating,
       decisionTree: JSON.parse(row.decision_tree_json!) as SessionFeedback['decisionTree'], createdAt: row.created_at!,
     };
+  }
+
+  captureWorkspaceDiffSnapshot(scope: { workItemId: string } | { conversationId: string }, diff: WorkspaceDiff): WorkspaceDiffSnapshot {
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    if ('workItemId' in scope) {
+      this.database.prepare(`INSERT OR IGNORE INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at) VALUES (?, ?, NULL, ?, ?, ?)`).run(id, scope.workItemId, diff.revision, JSON.stringify(diff), now);
+      return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at FROM workspace_diff_snapshots WHERE work_item_id = ? AND revision = ?`).get(scope.workItemId, diff.revision) as unknown as WorkspaceDiffSnapshotRow);
+    }
+    this.database.prepare(`INSERT OR IGNORE INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at) VALUES (?, NULL, ?, ?, ?, ?)`).run(id, scope.conversationId, diff.revision, JSON.stringify(diff), now);
+    return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at FROM workspace_diff_snapshots WHERE conversation_id = ? AND revision = ?`).get(scope.conversationId, diff.revision) as unknown as WorkspaceDiffSnapshotRow);
+  }
+
+  listWorkspaceDiffSnapshots(scope: { workItemId: string } | { conversationId: string }): WorkspaceDiffSnapshot[] {
+    const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
+    return (this.database.prepare(`SELECT id, revision, diff_json, captured_at FROM workspace_diff_snapshots WHERE ${column} = ? ORDER BY captured_at DESC`).all(id) as unknown as WorkspaceDiffSnapshotRow[]).map(mapWorkspaceDiffSnapshot);
   }
 
   createSessionFeedback(input: { conversationId?: string | null; workItemId?: string | null; rating: SessionFeedbackRating }): SessionFeedback | null {

@@ -1,5 +1,5 @@
 import type { BrokerConnection, BrokerSearchResponse, BrokerSourceId, ResolvedSourceDraft } from '../../shared/contracts';
-import type { GitHubPullRequestDiff, WorkspaceDiff, WorkspacePublishResult } from '../../shared/contracts';
+import type { GitHubPullRequestDiff, WorkspaceDiff, WorkspaceDiffSnapshot, WorkspacePublishResult } from '../../shared/contracts';
 import { request } from './request';
 
 // A conversation with no linked task still has a real workspace (see
@@ -20,6 +20,7 @@ export const sourceClient = {
   startManagedMcpOAuth: (provider: 'figma' | 'atlassian') => request<{ url: string }>(`/api/source-connections/${provider}/managed/oauth/start`, { method: 'POST' }),
   disconnectSource: (provider: 'confluence' | 'slack' | 'figma' | 'gmail' | 'github') => request<void>(`/api/source-connections/${provider}`, { method: 'DELETE' }),
   getWorkspaceDiff: (scope: WorkspaceDiffScope) => request<{ diff: WorkspaceDiff }>(`${workspaceDiffBasePath(scope)}/workspace-diff`),
+  getWorkspaceDiffSnapshots: (scope: WorkspaceDiffScope) => request<{ snapshots: WorkspaceDiffSnapshot[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/snapshots`),
   getWorkspaceDiffStatus: (scope: WorkspaceDiffScope, revision: string) => request<{ changed: boolean }>(`${workspaceDiffBasePath(scope)}/workspace-diff/status?revision=${encodeURIComponent(revision)}`),
   commitAndPushWorkspace: (scope: WorkspaceDiffScope, revision: string) => request<{ result: WorkspacePublishResult }>(`${workspaceDiffBasePath(scope)}/workspace-diff/commit-and-push`, { method: 'POST', body: JSON.stringify({ revision }) }),
   getGitHubPullRequestDiff: (url: string) => request<{ diff: GitHubPullRequestDiff }>(`/api/github/pull-request-diff?url=${encodeURIComponent(url)}`),

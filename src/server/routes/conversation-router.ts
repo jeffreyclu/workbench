@@ -53,8 +53,14 @@ export function createConversationRouter({ repository, database, capabilities }:
     try {
       const workingDirectory = conversationWorkingDirectory(request.params.id);
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
-      response.json({ diff: await getWorkspaceDiff(workingDirectory) });
+      const diff = await getWorkspaceDiff(workingDirectory);
+      repository.captureWorkspaceDiffSnapshot({ conversationId: request.params.id }, diff);
+      response.json({ diff });
     } catch (error) { next(error); }
+  });
+  router.get('/api/shared/conversations/:id/workspace-diff/snapshots', (request, response) => {
+    if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
+    response.json({ snapshots: repository.listWorkspaceDiffSnapshots({ conversationId: request.params.id }) });
   });
 
   router.get('/api/shared/conversations/:id/workspace-diff/status', async (request, response, next) => {

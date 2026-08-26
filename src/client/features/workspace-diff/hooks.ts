@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { workspaceDiffData, workspaceDiffQueryKeys } from './data.js';
@@ -24,6 +25,22 @@ export function useWorkspaceDiffChanges(scope: WorkspaceDiffScope, revision: str
   return status.data ?? false;
 }
 
+export function useWorkspaceDiffSnapshots(scope: WorkspaceDiffScope | null, revision: string | undefined) {
+  const query = useQuery({
+    queryKey: workspaceDiffQueryKeys.snapshots(scope ?? { workItemId: '' }),
+    queryFn: () => workspaceDiffData.getSnapshots(scope!),
+    enabled: Boolean(scope),
+    staleTime: Infinity,
+  });
+  // The current-diff route writes its immutable record before replying. Fetch
+  // again when that revision arrives so a racing initial timeline request does
+  // not omit the just-captured version.
+  useEffect(() => {
+    if (revision) void query.refetch();
+  }, [revision, query.refetch]);
+  return query;
+}
+
 
 export function useCommitAndPushWorkspace(scope: WorkspaceDiffScope) {
   const queryClient = useQueryClient();
@@ -31,6 +48,7 @@ export function useCommitAndPushWorkspace(scope: WorkspaceDiffScope) {
     mutationFn: (revision: string) => workspaceDiffData.commitAndPush(scope, revision),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.detail(scope) });
+      await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.snapshots(scope) });
     },
   });
 }

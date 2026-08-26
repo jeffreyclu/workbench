@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { WorkspaceDiff } from '../shared/contracts.js';
 import { readFileSync, rmSync } from 'node:fs';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
@@ -22,6 +23,21 @@ describe('WorkItemRepository', () => {
   afterEach(() => {
     database.close();
     setEmbedder(null);
+  });
+
+  it('keeps one immutable workspace diff record per reviewed revision after the workspace is clean', () => {
+    const item = repository.create({ title: 'Preserve diff record', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const diff: WorkspaceDiff = {
+      workspacePath: '/tmp/workbench', branch: 'feature/timeline', revision: 'reviewed-revision', changedFiles: 1, additions: 1, deletions: 0,
+      publish: { branch: 'feature/timeline', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
+      files: [{ path: 'src/version.ts', previousPath: null, status: 'added', additions: 1, deletions: 0, patch: '@@ -0,0 +1 @@\n+version', isBinary: false }],
+    };
+
+    const first = repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff);
+    const duplicate = repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff);
+
+    expect(duplicate.id).toBe(first.id);
+    expect(repository.listWorkspaceDiffSnapshots({ workItemId: item.id })).toEqual([expect.objectContaining({ id: first.id, diff })]);
   });
 
   it('uses the normal CLI account for repository-created runs unless a profile is explicitly selected', () => {

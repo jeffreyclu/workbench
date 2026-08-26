@@ -17,6 +17,15 @@ one local workspace or linked GitHub pull-request diff contains changed files.
 Leave it disabled when both are empty or unavailable; it must not open an empty
 review surface.
 
+### Workspace diff history is an immutable review record
+
+*Decision from Jeffrey, 2026-08-26.* Every distinct local workspace diff
+opened in Workbench is persisted as an immutable task- or conversation-scoped
+snapshot before it is rendered. The version browser lists those captured
+patches even after a commit and push makes Git’s working tree clean. Reopening
+the same revision must not create duplicate timeline entries; never overwrite
+or delete a recorded patch as part of refresh, commit, or push.
+
 ### Changes can commit and push the reviewed workspace
 
 *Decision from Jeffrey, 2026-08-26.* The local-workspace Changes pane includes

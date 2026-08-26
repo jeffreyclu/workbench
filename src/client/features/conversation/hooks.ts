@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { WorkItemReference } from '../../../shared/contracts.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { pullRequestUrl } from '../github-diff/logic.js';
 import { useGitHubPullRequestDiff } from '../github-diff/hooks.js';
 import { useWorkspaceDiff } from '../workspace-diff/hooks.js';
+import { workspaceDiffQueryKeys } from '../workspace-diff/data.js';
 
 export function useDebouncedValue(value: string, delayMs: number) {
   const [debouncedValue, setDebouncedValue] = useState(value);
@@ -14,8 +16,19 @@ export function useDebouncedValue(value: string, delayMs: number) {
   return debouncedValue;
 }
 
-export function useConversationChangesAvailability(scope: WorkspaceDiffScope | null, sourceUrl: string | null, references: WorkItemReference[]) {
+export function useConversationChangesAvailability(scope: WorkspaceDiffScope | null, sourceUrl: string | null, references: WorkItemReference[], isRunning: boolean) {
+  const queryClient = useQueryClient();
   const workspaceDiff = useWorkspaceDiff(scope);
+  const wasRunning = useRef(isRunning);
+  useEffect(() => {
+    // The diff query is deliberately stale-forever (see useWorkspaceDiff) so a
+    // patch someone is reading never shifts under them. But that means the
+    // "Changes" tab's enabled/disabled state can go stale too: once an agent
+    // finishes a turn, this is the one moment we know new changes may exist,
+    // so force a refetch to keep the tab honest.
+    if (wasRunning.current && !isRunning && scope) void queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.detail(scope) });
+    wasRunning.current = isRunning;
+  }, [isRunning, scope, queryClient]);
   const pullRequestUrlValue = pullRequestUrl([...(sourceUrl ? [sourceUrl] : []), ...references.map((reference) => reference.url)]);
   const pullRequestDiff = useGitHubPullRequestDiff(pullRequestUrlValue);
   const hasWorkspaceChanges = (workspaceDiff.data?.diff?.changedFiles ?? 0) > 0;

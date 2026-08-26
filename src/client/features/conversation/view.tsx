@@ -439,10 +439,12 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   // A conversation without a linked task still runs somewhere (the Workbench
   // server's own workspace), so it has real changes to review too.
   const workspaceDiffScope: WorkspaceDiffScope | null = linkedWorkItemId ? { workItemId: linkedWorkItemId } : conversationId ? { conversationId } : null;
+  const conversationIsRunning = selectedConversation?.state === 'working';
   const changesAvailability = useConversationChangesAvailability(
     workspaceDiffScope,
     linkedWorkItem.data?.item?.sourceUrl ?? null,
     linkedWorkItem.data?.references ?? [],
+    conversationIsRunning,
   );
   useEffect(() => { setConversationSurface('messages'); }, [conversationId]);
   const linkableTasks = useQuery({ queryKey: ['conversation-linkable-tasks'], queryFn: () => api.listWorkItems('active', ''), staleTime: 30_000 });

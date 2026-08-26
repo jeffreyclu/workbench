@@ -62,6 +62,7 @@ const EXPECTED_MIGRATIONS = [
   '049_shared_message_interjection_stream_offset',
   '050_session_feedback_decision_tree_snapshot',
   '051_shared_conversation_claude_session_id',
+  '052_workspace_diff_snapshots',
 ];
 
 describe('openDatabase', () => {
@@ -512,6 +513,21 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toContain('claude_session_id');
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '051_shared_conversation_claude_session_id'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds immutable workspace diff snapshots when upgrading from migration 051', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE workspace_diff_snapshots;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '052_workspace_diff_snapshots'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'workspace_diff_snapshots'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_workspace_diff_snapshots_work_item_captured'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '052_workspace_diff_snapshots'").get()).toBeTruthy();
     upgraded.close();
   });
 

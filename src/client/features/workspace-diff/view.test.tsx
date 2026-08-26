@@ -18,6 +18,9 @@ describe('WorkspaceDiffView', () => {
         const keys = (JSON.parse(String(init?.body)) as { blocks: Array<{ key: string }> }).blocks.map((block) => block.key);
         return new Response(JSON.stringify({ assessments: Object.fromEntries(keys.map((key) => [key, 42])) }), { headers: { 'Content-Type': 'application/json' } });
       }
+      if (url === '/api/work-items/work-item-1/workspace-diff/snapshots') {
+        return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
+      }
       if (url === '/api/work-items/work-item-1/workspace-diff') {
         return new Response(JSON.stringify({
           diff: {
@@ -75,6 +78,7 @@ describe('WorkspaceDiffView', () => {
   it('uses disabled and retry-push states when publishing is not currently safe', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const workItemId = String(input).includes('work-item-running') ? 'running' : String(input).includes('work-item-ahead') ? 'ahead' : 'clean';
+      if (String(input).endsWith('/workspace-diff/snapshots')) return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
       const diff = workItemId === 'ahead'
         ? { workspacePath: '/tmp/workbench', branch: 'review', revision: 'ahead', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'review', hasOrigin: true, ahead: 2, hasChanges: false, reason: null }, files: [] }
         : { workspacePath: '/tmp/workbench', branch: 'review', revision: workItemId, changedFiles: workItemId === 'running' ? 1 : 0, additions: 0, deletions: 0, publish: { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: workItemId === 'running', reason: null }, files: [] };
@@ -88,5 +92,34 @@ describe('WorkspaceDiffView', () => {
     expect(await screen.findByRole('button', { name: 'No changes to commit' })).toBeDisabled();
     rerender(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-ahead' }} isRunning={false} /></QueryClientProvider>);
     expect(await screen.findByRole('button', { name: 'Push 2 commits' })).toBeEnabled();
+  });
+
+  it('shows a preserved diff version after commit leaves the current workspace clean', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/work-items/work-item-1/workspace-diff') return new Response(JSON.stringify({ diff: {
+        workspacePath: '/tmp/workbench', branch: 'main', revision: 'clean', changedFiles: 0, additions: 0, deletions: 0,
+        publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [],
+      } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/work-items/work-item-1/workspace-diff/snapshots') return new Response(JSON.stringify({ snapshots: [{
+        id: 'recorded-version', revision: 'before-push', capturedAt: '2026-08-26T12:00:00.000Z', diff: {
+          workspacePath: '/tmp/workbench', branch: 'main', revision: 'before-push', changedFiles: 1, additions: 1, deletions: 0,
+          publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
+          files: [{ path: 'src/preserved.ts', previousPath: null, status: 'added', additions: 1, deletions: 0, isBinary: false, patch: '@@ -0,0 +1 @@\n+preserved' }],
+        },
+      }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/diff-confidence') return new Response(JSON.stringify({ assessments: {} }), { headers: { 'Content-Type': 'application/json' } });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={false} /></QueryClientProvider>);
+
+    const version = await screen.findByLabelText('Workspace diff version');
+    fireEvent.change(version, { target: { value: 'recorded-version' } });
+    expect(await screen.findByRole('heading', { name: 'Workspace diff record' })).toBeInTheDocument();
+    expect(screen.getByText('+preserved')).toBeInTheDocument();
+    expect(screen.getByText(/This record is preserved after commit and push/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'No changes to commit' })).toBeDisabled();
   });
 });

@@ -331,6 +331,14 @@ export interface WorkspaceDiff {
   publish: WorkspacePublishStatus;
 }
 
+/** An immutable, previously reviewed workspace diff. */
+export interface WorkspaceDiffSnapshot {
+  id: string;
+  revision: string;
+  diff: WorkspaceDiff;
+  capturedAt: string;
+}
+
 export interface WorkspacePublishStatus {
   branch: string | null;
   hasOrigin: boolean;

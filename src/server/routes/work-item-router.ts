@@ -56,8 +56,14 @@ export function createWorkItemRouter({ repository }: RouteContext) {
     try {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      response.json({ diff: await getWorkspaceDiff(resolveWorkingDirectory(item)) });
+      const diff = await getWorkspaceDiff(resolveWorkingDirectory(item));
+      repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff);
+      response.json({ diff });
     } catch (error) { next(error); }
+  });
+  router.get('/api/work-items/:id/workspace-diff/snapshots', (request, response) => {
+    if (!repository.get(request.params.id)) return response.status(404).json({ error: 'Work item not found.' });
+    response.json({ snapshots: repository.listWorkspaceDiffSnapshots({ workItemId: request.params.id }) });
   });
   router.get('/api/work-items/:id/workspace-diff/status', async (request, response, next) => {
     try {

@@ -7,7 +7,7 @@ import { WorkItemRepository } from './repository.js';
 import { cancelAgentRun, isAgentRunActive } from './agent-runner.js';
 import { OWNER_ID } from './scheduler.js';
 import { previewRuntimeCapabilities } from './runtime-capabilities.js';
-import type { ProjectSummary, WorkItem } from '../shared/contracts.js';
+import type { ProjectSummary, WorkItem, WorkspaceDiff } from '../shared/contracts.js';
 import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { closeTestServer as closeServer } from './test-http-harness.js';
@@ -61,6 +61,21 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     await expect(response.json()).resolves.toEqual({
       error: 'GitHub is not connected. Connect it in Sources to view pull-request diffs.',
     });
+  });
+
+  it('serves immutable workspace diff records after the current workspace changes are gone', async () => {
+    const item = repository.create({ title: 'Timeline record', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const diff: WorkspaceDiff = {
+      workspacePath: '/tmp/workbench', branch: 'main', revision: 'preserved-revision', changedFiles: 1, additions: 1, deletions: 0,
+      publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
+      files: [{ path: 'src/preserved.ts', previousPath: null, status: 'added', additions: 1, deletions: 0, patch: '@@ -0,0 +1 @@\n+preserved', isBinary: false }],
+    };
+    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff);
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}/workspace-diff/snapshots`);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ snapshots: [expect.objectContaining({ revision: 'preserved-revision', diff })] });
   });
 
   it('reports only work owned by this backend in its runtime drain health', async () => {
