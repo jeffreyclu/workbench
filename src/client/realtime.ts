@@ -21,6 +21,7 @@ export type RealtimeConnectionState = 'connecting' | 'connected' | 'reconnecting
 
 const MAX_WEBSOCKET_RECONNECT_ATTEMPTS = 3;
 const HTTPS_FALLBACK_POLL_MS = 1_500;
+const HTTPS_FALLBACK_WS_PROBE_MS = 30_000;
 const AGENT_POLL_TOPICS: readonly RealtimeTopic[] = ['shared', 'work-items', 'insights'];
 
 const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
@@ -83,6 +84,7 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
     let socket: WebSocket | null = null;
     let reconnectTimer: number | null = null;
     let pollingTimer: number | null = null;
+    let recoveryProbeTimer: number | null = null;
     let attempts = 0;
     let disposed = false;
 
@@ -94,6 +96,10 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
       setConnectionState('polling');
       invalidateRealtimeTopics(queryClient, AGENT_POLL_TOPICS);
       pollingTimer = window.setInterval(() => invalidateRealtimeTopics(queryClient, AGENT_POLL_TOPICS), HTTPS_FALLBACK_POLL_MS);
+      // Stay useful over HTTPS, but periodically make one recovery probe.
+      // A failed probe returns here without fast retries; the next probe is
+      // still bounded to this low-frequency interval.
+      recoveryProbeTimer = window.setInterval(connect, HTTPS_FALLBACK_WS_PROBE_MS);
     };
 
     const connect = () => {
@@ -104,6 +110,10 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
         if (pollingTimer !== null) {
           window.clearInterval(pollingTimer);
           pollingTimer = null;
+        }
+        if (recoveryProbeTimer !== null) {
+          window.clearInterval(recoveryProbeTimer);
+          recoveryProbeTimer = null;
         }
         setConnectionState('connected');
       });
@@ -135,6 +145,7 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
       disposed = true;
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       if (pollingTimer !== null) window.clearInterval(pollingTimer);
+      if (recoveryProbeTimer !== null) window.clearInterval(recoveryProbeTimer);
       socket?.close();
     };
   }, [onNotification, queryClient]);
