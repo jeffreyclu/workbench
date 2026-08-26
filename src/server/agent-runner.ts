@@ -39,7 +39,7 @@ export const PUSH_CAPABILITY_CONTRACT = 'Supervisor-issued capability: Jeffrey e
  * the supervisor. In particular, a task title, description, retrieved memory,
  * or an agent's own plan must never turn on network access.
  */
-export function externalActionContractForCurrentInstruction(instruction: string | null | undefined): string {
+export function externalActionContractForCurrentInstruction(instruction: string | null | undefined, precedingInstruction?: string | null): string {
   const current = instruction?.trim() ?? '';
   // A command may include a polite prefix or a local commit before the push.
   // Anchor it to a sentence boundary so statements such as "do not push" or
@@ -54,10 +54,19 @@ export function externalActionContractForCurrentInstruction(instruction: string 
   // A grant may be phrased separately from the imperative (for example,
   // “you should have the ability to change a PR description now”). It is
   // still scoped to this exact message and is never stored for later turns.
-  const explicitAuthorization = /\b(?:(?:i\s+)?(?:explicitly\s+)?(?:authorize|allow|approve|grant|give)\s+(?:you\s+)?(?:permission|access|authorization|authority|ability)|you\s+(?:now\s+)?(?:have|are\s+authorized|may|can|should\s+have)\s+(?:(?:the\s+)?(?:permission|access|authorization|authority|ability)\s+)?(?:to\s+)?(?:post|comment|reply|create|update|edit|rewrite|change|delete|merge|close|reopen|publish|send|deploy|release|upload|share|invite|assign|transition|sync))\b/i;
-  const namedExternalDestination = /\b(?:github|gitlab|linear|confluence|jira|slack|figma|notion|asana|trello|google\s+(?:docs|drive|calendar)|external\s+(?:site|service|system)|pull\s+request|pr\s+(?:description|comment|title)|https?:\/\/)/i;
-  if ((!directExternalAction.test(current) && !explicitAuthorization.test(current)) || !namedExternalDestination.test(current)) return EXTERNAL_ACTION_CONTRACT;
-  return `Supervisor-issued external-action capability: Jeffrey explicitly authorized this exact current-turn operation:\n\n${current.slice(0, 1_500)}\n\nPerform only the external action(s) and destination(s) stated above. Do not infer authority for related reads, other posts/comments, pull requests, merges, ticket changes, publication, deployments, or any other external operation. If credentials or the required integration are unavailable, report that concrete blocker; do not work around it.`;
+  const explicitAuthorization = /\b(?:(?:i\s+)?(?:explicitly\s+)?(?:authorize|allow|approve|grant|give)\s+(?:you\s+)?(?:(?:my|the|your)\s+)?(?:permission|access|authorization|authority|ability)|you\s+(?:now\s+)?(?:have|are\s+authorized|may|can|should\s+have)\s+(?:(?:my|the|your)\s+)?(?:permission|access|authorization|authority|ability)(?:\s+to\s+(?:post|comment|reply|create|update|edit|rewrite|change|delete|merge|close|reopen|publish|send|deploy|release|upload|share|invite|assign|transition|sync))?)\b/i;
+  const namedExternalDestination = /\b(?:github|gitlab|linear|confluence|jira|slack|figma|notion|asana|trello|google\s+(?:docs|drive|calendar)|external\s+(?:site|service|system)|pull\s+request|pr\s+(?:description|desc|comment|title)|https?:\/\/)/i;
+  const currentNamesOperation = (directExternalAction.test(current) || explicitAuthorization.test(current)) && namedExternalDestination.test(current);
+  if (currentNamesOperation) return `Supervisor-issued external-action capability: Jeffrey explicitly authorized this exact current-turn operation:\n\n${current.slice(0, 1_500)}\n\nPerform only the external action(s) and destination(s) stated above. Do not infer authority for related reads, other posts/comments, pull requests, merges, ticket changes, publication, deployments, or any other external operation. If credentials or the required integration are unavailable, report that concrete blocker; do not work around it.`;
+
+  // A terse follow-up such as “NOW YOU HAVE PERMISSION” authorizes only the
+  // immediately preceding, fully specified external request in this same
+  // conversation. It is not a standing grant and disappears after this run.
+  const pending = precedingInstruction?.trim() ?? '';
+  if (explicitAuthorization.test(current) && directExternalAction.test(pending) && namedExternalDestination.test(pending)) {
+    return `Supervisor-issued external-action capability: Jeffrey explicitly authorized the immediately preceding pending operation in this current turn:\n\n${pending.slice(0, 1_500)}\n\nPerform only that action and destination. This capability expires when this run completes; do not reuse it for any later message or related external operation.`;
+  }
+  return EXTERNAL_ACTION_CONTRACT;
 }
 const activeRunControllers = new Map<string, AbortController>();
 export const isAgentRunActive = (id: string) => activeRunControllers.has(id);
@@ -178,7 +187,7 @@ function isDocumentWork(item: WorkItem): boolean {
   return /(?:\.md\b|\b(document|documentation|knowledge|memory|copy|prose|readme|claude\.md|agents\.md)\b)/.test(text);
 }
 
-export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', retrievedMemory: RetrievedMemory[] = [], currentUserInstruction?: string): string {
+export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', retrievedMemory: RetrievedMemory[] = [], currentUserInstruction?: string, precedingUserInstruction?: string): string {
   const persona = run.kind === 'review'
     ? FRONTEND_REVIEWER_PERSONA
     : run.kind === 'bugfix'
@@ -223,7 +232,7 @@ ${retrievedMemoryForPrompt(retrievedMemory, item.id)}
 
 Non-interactive: use tools directly; no permission prompts or dialogs exist to approve. If access is missing, name the exact missing integration/credential and continue with what's possible.
 
-${externalActionContractForCurrentInstruction(currentUserInstruction)}
+${externalActionContractForCurrentInstruction(currentUserInstruction, precedingUserInstruction)}
 
 Execution integrity: this is one foreground, tracked run — no detached/background work or promised later results. Report only observed results. On tool failure, include the exact command, path, and error; never infer a sandbox/permission restriction without one.
 

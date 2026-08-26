@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexFinalReply, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, latestHumanMessageForSharedReply, memoryQueryForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexFinalReply, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory } from './shared-room.js';
 
 function message(index: number, body: string): SharedMessage {
   return {
@@ -104,6 +104,7 @@ describe('compactConversationHistory', () => {
     const prompt = buildSharedReplyPrompt('claude', 'Shared context.', '', messages, { item: task, run }, [], null, current);
 
     expect(current).toBe('Update the GitHub PR description to include the Loom demo.');
+    expect(precedingHumanMessageForSharedReply(messages)).toBe('Discuss the PR description, but do not post anything.');
     expect(prompt).toContain('Supervisor-issued external-action capability');
     expect(prompt).not.toContain('No external capability is issued');
     database.close();

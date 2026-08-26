@@ -174,6 +174,9 @@ describe('classifyExecution', () => {
     expect(externalActionContractForCurrentInstruction('Update the implementation notes.')).toBe(EXTERNAL_ACTION_CONTRACT);
     expect(externalActionContractForCurrentInstruction('Update the PR description to include my Loom demo: https://www.loom.com/share/example')).toContain('Supervisor-issued external-action capability');
     expect(externalActionContractForCurrentInstruction('Ok, you should have the ability to change a PR description now. Rewrite the PR description and include the Loom demo.')).toContain('Supervisor-issued external-action capability');
+    expect(externalActionContractForCurrentInstruction('NOW YOU HAVE MY PERMISSION TO UPDATE THE PR DESC')).toContain('Supervisor-issued external-action capability');
+    expect(externalActionContractForCurrentInstruction('NOW YOU HAVE PERMISSION', 'Update the GitHub PR description to include the Loom demo.')).toContain('immediately preceding pending operation');
+    expect(externalActionContractForCurrentInstruction('NOW YOU HAVE PERMISSION')).toBe(EXTERNAL_ACTION_CONTRACT);
     expect(externalActionContractForCurrentInstruction('Do it.')).toBe(EXTERNAL_ACTION_CONTRACT);
   });
 

@@ -354,9 +354,10 @@ export function buildSharedReplyPrompt(
   retrievedMemory?: RetrievedMemory[],
   localId?: string | null,
   currentUserInstruction?: string,
+  precedingUserInstruction?: string,
 ): string {
   const roleContext = linked
-    ? buildPrompt(linked.item, linked.run, sharedContext, [], currentUserInstruction)
+    ? buildPrompt(linked.item, linked.run, sharedContext, [], currentUserInstruction, precedingUserInstruction)
     : `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.\n\n${compactSharedBrief(sharedContext)}`;
   return `${roleContext}
 
@@ -396,6 +397,10 @@ export function memoryQueryForSharedReply(thread: SharedMessage[]): string {
 /** The repository returns conversation messages in chronological order. */
 export function latestHumanMessageForSharedReply(thread: SharedMessage[]): string {
   return thread.filter((message) => message.author === 'jeffrey').at(-1)?.body ?? '';
+}
+
+export function precedingHumanMessageForSharedReply(thread: SharedMessage[]): string {
+  return thread.filter((message) => message.author === 'jeffrey').at(-2)?.body ?? '';
 }
 
 export function linearContextForPrompt(repository: WorkItemRepository, message: string): string {
@@ -545,6 +550,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
   try {
     const thread = repository.listSharedMessages(100, null, target.conversationId).messages.filter((message) => message.id !== messageId);
     const latestUserMessage = latestHumanMessageForSharedReply(thread);
+    const precedingUserMessage = precedingHumanMessageForSharedReply(thread);
     const memoryQuery = retrievalSnapshot?.query ?? memoryQueryForSharedReply(thread);
     const recentSourceReferences = thread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body);
     const connectionContext = await connectionContextForPrompt(repository, [latestUserMessage, ...recentSourceReferences].join('\n'));
@@ -576,6 +582,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       injectedMemory,
       target.conversationId,
       latestUserMessage,
+      precedingUserMessage,
     );
     repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
     const guardedPrompt = prompt;
