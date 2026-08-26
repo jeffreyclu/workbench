@@ -6,7 +6,7 @@ import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, sharedTurnKindForMessage, warmSharedRoomCodex } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, sharedTurnKindForMessage, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const temporaryDirectories: string[] = [];
@@ -318,5 +318,39 @@ describe('isCodexDecisionPreamble', () => {
       'Fixed the route and verified the focused test.',
       'Also renamed the helper per your interjection.',
     ], true)).toBe('Fixed the route and verified the focused test.\n\nAlso renamed the helper per your interjection.');
+  });
+});
+
+describe('codexUsageFromAppServerEvent', () => {
+  it('extracts forwarded token-count usage without double-counting cached input', () => {
+    expect(codexUsageFromAppServerEvent({ method: 'codex/event', params: { payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 1_200, cached_input_tokens: 900, output_tokens: 44 } } } } }))
+      .toEqual({ inputTokens: 300, cacheCreationInputTokens: null, cacheReadInputTokens: 900, outputTokens: 44 });
+  });
+
+  it('accepts terminal turn usage when no token-count notification was forwarded', () => {
+    expect(codexUsageFromAppServerEvent({ method: 'turn/completed', params: { usage: { input_tokens: 200, cached_input_tokens: 50, output_tokens: 20 } } }))
+      .toEqual({ inputTokens: 150, cacheCreationInputTokens: null, cacheReadInputTokens: 50, outputTokens: 20 });
+  });
+
+  it('extracts usage from the thread/tokenUsage/updated event current app-server versions actually emit', () => {
+    expect(codexUsageFromAppServerEvent({
+      method: 'thread/tokenUsage/updated',
+      params: {
+        threadId: 't1',
+        turnId: 'turn1',
+        tokenUsage: {
+          last: { totalTokens: 17_693, inputTokens: 17_688, cachedInputTokens: 11_008, cacheWriteInputTokens: 0, outputTokens: 5, reasoningOutputTokens: 0 },
+          total: { totalTokens: 17_693, inputTokens: 17_688, cachedInputTokens: 11_008, cacheWriteInputTokens: 0, outputTokens: 5, reasoningOutputTokens: 0 },
+          modelContextWindow: 258_400,
+        },
+      },
+    })).toEqual({ inputTokens: 6_680, cacheCreationInputTokens: 0, cacheReadInputTokens: 11_008, outputTokens: 5 });
+  });
+
+  it('returns null for a turn/completed event with no usage field, matching current app-server output', () => {
+    expect(codexUsageFromAppServerEvent({
+      method: 'turn/completed',
+      params: { threadId: 't1', turn: { id: 'turn1', items: [], status: 'completed' } },
+    })).toBeNull();
   });
 });

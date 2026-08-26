@@ -76,6 +76,39 @@ export function isCodexDecisionPreamble(text: string): boolean {
   return /^\s*Decision:\s*/i.test(text);
 }
 
+/** Extracts token snapshots forwarded by Codex's steerable app-server. */
+export function codexUsageFromAppServerEvent(event: unknown): AgentUsage | null {
+  if (!event || typeof event !== 'object') return null;
+  const record = event as Record<string, unknown>;
+  const params = record.params && typeof record.params === 'object' ? record.params as Record<string, unknown> : {};
+  const candidates: Record<string, unknown>[] = [];
+  const addCandidate = (value: unknown) => { if (value && typeof value === 'object') candidates.push(value as Record<string, unknown>); };
+  addCandidate(params); addCandidate(params.usage); addCandidate(params.turn && typeof params.turn === 'object' ? (params.turn as Record<string, unknown>).usage : undefined); addCandidate(params.payload); addCandidate(params.event);
+  const tokenUsage = params.tokenUsage && typeof params.tokenUsage === 'object' ? params.tokenUsage as Record<string, unknown> : undefined;
+  addCandidate(tokenUsage?.last); addCandidate(tokenUsage?.total);
+  for (const candidate of [...candidates]) {
+    addCandidate(candidate.last_token_usage);
+    const payload = candidate.payload;
+    if (payload && typeof payload === 'object') {
+      addCandidate(payload); addCandidate((payload as Record<string, unknown>).info);
+      addCandidate(((payload as Record<string, unknown>).info as Record<string, unknown> | undefined)?.last_token_usage);
+    }
+    const info = candidate.info;
+    if (info && typeof info === 'object') addCandidate((info as Record<string, unknown>).last_token_usage);
+  }
+  for (const usage of candidates) {
+    const input = typeof usage.input_tokens === 'number' ? usage.input_tokens : typeof usage.inputTokens === 'number' ? usage.inputTokens : null;
+    const output = typeof usage.output_tokens === 'number' ? usage.output_tokens : typeof usage.outputTokens === 'number' ? usage.outputTokens : null;
+    const cached = typeof usage.cached_input_tokens === 'number' ? usage.cached_input_tokens : typeof usage.cachedInputTokens === 'number' ? usage.cachedInputTokens : null;
+    const cacheWrite = typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : typeof usage.cacheWriteInputTokens === 'number' ? usage.cacheWriteInputTokens : null;
+    if (input === null && output === null) continue;
+    // Codex's input_tokens includes cache reads. Store only the fresh portion
+    // so total-traffic accounting does not count the cache split twice.
+    return { inputTokens: input === null ? null : Math.max(0, input - (cached ?? 0)), cacheCreationInputTokens: cacheWrite, cacheReadInputTokens: cached, outputTokens: output };
+  }
+  return null;
+}
+
 /** Provider session IDs are ephemeral; a missing one must never poison retries. */
 export function isMissingClaudeSessionError(error: unknown): boolean {
   return /no conversation found with session id/i.test(error instanceof Error ? error.message : String(error));
@@ -177,7 +210,7 @@ export function warmSharedRoomCodex(cwd: string, accountProfile = DEFAULT_ACCOUN
 }
 
 /** Codex's app-server is the provider protocol that supports turn/steer. */
-function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE): Promise<{ output: string; threadId: string }> {
+function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE): Promise<{ output: string; threadId: string; usage: AgentUsage }> {
   return new Promise((resolveOutput, reject) => {
     const command = codexAppServerCommand();
     const claimed = claimWarmProcess('codex', cwd, command, CODEX_APP_SERVER_ARGS, accountProfile);
@@ -185,6 +218,7 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
     const initialized = Boolean(claimed);
     if (!process.env.VITEST) warmSharedRoomCodex(cwd, accountProfile);
     let buffered = ''; let output = ''; let liveOutput = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
+    let usage: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
     const pendingSteers = new Map<number, (accepted: boolean) => void>();
     let steerCount = 0;
     // A steered turn emits a separate `agentMessage` item per exchange (the
@@ -247,6 +281,8 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
       buffered += chunk.toString(); const lines = buffered.split('\n'); buffered = lines.pop() ?? '';
       for (const line of lines.filter(Boolean)) {
         let event: any; try { event = JSON.parse(line); } catch { continue; }
+        const reportedUsage = codexUsageFromAppServerEvent(event);
+        if (reportedUsage) { usage = reportedUsage; onUsage(usage); }
         if (!initialized && event.id === 1 && event.result) {
           const bootstrap = codexThreadBootstrapRequest(cwd, resumeThreadId);
           request(bootstrap.method, bootstrap.params);
@@ -305,7 +341,7 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
           settled = true;
           if (startupTimeout) clearTimeout(startupTimeout);
           rejectPendingSteers();
-          resolveOutput({ output: output.trim(), threadId });
+          resolveOutput({ output: output.trim(), threadId, usage });
           child.stdin.end();
         }
         if (event.error) {
@@ -728,8 +764,12 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
         // Keep that explicitly promoted human message queued, then deliver it
         // as soon as the same live session exposes turn/steer.
         void deliverPendingSharedInterjections(repository, messageId);
-      }, (event) => repository.addAgentStreamEvents(messageId, runId ?? null, [event]), linkedConversation?.codexThreadId, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE)
-        .then(({ output, threadId }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage: { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null }, fallbackFrom: null, fallbackReason: null }))
+      }, (event) => repository.addAgentStreamEvents(messageId, runId ?? null, [event]), (usage) => {
+        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
+        repository.updateSharedMessage(messageId, telemetry);
+        if (runId) { repository.updateRun(runId, telemetry); repository.addAgentRunDiagnostic(runId, messageId, agent, 'usage', telemetry); }
+      }, linkedConversation?.codexThreadId, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE)
+        .then(({ output, threadId, usage }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage, fallbackFrom: null, fallbackReason: null }))
       : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       if (controller.signal.aborted) return;
       updateLiveSharedBody(repository, messageId, partial);
