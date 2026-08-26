@@ -299,6 +299,15 @@ export interface GeneratedTaskDraft { title: string; description: string; projec
 export const resolveSourceUrlSchema = z.object({ url: z.string().url().max(4_000) });
 export interface ResolvedSourceDraft { source: string; sourceUrl: string; title: string; description: string; }
 
+/** Blocks of one file's diff sent for AI confidence assessment. Keys are echoed
+ * back in the response so the client can match scores to rendered blocks. */
+export const diffConfidenceRequestSchema = z.object({
+  blocks: z.array(z.object({
+    key: z.string().min(1).max(2_000),
+    lines: z.array(z.string().max(4_000)).min(1).max(200),
+  })).min(1).max(120),
+});
+
 /** A read-only snapshot of the uncommitted changes in a task's local workspace. */
 export interface WorkspaceDiffFile {
   path: string;

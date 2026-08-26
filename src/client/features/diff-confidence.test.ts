@@ -1,40 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { confidenceProminence, confidenceTone, groupDiffBlocks, scoreDiffBlockConfidence } from './diff-confidence.js';
+import { confidenceProminence, confidenceTone, groupDiffBlocks, isChangedBlock } from './diff-confidence.js';
 import type { DiffBlockLine } from './diff-confidence.js';
 
 function line(kind: DiffBlockLine['kind'], text: string, index: number): DiffBlockLine {
   return { key: `${index}:${text}`, kind, oldLine: kind === 'deletion' || kind === 'context' ? index : null, newLine: kind === 'addition' || kind === 'context' ? index : null, text };
 }
-
-describe('scoreDiffBlockConfidence', () => {
-  it('scores a small single-line addition highly', () => {
-    expect(scoreDiffBlockConfidence([line('addition', '+const x = 1;', 0)])).toBeGreaterThanOrEqual(80);
-  });
-
-  it('penalizes large blocks more than small ones', () => {
-    const small = scoreDiffBlockConfidence([line('addition', '+a', 0)]);
-    const big = scoreDiffBlockConfidence(Array.from({ length: 20 }, (_, index) => line('addition', `+line ${index}`, index)));
-    expect(big).toBeLessThan(small);
-  });
-
-  it('penalizes mixed addition/deletion blocks relative to pure ones', () => {
-    const pure = scoreDiffBlockConfidence([line('addition', '+a', 0), line('addition', '+b', 1)]);
-    const mixed = scoreDiffBlockConfidence([line('addition', '+a', 0), line('deletion', '-b', 1)]);
-    expect(mixed).toBeLessThan(pure);
-  });
-
-  it('penalizes risky keywords like TODO or console.log', () => {
-    const clean = scoreDiffBlockConfidence([line('addition', '+doWork();', 0)]);
-    const risky = scoreDiffBlockConfidence([line('addition', '+// TODO: fix this', 0)]);
-    expect(risky).toBeLessThan(clean);
-  });
-
-  it('clamps to the 5-98 range', () => {
-    const huge = scoreDiffBlockConfidence(Array.from({ length: 200 }, (_, index) => line(index % 2 ? 'addition' : 'deletion', `+/-TODO ${index}`, index)));
-    expect(huge).toBeGreaterThanOrEqual(5);
-    expect(huge).toBeLessThanOrEqual(98);
-  });
-});
 
 describe('groupDiffBlocks', () => {
   it('groups contiguous change lines into one block and leaves context/header lines standalone', () => {
@@ -49,9 +19,6 @@ describe('groupDiffBlocks', () => {
     const blocks = groupDiffBlocks(lines);
     expect(blocks).toHaveLength(4);
     expect(blocks[2].lines).toHaveLength(3);
-    expect(blocks[2].confidence).toBeGreaterThan(0);
-    expect(blocks[0].confidence).toBe(0);
-    expect(blocks[1].confidence).toBe(0);
   });
 
   it('splits separate change hunks into separate blocks', () => {
@@ -83,5 +50,12 @@ describe('confidenceProminence', () => {
     const high = confidenceProminence(98);
     expect(low.opacity).toBeGreaterThan(high.opacity);
     expect(low.fontWeight).toBeGreaterThan(high.fontWeight);
+  });
+});
+
+describe('isChangedBlock', () => {
+  it('marks blocks that add or remove code and skips context and header blocks', () => {
+    const blocks = groupDiffBlocks([line('header', '@@ -1 +1 @@', 0), line('context', ' same', 1), line('addition', '+new', 2)]);
+    expect(blocks.map(isChangedBlock)).toEqual([false, false, true]);
   });
 });

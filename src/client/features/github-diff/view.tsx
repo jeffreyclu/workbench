@@ -1,9 +1,10 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { ExternalLink, FileDiff, GitPullRequest } from 'lucide-react';
 import type { WorkItemReference } from '../../../shared/contracts.js';
 import { Skeleton, SkeletonText } from '../../skeleton.js';
 import { DiffConfidenceBubble } from '../diff-confidence-bubble.js';
-import { groupDiffBlocks } from '../diff-confidence.js';
+import { useDiffBlockConfidence } from '../diff-confidence-hooks.js';
+import { groupDiffBlocks, isChangedBlock } from '../diff-confidence.js';
 import { fileLabel, parsePatch, pullRequestUrl } from './logic.js';
 import { useGitHubPullRequestDiff } from './hooks.js';
 
@@ -21,6 +22,10 @@ export const GitHubDiffView = memo(function GitHubDiffView({ sourceUrl, referenc
   const diff = query.data?.diff;
   const files = diff?.files ?? [];
   const selectedFile = files.find((file) => file.path === selectedPath) ?? files[0] ?? null;
+  const patch = selectedFile?.patch ?? null;
+  const blocks = useMemo(() => (patch ? groupDiffBlocks(parsePatch(patch)) : []), [patch]);
+  const changedBlocks = useMemo(() => blocks.filter(isChangedBlock).map((block) => ({ key: block.key, lines: block.lines.map((line) => line.text) })), [blocks]);
+  const confidence = useDiffBlockConfidence(changedBlocks);
 
   useEffect(() => { setSelectedPath(null); }, [url]);
 
@@ -36,7 +41,7 @@ export const GitHubDiffView = memo(function GitHubDiffView({ sourceUrl, referenc
     </header>
     {files.length === 0 ? <p className="muted">GitHub reports no changed files for this pull request.</p> : <div className="github-diff-layout diff-review-layout">
       <nav className="diff-file-list" aria-label="Changed files"><span>Files ({files.length}{diff.changedFiles > files.length ? '+' : ''})</span><div>{files.map((file) => <button key={file.path} type="button" className={selectedFile?.path === file.path ? 'selected' : ''} onClick={() => setSelectedPath(file.path)} title={fileLabel(file)}><FileDiff size={13} /><span>{file.path}</span><b>+{file.additions}</b><i>−{file.deletions}</i></button>)}</div></nav>
-      {selectedFile && <article className="github-diff-file"><header><strong>{fileLabel(selectedFile)}</strong><span>{selectedFile.isBinary ? 'Binary file' : selectedFile.status}</span></header>{selectedFile.patch ? <pre>{groupDiffBlocks(parsePatch(selectedFile.patch)).map((block) => <div key={block.key} className={block.confidence ? 'diff-block' : undefined}>{block.confidence > 0 && <DiffConfidenceBubble confidence={block.confidence} />}{block.lines.map((line) => <code key={line.key} className={`diff-line ${line.kind}`}><span>{line.oldLine ?? ''}</span><span>{line.newLine ?? ''}</span><span>{line.text || ' '}</span></code>)}</div>)}</pre> : <p className="muted">GitHub does not provide a text patch for this binary or oversized file.</p>}</article>}
+      {selectedFile && <article className="github-diff-file"><header><strong>{fileLabel(selectedFile)}</strong><span>{selectedFile.isBinary ? 'Binary file' : selectedFile.status}</span></header>{selectedFile.patch ? <pre>{blocks.map((block) => { const changed = isChangedBlock(block); return <div key={block.key} className={changed ? 'diff-block' : undefined}>{changed && !confidence.isError && <DiffConfidenceBubble confidence={confidence.data?.[block.key] ?? null} />}{block.lines.map((line) => <code key={line.key} className={`diff-line ${line.kind}`}><span>{line.oldLine ?? ''}</span><span>{line.newLine ?? ''}</span><span>{line.text || ' '}</span></code>)}</div>; })}</pre> : <p className="muted">GitHub does not provide a text patch for this binary or oversized file.</p>}</article>}
     </div>}
   </section>;
 });

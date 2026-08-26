@@ -847,10 +847,11 @@ Updated two pre-existing tests
 old cutoff-only match counts (2 and 3 matches) — under the new rank floor
 those same fixtures correctly resolve to 5 matches each.
 
-Not yet done: `retrievedMemoryForPrompt()` in `agent-runner.ts` (used by
-`buildPrompt()`) still calls `selectRelevantMemoryForPrompt` with no
-`localId`, so that path gets rank-floor behavior but not tiering. Needs a
-follow-up review to find its correct local-scope id.
+Update 2026-08-25: the task-run formatting path now passes `item.id` into
+`retrievedMemoryForPrompt()`, so its second selection preserves task-local
+history's additive tier instead of silently filtering it back into the global
+budget. `agent-runner.test.ts` covers a low-scoring task-local decision kept
+alongside the global rank-floor matches.
 
 ## 2026-08-26: agent-runner reuse policy — hybrid, ship pool + conversation-scoped sessions first
 

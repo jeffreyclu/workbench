@@ -10,6 +10,7 @@ import {
   createWorkItemLinkSchema,
   createWorkItemReferenceSchema,
   createWorkItemSchema,
+  diffConfidenceRequestSchema,
   generateTaskDraftSchema,
   providerSyncConflictResolutionSchema,
   providerSyncFieldSchema,
@@ -28,12 +29,19 @@ import { resolveWorkingDirectory } from '../agent-runner.js';
 import { summarizeWorkItemChanges } from '../activity-log.js';
 import { resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { generateFastAiTaskDraft } from '../fast-task-draft-ai.js';
+import { assessDiffBlocks } from '../diff-confidence-ai.js';
 import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision } from '../workspace-diff.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
 
 export function createWorkItemRouter({ repository }: RouteContext) {
   const router = Router();
+  router.post('/api/diff-confidence', async (request, response, next) => {
+    try {
+      const { blocks } = diffConfidenceRequestSchema.parse(request.body);
+      response.json({ assessments: await assessDiffBlocks(blocks) });
+    } catch (error) { next(error); }
+  });
   const persistAttachments = (attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }>) => {
     const directory = resolve('data/attachments');
     mkdirSync(directory, { recursive: true });

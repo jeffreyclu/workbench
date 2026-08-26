@@ -645,6 +645,22 @@ describe('classifyExecution', () => {
     expect(prompt).not.toContain('Memory 6');
   });
 
+  it('keeps task-local retrieval additive when formatting an execution prompt', () => {
+    const task = item('Continue the token-bloat fix');
+    const run = { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun;
+    const global = Array.from({ length: 5 }, (_, index) => ({
+      source: 'message', title: `Global ${index + 1}`, body: `Global evidence ${index + 1}`, createdAt: '2026-08-25T00:00:00.000Z', score: 1 - index * 0.1,
+    }));
+    const local = {
+      source: 'activity', title: 'Task-local decision', body: 'Preserve this task-local decision even when its lexical score is lower.', createdAt: '2026-08-25T00:00:00.000Z', score: 0.01, workItemId: task.id,
+    };
+
+    const prompt = buildPrompt(task, run, '', [...global, local]);
+
+    expect(prompt).toContain('Global 5');
+    expect(prompt).toContain('Task-local decision');
+  });
+
   it('turns Codex and Claude JSON events into readable live progress', () => {
     expect(readableAgentEvent('codex', JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'npm test' } })).progress).toBe('● Running tests');
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'App.tsx' } }] } })).progress).toBe('● Reading App.tsx');

@@ -185,6 +185,12 @@ with his own thoughts and the assistants' accumulated lessons in one shared cont
 agent can read. Writing back to that shared context is part of finishing a task, not an optional
 extra.
 
+**Dual-agent dispatch is a product requirement.** Jeffrey explicitly rejected using fewer
+simultaneous agents as a token-reduction lever: the ability to collaborate with both Claude and
+Codex in one shared room is what differentiates Workbench. Keep the concurrent-recipient path;
+reduce cache traffic through bounded retrieval/history, compact prompts, and fewer avoidable
+round-trips within each agent instead.
+
 **Shared context is mandatory; budgeting must preserve it.** Jeffrey clarified on 2026-08-24 that
 shared context is Workbench's most critical requirement, not a feature that can be traded away to
 control model usage. Context controls must therefore retain durable shared facts and make them

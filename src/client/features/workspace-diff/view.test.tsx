@@ -12,8 +12,12 @@ afterEach(() => {
 
 describe('WorkspaceDiffView', () => {
   it('offers an orange refresh action when a newer workspace revision is detected without replacing the open patch', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === '/api/diff-confidence') {
+        const keys = (JSON.parse(String(init?.body)) as { blocks: Array<{ key: string }> }).blocks.map((block) => block.key);
+        return new Response(JSON.stringify({ assessments: Object.fromEntries(keys.map((key) => [key, 42])) }), { headers: { 'Content-Type': 'application/json' } });
+      }
       if (url === '/api/work-items/work-item-1/workspace-diff') {
         return new Response(JSON.stringify({
           diff: {
@@ -36,6 +40,7 @@ describe('WorkspaceDiffView', () => {
     expect(screen.getByText('+after')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /src\/old\.ts/ })).toBeInTheDocument();
     expect(document.querySelector('.diff-review-layout > .diff-file-list')).toBeInTheDocument();
+    expect(await screen.findByLabelText('AI assessment: 42 out of 100')).toBeInTheDocument();
   });
 
   it('commits and pushes reviewed changes, then refreshes the snapshot', async () => {

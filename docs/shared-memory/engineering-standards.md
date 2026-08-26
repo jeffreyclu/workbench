@@ -314,6 +314,21 @@ observed failure had roughly 1.0M cache-read tokens in under a minute for about
 100 visible output tokens, so minimizing fan-out and repeated context is the
 primary invariant; usage telemetry remains for diagnosis, not termination.
 
+### Cache-read reduction: dual-agent dispatch stays, other levers are the approved path
+
+On 2026-08-25, with cache-read at 521.9M tokens (30:1 over fresh input) across
+Claude and Codex, Jeffrey ruled that running both agents on one request is a
+core Workbench differentiator and is explicitly **not** a lever to cut — do not
+propose reducing to one-agent-per-request as a fix. The approved levers instead
+are: fewer/larger tool-loop steps per run, shrinking the cached prefix (tool
+schemas, brief, retrieval), and deliberate session lifecycle management
+(persist per conversation, compact after each turn, resume from compacted
+state rather than raw history). As a first concrete step, `agent-runner.ts`'s
+prompt-injected RAG budget was cut from 6,000/420/1,500 chars
+(global/per-item/local) to 3,500/300/1,000 — the search candidate ceiling
+(`PROMPT_MEMORY_CANDIDATE_LIMIT = 400`) is unchanged since that only bounds the
+DB query, not what gets injected into the cached prompt.
+
 ### Codex session accounting: `input_tokens` includes cache reads
 
 On 2026-08-24, Jeffrey's seven-day Codex session-log aggregate reported 637,606,464

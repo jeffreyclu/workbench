@@ -9,3 +9,4 @@ export function useGitHubPullRequestDiff(url: string | null) {
     staleTime: 30_000,
   });
 }
+

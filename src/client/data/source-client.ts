@@ -15,4 +15,5 @@ export const sourceClient = {
   getWorkspaceDiffStatus: (workItemId: string, revision: string) => request<{ changed: boolean }>(`/api/work-items/${workItemId}/workspace-diff/status?revision=${encodeURIComponent(revision)}`),
   commitAndPushWorkspace: (workItemId: string, revision: string) => request<{ result: WorkspacePublishResult }>(`/api/work-items/${workItemId}/workspace-diff/commit-and-push`, { method: 'POST', body: JSON.stringify({ revision }) }),
   getGitHubPullRequestDiff: (url: string) => request<{ diff: GitHubPullRequestDiff }>(`/api/github/pull-request-diff?url=${encodeURIComponent(url)}`),
+  assessDiffBlocks: (blocks: Array<{ key: string; lines: string[] }>) => request<{ assessments: Record<string, number> }>('/api/diff-confidence', { method: 'POST', body: JSON.stringify({ blocks }) }),
 };

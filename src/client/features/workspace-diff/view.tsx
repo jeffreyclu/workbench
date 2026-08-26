@@ -1,8 +1,9 @@
-import { memo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { FileDiff, GitCommitHorizontal, RefreshCw, Upload } from 'lucide-react';
 import { Skeleton, SkeletonText } from '../../skeleton.js';
 import { DiffConfidenceBubble } from '../diff-confidence-bubble.js';
-import { groupDiffBlocks } from '../diff-confidence.js';
+import { useDiffBlockConfidence } from '../diff-confidence-hooks.js';
+import { groupDiffBlocks, isChangedBlock } from '../diff-confidence.js';
 import { fileLabel, parsePatch } from './logic.js';
 import { useCommitAndPushWorkspace, useWorkspaceDiff, useWorkspaceDiffChanges } from './hooks.js';
 
@@ -21,6 +22,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ workItemId, i
   const selectedFile = files.find((file) => file.path === selectedPath) ?? files[0] ?? null;
   const hasChanges = useWorkspaceDiffChanges(workItemId, diff?.revision, isRunning);
   const publish = useCommitAndPushWorkspace(workItemId);
+  const patch = selectedFile?.patch ?? null;
+  const blocks = useMemo(() => (patch ? groupDiffBlocks(parsePatch(patch)) : []), [patch]);
+  const changedBlocks = useMemo(() => blocks.filter(isChangedBlock).map((block) => ({ key: block.key, lines: block.lines.map((line) => line.text) })), [blocks]);
+  const confidence = useDiffBlockConfidence(changedBlocks);
   const publishDisabled = publish.isPending || isRunning || Boolean(diff?.publish.reason) || (!diff?.publish.hasChanges && diff?.publish.ahead === 0);
   const publishLabel = publish.isPending ? 'Publishing…'
     : isRunning ? 'Agent running'
@@ -44,7 +49,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ workItemId, i
     {publish.data?.result.pushed && <p className="workspace-diff-publish-success" role="status">Committed and pushed{publish.data.result.commit ? ` ${publish.data.result.commit}` : ''}.</p>}
     {files.length === 0 ? <p className="muted">No uncommitted changes to review.</p> : <div className="workspace-diff-layout diff-review-layout">
       <nav className="diff-file-list" aria-label="Changed workspace files"><span>Files ({files.length})</span><div>{files.map((file) => <button key={file.path} type="button" className={selectedFile?.path === file.path ? 'selected' : ''} onClick={() => setSelectedPath(file.path)}><FileDiff size={13} /><span>{file.path}</span><b>+{file.additions}</b><i>−{file.deletions}</i></button>)}</div></nav>
-      {selectedFile && <article className="workspace-diff-file"><header><strong>{fileLabel(selectedFile)}</strong><span>{selectedFile.isBinary ? 'Binary file' : selectedFile.status}</span></header>{selectedFile.patch ? <pre>{groupDiffBlocks(parsePatch(selectedFile.patch)).map((block) => <div key={block.key} className={block.confidence ? 'diff-block' : undefined}>{block.confidence > 0 && <DiffConfidenceBubble confidence={block.confidence} />}{block.lines.map((line) => <code key={line.key} className={`diff-line ${line.kind}`}><span>{line.oldLine ?? ''}</span><span>{line.newLine ?? ''}</span><span>{line.text || ' '}</span></code>)}</div>)}</pre> : <p className="muted">This binary file cannot be rendered as a text diff.</p>}</article>}
+      {selectedFile && <article className="workspace-diff-file"><header><strong>{fileLabel(selectedFile)}</strong><span>{selectedFile.isBinary ? 'Binary file' : selectedFile.status}</span></header>{selectedFile.patch ? <pre>{blocks.map((block) => { const changed = isChangedBlock(block); return <div key={block.key} className={changed ? 'diff-block' : undefined}>{changed && !confidence.isError && <DiffConfidenceBubble confidence={confidence.data?.[block.key] ?? null} />}{block.lines.map((line) => <code key={line.key} className={`diff-line ${line.kind}`}><span>{line.oldLine ?? ''}</span><span>{line.newLine ?? ''}</span><span>{line.text || ' '}</span></code>)}</div>; })}</pre> : <p className="muted">This binary file cannot be rendered as a text diff.</p>}</article>}
     </div>}
   </section>;
 });

@@ -276,3 +276,24 @@ One consequence worth remembering: `~/dev/writer-monorepo/mise.toml` pins node 2
 versions are **not** applied automatically — matching the pinned node version and obtaining pnpm,
 python 3.12, and uv has to happen by hand. Flag that gap rather than assuming his environment matches
 the repo's declaration.
+
+### Never conclude "no AI signal is available" — Workbench can run a model in-process
+
+Told that a diff had no AI confidence score to display, Jeffrey pushed back flatly: *"what do you mean
+there's no AI confidence score? i don't believe that."* He was right, and the reasoning error is worth
+generalizing. The earlier claim rested on the fact that the Messages API does not expose token-level
+logprobs — true, but irrelevant, because a model can simply be *asked* to rate its own confidence, and
+Workbench already ships that mechanism.
+
+Workbench has an in-repo one-shot inference path: a `claude -p` subprocess spawned locally with the
+model and tools locked down (see `src/server/fast-task-draft-ai.ts` and `src/server/diff-confidence-ai.ts`
+for the established shape — `--model haiku --effort low --tools '' --strict-mcp-config --no-session-persistence
+--output-format json`, run from `/tmp`, with a timeout, an in-memory cache keyed by a hash of the input,
+and a strict parser that validates every key came back). Any future feature that wants a rating, score,
+classification, or summary can reuse it rather than inventing a regex heuristic.
+
+The durable rule: an *absence* claim ("there is no signal", "the API doesn't support that", "this
+isn't available") is a claim like any other and needs evidence before it is stated. Search the codebase
+for an existing mechanism first — in Workbench specifically, assume a model call is available until
+proven otherwise. And when a heuristic is offered as a stand-in for a model judgment, say so explicitly
+instead of letting it be read as the real thing.
