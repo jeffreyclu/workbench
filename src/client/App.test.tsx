@@ -731,6 +731,10 @@ describe('shared room', () => {
     expect(screen.queryByRole('heading', { name: 'Unrelated conversation one' })).toBeNull();
     expect(screen.getByText('Unrelated conversation two')).toBeTruthy();
     expect(screen.queryByText(/Archived conversation · restore or fork it to continue/)).toBeNull();
+
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Conversation view' })).getByRole('tab', { name: 'Archive' }));
+    const archivedCard = (await screen.findAllByText('Conversation to archive')).map((node) => node.closest('button')).find(Boolean);
+    expect(archivedCard).not.toHaveClass('conversation-exiting');
   });
 
   it('refetches the archive rail when Archive is selected again', async () => {

@@ -457,7 +457,35 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const animateConversationExit = (id: string) => new Promise<void>((resolve) => {
     setExitingConversationIds((current) => new Set(current).add(id));
     window.setTimeout(resolve, 560);
+    // A failed archive leaves the card mounted. Do not leave its one-shot
+    // exit class on it forever in that case.
+    window.setTimeout(() => {
+      setExitingConversationIds((current) => {
+        if (!current.has(id)) return current;
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    }, 10_000);
   });
+  useEffect(() => {
+    // Exit state belongs only to a card leaving the active rail. An archived
+    // card may legitimately appear in the Archive tab immediately afterward;
+    // carrying this state across tabs makes that new card animate out.
+    if (conversationView !== 'archive' || exitingConversationIds.size === 0) return;
+    setExitingConversationIds(new Set());
+  }, [conversationView, exitingConversationIds]);
+  useEffect(() => {
+    if (exitingConversationIds.size === 0) return;
+    const presentIds = new Set(conversationList.map((conversation) => conversation.id));
+    const stale = [...exitingConversationIds].filter((id) => !presentIds.has(id));
+    if (stale.length === 0) return;
+    setExitingConversationIds((current) => {
+      const next = new Set(current);
+      for (const id of stale) next.delete(id);
+      return next;
+    });
+  }, [conversationList, exitingConversationIds]);
   // initialConversationId is navigation input, not a controlled selection.
   // Applying later prop changes here allowed a delayed Execute response to
   // steal focus after Jeffrey had already selected another conversation.
@@ -1002,7 +1030,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                   const stateClass = state;
                   const color = conversation.linkedProjectName ? projectTheme(conversation.linkedProjectName) : null;
                   const cardStyle = color ? { '--task-accent': color.accent, '--task-tint': color.tint, '--task-border': color.border } as CSSProperties : undefined;
-                  return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><button style={cardStyle} className={`stack-card ${conversation.id === conversationId ? 'active' : ''} ${isUnread ? 'conversation-unread' : 'conversation-read'} ${conversation.linkedProjectName ? 'project-colored' : ''} ${stateClass ? `conversation-${stateClass}` : ''} ${exitingConversationIds.has(conversation.id) ? 'conversation-exiting' : ''}`} onClick={() => { setShowingConversationStackOnly(false); setConversationId(conversation.id); setRailOpen(false); }}><span className="conversation-tab-title">{conversation.linkedProjectName && <ProjectColorDot projectName={conversation.linkedProjectName} labelled />}<strong>{conversation.title}</strong>{(conversation.pinned || conversation.linkedWorkItemPinned) && <span className="conversation-pinned-marker" aria-label={conversation.pinned ? 'Pinned conversation' : 'Pinned task'} title={conversation.pinned ? 'Pinned conversation' : 'Pinned task'}><Pin size={10} fill="currentColor" aria-hidden="true" /></span>}{isUnread && <span className="conversation-unread-marker">New</span>}{stateLabel && <span className={`conversation-state conversation-state-${state}`}>{(state === 'working' || state === 'promoting') && <LoaderCircle className="spin" size={10} />}{state === 'waiting_promotion' && <Clock size={10} />}{stateLabel}</span>}</span><small className="conversation-tab-meta"><ConversationOriginBadge workItemId={conversation.workItemId} /><span>{state === 'working' ? 'Agent working…' : state === 'promoting' ? 'Promoting preview…' : state === 'waiting_promotion' ? 'Waiting to promote…' : new Date(conversation.updatedAt).toLocaleDateString()}</span></small></button></div>;
+                  return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><button style={cardStyle} className={`stack-card ${conversation.id === conversationId ? 'active' : ''} ${isUnread ? 'conversation-unread' : 'conversation-read'} ${conversation.linkedProjectName ? 'project-colored' : ''} ${stateClass ? `conversation-${stateClass}` : ''} ${conversationView === 'active' && exitingConversationIds.has(conversation.id) ? 'conversation-exiting' : ''}`} onClick={() => { setShowingConversationStackOnly(false); setConversationId(conversation.id); setRailOpen(false); }}><span className="conversation-tab-title">{conversation.linkedProjectName && <ProjectColorDot projectName={conversation.linkedProjectName} labelled />}<strong>{conversation.title}</strong>{(conversation.pinned || conversation.linkedWorkItemPinned) && <span className="conversation-pinned-marker" aria-label={conversation.pinned ? 'Pinned conversation' : 'Pinned task'} title={conversation.pinned ? 'Pinned conversation' : 'Pinned task'}><Pin size={10} fill="currentColor" aria-hidden="true" /></span>}{isUnread && <span className="conversation-unread-marker">New</span>}{stateLabel && <span className={`conversation-state conversation-state-${state}`}>{(state === 'working' || state === 'promoting') && <LoaderCircle className="spin" size={10} />}{state === 'waiting_promotion' && <Clock size={10} />}{stateLabel}</span>}</span><small className="conversation-tab-meta"><ConversationOriginBadge workItemId={conversation.workItemId} /><span>{state === 'working' ? 'Agent working…' : state === 'promoting' ? 'Promoting preview…' : state === 'waiting_promotion' ? 'Waiting to promote…' : new Date(conversation.updatedAt).toLocaleDateString()}</span></small></button></div>;
                 })}
               </div>
               {conversations.isLoading && <ConversationRailSkeleton count={6} />}
