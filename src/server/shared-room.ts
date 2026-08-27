@@ -799,7 +799,11 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     }))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, agent === 'claude' ? (steer) => {
       registerActiveReplySteering(messageId, steer);
       void deliverPendingSharedInterjections(repository, messageId);
-    } : undefined, agent === 'claude' ? linkedConversation?.claudeSessionId ?? undefined : undefined, agent !== 'claude');
+    } : undefined,
+    // Workbench already supplies a bounded conversation prompt. Resuming the
+    // separate Claude CLI session also replays its old tool history: the last
+    // short follow-up read 199k cached tokens and took 57 seconds.
+    undefined, true);
     } catch (error) {
       if (agent !== 'claude' || !linkedConversation?.claudeSessionId || !isMissingClaudeSessionError(error)) throw error;
       repository.setConversationClaudeSessionId(target.conversationId, null);
