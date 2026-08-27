@@ -120,17 +120,17 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed { display: none; }');
   });
 
-  it('keeps the primary-nav conversation icon as a safe-area-aware bottom-right action', () => {
+  it('keeps the mobile composer action as a safe-area-aware bottom-right action', () => {
     const phoneRules = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.queued-message-action \{[^}]*\}/)?.[0] ?? '';
 
-    expect(phoneRules).toContain('.sidebar .mobile-conversation-nav,');
-    expect(phoneRules).toContain('position: fixed; right: 14px;');
+    expect(phoneRules).toContain('.mobile-composer-toggle {\n    position: fixed; right: 14px;');
     expect(phoneRules).toContain('bottom: calc(var(--mobile-nav) + env(safe-area-inset-bottom, 0px) + 14px);');
+    expect(phoneRules).not.toContain('.sidebar .mobile-conversation-nav,');
   });
 
-  it('keeps the primary conversation destination available outside the phone breakpoint', () => {
+  it('keeps the primary conversation destination in the mobile tab bar', () => {
     expect(styles).toMatch(/^\.mobile-chrome-controls \{ display: none; \}/m);
-    expect(styles).not.toContain('.sidebar .mobile-conversation-nav { display: none; }');
+    expect(styles).not.toContain('.sidebar .mobile-conversation-nav,');
   });
 });
 

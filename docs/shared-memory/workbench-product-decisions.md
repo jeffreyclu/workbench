@@ -216,14 +216,13 @@ practice. Do not render full-width, text-labeled **Conversation details** or
 **Compose/Show composer** buttons; they are unacceptable. The header and
 composer default to collapsed on phone layouts to maximize thread space.
 
-### Mobile primary-nav conversation icon sits at the bottom-right
+### Mobile composer action sits at the bottom-right
 
-*Correction from Jeffrey, 2026-08-27.* On phones, the primary-navigation
-conversation icon—not either conversation-header/composer disclosure control—
-belongs in the bottom-right corner of the page, above the bottom navigation and
-safe-area inset. It is a mobile-only affordance and must be hidden at desktop
-widths. Keep the header and composer controls together in their compact inline
-row.
+*Correction from Jeffrey, 2026-08-27.* On phones, the **Open composer** action,
+not the primary-nav Conversations icon, belongs in the bottom-right corner of
+the page, above the bottom navigation and safe-area inset. Conversations stays
+in the bottom tab bar. Keep the conversation-header control inline; the
+composer control is the fixed bottom-right action.
 
 The mobile conversation controls are hidden entirely at desktop widths.
 

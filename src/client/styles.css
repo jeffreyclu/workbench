@@ -1045,13 +1045,6 @@ nav { display: grid; gap: 3px; }
   .sidebar .nav-item.active { color: var(--acid); background: transparent; }
   .sidebar .nav-item.active svg { margin: 0; }
   .sidebar .nav-item > span { display: none; }
-  .sidebar .mobile-conversation-nav,
-  .sidebar .mobile-conversation-nav:not(.active),
-  .sidebar .mobile-conversation-nav.active {
-    position: fixed; right: 14px; bottom: calc(var(--mobile-nav) + env(safe-area-inset-bottom, 0px) + 14px); z-index: 9;
-    display: grid; place-items: center; width: 44px; height: 44px; padding: 0; color: #d9d8d0; background: #252520; border: 1px solid #55564d; border-radius: 50%; box-shadow: 0 8px 20px #0009;
-  }
-  .sidebar .mobile-conversation-nav.active { color: var(--acid); border-color: var(--acid); }
   .sidebar .mobile-nav-secondary { display: grid; position: absolute; right: 8px; bottom: calc(100% + 8px); z-index: 1; width: min(280px, calc(100vw - 16px)); gap: 3px; padding: 6px; visibility: hidden; opacity: 0; transform: translateY(8px) scale(.98); pointer-events: none; background: #181816; border: 1px solid #3a3a34; border-radius: 12px; box-shadow: 0 16px 36px #000b; transition: opacity var(--motion-fast) ease, transform var(--motion-standard) var(--motion-ease), visibility 0s linear var(--motion-standard); }
   .sidebar .mobile-nav-more { display: flex; }
   .sidebar .mobile-global-search { display: block; padding: 4px 4px 8px; }
@@ -1125,6 +1118,11 @@ nav { display: grid; gap: 3px; }
   }
   .mobile-chrome-controls { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 6px 14px; border-bottom: 1px solid var(--line); }
   .mobile-chrome-toggle { width: 32px; height: 32px; }
+  .mobile-composer-toggle {
+    position: fixed; right: 14px; bottom: calc(var(--mobile-nav) + env(safe-area-inset-bottom, 0px) + 14px); z-index: 9;
+    display: grid; place-items: center; width: 44px; height: 44px; padding: 0; color: #d9d8d0; background: #252520; border: 1px solid #55564d; border-radius: 50%; box-shadow: 0 8px 20px #0009;
+  }
+  .mobile-composer-toggle.icon-button-active { color: var(--acid); border-color: var(--acid); }
   .agent-console .shared-composer.is-mobile-composer-collapsed { display: none; }
   .agent-console .shared-thread { padding-inline: 14px; }
   .agent-console .shared-thread .jump-to-latest-button {
