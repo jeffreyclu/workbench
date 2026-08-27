@@ -63,8 +63,12 @@ function runtimeWorkActive(port: number): Promise<boolean | null> {
 }
 
 async function stopAfterDrain(runtime: Runtime): Promise<void> {
+  // A failed provider cancellation is owned by the old process. Without a
+  // ceiling it can keep that retired release (and its agent subprocesses)
+  // alive forever, even after the new runtime is serving normally.
+  const deadline = Date.now() + 15_000;
   let reported = false;
-  while (runtime.child.exitCode === null) {
+  while (runtime.child.exitCode === null && Date.now() < deadline) {
     const activeWork = await runtimeWorkActive(runtime.port);
     if (activeWork === false) {
       runtime.child.kill('SIGTERM');
@@ -75,6 +79,10 @@ async function stopAfterDrain(runtime: Runtime): Promise<void> {
       console.log(`Workbench backend on port ${runtime.port} is draining in-flight work before shutdown.`);
     }
     await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  }
+  if (runtime.child.exitCode === null) {
+    console.warn(`Workbench backend on port ${runtime.port} exceeded its 15s drain window; terminating the retired runtime.`);
+    runtime.child.kill('SIGTERM');
   }
 }
 
