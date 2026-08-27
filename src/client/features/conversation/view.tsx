@@ -381,11 +381,19 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const conversationVirtualizer = useVirtualizer({ count: conversationStackRows.length, getScrollElement: () => conversationScrollRef.current, estimateSize: (index) => (conversationStackRows[index]?.type === 'header' ? 38 : CONVERSATION_CARD_ESTIMATE) + CONVERSATION_ROW_GAP, overscan: 5, initialRect: { width: 250, height: 600 } });
   const conversationRows = conversationVirtualizer.getVirtualItems();
   const displayedConversationRows = conversationRows.length ? conversationRows : conversationStackRows.map((row, index) => ({ index, start: conversationStackRows.slice(0, index).reduce((total, item) => total + (item.type === 'header' ? 38 : CONVERSATION_CARD_ESTIMATE) + CONVERSATION_ROW_GAP, 0) }));
+  // The 1s conversation/activity polls hand back brand-new array references
+  // every tick even when nothing visible changed, so keying this off
+  // conversationStackRows itself forced a full remeasure (and a visible jump
+  // under a mid-scroll finger) every second. Key off the row shape instead --
+  // it only changes when a card actually moves between groups or a header
+  // count changes.
+  const conversationStackShape = conversationStackRows.map((row) => row.type === 'header' ? `h:${row.id}:${row.count}` : `i:${row.id}:${row.group}`).join('|');
   useEffect(() => {
     // Group headers change the virtual row geometry as conversations move
     // between stacks, so recalculate instead of waiting for a scroll event.
     conversationVirtualizer.measure();
-  }, [conversationStackRows, conversationVirtualizer]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationStackShape, conversationVirtualizer]);
   useEffect(() => {
     const last = conversationRows.at(-1);
     if (last && last.index >= conversationStackRows.length - 5 && conversations.hasNextPage && !conversations.isFetchingNextPage) void conversations.fetchNextPage();

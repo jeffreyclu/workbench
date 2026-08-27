@@ -1351,6 +1351,16 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   if (run.messageId) repository.updateSharedMessage(run.messageId, { body: `● Starting ${run.kind}…` });
   try {
     const cwd = workspace ?? resolveWorkingDirectory(item);
+    // Task executions reach this runner directly (including Retry), rather
+    // than the shared-room dispatcher. Give them the same one-turn Haiku
+    // authorization judgment so an explicit request to push/update a PR does
+    // not silently fall back to the default external-mutation denial.
+    // Unit tests replace the provider binary with a fixture and assert its
+    // exact invocation sequence. The Haiku classifier has its own direct
+    // coverage below; do not route it through that fixture as a fake task.
+    const externalAuthorizationPromise: Promise<ExternalActionAuthorization> = process.env.VITEST
+      ? Promise.resolve({ granted: false, operation: null })
+      : classifyExternalActionAuthorization(run.instructions, null);
     // The resolved workspace is explicit in the CLI command and surfaced in
     // activity so a run's filesystem boundary is never implicit.
     repository.addActivity(item.id, 'system', 'progress', `Workspace resolved to ${cwd}.`);
@@ -1364,15 +1374,17 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const sharedContext = resumesSession
       ? ''
       : [repository.getSharedContext(undefined, { workItemId: item.id }), externalContext].filter(Boolean).join('\n\n');
-    const retrievedMemory = resumesSession
-      ? []
-      : await repository.searchActivityMemory(memoryQueryForRun(item, run), PROMPT_MEMORY_CANDIDATE_LIMIT, {
+    const retrievedMemoryPromise = resumesSession
+      ? Promise.resolve([] as RetrievedMemory[])
+      : repository.searchActivityMemory(memoryQueryForRun(item, run), PROMPT_MEMORY_CANDIDATE_LIMIT, {
         refresh: false,
         projectKey: projectKey(item.projectName) || undefined,
       }).catch((error) => {
         console.error('[agent-runner] memory retrieval failed for prompt injection', error);
         return [];
       });
+    const [retrievedMemory, externalAuthorization] = await Promise.all([retrievedMemoryPromise, externalAuthorizationPromise]);
+    const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const injectedMemory = resumesSession ? [] : selectRelevantMemoryForPrompt(retrievedMemory, undefined, item.id);
     repository.addActivity(item.id, 'system', 'progress', resumesSession
       ? 'Resuming Claude session with bounded continuation context.'
@@ -1384,8 +1396,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       retrievedMemoryDetail: { query: memoryQueryForRun(item, run), items: injectedMemory },
     });
     const prompt = resumesSession
-      ? buildResumedPrompt(item, run)
-      : buildPrompt(item, run, sharedContext, injectedMemory);
+      ? buildResumedPrompt(item, run, run.instructions, undefined, externalActionContract)
+      : buildPrompt(item, run, sharedContext, injectedMemory, run.instructions, undefined, externalActionContract);
     repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, run.agent, 'prompt', {
       promptChars: prompt.length,
       taskChars: item.description.length,
