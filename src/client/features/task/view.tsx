@@ -14,6 +14,8 @@ import {
   Clock,
   Cloud,
   Command,
+  Eye,
+  EyeOff,
   FileText,
   LoaderCircle,
   Menu,
@@ -42,6 +44,7 @@ import { isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAGE, SELF_ASSIGNED_OWNER_ME
 import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SessionFeedbackRating, SharedConversation, SharedMessage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
 import { api } from '../../api';
 import { ArtifactLibraryView } from '../../artifacts';
+import { AttachmentPreview } from '../../attachment-preview';
 import { ConfirmationDialog } from '../../confirmation-dialog';
 import { InsightsView } from '../../insights';
 import { navigate, parseRoute, routePath, useRoute, type StackName } from '../../router';
@@ -57,7 +60,7 @@ import { DiscoveryInboxView } from '../../discovery';
 import { useNavigation } from '../../features/navigation/hooks';
 import { NavigationView } from '../../features/navigation/view';
 import { FollowUpArchiveDialog } from '../../follow-up-archive-dialog';
-import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, providerConflictFieldLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
+import { activityKindLabel, agentDecisionKinds, attachmentPreviewKind, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, providerConflictFieldLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
 import { clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
 import { QueueExplanationList } from '../../queue-explanations';
 import { ProjectColorDot } from '../../project-color';
@@ -93,6 +96,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const [taskLinkQuery, setTaskLinkQuery] = useState('');
   const [showAddArtifactLink, setShowAddArtifactLink] = useState(false);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const [expandedAttachments, setExpandedAttachments] = useState<Set<string>>(new Set());
   const [artifactLinkQuery, setArtifactLinkQuery] = useState('');
   const [dependencyQuery, setDependencyQuery] = useState('');
   const normalizedDependencyQuery = useDebouncedValue(dependencyQuery.trim(), 300);
@@ -425,6 +429,14 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
     update.mutate({ blockedByIds });
   }
 
+  function toggleAttachmentPreview(path: string) {
+    setExpandedAttachments((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path); else next.add(path);
+      return next;
+    });
+  }
+
   return (
     <section className={`detail-panel ${isExecutionActive ? 'execution-starting' : ''}`} aria-busy={isExecutionActive}>
       <div className="detail-topline">
@@ -493,7 +505,17 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       </div>
       <div className="detail-section task-attachments">
         <span className="section-label">Files for the agent</span>
-        {taskAttachments.length > 0 ? <div className="message-files">{taskAttachments.map((file) => <span key={file.path}><a href={`/api/work-items/${item.id}/attachments/${encodeURIComponent(file.path)}`} target="_blank" rel="noreferrer" title={`${file.mimeType} · ${formatFileSize(file.size)}`}><Paperclip size={11} /> {file.name} <span className="message-file-meta">{formatFileSize(file.size)}</span></a>{!hasBeenExecuted && <button type="button" className="icon-button" aria-label={`Remove ${file.name}`} onClick={() => removeAttachment.mutate(file.path)} disabled={removeAttachment.isPending}><X size={12} /></button>}</span>)}</div> : <p className="muted">No files attached.</p>}
+        {taskAttachments.length > 0 ? <><div className="message-files">{taskAttachments.map((file) => {
+          const previewable = attachmentPreviewKind(file.mimeType) !== 'none';
+          const expanded = expandedAttachments.has(file.path);
+          return <span key={file.path}>
+            {previewable && <button type="button" className="icon-button" aria-expanded={expanded} aria-label={expanded ? `Hide preview of ${file.name}` : `Preview ${file.name}`} title={expanded ? 'Hide preview' : 'Preview'} onClick={() => toggleAttachmentPreview(file.path)}>{expanded ? <EyeOff size={11} /> : <Eye size={11} />}</button>}
+            <a href={`/api/work-items/${item.id}/attachments/${encodeURIComponent(file.path)}`} target="_blank" rel="noreferrer" title={`${file.mimeType} · ${formatFileSize(file.size)}`}><Paperclip size={11} /> {file.name} <span className="message-file-meta">{formatFileSize(file.size)}</span></a>
+            {!hasBeenExecuted && <button type="button" className="icon-button" aria-label={`Remove ${file.name}`} onClick={() => removeAttachment.mutate(file.path)} disabled={removeAttachment.isPending}><X size={12} /></button>}
+          </span>;
+        })}</div>
+        {taskAttachments.filter((file) => expandedAttachments.has(file.path)).map((file) => <div className="attachment-preview-pane" key={file.path}><AttachmentPreview url={`/api/work-items/${item.id}/attachments/${encodeURIComponent(file.path)}`} file={file} /></div>)}
+        </> : <p className="muted">No files attached.</p>}
         {!hasBeenExecuted && <><input ref={attachmentInputRef} className="visually-hidden" type="file" multiple onChange={(event) => { const files = Array.from(event.target.files ?? []); if (files.length) addAttachments.mutate(files); event.currentTarget.value = ''; }} /><button type="button" className="button secondary compact" onClick={() => attachmentInputRef.current?.click()} disabled={addAttachments.isPending || taskAttachments.length >= 10}><Paperclip size={13} /> {addAttachments.isPending ? 'Attaching…' : 'Attach files'}</button></>}
       </div>
       <div className="detail-section">

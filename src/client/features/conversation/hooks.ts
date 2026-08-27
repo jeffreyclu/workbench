@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { WorkItemReference } from '../../../shared/contracts.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
-import { pullRequestUrl } from '../github-diff/logic.js';
-import { useGitHubPullRequestDiff } from '../github-diff/hooks.js';
+import { pullRequestUrls } from '../github-diff/logic.js';
+import { useGitHubPullRequestDiffPreviews } from '../github-diff/hooks.js';
 import { useWorkspaceDiff, useWorkspaceDiffSnapshots } from '../workspace-diff/hooks.js';
 import { workspaceDiffQueryKeys } from '../workspace-diff/data.js';
 
@@ -32,23 +32,23 @@ export function useConversationChangesAvailability(scope: WorkspaceDiffScope | n
     if (wasRunning.current && !isRunning && scope) void queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.detail(scope) });
     wasRunning.current = isRunning;
   }, [isRunning, scope, queryClient]);
-  const pullRequestUrlValue = pullRequestUrl([...(sourceUrl ? [sourceUrl] : []), ...references.map((reference) => reference.url)]);
-  const pullRequestDiff = useGitHubPullRequestDiff(pullRequestUrlValue);
+  const linkedPullRequestUrls = pullRequestUrls([...(sourceUrl ? [sourceUrl] : []), ...references.map((reference) => reference.url)]);
+  const pullRequestDiffs = useGitHubPullRequestDiffPreviews(linkedPullRequestUrls);
   const hasWorkspaceChanges = (workspaceDiff.data?.diff?.changedFiles ?? 0) > 0;
   const hasRecordedWorkspaceChanges = (snapshots.data?.snapshots ?? []).some((snapshot) => snapshot.diff.changedFiles > 0);
-  const hasPullRequestChanges = (pullRequestDiff.data?.pages[0]?.diff.changedFiles ?? 0) > 0;
-  const isError = workspaceDiff.isError || snapshots.isError || pullRequestDiff.isError;
+  const hasPullRequestChanges = pullRequestDiffs.some((pullRequestDiff) => (pullRequestDiff.data?.diff.changedFiles ?? 0) > 0);
+  const isError = workspaceDiff.isError || snapshots.isError || pullRequestDiffs.some((pullRequestDiff) => pullRequestDiff.isError);
   const retry = useCallback(async () => {
     await Promise.all([
       workspaceDiff.refetch(),
       snapshots.refetch(),
-      ...(pullRequestUrlValue ? [pullRequestDiff.refetch()] : []),
+      ...pullRequestDiffs.map((pullRequestDiff) => pullRequestDiff.refetch()),
     ]);
-  }, [pullRequestDiff.refetch, pullRequestUrlValue, snapshots.refetch, workspaceDiff.refetch]);
+  }, [pullRequestDiffs, snapshots.refetch, workspaceDiff.refetch]);
 
   return {
     hasChanges: hasWorkspaceChanges || hasRecordedWorkspaceChanges || hasPullRequestChanges,
-    isLoading: workspaceDiff.isLoading || snapshots.isLoading || pullRequestDiff.isLoading,
+    isLoading: workspaceDiff.isLoading || snapshots.isLoading || pullRequestDiffs.some((pullRequestDiff) => pullRequestDiff.isLoading),
     isError,
     retry,
   };

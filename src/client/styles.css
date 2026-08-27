@@ -364,14 +364,17 @@ nav { display: grid; gap: 3px; }
 .workspace-diff nav, .github-diff nav { min-width: 0; border-bottom: 1px solid #302f2b; background: #151513; }
 .workspace-diff nav > span { display: block; padding: 10px 11px; color: #85847d; border-bottom: 1px solid #302f2b; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
 .workspace-diff nav > div, .github-diff nav > div { display: flex; max-height: 68px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
-.workspace-diff nav button, .github-diff nav button { display: grid; flex: 0 0 min(280px, 40vw); grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 6px; min-height: 52px; padding: 7px 10px; color: #aaa9a2; text-align: left; background: transparent; border: 0; border-right: 1px solid #252522; cursor: pointer; font: 10px 'DM Mono'; }
+.diff-file-row { display: flex; flex: 0 0 min(280px, 40vw); align-items: stretch; border-right: 1px solid #252522; }
+.workspace-diff nav button, .github-diff nav button { display: grid; flex: 1 1 auto; min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 6px; min-height: 52px; padding: 7px 10px; color: #aaa9a2; text-align: left; background: transparent; border: 0; cursor: pointer; font: 10px 'DM Mono'; }
 .workspace-diff nav button:hover, .workspace-diff nav button.selected { color: #eee; background: #24241f; }
 .workspace-diff nav button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-diff nav button b, .workspace-diff nav button i { font-size: 9px; }
+.diff-file-row .diff-file-copy-path { flex: 0 0 auto; align-self: stretch; width: 26px; border-left: 1px solid #252522; border-radius: 0; }
 .workspace-diff-file { min-width: 0; overflow: auto; }
 .workspace-diff-file > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 39px; padding: 0 12px; color: #d5d4cd; border-bottom: 1px solid #302f2b; font: 10px 'DM Mono'; }
 .workspace-diff-file > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-diff-file > header span { flex: 0 0 auto; color: #898880; text-transform: capitalize; }
+.diff-file-info { display: flex; align-items: center; gap: 12px; min-width: 0; overflow: hidden; }
 .workspace-diff-file pre { min-width: max-content; margin: 0; padding: 8px 0; overflow: visible; background: #10100f; font: 11px/1.55 'DM Mono'; }
 .diff-line { display: grid; grid-template-columns: 42px 42px minmax(0, 1fr); min-height: 18px; color: #c9c8c1; white-space: pre; }
 .diff-line > span { padding: 0 8px; }
@@ -408,6 +411,8 @@ nav { display: grid; gap: 3px; }
 .github-diff { margin-top: 35px; padding-top: 22px; border-top: 1px solid #272724; }
 .github-diff > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
 .github-diff > header > div { min-width: 0; }
+.github-diff-picker { display: grid; flex: 0 1 220px; gap: 3px; min-width: 0; margin-left: auto; color: #85847d; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
+.github-diff-picker select { width: 100%; min-height: 28px; padding: 0 24px 0 8px; color: #d5d4cd; background: #151513; border: 1px solid #353530; border-radius: 6px; font: 10px 'DM Mono'; letter-spacing: normal; text-transform: none; }
 .github-diff-eyebrow { display: inline-flex; align-items: center; gap: 6px; color: #94938b; font: 700 10px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
 .github-diff h2 { margin: 5px 0; color: #deddd6; font-size: 16px; line-height: 1.35; }
 .github-diff small { color: #85847d; font: 10px 'DM Mono'; }
@@ -423,6 +428,10 @@ nav { display: grid; gap: 3px; }
 .github-diff-file > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 39px; padding: 0 12px; color: #d5d4cd; border-bottom: 1px solid #302f2b; font: 10px 'DM Mono'; }
 .github-diff-file > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .github-diff-file > header span { flex: 0 0 auto; color: #898880; text-transform: capitalize; }
+.copy-icon-button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: #aaa9a2; background: transparent; border: 1px solid #353530; border-radius: 5px; cursor: pointer; }
+.copy-icon-button:hover { color: var(--acid); border-color: #596234; }
+.diff-file-copy-path { width: 26px; height: auto; color: #77766f; border: 0; border-radius: 0; }
+.diff-file-copy-path:hover { color: var(--acid); background: #24241f; }
 .github-diff-file pre { min-width: max-content; margin: 0; padding: 8px 0; overflow: visible; background: #10100f; font: 11px/1.55 'DM Mono'; }
 .github-diff-load-more { width: 100%; min-height: 40px; color: #c4c3bc; border: 0; border-top: 1px solid #302f2b; background: #191916; cursor: pointer; font: 700 10px 'DM Mono'; }
 .github-diff-load-more:hover:not(:disabled) { color: var(--acid); background: #24241f; }.github-diff-load-more:disabled { color: #85847d; cursor: wait; }
@@ -435,7 +444,7 @@ nav { display: grid; gap: 3px; }
   .workspace-diff-timeline { flex: 0 1 160px; max-width: 100%; }
   .workspace-diff-timeline select { width: 100%; }
   .diff-file-list > span { padding-block: 8px; }
-  .diff-file-list button { flex-basis: min(220px, 68vw); }
+  .diff-file-row { flex-basis: min(220px, 68vw); }
   .workspace-diff-file, .github-diff-file { min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }
   .workspace-diff-file > header, .github-diff-file > header { min-height: 44px; padding-inline: 10px; }
   .workspace-diff-file pre, .github-diff-file pre { font-size: 10px; }
@@ -958,6 +967,14 @@ nav { display: grid; gap: 3px; }
 .pending-files button:hover, .message-files a:hover { color: #fff; border-color: #55554c; }
 .task-attachment-picker { display: grid; gap: 7px; margin-block: 13px; }.task-attachment-picker .muted { margin: -3px 0 0; font-size: 12px; }.task-attachment-picker .pending-files { margin: 0; }.task-attachments .message-files > span { display: inline-flex; align-items: center; gap: 4px; }.task-attachments .message-files { align-items: center; }
 .message-file-meta { color: #75746d; }
+.attachment-preview-pane { margin-top: 8px; border: 1px solid #3a3a34; border-radius: 8px; overflow: hidden; }
+.attachment-preview { display: block; }
+.attachment-preview-image { display: flex; justify-content: center; padding: 8px; background: #1c1c1a; }
+.attachment-preview-image img { max-width: 100%; max-height: 480px; border-radius: 4px; }
+.attachment-preview-pdf { width: 100%; height: 480px; border: 0; }
+.attachment-preview-text { max-height: 320px; margin: 0; padding: 12px; overflow: auto; color: #d4d3ca; background: #1c1c1a; font: 400 11px 'DM Mono'; white-space: pre-wrap; word-break: break-word; }
+.attachment-preview-loading { display: flex; align-items: center; justify-content: center; padding: 20px; color: #75746d; }
+.attachment-preview-unsupported { margin: 0; padding: 12px; }
 .thread-filter-bar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: min(900px, 100%); margin: 12px auto 0; padding: 0 28px; }
 .conversation-surface-tabs { display: inline-flex; align-items: stretch; margin-right: auto; overflow: hidden; border: 1px solid #373731; border-radius: 6px; background: #171715; }
 .conversation-surface-tabs button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 9px; color: #908f88; background: transparent; border: 0; border-right: 1px solid #373731; font: 700 10px 'DM Mono'; cursor: pointer; }

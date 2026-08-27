@@ -53,6 +53,22 @@ describe('GitHubDiffView', () => {
     expect(document.querySelector('.github-diff-file')).toBeInTheDocument();
   });
 
+  it('switches between each linked pull request without showing a picker for one PR', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const pullRequest = new URL(String(input), 'http://localhost').searchParams.get('url')!.match(/pull\/(\d+)/)![1];
+      return new Response(JSON.stringify({ diff: { repository: 'writer/workbench', number: Number(pullRequest), title: `Pull request ${pullRequest}`, url: `https://github.com/writer/workbench/pull/${pullRequest}`, baseRef: 'main', headRef: `branch-${pullRequest}`, changedFiles: 0, additions: 0, deletions: 0, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    const { rerender } = render(<QueryClientProvider client={client}><GitHubDiffView sourceUrl="https://github.com/writer/workbench/pull/42" references={[]} /></QueryClientProvider>);
+    expect(await screen.findByRole('heading', { name: 'Pull request 42' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Pull request')).not.toBeInTheDocument();
+
+    rerender(<QueryClientProvider client={client}><GitHubDiffView sourceUrl="https://github.com/writer/workbench/pull/42" references={[{ id: 'reference-43', workItemId: 'work-item-1', type: 'pull_request', url: 'https://github.com/writer/workbench/pull/43', title: 'Related PR', createdAt: '2026-08-27T00:00:00.000Z' }]} /></QueryClientProvider>);
+    fireEvent.change(await screen.findByLabelText('Pull request'), { target: { value: 'https://github.com/writer/workbench/pull/43' } });
+    expect(await screen.findByRole('heading', { name: 'Pull request 43' })).toBeInTheDocument();
+  });
+
   it('loads later file pages and provides image and GitHub fallbacks when GitHub omits a patch', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

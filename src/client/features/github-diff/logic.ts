@@ -44,8 +44,27 @@ export function parsePatch(patch: string): DiffLine[] {
   });
 }
 
+const pullRequestUrlPattern = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/files)?\/?(?:[?#].*)?$/i;
+
+export function pullRequestUrls(urls: string[]): string[] {
+  const seen = new Set<string>();
+  return urls.filter((url) => {
+    const match = url.match(pullRequestUrlPattern);
+    if (!match) return false;
+    const identity = `${match[1]}/${match[2]}#${match[3]}`.toLowerCase();
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
 export function pullRequestUrl(urls: string[]): string | null {
-  return urls.find((url) => /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+(?:\/files)?\/?(?:[?#].*)?$/i.test(url)) ?? null;
+  return pullRequestUrls(urls)[0] ?? null;
+}
+
+export function pullRequestLabel(url: string) {
+  const match = url.match(pullRequestUrlPattern);
+  return match ? `${match[1]}/${match[2]} #${match[3]}` : url;
 }
 
 export function fileLabel(file: Pick<GitHubPullRequestFile, 'path' | 'previousPath' | 'status'>) {

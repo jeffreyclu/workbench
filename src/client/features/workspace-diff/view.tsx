@@ -13,6 +13,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
 import { workspaceDiffQueryKeys } from './data.js';
+import { CopyIconButton } from '../../copy-code.js';
 
 const HUNK_REVIEW_STATES: { state: DiffHunkReviewState; label: string }[] = [
   { state: 'reviewed', label: 'Reviewed' },
@@ -127,8 +128,8 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     {publish.isError && <p className="workspace-diff-publish-error" role="alert">{publish.error.message}</p>}
     {publish.data?.result.pushed && <p className="workspace-diff-publish-success" role="status">Committed and pushed{publish.data.result.commit ? ` ${publish.data.result.commit}` : ''}.</p>}
     {files.length === 0 ? <p className="muted">No uncommitted changes to review.</p> : <div className="workspace-diff-layout diff-review-layout">
-      <nav className="diff-file-list" aria-label="Changed workspace files"><span>Files ({files.length})</span><div>{files.map((file) => <button key={file.path} type="button" className={selectedFile?.path === file.path ? 'selected' : ''} onClick={() => setSelectedPath(file.path)}><FileDiff size={13} /><span>{file.path}</span><b>+{file.additions}</b><i>−{file.deletions}</i></button>)}</div></nav>
-      {selectedFile && <article className="workspace-diff-file"><header><strong>{fileLabel(selectedFile)}</strong><span>{selectedFile.isBinary ? 'Binary file' : selectedFile.status}</span></header>{selectedFile.patch ? <pre>{blocks.map((block) => {
+      <nav className="diff-file-list" aria-label="Changed workspace files"><span>Files ({files.length})</span><div>{files.map((file) => <div key={file.path} className="diff-file-row"><button type="button" className={selectedFile?.path === file.path ? 'selected' : ''} onClick={() => setSelectedPath(file.path)}><FileDiff size={13} /><span>{file.path}</span><b>+{file.additions}</b><i>−{file.deletions}</i></button><CopyIconButton text={file.path} label="Copy file path" className="diff-file-copy-path" /></div>)}</div></nav>
+      {selectedFile && <article className="workspace-diff-file"><header><div className="diff-file-info"><strong>{fileLabel(selectedFile)}</strong><span>{selectedFile.isBinary ? 'Binary file' : selectedFile.status}</span></div>{selectedFile.patch && <CopyIconButton text={selectedFile.patch} label="Copy patch" />}</header>{selectedFile.patch ? <pre>{blocks.map((block) => {
               const changed = isChangedBlock(block);
               const assessment = confidence.data?.[block.key] ?? null;
               const isHunkHeader = block.lines[0]?.kind === 'header';

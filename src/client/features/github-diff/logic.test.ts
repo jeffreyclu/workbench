@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { fileLabel, parsePatch, pullRequestUrl } from './logic.js';
+import { fileLabel, parsePatch, pullRequestUrl, pullRequestUrls } from './logic.js';
 
 describe('GitHub diff presentation logic', () => {
   it('selects only GitHub pull-request URLs from linked task sources', () => {
     expect(pullRequestUrl(['https://linear.app/writer/issue/ENG-1', 'https://github.com/writer/workbench/pull/42/files'])).toBe('https://github.com/writer/workbench/pull/42/files');
     expect(pullRequestUrl(['https://github.com/writer/workbench/issues/42'])).toBeNull();
+  });
+
+  it('keeps every distinct linked pull request while deduplicating alternate paths to the same PR', () => {
+    expect(pullRequestUrls([
+      'https://github.com/writer/workbench/pull/42/files',
+      'https://github.com/writer/workbench/pull/42',
+      'https://github.com/writer/workbench/pull/43',
+    ])).toEqual([
+      'https://github.com/writer/workbench/pull/42/files',
+      'https://github.com/writer/workbench/pull/43',
+    ]);
   });
 
   it('numbers unified patch additions and deletions on their respective sides', () => {

@@ -31,4 +31,21 @@ describe('useConversationChangesAvailability', () => {
     expect(result.current.hasChanges).toBe(false);
     expect(diffAttempts).toBe(2);
   });
+
+  it('enables Changes when any linked pull request has files to review', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspace-diff/snapshots')) return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.endsWith('/workspace-diff')) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'review', revision: 'empty', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
+      const pullRequest = new URL(url, 'http://localhost').searchParams.get('url')?.match(/pull\/(\d+)/)?.[1];
+      if (pullRequest) return new Response(JSON.stringify({ diff: { changedFiles: pullRequest === '43' ? 1 : 0 } }), { headers: { 'Content-Type': 'application/json' } });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    const { result } = renderHook(() => useConversationChangesAvailability({ workItemId: 'work-item-1' }, 'https://github.com/writer/workbench/pull/42', [{ id: 'reference-43', workItemId: 'work-item-1', type: 'pull_request', url: 'https://github.com/writer/workbench/pull/43', title: 'Related PR', createdAt: '2026-08-27T00:00:00.000Z' }], false), { wrapper });
+
+    await waitFor(() => expect(result.current.hasChanges).toBe(true));
+    expect(result.current.isError).toBe(false);
+  });
 });

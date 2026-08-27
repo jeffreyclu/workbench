@@ -74,7 +74,6 @@ import { celebrate } from '../../celebrate';
 import { SessionFeedbackPrompt } from '../../session-feedback-prompt';
 import { useConversationChangesAvailability, useDebouncedValue } from './hooks';
 import { GitHubDiffView } from '../github-diff/view';
-import { pullRequestUrl } from '../github-diff/logic';
 import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { WorkspaceDiffScope } from '../../data/source-client';
 import { formatDiffFollowUpReference, type DiffFollowUpReference } from '../diff-confidence';
@@ -418,10 +417,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   }, [selectedConversation, conversationId]);
   const linkedWorkItemId = selectedConversation?.workItemId ?? null;
   const linkedWorkItem = useQuery({ queryKey: ['work-item', linkedWorkItemId], queryFn: () => api.getWorkItem(linkedWorkItemId!), enabled: Boolean(linkedWorkItemId), refetchInterval: 1_000 });
-  const linkedPullRequestUrl = useMemo(() => {
-    const item = linkedWorkItem.data?.item;
-    return item ? pullRequestUrl([...(item.sourceUrl ? [item.sourceUrl] : []), ...(linkedWorkItem.data?.references ?? []).map((reference) => reference.url)]) : null;
-  }, [linkedWorkItem.data]);
   // Changes belong to the conversation, not merely its linked task: Repo
   // Explorer can deliberately select any attached local repository.
   const workspaceDiffScope: WorkspaceDiffScope | null = conversationId ? { conversationId } : null;
@@ -1194,7 +1189,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           {send.error && <p className="error-message">{send.error.message}</p>}
         </form>}
         </div>
-        {(activePane === 'changes' || activePane === 'split') && workspaceDiffScope && <div className="conversation-changes" aria-label="Conversation changes"><WorkspaceDiffView scope={workspaceDiffScope} isRunning={linkedWorkItem.data?.runs.some((run) => run.status === 'queued' || run.status === 'running') ?? false} defaultCommitMessage={`chore: ${selectedConversation?.title ?? 'update'}`} onFollowUp={addDiffFollowUp} />{linkedWorkItem.data?.item && linkedPullRequestUrl && <GitHubDiffView sourceUrl={linkedWorkItem.data.item.sourceUrl} references={linkedWorkItem.data.references} onFollowUp={addDiffFollowUp} />}</div>}
+        {(activePane === 'changes' || activePane === 'split') && workspaceDiffScope && <div className="conversation-changes" aria-label="Conversation changes"><WorkspaceDiffView scope={workspaceDiffScope} isRunning={linkedWorkItem.data?.runs.some((run) => run.status === 'queued' || run.status === 'running') ?? false} defaultCommitMessage={`chore: ${selectedConversation?.title ?? 'update'}`} onFollowUp={addDiffFollowUp} />{linkedWorkItem.data?.item && <GitHubDiffView sourceUrl={linkedWorkItem.data.item.sourceUrl} references={linkedWorkItem.data.references} onFollowUp={addDiffFollowUp} />}</div>}
         </div>
       </section>
       {planArchivePromptOpen && <FollowUpArchiveDialog count={selectedPlanTaskIndexes.size} pending={resolvePlan.isPending} onClose={() => setPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolvePlan.mutate({ resolution: 'accepted', archiveParent })} />}

@@ -51,6 +51,17 @@ export function formatFileSize(bytes: number): string {
   return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`;
 }
 
+export type AttachmentPreviewKind = 'image' | 'pdf' | 'text' | 'none';
+
+const TEXT_PREVIEW_MIME_TYPES = new Set(['application/json', 'application/xml', 'application/x-yaml', 'application/yaml']);
+
+export function attachmentPreviewKind(mimeType: string): AttachmentPreviewKind {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType === 'application/pdf') return 'pdf';
+  if (mimeType.startsWith('text/') || TEXT_PREVIEW_MIME_TYPES.has(mimeType)) return 'text';
+  return 'none';
+}
+
 /**
  * The activity log mixes Workbench's own routing decisions with Jeffrey's edits.
  * Labelling each entry keeps both scannable without opening a run.
