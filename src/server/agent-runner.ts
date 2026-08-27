@@ -1206,6 +1206,15 @@ export async function runAgentCommandWithFallback(
     const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, resumeSessionId, poolEligible, kind);
     return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
   } catch (error) {
+    // Provider session IDs are cache hints, not durable retry identities. A
+    // task retry can outlive Claude's local session (including across a
+    // runtime promotion); restart the same agent fresh rather than exposing
+    // the provider's "No conversation found" protocol error to Jeffrey.
+    if (primary === 'claude' && resumeSessionId && /no conversation found with session id/i.test(error instanceof Error ? error.message : String(error))) {
+      onProgress?.('● Claude session expired. Restarting this turn in a fresh session…');
+      const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, undefined, false, kind);
+      return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
+    }
     if (signal?.aborted || modelOverride || !isAgentCapacityError(error)) throw error;
     const fallback = primary === 'claude' ? 'codex' : 'claude';
     const reason = error instanceof Error ? error.message : String(error);
