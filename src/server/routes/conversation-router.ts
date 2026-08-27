@@ -377,16 +377,11 @@ export function createConversationRouter({ repository, database, capabilities, a
       : [prior];
     if (!targets.length) return response.status(409).json({ error: 'No terminal agent replies remain to retry.' });
 
-    // A retry may run alongside its counterpart from the same original
-    // dispatch. It may not create a second live turn for the *same* agent.
-    const activeByAgent = new Set(repository.listAllSharedMessages(prior.conversationId)
-      .filter((message) => message.status === 'running' || message.status === 'queued')
-      .map((message) => message.author));
-    for (const target of targets) {
-      if (activeByAgent.has(target.author)) {
-        return response.status(409).json({ error: `${target.author[0].toUpperCase()}${target.author.slice(1)} already has an active reply in this conversation.` });
-      }
-    }
+    // The terminal message is the retry lock: prepareSharedMessageRetry and
+    // prepareRunRetry both conditionally reopen only failed/canceled rows.
+    // Do not turn another live reply in this conversation into a global lock.
+    // That rejected valid retries after an unrelated follow-up had already
+    // started, while a repeat click on this exact message remains atomic.
 
     const replies = [] as SharedMessage[];
     const runs = [] as AgentRun[];

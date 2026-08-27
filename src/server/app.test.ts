@@ -192,6 +192,18 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     await vi.waitFor(() => expect(repository.getSharedMessageById(codex.id)?.status).toBe('failed'));
   });
 
+  it('retries a terminal reply even when a newer reply from the same agent is running', async () => {
+    fakeAgentDirectory('exit 1', 'exit 1');
+    const conversation = repository.createConversation('Retry alongside a newer reply');
+    const staleClaude = repository.createSharedMessage('claude', 'Canceled Claude reply', 'canceled', conversation.id);
+    repository.createSharedMessage('claude', 'New Claude reply is running', 'running', conversation.id);
+
+    const retry = await fetch(`${baseUrl}/api/shared/messages/${staleClaude.id}/retry`, { method: 'POST' });
+
+    expect(retry.status).toBe(202);
+    await vi.waitFor(() => expect(repository.getSharedMessageById(staleClaude.id)?.status).toBe('failed'));
+  });
+
   describe('open-prerequisite dispatch gate', () => {
     const seedBlockedTask = () => {
       const blocker = repository.create({ title: 'Schema lands first', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
