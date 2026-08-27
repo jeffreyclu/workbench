@@ -212,7 +212,13 @@ describe('diff review layout', () => {
     const phoneRules = styles.match(/@media \(max-width: 640px\) \{[\s\S]*?\.task-collapsible/)?.[0] ?? '';
 
     expect(phoneRules).toContain('.diff-file-list button { flex-basis: min(220px, 68vw); }');
-    expect(phoneRules).toContain('.workspace-diff-file, .github-diff-file { min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }');
+    expect(styles).toContain('.diff-file-row > button { flex: 1 1 auto; }');
+    expect(styles).toContain('.workspace-diff-file { min-width: 0; overflow: hidden; }');
+    expect(styles).toContain('.github-diff-file { min-width: 0; overflow: hidden; }');
+    expect(styles).toContain('.workspace-diff-file pre { min-width: 0; max-width: 100%;');
+    expect(styles).toContain('white-space: pre-wrap; overflow-wrap: anywhere;');
+    expect(styles).toContain('.diff-line > span:last-child, .diff-line-code { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }');
+    expect(phoneRules).toContain('.workspace-diff-file, .github-diff-file { min-width: 0; overflow: hidden; }');
   });
 
   it('clamps the recorded-version selector so it cannot dominate the phone action row', () => {

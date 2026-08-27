@@ -200,6 +200,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const [exitingMessageIds, setExitingMessageIds] = useState<Set<string>>(new Set());
   const [retryingMessageIds, setRetryingMessageIds] = useState<Set<string>>(new Set());
   const conversationIdRef = useRef(conversationId);
+  const pendingComposerSelectionRef = useRef<ComposerSelection | null>(null);
   const sentDraftRef = useRef<{ conversationId: string; body: string } | null>(null);
   const preferenceMutationSequence = useRef(0);
   const updateConversationPreferences = useMutation({
@@ -231,7 +232,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     conversationIdRef.current = conversationId;
     setBody(conversationId ? readConversationDrafts()[conversationId] ?? '' : '');
     setFiles([]);
-    setComposerSelection(defaultComposerSelection());
+    setComposerSelection(pendingComposerSelectionRef.current ?? defaultComposerSelection());
+    pendingComposerSelectionRef.current = null;
     setSelectionHydratedFor(null);
   }, [conversationId]);
   useEffect(() => {
@@ -246,6 +248,14 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   function updateBody(nextBody: string) {
     setBody(nextBody);
     if (conversationId) writeConversationDraft(conversationId, nextBody);
+  }
+  function openConversation(nextConversationId: string, source?: Pick<SharedConversation, 'preferredExecutionProfile' | 'preferredAccountProfile' | 'preferredDispatchTarget'>) {
+    // Preference mutations resolve asynchronously. Update the ref before the
+    // state transition so an old window's response can never overwrite the
+    // picker state for the conversation Jeffrey just opened.
+    conversationIdRef.current = nextConversationId;
+    pendingComposerSelectionRef.current = source ? composerSelectionFromConversation(source) : null;
+    setConversationId(nextConversationId);
   }
   function addDiffFollowUp(reference: DiffFollowUpReference) {
     const nextBody = [body.trim(), formatDiffFollowUpReference(reference)].filter(Boolean).join('\n\n');
@@ -581,10 +591,17 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   // cached-height transition: streamed Markdown can grow or settle at any
   // time without another bubble ever reusing its vertical space.
   useEffect(() => {
-    if (!conversationId || selectionHydratedFor === conversationId || !conversationDetail.data?.conversation) return;
-    setComposerSelection(composerSelectionFromConversation(conversationDetail.data.conversation));
+    if (!conversationId || selectionHydratedFor === conversationId) return;
+    // The rail already has the selected conversation in the normal case. Do
+    // not leave the composer disabled while its redundant detail request is
+    // in flight; doing so also carried the previous window's picker values
+    // into a newly selected conversation. A deep-link still uses its detail
+    // response when it is absent from the rail.
+    const selectionSource = conversationDetail.data?.conversation ?? selectedConversation;
+    if (!selectionSource) return;
+    setComposerSelection(composerSelectionFromConversation(selectionSource));
     setSelectionHydratedFor(conversationId);
-  }, [conversationId, conversationDetail.data?.conversation, selectionHydratedFor]);
+  }, [conversationId, conversationDetail.data?.conversation, selectedConversation, selectionHydratedFor]);
   const send = useMutation({
     mutationFn: async ({ intent }: { intent: 'interject' | 'queue' }) => {
       const attachments = await Promise.all(files.map(async (file) => ({
@@ -1009,8 +1026,11 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     // A pending fingerprint is global to the editable Workbench tree. It must
     // not turn every newly opened, empty conversation into a release prompt.
     // Only the conversation that has actually produced completed agent work is
-    // a useful place to offer approval.
-    && latestCompletedAgentIndex >= 0
+    // a useful place to offer approval. A completed promotion consumes every
+    // preceding agent turn: the preview-status query can still be carrying its
+    // pre-switch `pending` response for a poll interval, and must not recreate
+    // the banner for the release that just completed.
+    && latestCompletedAgentIndex > latestPreviewPromotionIndex
     && Boolean(previewStatus.data?.pending) && !promotionInFlight && !agentWorkInFlight;
 
   return (
@@ -1040,7 +1060,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                   className={result.conversationId === conversationId ? 'active' : ''}
                   onClick={() => {
                     setShowingConversationStackOnly(false);
-                    setConversationId(result.conversationId);
+                    openConversation(result.conversationId);
                     setPendingSelectedConversation({ id: result.conversationId, title: result.conversationTitle });
                     setConversationSearch('');
                     setRailOpen(false);
@@ -1071,7 +1091,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                   const stateClass = state;
                   const color = conversation.linkedProjectName ? projectTheme(conversation.linkedProjectName) : null;
                   const cardStyle = color ? { '--task-accent': color.accent, '--task-tint': color.tint, '--task-border': color.border } as CSSProperties : undefined;
-                  return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><button style={cardStyle} className={`stack-card ${conversation.id === conversationId ? 'active' : ''} ${isUnread ? 'conversation-unread' : 'conversation-read'} ${conversation.linkedProjectName ? 'project-colored' : ''} ${stateClass ? `conversation-${stateClass}` : ''} ${conversationView === 'active' && exitingConversationIds.has(conversation.id) ? 'conversation-exiting' : ''}`} onClick={() => { setShowingConversationStackOnly(false); setConversationId(conversation.id); setRailOpen(false); }}><span className="conversation-tab-title">{conversation.linkedProjectName && <ProjectColorDot projectName={conversation.linkedProjectName} labelled />}<strong>{conversation.title}</strong>{(conversation.pinned || conversation.linkedWorkItemPinned) && <span className="conversation-pinned-marker" aria-label={conversation.pinned ? 'Pinned conversation' : 'Pinned task'} title={conversation.pinned ? 'Pinned conversation' : 'Pinned task'}><Pin size={10} fill="currentColor" aria-hidden="true" /></span>}{isUnread && <span className="conversation-unread-marker">New</span>}{stateLabel && <span className={`conversation-state conversation-state-${state}`}>{(state === 'working' || state === 'promoting') && <LoaderCircle className="spin" size={10} />}{state === 'waiting_promotion' && <Clock size={10} />}{stateLabel}</span>}</span><small className="conversation-tab-meta"><ConversationOriginBadge workItemId={conversation.workItemId} /><span>{state === 'working' ? 'Agent working…' : state === 'promoting' ? 'Promoting preview…' : state === 'waiting_promotion' ? 'Waiting to promote…' : new Date(conversation.updatedAt).toLocaleDateString()}</span></small></button></div>;
+                  return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><button style={cardStyle} className={`stack-card ${conversation.id === conversationId ? 'active' : ''} ${isUnread ? 'conversation-unread' : 'conversation-read'} ${conversation.linkedProjectName ? 'project-colored' : ''} ${stateClass ? `conversation-${stateClass}` : ''} ${conversationView === 'active' && exitingConversationIds.has(conversation.id) ? 'conversation-exiting' : ''}`} onClick={() => { setShowingConversationStackOnly(false); openConversation(conversation.id, conversation); setRailOpen(false); }}><span className="conversation-tab-title">{conversation.linkedProjectName && <ProjectColorDot projectName={conversation.linkedProjectName} labelled />}<strong>{conversation.title}</strong>{(conversation.pinned || conversation.linkedWorkItemPinned) && <span className="conversation-pinned-marker" aria-label={conversation.pinned ? 'Pinned conversation' : 'Pinned task'} title={conversation.pinned ? 'Pinned conversation' : 'Pinned task'}><Pin size={10} fill="currentColor" aria-hidden="true" /></span>}{isUnread && <span className="conversation-unread-marker">New</span>}{stateLabel && <span className={`conversation-state conversation-state-${state}`}>{(state === 'working' || state === 'promoting') && <LoaderCircle className="spin" size={10} />}{state === 'waiting_promotion' && <Clock size={10} />}{stateLabel}</span>}</span><small className="conversation-tab-meta"><ConversationOriginBadge workItemId={conversation.workItemId} /><span>{state === 'working' ? 'Agent working…' : state === 'promoting' ? 'Promoting preview…' : state === 'waiting_promotion' ? 'Waiting to promote…' : new Date(conversation.updatedAt).toLocaleDateString()}</span></small></button></div>;
                 })}
               </div>
               {conversations.isLoading && <ConversationRailSkeleton count={6} />}

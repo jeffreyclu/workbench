@@ -401,6 +401,26 @@ describe('shared room', () => {
     expect(await screen.findByRole('button', { name: 'Approve preview' })).toBeTruthy();
   });
 
+  it('does not recreate preview approval from a stale pending response after that work promoted', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-0000-000000000096';
+    const timestamp = '2026-01-01T00:00:00Z';
+    const agentReply = { id: 'agent-before-promotion', conversationId, author: 'codex', body: 'Completed the change.', pinned: false, status: 'completed', error: '', createdAt: timestamp, attachments: [], model: null, executionProfile: 'auto', dispatchTarget: 'none' };
+    const promotion = { id: 'promotion-complete', conversationId, author: 'system', body: 'Preview approved and promoted.', pinned: false, status: 'completed', error: '', createdAt: timestamp, attachments: [], model: null, executionProfile: null, dispatchTarget: 'promotion' };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/runtime/preview-status') return new Response(JSON.stringify({ pending: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Promoted work', archivedAt: null, createdAt: timestamp, updatedAt: timestamp }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages: [agentReply, promotion] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    await screen.findByText('Preview approved and promoted.');
+    expect(screen.queryByRole('button', { name: 'Approve preview' })).toBeNull();
+  });
+
   it('offers task completion after an approval was combined into another successful promotion', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000097';

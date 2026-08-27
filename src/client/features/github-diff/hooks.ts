@@ -16,7 +16,10 @@ export function useGitHubPullRequestDiff(url: string | null) {
 export function useGitHubPullRequestDiffPreviews(urls: string[]) {
   return useQueries({
     queries: urls.map((url) => ({
-      queryKey: githubDiffQueryKeys.pullRequest(url),
+      // A one-page availability probe cannot share a key with the paginated
+      // viewer: React Query stores different data shapes for each, and mixing
+      // them makes the infinite observer read a non-existent `pages` array.
+      queryKey: githubDiffQueryKeys.preview(url),
       queryFn: () => githubDiffData.getPullRequest(url, 1),
       staleTime: 30_000,
     })),

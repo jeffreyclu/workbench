@@ -2,6 +2,7 @@ import { api } from '../../data/api.js';
 
 export const githubDiffQueryKeys = {
   pullRequest: (url: string) => ['github-pull-request-diff', url] as const,
+  preview: (url: string) => ['github-pull-request-diff-preview', url] as const,
 };
 
 export const githubDiffData = {

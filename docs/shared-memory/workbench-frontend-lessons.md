@@ -131,6 +131,13 @@ size only to its intrinsic content and leave the composer immediately after
 the diff. Both review panes use the same single composer instance and state;
 CSS may reposition it but Changes must never render a separate composer.
 
+### Diff review is a wrapped reading surface
+
+*Decision from Jeffrey, 2026-08-27.* The IDE-style patch pane must wrap long
+lines inside its visible width. Do not offer horizontal scrolling for source
+review. File-path rows reserve space for their editor/copy actions so long
+paths cannot collide with those controls.
+
 ### Phone conversation chrome collapses into two icon controls
 
 *Decision from Jeffrey, 2026-08-26.* Phone conversations are reading-first:
