@@ -298,6 +298,7 @@ export class WorkbenchAdminService {
       dispatchConversationTurn: (conversationId, actor, body, dispatchTo, executionProfile) => {
         if (!this.repository.getConversation(conversationId)) return { status: 404, body: { error: 'Conversation not found.' } };
         if (!this.capabilities.executeAgents) return { status: 409, body: { error: 'This runtime does not execute agents.' } };
+        if (dispatchTo !== 'none') this.repository.unpinConversationAndLinkedItem(conversationId);
         const message = this.repository.createSharedMessage(actor, body, dispatchTo === 'none' ? 'completed' : 'queued', conversationId, [], dispatchTo, executionProfile ?? null);
         const replies = dispatchTo === 'none' ? [] : dispatchNextSharedTurn(this.repository, conversationId);
         return { message, replies };

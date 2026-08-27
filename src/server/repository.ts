@@ -282,6 +282,20 @@ export class WorkItemRepository {
     return this.conversations.setPinned(id, pinned) ? this.getConversation(id) : null;
   }
 
+  // Handing a conversation to an agent is the signal that it's back in active
+  // work, whether the turn was dispatched over HTTP or through the MCP admin
+  // surface -- both paths must unpin the conversation and its linked task so
+  // neither is left stuck in the pinned stack once work resumes.
+  unpinConversationAndLinkedItem(conversationId: string): void {
+    const conversation = this.getConversation(conversationId);
+    if (!conversation) return;
+    if (conversation.workItemId) {
+      const linkedItem = this.get(conversation.workItemId);
+      if (linkedItem?.status === 'pinned') this.update(linkedItem.id, { status: 'ready' }, false, { actor: 'jeffrey', source: 'http' });
+    }
+    if (conversation.pinned) this.setConversationPinned(conversationId, false);
+  }
+
   countActiveConversations(): number {
     return this.conversations.countActive();
   }

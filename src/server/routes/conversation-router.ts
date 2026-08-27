@@ -17,15 +17,7 @@ import type { RouteContext } from '../route-context.js';
 
 export function createConversationRouter({ repository, database, capabilities, admin }: RouteContext) {
   const router = Router();
-  const unpinConversationAndLinkedItem = (conversationId: string) => {
-    const conversation = repository.getConversation(conversationId);
-    if (!conversation) return;
-    if (conversation.workItemId) {
-      const linkedItem = repository.get(conversation.workItemId);
-      if (linkedItem?.status === 'pinned') repository.update(linkedItem.id, { status: 'ready' }, false, { actor: 'jeffrey', source: 'http' });
-    }
-    if (conversation.pinned) repository.setConversationPinned(conversationId, false);
-  };
+  const unpinConversationAndLinkedItem = (conversationId: string) => repository.unpinConversationAndLinkedItem(conversationId);
   const conversationWorkspaces = (conversationId: string) => {
     const conversation = repository.getConversation(conversationId);
     if (!conversation) return null;

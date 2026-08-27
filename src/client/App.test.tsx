@@ -1408,6 +1408,7 @@ describe('shared room', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Collapse conversation tray' }));
     expect(heading.closest('header')).toHaveClass('is-mobile-header-collapsed');
 
+    expect(document.querySelector('.mobile-chrome-controls .mobile-composer-toggle')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Expand composer' }));
     expect(composer).not.toHaveClass('is-mobile-composer-collapsed');
     expect(screen.getByRole('button', { name: 'Collapse composer' })).toBeInTheDocument();
