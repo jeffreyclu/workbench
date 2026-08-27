@@ -218,6 +218,11 @@ composer default to collapsed on phone layouts to maximize thread space.
 
 ### Mobile composer action sits at the bottom-right
 
+*Clarification from Jeffrey, 2026-08-27.* The floating composer button and
+bottom-sheet grab handle are phone-only controls. Do not show either in a
+narrow desktop window: phone conversation chrome requires both the compact
+width and a coarse primary pointer.
+
 *Correction from Jeffrey, 2026-08-27.* On phones, the **Open composer** action,
 not the primary-nav Conversations icon, belongs in the bottom-right corner of
 the page, above the bottom navigation and safe-area inset. Conversations stays

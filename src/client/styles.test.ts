@@ -86,7 +86,7 @@ describe('conversation view controls', () => {
   });
 
   it('keeps the phone composer in normal flex flow and the jump control above it', () => {
-    const phoneRules = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.agent-console \.shared-thread \.jump-to-latest-button\s*\{[^}]*\}/)?.[0] ?? '';
+    const phoneRules = styles.match(/@media \(max-width: 820px\) and \(pointer: coarse\) \{[\s\S]*?\.agent-console \.shared-thread \.jump-to-latest-button\s*\{[^}]*\}/)?.[0] ?? '';
 
     expect(phoneRules).toContain('.agent-console .shared-composer {\n    /* This is a flex item below the scrolling thread. Sticky positioning made');
     expect(phoneRules).toContain('position: relative; z-index: 2; flex: 0 0 auto;');
@@ -132,7 +132,7 @@ describe('conversation view controls', () => {
   });
 
   it('collapses phone conversation metadata behind small toggle buttons while keeping actions available', () => {
-    const phoneRules = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.queued-message-action \{[^}]*\}/)?.[0] ?? '';
+    const phoneRules = styles.match(/@media \(max-width: 820px\) and \(pointer: coarse\) \{[\s\S]*?\.queued-message-action \{[^}]*\}/)?.[0] ?? '';
 
     expect(phoneRules).not.toContain('mobile-conversation-disclosure');
     expect(phoneRules).not.toContain('mobile-composer-disclosure');
@@ -147,7 +147,7 @@ describe('conversation view controls', () => {
   });
 
   it('keeps the mobile composer action as a safe-area-aware bottom-right action', () => {
-    const phoneRules = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.queued-message-action \{[^}]*\}/)?.[0] ?? '';
+    const phoneRules = styles.match(/@media \(max-width: 820px\) and \(pointer: coarse\) \{[\s\S]*?\.queued-message-action \{[^}]*\}/)?.[0] ?? '';
 
     expect(phoneRules).toContain('.mobile-composer-toggle {\n    position: fixed; right: 14px;');
     expect(phoneRules).toContain('bottom: calc(var(--mobile-nav) + env(safe-area-inset-bottom, 0px) + 14px);');

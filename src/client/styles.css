@@ -1027,7 +1027,10 @@ nav { display: grid; gap: 3px; }
   .task-lifecycle-actions .button { flex: 0 1 auto; }
   .detail-section { margin-top: 27px; padding-top: 18px; }
 }
-@media (max-width: 820px) {
+/* Phone-only chrome must not replace the desktop composer in a narrow desktop
+   window. The compact width keeps layouts usable; a coarse primary pointer
+   opts into the mobile interaction model. */
+@media (max-width: 820px) and (pointer: coarse) {
   /* The sidebar becomes a fixed bottom tab bar rather than disappearing —
      hiding it entirely left the phone with no navigation at all. */
   .app-shell { display: block; }
