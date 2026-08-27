@@ -192,6 +192,24 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     await vi.waitFor(() => expect(repository.getSharedMessageById(codex.id)?.status).toBe('failed'));
   });
 
+  it('retries each terminal reply from a paired dispatch independently', async () => {
+    fakeAgentDirectory('exit 1', 'exit 1');
+    const conversation = repository.createConversation('Retry both paired replies');
+    const groupId = 'paired-retry-group';
+    const codex = repository.createSharedMessage('codex', 'Canceled Codex reply', 'canceled', conversation.id, [], 'none', null, null, groupId);
+    const claude = repository.createSharedMessage('claude', 'Canceled Claude reply', 'canceled', conversation.id, [], 'none', null, null, groupId);
+
+    const [codexRetry, claudeRetry] = await Promise.all([
+      fetch(`${baseUrl}/api/shared/messages/${codex.id}/retry`, { method: 'POST' }),
+      fetch(`${baseUrl}/api/shared/messages/${claude.id}/retry`, { method: 'POST' }),
+    ]);
+
+    expect(codexRetry.status).toBe(202);
+    expect(claudeRetry.status).toBe(202);
+    await vi.waitFor(() => expect(repository.getSharedMessageById(codex.id)?.status).toBe('failed'));
+    await vi.waitFor(() => expect(repository.getSharedMessageById(claude.id)?.status).toBe('failed'));
+  });
+
   it('retries a terminal reply even when a newer reply from the same agent is running', async () => {
     fakeAgentDirectory('exit 1', 'exit 1');
     const conversation = repository.createConversation('Retry alongside a newer reply');

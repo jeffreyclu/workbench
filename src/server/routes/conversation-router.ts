@@ -374,14 +374,11 @@ export function createConversationRouter({ repository, database, capabilities, a
     if ((prior.author !== 'codex' && prior.author !== 'claude') || (prior.status !== 'failed' && prior.status !== 'canceled')) {
       return response.status(409).json({ error: 'Only failed or canceled agent responses can be continued.' });
     }
-    // The message is the single retry identity. Resolve every terminal agent
-    // sibling in its original dispatch group on the server; never rely on a
-    // stale task-run cache or force the user to retry Codex and Claude through
-    // different pathways.
-    const targets = prior.dispatchGroupId
-      ? repository.listAllSharedMessages(prior.conversationId).filter((message) => message.dispatchGroupId === prior.dispatchGroupId && (message.author === 'codex' || message.author === 'claude') && (message.status === 'failed' || message.status === 'canceled'))
-      : [prior];
-    if (!targets.length) return response.status(409).json({ error: 'No terminal agent replies remain to retry.' });
+    // A retry button owns exactly the response it is rendered on. A paired
+    // Codex/Claude dispatch has two independently cancellable/retryable
+    // streams; reopening every terminal sibling here meant the first click
+    // silently consumed both and the second click got a misleading 409.
+    const targets = [prior];
 
     // The terminal message is the retry lock: prepareSharedMessageRetry and
     // prepareRunRetry both conditionally reopen only failed/canceled rows.
