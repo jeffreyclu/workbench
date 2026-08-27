@@ -797,7 +797,11 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
         const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
         repository.updateSharedMessage(messageId, telemetry);
         if (runId) { repository.updateRun(runId, telemetry); repository.addAgentRunDiagnostic(runId, messageId, agent, 'usage', telemetry); }
-      }, linkedConversation?.codexThreadId, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE)
+      // Workbench already supplies a compact room prompt plus focused memory.
+      // Resuming Codex's provider thread replays its hidden tool history too,
+      // turning short follow-ups into 100k-token cache reads. Keep only the
+      // active turn steerable; every later room message starts clean.
+      }, undefined, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE)
         .then(({ output, threadId, usage }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage, fallbackFrom: null, fallbackReason: null }))
       : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       if (controller.signal.aborted) return;
@@ -840,7 +844,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
         void deliverPendingSharedInterjections(repository, messageId);
       }, undefined, false);
     }
-    if (result.agent === 'codex' && 'codexThreadId' in result && result.codexThreadId) repository.setConversationCodexThreadId(target.conversationId, result.codexThreadId);
+    if (result.agent === 'codex') repository.setConversationCodexThreadId(target.conversationId, null);
     if (result.agent === 'claude') repository.setConversationClaudeSessionId(target.conversationId, result.sessionId ?? null);
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       if (controller.signal.aborted) throw new Error('Agent run canceled.');
