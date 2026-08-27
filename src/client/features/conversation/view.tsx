@@ -792,10 +792,12 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     },
   });
   const retryReply = useMutation<unknown, Error, SharedMessage>({
-    mutationFn: async (message: SharedMessage) => {
-      const linkedRun = linkedWorkItem.data?.runs.find((run) => run.messageId === message.id);
-      return linkedRun ? await api.retryAgentRun(linkedRun.id) : await api.retrySharedMessage(message.id);
-    },
+    // A conversation message is the durable retry identity. The task detail
+    // query can be stale immediately after cancel/recovery, so choosing its
+    // cached run here used to bypass the server's message-to-run resolution
+    // and make the button appear to do nothing. The route atomically finds
+    // the linked run (when one exists) and otherwise retries the room reply.
+    mutationFn: (message: SharedMessage) => api.retrySharedMessage(message.id),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] }),
