@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceFileDiff, parseWorkspacePatch, workspaceStatuses } from './workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, parseWorkspacePatch, workspaceStatuses } from './workspace-diff.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -94,58 +94,5 @@ describe('workspace diff parsing', () => {
     await expect(commitAndPushWorkspace(workspace, 'chore: publish workspace', revision)).resolves.toEqual({ committed: true, pushed: true, commit: expect.any(String) });
     expect(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' })).toBe('');
     expect(execFileSync('git', ['rev-list', '--count', '@{upstream}..HEAD'], { cwd: workspace, encoding: 'utf8' }).trim()).toBe('0');
-  });
-});
-
-describe('getWorkspaceFileDiff', () => {
-  it('expands context around a tracked file change', async () => {
-    const workspace = temporaryGitWorkspace();
-    const lines = Array.from({ length: 20 }, (_, index) => `line ${index}`);
-    writeFileSync(join(workspace, 'file.ts'), `${lines.join('\n')}\n`);
-    execFileSync('git', ['add', 'file.ts'], { cwd: workspace });
-    execFileSync('git', ['commit', '--quiet', '-m', 'initial'], { cwd: workspace });
-    lines[10] = 'line 10 changed';
-    writeFileSync(join(workspace, 'file.ts'), `${lines.join('\n')}\n`);
-
-    const defaultPatch = await getWorkspaceFileDiff(workspace, 'file.ts', 3);
-    const expandedPatch = await getWorkspaceFileDiff(workspace, 'file.ts', 8);
-
-    expect(defaultPatch).toEqual(expect.stringContaining('-line 10\n+line 10 changed'));
-    expect(expandedPatch?.length).toBeGreaterThan(defaultPatch?.length ?? 0);
-    expect(expandedPatch).toEqual(expect.stringContaining('line 2'));
-  });
-
-  it('returns the whole file when given a very large context', async () => {
-    const workspace = temporaryGitWorkspace();
-    const lines = Array.from({ length: 20 }, (_, index) => `line ${index}`);
-    writeFileSync(join(workspace, 'file.ts'), `${lines.join('\n')}\n`);
-    execFileSync('git', ['add', 'file.ts'], { cwd: workspace });
-    execFileSync('git', ['commit', '--quiet', '-m', 'initial'], { cwd: workspace });
-    lines[0] = 'line 0 changed';
-    writeFileSync(join(workspace, 'file.ts'), `${lines.join('\n')}\n`);
-
-    const wholeFilePatch = await getWorkspaceFileDiff(workspace, 'file.ts', 1_000_000);
-
-    expect(wholeFilePatch).toEqual(expect.stringContaining('line 19'));
-  });
-
-  it('diffs an untracked file against /dev/null', async () => {
-    const workspace = temporaryGitWorkspace();
-    writeFileSync(join(workspace, 'new-file.ts'), 'export const value = 1;\n');
-
-    const patch = await getWorkspaceFileDiff(workspace, 'new-file.ts', 8);
-
-    expect(patch).toEqual(expect.stringContaining('+export const value = 1;'));
-  });
-
-  it('returns null when the file has no diff', async () => {
-    const workspace = temporaryGitWorkspace();
-    writeFileSync(join(workspace, 'file.ts'), 'export const value = 1;\n');
-    execFileSync('git', ['add', 'file.ts'], { cwd: workspace });
-    execFileSync('git', ['commit', '--quiet', '-m', 'initial'], { cwd: workspace });
-
-    const patch = await getWorkspaceFileDiff(workspace, 'file.ts', 8);
-
-    expect(patch).toBeNull();
   });
 });

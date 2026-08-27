@@ -43,15 +43,6 @@ export function useWorkspaceDiffSnapshots(scope: WorkspaceDiffScope | null, revi
 }
 
 
-export function useWorkspaceFileDiff(scope: WorkspaceDiffScope | null, filePath: string | null, context: number | null) {
-  return useQuery({
-    queryKey: workspaceDiffQueryKeys.fileContext(scope ?? { workItemId: '' }, filePath ?? '', context ?? 0),
-    queryFn: () => workspaceDiffData.getFileDiff(scope!, filePath!, context!),
-    enabled: Boolean(scope) && Boolean(filePath) && Boolean(context),
-    staleTime: Infinity,
-  });
-}
-
 export function useDiffHunkReviews(scope: WorkspaceDiffScope, revision: string | undefined) {
   return useQuery({
     queryKey: workspaceDiffQueryKeys.hunkReviews(scope, revision),

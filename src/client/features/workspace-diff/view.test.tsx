@@ -262,36 +262,4 @@ describe('WorkspaceDiffView', () => {
     expect(document.querySelector('.diff-line.addition')?.textContent).toContain('+preserved');
     expect(screen.getByLabelText('Workspace diff version')).toHaveValue('recorded-version');
   });
-
-  it('expands hunk context on request and suppresses hunk review controls while it is active', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/api/diff-confidence') return new Response(JSON.stringify({ assessments: {} }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === '/api/work-items/work-item-1/workspace-diff/snapshots') return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url.startsWith('/api/work-items/work-item-1/workspace-diff/hunk-reviews')) return new Response(JSON.stringify({ reviews: [] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === '/api/work-items/work-item-1/workspace-diff') return new Response(JSON.stringify({ diff: {
-        workspacePath: '/tmp/workbench', branch: 'review', revision: 'context-revision', changedFiles: 1, additions: 1, deletions: 1,
-        publish: { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
-        files: [{ path: 'src/context.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }],
-      } }), { headers: { 'Content-Type': 'application/json' } });
-      if (url.startsWith('/api/work-items/work-item-1/workspace-diff/file')) {
-        expect(url).toContain('filePath=src%2Fcontext.ts');
-        expect(url).toContain('context=8');
-        return new Response(JSON.stringify({ patch: '@@ -1,5 +1,5 @@\n context line\n-before\n+after\n more context\n' }), { headers: { 'Content-Type': 'application/json' } });
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    }));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-
-    render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={false} /></QueryClientProvider>);
-
-    expect(await screen.findByRole('button', { name: 'Reviewed' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '+5 lines' }));
-
-    expect(await screen.findByText('context line')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Reviewed' })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Default context' }));
-    expect(await screen.findByRole('button', { name: 'Reviewed' })).toBeInTheDocument();
-  });
 });

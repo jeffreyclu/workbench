@@ -23,7 +23,6 @@ export const sourceClient = {
   getWorkspaceDiff: (scope: WorkspaceDiffScope) => request<{ diff: WorkspaceDiff }>(`${workspaceDiffBasePath(scope)}/workspace-diff`),
   getWorkspaceDiffSnapshots: (scope: WorkspaceDiffScope) => request<{ snapshots: WorkspaceDiffSnapshot[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/snapshots`),
   getWorkspaceDiffStatus: (scope: WorkspaceDiffScope, revision: string) => request<{ changed: boolean }>(`${workspaceDiffBasePath(scope)}/workspace-diff/status?revision=${encodeURIComponent(revision)}`),
-  getWorkspaceFileDiff: (scope: WorkspaceDiffScope, filePath: string, context: number) => request<{ patch: string | null }>(`${workspaceDiffBasePath(scope)}/workspace-diff/file?filePath=${encodeURIComponent(filePath)}&context=${context}`),
   commitAndPushWorkspace: (scope: WorkspaceDiffScope, revision: string, message?: string) => request<{ result: WorkspacePublishResult }>(`${workspaceDiffBasePath(scope)}/workspace-diff/commit-and-push`, { method: 'POST', body: JSON.stringify({ revision, message }) }),
   getDiffHunkReviews: (scope: WorkspaceDiffScope, revision: string) => request<{ reviews: DiffHunkReview[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/hunk-reviews?revision=${encodeURIComponent(revision)}`),
   upsertDiffHunkReview: (scope: WorkspaceDiffScope, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string }) => request<{ review: DiffHunkReview }>(`${workspaceDiffBasePath(scope)}/workspace-diff/hunk-reviews`, { method: 'PUT', body: JSON.stringify(input) }),
