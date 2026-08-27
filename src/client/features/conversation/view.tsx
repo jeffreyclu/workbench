@@ -1063,7 +1063,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
         )}
       </aside>
       <section className="agent-console" aria-label="Shared agent workspace">
-        <header id="conversation-header" className={`agent-console-header${mobileHeaderOpen ? '' : ' is-mobile-header-collapsed'}`}><button type="button" className="mobile-detail-close icon-button" aria-label="Close conversation" onClick={() => setRailOpen(true)}><X size={16} /></button><div className="agent-console-title">{selectedConversation ? <ConversationOriginBadge workItemId={selectedConversation.workItemId} /> : <span className="eyebrow">Shared context</span>}<h2>{selectedConversation?.title
+        <header id="conversation-header" className={`agent-console-header${mobileHeaderOpen ? '' : ' is-mobile-header-collapsed'}${conversationId && selectedConversation ? ' has-conversation-actions' : ''}`}><button type="button" className="mobile-detail-close icon-button" aria-label="Close conversation" onClick={() => setRailOpen(true)}><X size={16} /></button><div className="agent-console-title">{selectedConversation ? <ConversationOriginBadge workItemId={selectedConversation.workItemId} /> : <span className="eyebrow">Shared context</span>}<h2>{selectedConversation?.title
               ?? (pendingSelectedConversation?.id === conversationId ? pendingSelectedConversation.title
                   : conversationDetail.isLoading ? <span className="conversation-title-skeleton"><Skeleton width="240px" height="19px" /></span>
                   : selectedConversationMissing ? 'Conversation not found'

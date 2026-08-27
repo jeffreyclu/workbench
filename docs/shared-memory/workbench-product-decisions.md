@@ -422,6 +422,11 @@ On phone layouts, the conversation close control belongs at the same right-side 
 the task-detail close control. Do not place it before the conversation title or create a
 conversation-only back-button position. Decision from Jeffrey, 2026-08-25.
 
+*Decision from Jeffrey, 2026-08-27.* The mobile conversation header follows the Reddit-style
+control hierarchy: put the linked-task return arrow on the left only when a linked task exists,
+keep the close X at the top right, and center the conversation action controls in a floating pill.
+Leave the Conversation/Changes toggle unchanged until it is separately decided.
+
 ### Workbench is a mobile target
 
 *Jeffrey uses Workbench from his phone every day, so mobile layout and a stable shareable URL are first-class requirements rather than nice-to-haves.*

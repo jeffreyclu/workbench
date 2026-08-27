@@ -94,18 +94,22 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('position: sticky; bottom: 12px;');
   });
 
-  it('keeps the mobile conversation title to one line clear of the close control', () => {
+  it('uses a Reddit-style mobile conversation header with task return left, actions centered, and close right', () => {
     const phoneRules = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.conversation-window-actions \{[^}]*\}/)?.[0] ?? '';
 
-    expect(phoneRules).toContain('.agent-console-header .mobile-detail-close { position: absolute; top: 12px; right: 14px; }');
-    expect(phoneRules).toContain('.agent-console-title { flex: 1 1 100%; min-width: 0; max-width: calc(100% - 44px); }');
+    expect(phoneRules).toContain('.agent-console-header .mobile-detail-close { position: absolute; z-index: 2; top: 12px; right: 14px; }');
+    expect(phoneRules).toContain('.related-task-link { position: absolute; z-index: 2; top: 12px; left: 14px;');
+    expect(phoneRules).toContain('.conversation-window-actions { position: absolute; top: 12px; left: 50%;');
+    expect(phoneRules).toContain('border-radius: 999px;');
+    expect(phoneRules).toContain('.agent-console-header.has-conversation-actions .agent-console-title { max-width: 100%; padding-top: 108px; }');
     expect(phoneRules).toContain('.agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }');
   });
 
-  it('wraps mobile task-linked conversation controls into extra rows like the task header, instead of an overflow menu', () => {
+  it('keeps mobile task-linked conversation controls in a centered floating bar without an overflow menu', () => {
     const rule = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.conversation-window-actions \{[^}]*\}/)?.[0].match(/\.conversation-window-actions \{[^}]*\}/)?.[0] ?? '';
 
     expect(rule).toContain('flex-wrap: wrap');
+    expect(rule).toContain('width: max-content');
     expect(rule).not.toContain('overflow-x: auto');
     expect(styles).toContain('.conversation-window-actions .icon-button { flex: 0 0 auto; width: 44px; height: 44px; }');
   });

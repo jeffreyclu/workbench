@@ -1145,12 +1145,14 @@ nav { display: grid; gap: 3px; }
     transition: max-height var(--motion-standard) var(--motion-ease), padding var(--motion-standard) var(--motion-ease), opacity var(--motion-fast) ease, border-color var(--motion-fast) ease;
   }
   .agent-console-header.is-mobile-header-collapsed { display: none; }
-  .agent-console-header .mobile-detail-close { position: absolute; top: 12px; right: 14px; }
+  .agent-console-header .mobile-detail-close { position: absolute; z-index: 2; top: 12px; right: 14px; }
   .agent-console-title { flex: 1 1 100%; min-width: 0; max-width: calc(100% - 44px); }
+  .agent-console-header.has-conversation-actions { min-height: 176px; }
+  .agent-console-header.has-conversation-actions .agent-console-title { max-width: 100%; padding-top: 108px; }
   .agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* Matches the task header's action row: wrap into extra rows rather than
-     cramming every action into one horizontally-scrolling line. */
-  .conversation-window-actions { flex: 1 1 100%; flex-wrap: wrap; justify-content: flex-start; gap: 8px; margin: 8px 0 0; }
+  .related-task-link { position: absolute; z-index: 2; top: 12px; left: 14px; display: grid; place-items: center; width: 44px; height: 44px; margin: 0; }
+  .related-task-link span { display: none; }
+  .conversation-window-actions { position: absolute; top: 12px; left: 50%; z-index: 1; display: flex; flex-wrap: wrap; justify-content: center; width: max-content; min-width: 44px; max-width: calc(100% - 116px); gap: 4px; margin: 0; padding: 3px; background: #20211d; border: 1px solid #3b3d32; border-radius: 999px; box-shadow: 0 8px 20px #0006; transform: translateX(-50%); }
   .conversation-window-actions .icon-button { flex: 0 0 auto; width: 44px; height: 44px; }
   .conversation-window-actions .conversation-task-picker { flex: 0 0 auto; min-height: 44px; }
   .conversation-window-actions .conversation-delete-control { flex: 0 0 auto; }
