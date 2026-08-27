@@ -652,7 +652,7 @@ export interface AgentRun {
   nextAttemptAt: string | null;
   /** Directory this run resolved to and edits under. Recorded at dispatch so a run's filesystem target is durable, auditable, and lockable. */
   resolvedWorkspace: string | null;
-  /** How this run was dispatched: a direct human action, or (once phase 3 ships) the autonomy governor. */
+  /** Historical dispatch origin. New runs are always manual. */
   origin: 'manual' | 'autonomous';
 }
 
@@ -1058,114 +1058,6 @@ export interface RunInsightsByKind {
   canceled: number;
   successRate: number | null;
 }
-
-// --- Weekly usage meter -------------------------------------------------------
-//
-// Sonnet-equivalent token (SET) totals for the current ISO week, split manual
-// vs autonomous per provider, plus each provider's weekly ceiling so the
-// frontend never has to know the ceiling values itself (see
-// docs/autonomy-strategy.md). `ceilingSet` is null when no ceiling estimate
-// exists yet — never fabricate one in the client.
-
-export interface UsageTotals {
-  inputTokens: number;
-  outputTokens: number;
-  setTokens: number;
-  runCount: number;
-}
-
-export interface WorkbenchUsageByOrigin {
-  manual: UsageTotals;
-  autonomous: UsageTotals;
-}
-
-export interface ClaudeInteractiveUsage {
-  setTokens: number;
-  scannedFiles: number;
-  /** Non-null means this result is unsafe for a governor to use. */
-  error: string | null;
-}
-
-/** Current account window read directly from Codex app-server. */
-export interface CodexRateLimit {
-  usedPercent: number;
-  resetsAt: string | null;
-  windowDurationMins: number | null;
-  planType: string | null;
-}
-
-export interface WeeklyUsageReport {
-  weekStart: string;
-  weekEnd: string;
-  /** Alarm-line fraction of each provider's weekly ceiling reserved for autonomous work (see docs/autonomy-strategy.md). */
-  autonomousSliceFraction: number;
-  /** Target-line fraction autonomous work should spend to, 4 points below the alarm (see docs/autonomy-strategy.md "Spend to 16%, alarm at 20%"). */
-  autonomousTargetFraction: number;
-  claude: {
-    workbench: WorkbenchUsageByOrigin;
-    interactive: ClaudeInteractiveUsage;
-    /**
-     * SET/week ceiling. Comes from the most recent calibration within the
-     * last 14 days if one exists, otherwise the pessimistic estimate
-     * (`CLAUDE_PESSIMISTIC_CEILING_SET`) so the system under-spends rather
-     * than over-spends while uncalibrated.
-     */
-    ceilingSet: number;
-    /** Null until the first `/usage` calibration lands, or once the last one is more than 14 days old. */
-    calibration: UsageCalibration | null;
-  };
-  codex: {
-    workbench: WorkbenchUsageByOrigin;
-    /** Real account usage from `account/rateLimits/read`; null when Codex is unavailable. */
-    rateLimit: CodexRateLimit | null;
-    /** From the most recent Codex calibration within the last 14 days, or null until one is submitted. */
-    ceilingSet: number | null;
-    /** Null until the first `/usage` calibration lands for Codex, or once the last one is more than 14 days old. */
-    calibration: UsageCalibration | null;
-  };
-}
-
-// --- Usage calibration ---------------------------------------------------------
-//
-// Twice-weekly manual correction of the Claude ceiling: run `/usage` in an
-// interactive session, report the percentage it shows and when it was
-// observed, and Workbench solves for the real ceiling from the SET it
-// already measured for that week. Each submission is a standalone
-// observation — there is no automatic retry or correction, only newer
-// observations superseding older ones by recency (see
-// docs/autonomy-strategy.md "Calibration").
-
-export interface UsageCalibration {
-  id: string;
-  provider: 'claude' | 'codex';
-  observedAt: string;
-  observedPercentage: number;
-  /** Reset date `/usage` reported for this reading, if given. */
-  resetsAt: string | null;
-  /** Workbench-dispatched SET measured for the ISO week containing `observedAt`. */
-  workbenchSet: number;
-  /** Interactive (non-Workbench) SET measured for the same week. */
-  interactiveSet: number;
-  /** `(workbenchSet + interactiveSet) / (observedPercentage / 100)`. */
-  computedCeilingSet: number;
-  createdAt: string;
-}
-
-/**
- * A calibration as returned in `GET /api/usage/calibration` history: flagged
- * when its solved ceiling drifts sharply from the next-older reading, so a
- * bad `/usage` transcription shows up instead of silently blending in.
- */
-export interface UsageCalibrationHistoryEntry extends UsageCalibration {
-  flagged: boolean;
-}
-
-export const submitUsageCalibrationSchema = z.object({
-  provider: z.enum(['claude', 'codex']).default('claude'),
-  observedAt: z.string().datetime(),
-  observedPercentage: z.number().gt(0).lte(100),
-  resetsAt: z.string().datetime().nullish().transform((value) => value ?? null),
-});
 
 // --- Audit log ---------------------------------------------------------------
 //

@@ -6,19 +6,9 @@ import { InsightsView } from './insights';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-function emptyTotals() { return { inputTokens: 0, outputTokens: 0, setTokens: 0, runCount: 0 }; }
-const emptyWeeklyUsage = {
-  weekStart: '2026-08-17T00:00:00.000Z', weekEnd: '2026-08-24T00:00:00.000Z', autonomousSliceFraction: 0.2, autonomousTargetFraction: 0.16,
-  claude: { workbench: { manual: emptyTotals(), autonomous: emptyTotals() }, interactive: { setTokens: 0, scannedFiles: 0, error: null }, ceilingSet: 333_000_000, calibration: null },
-  codex: { workbench: { manual: emptyTotals(), autonomous: emptyTotals() }, rateLimit: null, ceilingSet: null, calibration: null },
-};
-
-/** Routes the stubbed fetch by URL so the weekly-usage dial's own request doesn't get the insights payload by mistake. */
 function stubInsightsFetch(insightsPayload: unknown) {
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-    const url = input.toString();
-    const body = url.includes('/api/usage/weekly') ? emptyWeeklyUsage : insightsPayload;
-    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  vi.stubGlobal('fetch', vi.fn(async () => {
+    return new Response(JSON.stringify(insightsPayload), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }));
 }
 
@@ -122,118 +112,16 @@ describe('InsightsView', () => {
     expect(await screen.findByText('2026-08-20 · 4')).toBeTruthy();
   });
 
-  it('shows the weekly usage dial with the manual/autonomous split and the 20% autonomous slice', async () => {
-    stubInsightsFetch({
-      retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 1, completedTasks: 0,
-      medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
-      cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
-    });
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = input.toString();
-      if (url.includes('/api/usage/weekly')) {
-        return new Response(JSON.stringify({
-          weekStart: '2026-08-17T00:00:00.000Z', weekEnd: '2026-08-24T00:00:00.000Z', autonomousSliceFraction: 0.2, autonomousTargetFraction: 0.16,
-          claude: {
-            workbench: { manual: { inputTokens: 1_000, outputTokens: 100, setTokens: 30_000_000, runCount: 5 }, autonomous: { inputTokens: 200, outputTokens: 20, setTokens: 3_000_000, runCount: 1 } },
-            interactive: { setTokens: 300_000, scannedFiles: 2, error: null },
-            ceilingSet: 333_000_000,
-            calibration: null,
-          },
-          codex: { workbench: { manual: { inputTokens: 500, outputTokens: 50, setTokens: 1_000_000, runCount: 2 }, autonomous: emptyTotals() }, rateLimit: null, ceilingSet: null, calibration: null },
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return new Response(JSON.stringify({
-        retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 1, completedTasks: 0,
-        medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
-        cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    }));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-
-    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
-
-    expect(await screen.findByRole('heading', { name: /weekly usage/i })).toBeTruthy();
-    // (30M manual + 3M autonomous + 0.3M interactive) / 333M ceiling = 10%.
-    expect(screen.getByText('10% of weekly ceiling')).toBeTruthy();
-    expect(screen.getByText('30M tokens')).toBeTruthy();
-    expect(screen.getByText('3M tokens')).toBeTruthy();
-    // Codex has no ceiling estimate yet.
-    expect(screen.getByText(/No Codex ceiling estimate yet/)).toBeTruthy();
-    // Calibration is agent-owned; the usage view does not expose manual controls for either provider.
-    expect(screen.queryByRole('button', { name: 'Calibrate' })).toBeNull();
-    expect(screen.queryByText('Calibration history')).toBeNull();
-  });
-
-  it('labels the ceiling as an uncalibrated estimate until a /usage observation is recorded', async () => {
+  it('does not request or render the retired weekly usage section', async () => {
     stubInsightsFetch({
       retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
       medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
       cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
     });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-
     render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
-
-    expect((await screen.findAllByText('Estimate — not yet calibrated')).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/^Calibrated /)).toBeNull();
-  });
-
-  it('switches the ceiling label to a calibrated date once a /usage observation is recorded', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = input.toString();
-      if (url.includes('/api/usage/weekly')) {
-        return new Response(JSON.stringify({
-          weekStart: '2026-08-17T00:00:00.000Z', weekEnd: '2026-08-24T00:00:00.000Z', autonomousSliceFraction: 0.2, autonomousTargetFraction: 0.16,
-          claude: {
-            workbench: { manual: emptyTotals(), autonomous: emptyTotals() },
-            interactive: { setTokens: 0, scannedFiles: 0, error: null },
-            ceilingSet: 400_000_000,
-            calibration: { provider: 'claude', observedAt: '2026-08-19T15:00:00.000Z', observedPercentage: 12, workbenchSet: 30_000_000, interactiveSet: 300_000, computedCeilingSet: 400_000_000 },
-          },
-          codex: { workbench: { manual: emptyTotals(), autonomous: emptyTotals() }, rateLimit: null, ceilingSet: null, calibration: null },
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return new Response(JSON.stringify({
-        retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
-        medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
-        cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    }));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-
-    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
-
-    expect(await screen.findByText(/^Calibrated /)).toBeTruthy();
-    // Codex is still uncalibrated in this fixture, so the estimate label must still show for it.
-    expect(screen.getByText('Estimate — not yet calibrated')).toBeTruthy();
-  });
-
-  it('keeps the weekly usage dial content reachable at a narrow, phone-width viewport', async () => {
-    const originalInnerWidth = window.innerWidth;
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 360 });
-    window.dispatchEvent(new Event('resize'));
-    stubInsightsFetch({
-      retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
-      medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
-      cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
-    });
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-
-    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
-
-    // Content that must stay reachable without horizontal scroll: both provider
-    // cards, the manual/autonomous breakdown, and the reset/legend text. None of
-    // this is gated behind a wide-viewport-only element, matching the CSS rule
-    // (styles.css `.usage-dial-grid` at the narrow breakpoint) that collapses the
-    // two-provider grid to a single column instead of hiding either card.
-    expect(await screen.findByRole('heading', { name: /weekly usage/i })).toBeTruthy();
-    expect(screen.getByText('Claude')).toBeTruthy();
-    expect(screen.getByText('Codex')).toBeTruthy();
-    expect(screen.getAllByText('Manual').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Autonomous').length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Target 16%/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Alarm 20%/).length).toBeGreaterThan(0);
-
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalInnerWidth });
+    await screen.findByRole('heading', { name: /insights/i });
+    expect(screen.queryByRole('heading', { name: /weekly usage/i })).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/api/usage/weekly'))).toBe(false);
   });
 });

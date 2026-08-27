@@ -11,7 +11,7 @@ import {
 import type { Activity, AgentRun, WorkItem } from '../../shared/contracts.js';
 import type { ActionFailure } from '../action-result.js';
 import { isActionFailure } from '../action-result.js';
-import { cancelAgentRun, classifyExecutionRobust, executeAgentRun, resolveAgents } from '../agent-runner.js';
+import { CANCEL_FORCE_KILL_DELAY_MS, cancelAgentRun, classifyExecutionRobust, executeAgentRun, resolveAgents } from '../agent-runner.js';
 import { describeExecutionRouting } from '../activity-log.js';
 import { contextForPrompt, listBrokerConnections } from '../connection-broker.js';
 import { scanSource } from '../source-scanner.js';
@@ -26,7 +26,6 @@ import type { WorkbenchAdminActions } from '../workbench-mcp.js';
 import { oauthCallbackBase } from '../app-exports.js';
 import type { ArtifactService } from './artifact-service.js';
 import { runDiscovery } from '../discovery.js';
-import { dispatchAutonomousWork } from '../autonomous-dispatcher.js';
 
 function selfAssignedFailure(item: WorkItem, force: boolean): ActionFailure | null {
   if (force || !isSelfAssigned(item.assignees)) return null;
@@ -38,6 +37,20 @@ function openPrerequisiteFailure(repository: WorkItemRepository, workItemId: str
   const blockedBy = repository.listOpenDependencies(workItemId);
   if (!blockedBy.length) return null;
   return { status: 409, body: { error: 'Task is blocked by open prerequisites.', code: 'OPEN_PREREQUISITES', blockedBy } };
+}
+
+// Must clear the Stop escalation delay (SIGTERM -> SIGKILL) with real margin for
+// the kill signal to land, the child's `close` event to fire, and the
+// cancellation commit write to land — not just edge past it.
+const CANCELLATION_SETTLE_TIMEOUT_MS = CANCEL_FORCE_KILL_DELAY_MS + 5_000;
+
+async function waitForCancellationToSettle(repository: WorkItemRepository, runId: string): Promise<boolean> {
+  const deadline = Date.now() + CANCELLATION_SETTLE_TIMEOUT_MS;
+  while (repository.isRunCancellationSettling(runId)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
+  return true;
 }
 
 export class WorkbenchAdminService {
@@ -102,6 +115,12 @@ export class WorkbenchAdminService {
     const prior = this.repository.getRun(runId);
     if (!prior) return { status: 404, body: { error: 'Agent run not found.' } } as ActionFailure;
     if (prior.status !== 'failed' && prior.status !== 'canceled') return { status: 409, body: { error: 'Only failed or canceled runs can be retried.' } } as ActionFailure;
+    // Cancel returns to the UI immediately, but the provider process needs a
+    // moment to receive SIGTERM and release its durable lease. Retrying the
+    // same row before that happens lets two processes write as one attempt.
+    if (prior.status === 'canceled' && !await waitForCancellationToSettle(this.repository, prior.id)) {
+      return { status: 409, body: { error: 'The canceled agent is still stopping. Try again in a moment.' } } as ActionFailure;
+    }
     // Scoped to this run's own agent: a task can legitimately have two active
     // threads (Codex + Claude) at once, and retrying one failed/canceled
     // thread must not be blocked by its sibling's unrelated active run.
@@ -253,15 +272,6 @@ export class WorkbenchAdminService {
   queueLinearWorkItem(workItemId: string) {
     const item = this.repository.queueLinearItem(workItemId);
     return item ? { item } : { status: 404, body: { error: 'Linear issue not found.' } } as ActionFailure;
-  }
-
-  async dispatchAutonomousWork() {
-    if (!this.capabilities.executeAgents) return { status: 409, body: { error: 'This runtime does not execute agents.' } } as ActionFailure;
-    const result = dispatchAutonomousWork(this.repository);
-    if (!result.dispatched) return { status: 409, body: result };
-    // Leave the run queued. The scheduler is the sole process dispatcher, so
-    // autonomous and recovered work follow the same durable lease path.
-    return result;
   }
 
   sendAction(response: Response, result: unknown, status = 202) {

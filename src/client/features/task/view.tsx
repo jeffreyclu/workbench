@@ -634,9 +634,8 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
               <header>
                 <span className={`run-status run-${run.status}`}>{run.status === 'running' && <LoaderCircle className="spin" size={11} />}{run.status === 'queued' && run.attempt > 0 ? `Retrying (attempt ${run.attempt + 1} of ${run.maxAttempts})…` : run.status}</span>
                 <strong>{run.agent} · {run.kind}</strong>
-                <span className={`run-origin run-origin-${run.origin}`}>{run.origin === 'autonomous' ? 'Autonomous' : 'Manual'}</span>
                 <time>{new Date(run.createdAt).toLocaleString()}</time>
-                {(run.status === 'queued' || run.status === 'running') && <button className="cancel-run" onClick={() => cancelRun.mutate(run.id)}><X size={11} /> {run.origin === 'autonomous' ? 'Stop' : 'Cancel'}</button>}
+                {(run.status === 'queued' || run.status === 'running') && <button className="cancel-run" onClick={() => cancelRun.mutate(run.id)}><X size={11} /> Cancel</button>}
                 {runIndex === 0 && (run.status === 'failed' || run.status === 'canceled') && <button className="retry-run" onClick={() => retryRun.mutate(run.id)} disabled={retryRun.isPending}><RefreshCw size={11} /> Retry / continue</button>}
               </header>
               {run.instructions && <p className="run-prompt" title={run.instructions}>{run.instructions}</p>}

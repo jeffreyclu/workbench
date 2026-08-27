@@ -2,13 +2,11 @@ import { Router } from 'express';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import { listAuditLogQuerySchema, submitUsageCalibrationSchema } from '../../shared/contracts.js';
+import { listAuditLogQuerySchema } from '../../shared/contracts.js';
 import type { RouteContext } from '../route-context.js';
 import { runtimePreviewStatus } from '../runtime-preview.js';
 import { lastCompletedRuntimePromotion } from '../runtime-release.js';
 import { LIFECYCLE_REPORT_MS, lifecycleReportMinimumCases, OWNER_ID } from '../scheduler.js';
-import { computeWeeklyUsageReport, isCalibrationDrift, recordUsageCalibration } from '../usage-meter.js';
-import { readCodexRateLimit } from '../codex-rate-limits.js';
 import { DEFAULT_LIFECYCLE_REPORT_DIRECTORY, lifecycleReportStatus } from '../lifecycle-report.js';
 import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMessage } from '../slack-notify.js';
 
@@ -54,24 +52,6 @@ export function createSystemRouter({ repository, admin }: RouteContext) {
     const input = listAuditLogQuerySchema.parse(request.query);
     try { response.json(repository.listAuditLog(input.limit, input.cursor ?? null, input.category, input.workItemId)); }
     catch { response.status(400).json({ error: 'Invalid audit log cursor.' }); }
-  });
-  router.get('/api/usage/weekly', async (_request, response) => {
-    response.json(computeWeeklyUsageReport(repository, new Date(), await readCodexRateLimit()));
-  });
-  router.post('/api/usage/calibration', (request, response) => {
-    const input = submitUsageCalibrationSchema.parse(request.body);
-    response.status(201).json({ calibration: recordUsageCalibration(repository, input.provider, input.observedAt, input.observedPercentage, input.resetsAt) });
-  });
-  router.get('/api/usage/calibration', (request, response) => {
-    const provider = z.enum(['claude', 'codex']).default('claude').parse(request.query.provider);
-    const limit = z.coerce.number().int().min(1).max(200).default(20).parse(request.query.limit);
-    // Newest-first; each reading is compared against the next-older one to flag drift.
-    const readings = repository.listUsageCalibrations(provider, limit);
-    const calibrations = readings.map((reading, index) => ({ ...reading, flagged: isCalibrationDrift(reading, readings[index + 1] ?? null) }));
-    response.json({ calibrations });
-  });
-  router.post('/api/autonomy/dispatch', async (_request, response) => {
-    admin.sendAction(response, await admin.dispatchAutonomousWork());
   });
   router.get('/api/integrations/slack', (_request, response) => {
     response.json({ notifications: describeSlackConfig() });

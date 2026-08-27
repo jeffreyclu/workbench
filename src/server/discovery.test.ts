@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { discoveryPriority, NEW_CANDIDATES_PER_RUN, runDiscovery } from './discovery.js';
+import { discoveryPriority, runDiscovery } from './discovery.js';
 import type { SourceSignal } from './source-scanner.js';
 
 vi.mock('./source-scanner.js', () => ({
@@ -23,7 +23,7 @@ describe('discovery relevance', () => {
   });
 });
 
-describe('runDiscovery proposal cycle', () => {
+describe('runDiscovery review cycle', () => {
   let database: WorkbenchDatabase;
   let repository: WorkItemRepository;
 
@@ -39,7 +39,7 @@ describe('runDiscovery proposal cycle', () => {
     vi.restoreAllMocks();
   });
 
-  it('caps machine proposals at NEW_CANDIDATES_PER_RUN, keeping the highest-priority signals in a reviewable backlog state', async () => {
+  it('adds actionable signals to the review inbox without creating tasks', async () => {
     const { scanConnectedSources } = await import('./source-scanner.js');
     const now = Date.now();
     const at = (offsetMinutes: number) => new Date(now - offsetMinutes * 60_000).toISOString();
@@ -55,25 +55,19 @@ describe('runDiscovery proposal cycle', () => {
     await runDiscovery(repository);
 
     const inbox = repository.getDiscoveryInbox('pending');
-    expect(inbox.candidates).toHaveLength(NEW_CANDIDATES_PER_RUN);
-    // All three focus-priority (relevance 2) signals survive the cap; the two relevance-1 signals do not.
+    expect(inbox.candidates).toHaveLength(5);
     expect(inbox.candidates.map((candidate) => candidate.title)).toEqual([
       'Review PR: mcp gateway',
       'Fix connector permissions',
       'Review PR: connector auth',
+      'Billing cleanup',
+      'Could you prepare the demo?',
     ]);
     expect(inbox.candidates.every((candidate) => candidate.status === 'pending')).toBe(true);
-    const proposals = repository.list();
-    expect(proposals).toHaveLength(NEW_CANDIDATES_PER_RUN);
-    expect(proposals.map((item) => item.title)).toEqual([
-      'Review PR: mcp gateway',
-      'Fix connector permissions',
-      'Review PR: connector auth',
-    ]);
-    expect(proposals.every((item) => item.machineProposed && item.status === 'backlog' && item.suggestedPriority !== null && item.suggestedQueuePosition !== null && item.proposalRationale)).toBe(true);
+    expect(repository.list()).toHaveLength(0);
   });
 
-  it('does not count a refreshed existing candidate against the new-proposal cap', async () => {
+  it('refreshes existing candidates without duplicating them', async () => {
     const { scanConnectedSources } = await import('./source-scanner.js');
     const firstBatch: SourceSignal[] = [
       { provider: 'github', title: 'Review PR: connector auth', summary: 'code review requested', url: 'https://github.com/writer/repo/pull/1', occurredAt: new Date().toISOString() },
@@ -92,11 +86,11 @@ describe('runDiscovery proposal cycle', () => {
     vi.mocked(scanConnectedSources).mockResolvedValue({ signals: secondBatch, errors: [] });
     await runDiscovery(repository);
 
-    // The already-pending candidate refreshes; three new ones are added, at the cap.
+    // The already-pending candidate refreshes and the three new ones are added.
     expect(repository.getDiscoveryInbox('pending').candidates).toHaveLength(4);
   });
 
-  it('rejects a near-duplicate title before creating a machine proposal', async () => {
+  it('keeps a candidate in review even when a similar task exists', async () => {
     const { scanConnectedSources } = await import('./source-scanner.js');
     repository.create({ title: 'Fix connector permission checks', description: 'Existing open task.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     vi.mocked(scanConnectedSources).mockResolvedValue({

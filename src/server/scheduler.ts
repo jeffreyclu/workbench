@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { executeAgentRun } from './agent-runner.js';
-import { dispatchAutonomousWork } from './autonomous-dispatcher.js';
 import { generateLifecycleReport } from './lifecycle-report.js';
 import { publishRealtimeEvent } from './realtime.js';
 import type { WorkItemRepository } from './repository.js';
@@ -84,9 +83,6 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
           Date.now() - start,
         );
       }
-      // This only creates a queued run. The loop below claims and executes it
-      // through the same durable scheduler path used by manual work.
-      dispatchAutonomousWork(repository);
       const allDue = repository.dueWork();
       const { runIds } = repository.dueWork(MAX_CONCURRENT_RUNS);
       const stalled = runIds.length === 0 && allDue.runIds.length > 0;

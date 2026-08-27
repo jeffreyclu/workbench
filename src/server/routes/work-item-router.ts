@@ -208,10 +208,6 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     response.json({ items: repository.listArchived() });
   });
 
-  // Phase 1a of docs/autonomy-strategy.md: measure this week's Sonnet-equivalent
-  // token spend per provider, split manual vs autonomous. No dispatch or
-  // guardrail logic reads this yet — it exists to prove the number is real
-  // before anything is built against it.
   router.get('/api/work-items/:id', (request, response) => {
     const item = repository.get(request.params.id);
     if (!item) return response.status(404).json({ error: 'Work item not found.' });

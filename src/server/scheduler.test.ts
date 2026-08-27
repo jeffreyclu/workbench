@@ -12,11 +12,6 @@ vi.mock('./agent-runner.js', () => ({
   executeAgentRun: (...args: Parameters<ExecuteAgentRun>) => executeAgentRunMock(...args),
 }));
 
-const dispatchAutonomousWorkMock = vi.fn((_repository: WorkItemRepository) => ({ dispatched: false as const, reason: 'No eligible backlog task is queued.' }));
-vi.mock('./autonomous-dispatcher.js', () => ({
-  dispatchAutonomousWork: (...args: [WorkItemRepository]) => dispatchAutonomousWorkMock(...args),
-}));
-
 const { startScheduler, MAX_CONCURRENT_RUNS, TICK_MS } = await import('./scheduler.js');
 
 describe('scheduler recovery semantics (integration-level, exercised via repository primitives)', () => {
@@ -138,7 +133,6 @@ describe('scheduler capacity-limited dispatch', () => {
     database = openDatabase(':memory:');
     repository = new WorkItemRepository(database);
     executeAgentRunMock.mockClear();
-    dispatchAutonomousWorkMock.mockClear();
     // Simulate dispatch: claim the run (as real executeAgentRun does, occupying a
     // capacity slot) then immediately mark it completed, without touching a real
     // Codex/Claude subprocess.
@@ -173,15 +167,6 @@ describe('scheduler capacity-limited dispatch', () => {
     expect(executeAgentRunMock).toHaveBeenCalledTimes(runs.length);
     const allDispatchedIds = executeAgentRunMock.mock.calls.map((call) => (call[1] as AgentRun).id);
     expect(allDispatchedIds).toEqual(runs.map((r) => r.id));
-  });
-
-  it('asks the autonomous dispatcher for one queued run on each scheduler tick', async () => {
-    ({ stop } = startScheduler(repository));
-
-    await vi.advanceTimersByTimeAsync(TICK_MS);
-
-    expect(dispatchAutonomousWorkMock).toHaveBeenCalledTimes(1);
-    expect(dispatchAutonomousWorkMock).toHaveBeenCalledWith(repository);
   });
 
   it('logs the queue-stalled diagnostic once per stall, not on every tick', async () => {

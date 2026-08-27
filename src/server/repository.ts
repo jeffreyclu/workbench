@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type UsageCalibration, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState } from '../shared/contracts.js';
 import type { FeedbackWeight, QueueContext, QueuePlan } from './queue-intelligence.js';
 import { listProjects, resolveProjectName } from './project-registry.js';
 import type { WorkbenchDatabase } from './database.js';
@@ -11,7 +11,7 @@ import { PROMOTION_QUEUED_MESSAGE } from './promotion-messages.js';
 import { collectMemoryDocuments, indexPendingMemory, searchMemory } from './memory-index.js';
 import { buildFtsMatchQuery } from './fts-query.js';
 import { UnitOfWork } from './unit-of-work.js';
-import { TelemetryRepository, type AutonomyGovernorDecisionRecord, type AutonomyPolicy } from './repositories/telemetry-repository.js';
+import { TelemetryRepository } from './repositories/telemetry-repository.js';
 import { SourceConnectionRepository } from './repositories/source-connection-repository.js';
 import { DiscoveryRepository } from './repositories/discovery-repository.js';
 import { ConversationRepository } from './repositories/conversation-repository.js';
@@ -1868,6 +1868,10 @@ export class WorkItemRepository {
     return this.runs.isCancellationRequested(id);
   }
 
+  isRunCancellationSettling(id: string): boolean {
+    return this.runs.isCancellationSettling(id);
+  }
+
   /**
    * The owner may publish a terminal result or retry only while it still owns
    * the live, uncanceled attempt. The conditional write is the commit point;
@@ -1876,7 +1880,6 @@ export class WorkItemRepository {
   finishRun(id: string, ownerId: string, patch: RunPatch): boolean {
     return this.transaction(() => {
       const finished = this.runs.finish(id, ownerId, patch);
-      if (finished && patch.status && ['completed', 'failed', 'canceled'].includes(patch.status)) this.telemetry.reconcileAutonomousBudget(id);
       return finished;
     });
   }
@@ -1884,7 +1887,6 @@ export class WorkItemRepository {
   finishRunCancellation(id: string, ownerId: string): boolean {
     return this.transaction(() => {
       const finished = this.runs.finishCancellation(id, ownerId);
-      if (finished) this.telemetry.reconcileAutonomousBudget(id);
       return finished;
     });
   }
@@ -1892,7 +1894,6 @@ export class WorkItemRepository {
   finishQueuedRunCancellation(id: string): boolean {
     return this.transaction(() => {
       const finished = this.runs.finishQueuedCancellation(id);
-      if (finished) this.telemetry.reconcileAutonomousBudget(id);
       return finished;
     });
   }
@@ -1985,83 +1986,6 @@ export class WorkItemRepository {
 
   activeRunsForItem(workItemId: string): AgentRun[] {
     return this.runs.activeForItem(workItemId);
-  }
-
-  activeAutonomousRunCount(): number {
-    return this.runs.activeAutonomousCount();
-  }
-
-  averageSetEstimate(agent: AgentRun['agent'], model: string): number | null {
-    return this.telemetry.averageSetEstimate(agent, model);
-  }
-
-  getAutonomyPolicy(): AutonomyPolicy {
-    return this.telemetry.getAutonomyPolicy();
-  }
-
-  setAutonomyPolicy(input: { globalEnabled: boolean; targetFraction: number; alarmFraction: number }, now?: string): AutonomyPolicy {
-    return this.telemetry.setAutonomyPolicy(input, now);
-  }
-
-  setAutonomyProviderPolicy(provider: AgentRun['agent'], input: { enabled: boolean; weeklyCeilingSet: number }, now?: string): AutonomyPolicy {
-    return this.telemetry.setAutonomyProviderPolicy(provider, input, now);
-  }
-
-  recordAutonomyGovernorDecision(input: Omit<AutonomyGovernorDecisionRecord, 'id' | 'createdAt'> & { createdAt?: string }): AutonomyGovernorDecisionRecord {
-    return this.telemetry.recordAutonomyGovernorDecision(input);
-  }
-
-  listAutonomyGovernorDecisions(limit = 100): AutonomyGovernorDecisionRecord[] {
-    return this.telemetry.listAutonomyGovernorDecisions(limit);
-  }
-
-  heldBudgetReservationSet(provider: 'claude' | 'codex', sinceIso: string): number {
-    return this.telemetry.heldBudgetReservationSet(provider, sinceIso);
-  }
-
-  /**
-   * Atomically verifies the remaining autonomous budget and creates its hold.
-   * Committed usage and held reservations are both read inside this transaction,
-   * so concurrent callers cannot reuse a stale allowance calculation.
-   */
-  tryReserveAutonomousBudget(input: {
-    provider: 'claude' | 'codex'; model: string; workItemId: string;
-    requiredTokenCount: number; budgetTokenLimit: number;
-    windowStart: string; windowEnd: string; now?: string;
-  }): { approved: true; reservationId: string; spentSet: number; heldSet: number } | { approved: false; spentSet: number; heldSet: number } {
-    return this.telemetry.tryReserveAutonomousBudget(input);
-  }
-
-  attachBudgetReservationToRun(reservationId: string, agentRunId: string): boolean {
-    return this.telemetry.attachBudgetReservationToRun(reservationId, agentRunId);
-  }
-
-  reconcileAutonomousBudget(agentRunId: string, now?: string): { actualSet: number; alarmTriggered: boolean } | null {
-    return this.telemetry.reconcileAutonomousBudget(agentRunId, now);
-  }
-
-  createBudgetReservation(input: { provider: 'claude' | 'codex'; model: string; workItemId: string; agentRunId?: string; reservedSet: number }): void {
-    this.telemetry.createBudgetReservation(input);
-  }
-
-  /** Token usage for every run created since `sinceIso`, for the usage meter. Not scoped to one work item. */
-  listAgentRunUsageSince(sinceIso: string): Array<{ agent: AgentRun['agent']; origin: AgentRun['origin']; model: string | null; inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null }> {
-    return this.telemetry.listAgentRunUsageSince(sinceIso);
-  }
-
-  // --- Usage calibration -----------------------------------------------------
-
-  createUsageCalibration(input: { provider: UsageCalibration['provider']; observedAt: string; observedPercentage: number; resetsAt: string | null; workbenchSet: number; interactiveSet: number; computedCeilingSet: number }): UsageCalibration {
-    return this.telemetry.createUsageCalibration(input);
-  }
-
-  /** Most recent calibration for `provider` observed at or before `asOfIso`, or null if none exists. */
-  getLatestUsageCalibration(provider: UsageCalibration['provider'], asOfIso: string): UsageCalibration | null {
-    return this.telemetry.getLatestUsageCalibration(provider, asOfIso);
-  }
-
-  listUsageCalibrations(provider: UsageCalibration['provider'], limit = 20): UsageCalibration[] {
-    return this.telemetry.listUsageCalibrations(provider, limit);
   }
 
   // --- Audit log -----------------------------------------------------------

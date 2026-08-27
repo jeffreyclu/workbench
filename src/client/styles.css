@@ -571,9 +571,6 @@ nav { display: grid; gap: 3px; }
 .run-card header strong { color: #c8c7bf; font-size: 10px; text-transform: capitalize; }
 .run-card header time { color: #5d5c57; font: 8px 'DM Mono'; }
 .run-status { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 4px; font: 7px 'DM Mono'; text-transform: uppercase; }
-.run-origin { display: inline-flex; width: fit-content; padding: 3px 5px; border: 1px solid; border-radius: 999px; font: 700 7px/1 'DM Mono'; letter-spacing: .04em; text-transform: uppercase; }
-.run-origin-autonomous { color: #c8e971; background: #1d2512; border-color: #44552a; }
-.run-origin-manual { color: #a9b9e9; background: #171d2d; border-color: #303b5c; }
 .cancel-run { display: flex; align-items: center; gap: 3px; padding: 4px 6px; color: #ff9181; background: #291815; border: 1px solid #4b2722; border-radius: 4px; font: 8px 'DM Mono'; }
 .retry-run { display: flex; align-items: center; gap: 4px; padding: 4px 7px; color: #c9e87b; background: #1b2112; border: 1px solid #435325; border-radius: 4px; font: 8px 'DM Mono'; }
 .run-queued { color: #a8a79f; background: #292925; }.run-running { color: #e8ca72; background: #382f19; }.run-completed { color: #c6f432; background: #263115; }.run-failed { color: #ff8d7c; background: #391d19; }
@@ -1278,38 +1275,6 @@ nav { display: grid; gap: 3px; }
 .cursing-model-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 7px; margin-bottom: 12px; }
 .cursing-model-list span { display: flex; align-items: baseline; justify-content: space-between; gap: 9px; padding: 8px 9px; color: #f1d3bb; background: #201612; border: 1px solid #4b3028; border-radius: 5px; font: 10px 'DM Mono'; }
 .cursing-model-list em { flex: 0 0 auto; color: #f0a66e; font-style: normal; }
-.usage-dial-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.usage-dial-card { min-width: 0; padding: 16px; background: #111110; border: 1px solid #2d2d29; border-radius: 8px; }
-.usage-dial-card > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
-.usage-dial-card > header strong { color: #e7e6df; font-size: 14px; }
-.usage-dial-total { color: #d6dfb5; font: 500 11px 'DM Mono'; text-align: right; }
-.usage-dial-track { position: relative; display: flex; height: 10px; overflow: visible; background: #292925; border-radius: 999px; }
-.usage-dial-fill { height: 100%; transition: width 240ms ease; }
-.usage-dial-fill-manual { background: linear-gradient(90deg, var(--acid-dark), var(--acid)); border-radius: 999px 0 0 999px; }
-.usage-dial-fill-autonomous { background: #6f9fd9; }
-.usage-dial-fill-interactive { background: #45443f; border-radius: 0 999px 999px 0; }
-.usage-dial-slice-marker { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; }
-.usage-dial-slice-marker-target { background: #8fd0a0; }
-.usage-dial-slice-marker-alarm { background: #f0a66e; }
-.usage-dial-marker-legend { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 8px; color: var(--soft); font-size: 10px; }
-.usage-dial-marker-legend span { display: inline-flex; align-items: center; gap: 5px; }
-.usage-dial-marker-swatch { display: inline-block; width: 7px; height: 2px; border-radius: 1px; }
-.usage-dial-marker-swatch-target { background: #8fd0a0; }
-.usage-dial-marker-swatch-alarm { background: #f0a66e; }
-.usage-dial-breakdown { display: grid; gap: 8px; margin: 14px 0 0; padding-top: 12px; border-top: 1px solid #292925; }
-.usage-dial-breakdown > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.usage-dial-breakdown dt { display: flex; align-items: center; gap: 7px; color: var(--soft); font-size: 11px; }
-.usage-dial-breakdown dd { margin: 0; color: #d6dfb5; font: 500 11px 'DM Mono'; }
-.usage-dial-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; }
-.usage-dial-swatch-manual { background: var(--acid); }
-.usage-dial-swatch-autonomous { background: #6f9fd9; }
-.usage-dial-swatch-interactive { background: #45443f; }
-.usage-dial-reset-note { margin: 10px 0 0; color: var(--soft); font-size: 11px; }
-.usage-dial-calibration { display: inline-block; margin-top: 6px; font-size: 10px; font-weight: 600; letter-spacing: .02em; }
-.usage-dial-calibration-estimate { color: #d9a35c; }
-.usage-dial-calibration-calibrated { color: #8fd0a0; }
-.usage-dial-section-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
-.usage-dial-last-refreshed { color: var(--soft); font-size: 11px; }
 
 @media (max-width: 820px) {
   .artifact-workspace {
@@ -1347,10 +1312,6 @@ nav { display: grid; gap: 3px; }
   .insight-bar-count { display: none; }
   .insight-token-row { align-items: stretch; flex-direction: column; gap: 10px; }
   .insight-token-row dl { width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .usage-dial-grid { grid-template-columns: 1fr; }
-  .usage-dial-section-header { flex-direction: column; align-items: flex-start; gap: 2px; }
-  .usage-dial-marker-legend { gap: 4px 10px; }
-  .usage-dial-reset-note { overflow-wrap: anywhere; }
 }
 
 .realtime-status-banner { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 61; display: flex; align-items: center; gap: 8px; padding: 8px 14px; color: #f0c05a; font-size: 11px; font-weight: 600; background: #211a0d; border: 1px solid #5c481c; border-radius: 999px; box-shadow: 0 12px 28px #000a; }

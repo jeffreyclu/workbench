@@ -19,34 +19,9 @@ export function SkeletonText({ lines = 1, width }: { lines?: number; width?: str
   );
 }
 
-export function UsageDialSkeleton() {
-  return (
-    <div className="insight-section usage-dial-section" aria-hidden="true">
-      <Skeleton width="140px" height="1.1em" />
-      <Skeleton width="90%" height="0.85em" />
-      <div className="usage-dial-grid">
-        {[0, 1].map((index) => (
-          <article className="usage-dial-card" key={index}>
-            <header>
-              <Skeleton width="70px" height="1em" />
-              <Skeleton width="90px" height="0.85em" />
-            </header>
-            <Skeleton width="100%" height="10px" radius="6px" />
-            <dl className="usage-dial-breakdown">
-              <div><Skeleton width="50px" /><Skeleton width="60px" /></div>
-              <div><Skeleton width="70px" /><Skeleton width="60px" /></div>
-            </dl>
-          </article>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export function InsightsSkeleton() {
   return (
     <div className="insight-sections" aria-hidden="true">
-      <UsageDialSkeleton />
       <div className="insight-overall-row">
         {[0, 1, 2, 3].map((index) => (
           <div className="insight-overall-stat" key={index}>

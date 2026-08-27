@@ -4,9 +4,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
-import { AUTONOMOUS_MODEL_ALLOWLIST } from './autonomy-governor.js';
 
-const AUTONOMOUS_MODELS = new Set<string>(AUTONOMOUS_MODEL_ALLOWLIST);
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
 import { agentAccountEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, shutdownAgentPool, startPoolSweep, warmProcess } from './agent-pool.js';
@@ -25,6 +23,14 @@ const HEARTBEAT_TICK_MS = 4_000;
  * keeping the database out of the run's critical path.
  */
 const PROGRESS_FLUSH_MS = 250;
+/**
+ * A canceled process gets this long to exit after SIGTERM before Stop escalates
+ * to SIGKILL. Callers that wait for a cancellation to fully settle (e.g. before
+ * allowing a retry) must budget for this delay plus real slack for the kill
+ * signal, the `close` event, and the commit write — see CANCELLATION_SETTLE_TIMEOUT_MS
+ * in workbench-admin-service.ts.
+ */
+export const CANCEL_FORCE_KILL_DELAY_MS = 3_000;
 
 /** One foreground agent owns each Workbench run. This keeps Claude's cache
  * footprint proportional to the actual task rather than multiplying it across
@@ -951,7 +957,7 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
       if (stopping) return;
       stopping = true;
       terminateAgentProcessTree(child, 'SIGTERM');
-      forceKillTimer = setTimeout(() => terminateAgentProcessTree(child, 'SIGKILL'), 3_000);
+      forceKillTimer = setTimeout(() => terminateAgentProcessTree(child, 'SIGKILL'), CANCEL_FORCE_KILL_DELAY_MS);
       forceKillTimer.unref();
     };
     const cancel = () => {
@@ -1226,8 +1232,6 @@ export async function runAgentCommandWithFallback(
     const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, resumeSessionId, poolEligible, kind);
     return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
   } catch (error) {
-    // An autonomous reservation is provider+model specific. Crossing providers
-    // would spend an allowance the governor never reserved.
     if (signal?.aborted || modelOverride || !isAgentCapacityError(error)) throw error;
     const fallback = primary === 'claude' ? 'codex' : 'claude';
     const reason = error instanceof Error ? error.message : String(error);
@@ -1275,12 +1279,20 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   if (!repository.claimRun(run.id, ownerId, leaseMs)) return;
   const item = repository.get(run.workItemId);
   if (!item) return;
+  if (repository.isCancellationRequested(run.id)) {
+    repository.finishRunCancellation(run.id, ownerId);
+    return;
+  }
   // Serialize on the working tree before anything visible happens: a run that
   // has to wait for its workspace should read as still queued, not as started
   // and then reverted. An unresolvable workspace falls through to the normal
   // failure path inside the try below.
   let workspace: string | null = null;
   try { workspace = resolveWorkingDirectory(item); } catch { workspace = null; }
+  if (repository.isCancellationRequested(run.id)) {
+    repository.finishRunCancellation(run.id, ownerId);
+    return;
+  }
   if (workspace) {
     if (MUTATING_RUN_KINDS.has(run.kind) && !repository.claimWorkspace(workspace, run.id, ownerId, leaseMs)) {
       const alreadyWaiting = run.resolvedWorkspace !== null;
@@ -1305,6 +1317,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   }
   const controller = new AbortController();
   activeRunControllers.set(run.id, controller);
+  if (repository.isCancellationRequested(run.id)) controller.abort(new Error('Agent run cancellation requested.'));
   // Requests can originate from the preview API, which intentionally has no
   // scheduler. Keep this run's lease alive locally instead of relying on a
   // process-wide scheduler that may not exist in the dispatching process. The
@@ -1387,11 +1400,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       ? { profile: run.executionProfile, source: 'requested' }
       : resolveExecutionProfileDecision(item, run, `${item.title}\n${item.description}\n${run.instructions}`);
     const profile = decision.profile;
-    const autonomousModel = run.origin === 'autonomous' ? run.model : null;
-    if (run.origin === 'autonomous' && (!autonomousModel || !AUTONOMOUS_MODELS.has(autonomousModel))) {
-      throw new Error(`Autonomous run ${run.id} has prohibited model '${autonomousModel ?? 'unset'}'.`);
-    }
-    const model = autonomousModel ?? modelFor(run.agent, profile);
+    const model = modelFor(run.agent, profile);
     repository.updateRun(run.id, { model, executionProfile: profile });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { model, executionProfile: profile });
     if (run.conversationId) repository.setConversationExecutionProfile(run.conversationId, profile);
@@ -1417,9 +1426,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
       })));
-    }, run.kind, run.accountProfile, autonomousModel ?? undefined, undefined, resumeSessionId, !resumesSession);
+    }, run.kind, run.accountProfile, undefined, undefined, resumeSessionId, !resumesSession);
     if (resumesSession && run.conversationId) repository.setConversationClaudeSessionId(run.conversationId, result.sessionId ?? null);
-    if (run.origin !== 'autonomous' && result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
+    if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the run to Codex.';
       repository.addActivity(item.id, 'system', 'agent_fallback', reason);
       repository.updateRun(run.id, { output: '● Claude reported an invalid workspace-scope blocker. Handing this tracked run to Codex…', fallbackFrom: 'claude', fallbackReason: reason });
@@ -1517,7 +1526,6 @@ export function cancelAgentRun(repository: WorkItemRepository, id: string): Agen
   if (!repository.requestRunCancellation(id)) return null;
   const completedAt = new Date().toISOString();
   repository.updateRun(id, { status: 'canceled', completedAt });
-  repository.reconcileAutonomousBudget(id, completedAt);
   if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'canceled' });
   const item = repository.get(run.workItemId);
   if (!item?.archivedAt && item?.status !== 'done') {

@@ -150,7 +150,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       'Read current state before mutating it, and use the actor that represents the calling assistant so the shared log stays truthful.',
       'External websites, services, and networked CLIs require Jeffrey\'s explicit current instruction for the particular operation. This MCP surface cannot perform them.',
       'The only things outside this surface are provider credentials, external-provider operations, public deployment, direct database access, and general machine administration.',
-      'You are an autonomous Workbench-local administrator. Execute requested local Workbench actions directly; do not ask Jeffrey for approval, force flags, or a handoff. Only concrete state-integrity conflicts — such as an active run, dependency cycle, or stale plan — can reject a local action.',
+      'You are a Workbench-local administrator. Execute requested local Workbench actions directly; do not ask Jeffrey for approval, force flags, or a handoff. Only concrete state-integrity conflicts — such as an active run, dependency cycle, or stale plan — can reject a local action.',
     ].join(' '),
   });
 

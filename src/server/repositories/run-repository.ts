@@ -257,6 +257,14 @@ export class RunRepository {
     return row?.cancel_requested === 1;
   }
 
+  /** A canceled row remains owned until the process that received SIGTERM exits.
+   * Reopening it before then would let the old and new attempts share one ID. */
+  isCancellationSettling(id: string): boolean {
+    const row = this.database.prepare(`SELECT 1 FROM agent_runs
+      WHERE id = ? AND status = 'canceled' AND cancel_requested = 1 AND owner_id IS NOT NULL`).get(id);
+    return Boolean(row);
+  }
+
   /**
    * The owner may publish a terminal result or retry only while it still owns
    * the live, uncanceled attempt. The conditional write is the commit point;
@@ -287,7 +295,7 @@ export class RunRepository {
   finishCancellation(id: string, ownerId: string): boolean {
     const changed = this.database.prepare(`
       UPDATE agent_runs SET status = 'canceled', error = '', completed_at = ?, owner_id = NULL, lease_expires_at = NULL
-      WHERE id = ? AND owner_id = ? AND status = 'running' AND cancel_requested = 1
+      WHERE id = ? AND owner_id = ? AND status IN ('running', 'canceled') AND cancel_requested = 1
     `).run(new Date().toISOString(), id, ownerId).changes;
     return Number(changed) > 0;
   }
@@ -405,8 +413,4 @@ export class RunRepository {
     return this.list(workItemId).filter((run) => run.status === 'queued' || run.status === 'running');
   }
 
-  activeAutonomousCount(): number {
-    const row = this.database.prepare("SELECT COUNT(*) AS n FROM agent_runs WHERE origin = 'autonomous' AND status IN ('queued', 'running')").get() as { n: number };
-    return Number(row.n);
-  }
 }

@@ -241,12 +241,6 @@ describe('classifyExecution', () => {
     expect(effortOf('claude', 'deep')).toBe('high');
   });
 
-  it('can raise autonomous reasoning effort without raising the allowlisted model tier', () => {
-    const args = commandFor('claude', '/tmp/project', 'deep', 'sonnet').args;
-    expect(args).toEqual(expect.arrayContaining(['--effort', 'high', '--model', 'sonnet']));
-    expect(args).not.toContain('opus');
-  });
-
   it('detects imaginary Claude scope claims and states the concrete fresh-session contract', () => {
     expect(hasUnsupportedClaudeScopeClaim('This session is read-only and my allowed directory is fixed elsewhere.')).toBe(true);
     expect(hasUnsupportedClaudeScopeClaim('The GitHub credential is unavailable.')).toBe(false);
@@ -418,10 +412,12 @@ describe('classifyExecution', () => {
       const execution = executeAgentRun(ownerRepository, run, 'owner-process', 3_000);
       await waitFor(() => ownerRepository.getRun(run.id)?.output.includes('Partial output') === true);
       expect(cancelAgentRun(cancelingRepository, run.id)?.status).toBe('canceled');
+      expect(ownerRepository.isRunCancellationSettling(run.id)).toBe(true);
       cancelingRepository.update(task.id, { status: 'canceled' });
       await execution;
 
       expect(ownerRepository.getRun(run.id)?.status).toBe('canceled');
+      expect(ownerRepository.isRunCancellationSettling(run.id)).toBe(false);
       expect(ownerRepository.get(task.id)?.status).toBe('canceled');
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {

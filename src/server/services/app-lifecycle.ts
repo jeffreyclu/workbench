@@ -1,5 +1,4 @@
 import type { WorkbenchDatabase } from '../database.js';
-import { runDiscovery, shouldRunDiscoveryCatchUp } from '../discovery.js';
 import type { WorkItemRepository } from '../repository.js';
 import type { RuntimeCapabilities } from '../runtime-capabilities.js';
 import { setAuditSink } from '../audit-log.js';
@@ -26,8 +25,6 @@ export function startAppLifecycle({ database, repository, capabilities, artifact
   if (!capabilities.runDiscoveryCatchUp) return { discoveryCatchUpScheduled: false };
   const timer = setTimeout(() => {
     if (!database.isOpen) return;
-    const lastRun = repository.getDiscoveryInbox().lastRun?.completedAt ?? null;
-    if (shouldRunDiscoveryCatchUp(lastRun)) void runDiscovery(repository).catch((error) => console.error('Discovery catch-up failed:', error));
   }, 1_500);
   timer.unref();
   return { discoveryCatchUpScheduled: true };

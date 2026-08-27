@@ -1887,44 +1887,6 @@ describe('WorkItemRepository', () => {
     });
   });
 
-  describe('extracted repositories: telemetry unit-of-work integrity', () => {
-    it('rolls back the whole budget reservation on a constraint failure, leaving the held total untouched', () => {
-      const item = repository.create({ title: 'Budgeted task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-      const windowStart = new Date(Date.now() - 60_000).toISOString();
-      const windowEnd = new Date(Date.now() + 60_000).toISOString();
-      const first = repository.tryReserveAutonomousBudget({ provider: 'claude', model: 'claude-sonnet', workItemId: item.id, requiredTokenCount: 100, budgetTokenLimit: 1_000, windowStart, windowEnd });
-      expect(first.approved).toBe(true);
-      expect(repository.heldBudgetReservationSet('claude', windowStart)).toBe(100);
-
-      // A malformed provider violates the budget_reservations CHECK constraint,
-      // so the INSERT inside tryReserveAutonomousBudget's transaction throws.
-      // The held total must reflect only the first, successfully committed
-      // reservation — proving the shared UnitOfWork rolled the failed write back
-      // rather than leaving a partial insert behind.
-      expect(() => repository.tryReserveAutonomousBudget({
-        provider: 'not-a-real-provider' as 'claude',
-        model: 'claude-sonnet', workItemId: item.id, requiredTokenCount: 50, budgetTokenLimit: 1_000, windowStart, windowEnd,
-      })).toThrow();
-      expect(repository.heldBudgetReservationSet('claude', windowStart)).toBe(100);
-      expect(repository.heldBudgetReservationSet('codex', windowStart)).toBe(0);
-    });
-
-    it('tryReserveAutonomousBudget is atomic: a second reservation that would exceed the ceiling is rejected without a partial write', () => {
-      const item = repository.create({ title: 'Budgeted task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-      const windowStart = new Date(Date.now() - 60_000).toISOString();
-      const windowEnd = new Date(Date.now() + 60_000).toISOString();
-      const first = repository.tryReserveAutonomousBudget({ provider: 'codex', model: 'gpt-5.6-terra', workItemId: item.id, requiredTokenCount: 700, budgetTokenLimit: 1_000, windowStart, windowEnd });
-      expect(first.approved).toBe(true);
-
-      // The second request alone fits under the ceiling, but combined with the
-      // first held reservation it does not — the read-then-insert must see the
-      // first reservation's held amount, not a stale pre-transaction snapshot.
-      const second = repository.tryReserveAutonomousBudget({ provider: 'codex', model: 'gpt-5.6-terra', workItemId: item.id, requiredTokenCount: 400, budgetTokenLimit: 1_000, windowStart, windowEnd });
-      expect(second.approved).toBe(false);
-      expect(repository.heldBudgetReservationSet('codex', windowStart)).toBe(700);
-    });
-  });
-
   describe('extracted repositories: discovery unit-of-work integrity', () => {
     it('rolls back the created work item when convert fails partway through, leaving the candidate pending', () => {
       const run = repository.startDiscoveryRun();

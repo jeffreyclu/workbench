@@ -2,8 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Info, LineChart } from 'lucide-react';
 import { useState } from 'react';
 import { api } from './api';
-import { UsageDial } from './usage-dial';
-import { InsightsSkeleton, UsageDialSkeleton } from './skeleton';
+import { InsightsSkeleton } from './skeleton';
 import type { LifecycleReportStatus, RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsTokenUsage } from '../shared/contracts';
 
 function InfoTooltip({ children }: { children: string }) {
@@ -154,7 +153,6 @@ function LifecycleReportInsight({ status }: { status: LifecycleReportStatus }) {
 export function InsightsView() {
   const [days, setDays] = useState<7 | 30>(30);
   const insights = useQuery({ queryKey: ['insights', days], queryFn: () => api.getInsights(days), refetchInterval: 10_000 });
-  const usage = useQuery({ queryKey: ['usage', 'weekly'], queryFn: () => api.getWeeklyUsage(), refetchInterval: 300_000 });
   const lifecycleReport = useQuery({ queryKey: ['lifecycle-report'], queryFn: () => api.getLifecycleReport(), refetchInterval: 300_000 });
   const data = insights.data;
 
@@ -177,11 +175,6 @@ export function InsightsView() {
 
       {!insights.isLoading && !insights.isError && data && (
         <div className="insight-sections">
-          {usage.data ? (
-            <UsageDial report={usage.data} lastRefreshedAt={usage.dataUpdatedAt} />
-          ) : usage.isLoading ? (
-            <UsageDialSkeleton />
-          ) : null}
           {lifecycleReport.data && <LifecycleReportInsight status={lifecycleReport.data} />}
           {data.byAgent.length === 0 && data.byKind.length === 0 && data.agentFit.length === 0 && data.tokenUsageByModel.length === 0 && data.cursing.messagesAnalyzed === 0 && (data.incompleteTokenTelemetryRuns ?? 0) === 0 ? (
             <div className="discovery-empty">
