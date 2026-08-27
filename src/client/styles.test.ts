@@ -126,6 +126,10 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.mobile-conversation-toggle { position: fixed; right: 14px;');
     expect(phoneRules).toContain('bottom: calc(var(--mobile-nav) + env(safe-area-inset-bottom, 0px) + 14px);');
   });
+
+  it('hides the mobile conversation controls outside the phone breakpoint', () => {
+    expect(styles).toMatch(/^\.mobile-chrome-controls \{ display: none; \}/m);
+  });
 });
 
 describe('phone dialogs', () => {

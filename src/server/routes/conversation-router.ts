@@ -197,8 +197,14 @@ export function createConversationRouter({ repository, database, capabilities, a
   });
 
   router.post('/api/shared/conversations/:id/restore', (request, response) => {
-    const conversation = repository.setConversationArchived(request.params.id, false);
+    let conversation = repository.setConversationArchived(request.params.id, false);
     if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
+    if (conversation.workItemId) {
+      const linkedItem = repository.get(conversation.workItemId);
+      if (linkedItem?.status === 'pinned') repository.update(linkedItem.id, { status: 'ready' }, false, { actor: 'jeffrey', source: 'http' });
+    }
+    if (conversation.pinned) conversation = repository.setConversationPinned(conversation.id, false) ?? conversation;
+    else conversation = repository.getConversation(conversation.id) ?? conversation;
     response.json({ conversation });
   });
 
