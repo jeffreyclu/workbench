@@ -27,6 +27,14 @@ describe('DiffConfidenceBubble', () => {
     expect(high.style.color).not.toBe(low.style.color);
   });
 
+  it('renders an explicit unavailable marker instead of inventing a score', () => {
+    render(<DiffConfidenceBubble assessment={{ risk: null, reasoning: 'AI assessment unavailable; review this changed block.' }} />);
+    const bubble = screen.getByRole('button', { name: 'AI assessment unavailable' });
+    expect(bubble).toHaveTextContent('--');
+    fireEvent.click(bubble);
+    expect(screen.getByRole('dialog', { name: 'AI assessment unavailable' })).toHaveTextContent('AI assessment unavailable');
+  });
+
   it('shows the recorded reasoning and forwards follow-up intent from the interactive details', () => {
     const onFollowUp = vi.fn();
     render(<DiffConfidenceBubble assessment={{ risk: 42, reasoning: 'The added call has no visible error path.' }} onFollowUp={onFollowUp} />);

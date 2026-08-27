@@ -4,7 +4,6 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkspaceDiffView } from './view.js';
-import type { DiffHunkReview } from '../../../shared/contracts.js';
 
 afterEach(() => {
   cleanup();
@@ -162,7 +161,7 @@ describe('WorkspaceDiffView', () => {
 
     render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={false} /></QueryClientProvider>);
 
-    const version = await screen.findByLabelText('Workspace diff version');
+    const version = await screen.findByLabelText('Workspace diff history');
     fireEvent.change(version, { target: { value: 'recorded-version' } });
     expect(await screen.findByRole('heading', { name: 'Workspace diff record' })).toBeInTheDocument();
     expect(document.querySelector('.diff-line.addition')?.textContent).toContain('+preserved');
@@ -170,7 +169,7 @@ describe('WorkspaceDiffView', () => {
     expect(screen.getByRole('button', { name: 'No changes to commit' })).toBeDisabled();
   });
 
-  it('compares two immutable snapshots and shows their recorded provenance', async () => {
+  it('selects a recorded history entry and shows its provenance', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/work-items/work-item-1/workspace-diff') return new Response(JSON.stringify({ diff: {
@@ -187,7 +186,6 @@ describe('WorkspaceDiffView', () => {
           files: [{ path: 'src/unchanged.ts', previousPath: null, status: 'added', additions: 1, deletions: 0, isBinary: false, patch: '@@ -0,0 +1 @@\n+same' }],
         } },
       ] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url.startsWith('/api/work-items/work-item-1/workspace-diff/hunk-reviews')) return new Response(JSON.stringify({ reviews: [] }), { headers: { 'Content-Type': 'application/json' } });
       if (url === '/api/diff-confidence') return new Response(JSON.stringify({ assessments: {} }), { headers: { 'Content-Type': 'application/json' } });
       throw new Error(`Unexpected request: ${url}`);
     }));
@@ -197,44 +195,11 @@ describe('WorkspaceDiffView', () => {
 
     expect(await screen.findByText(/Agent run run-after-123456/)).toBeInTheDocument();
     expect(screen.getByText(/Commit abcdef012345/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Compare snapshot against'), { target: { value: 'before-run' } });
-    expect(await screen.findByRole('heading', { name: 'Changes between snapshots' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /src\/new\.ts/ })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /src\/unchanged\.ts/ })).not.toBeInTheDocument();
-  });
-
-  it('shows hunk review badges and saves a new review state on click', async () => {
-    let putBody: unknown;
-    let savedReview: DiffHunkReview | null = null;
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === '/api/diff-confidence') return new Response(JSON.stringify({ assessments: {} }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === '/api/work-items/work-item-1/workspace-diff/snapshots') return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === '/api/work-items/work-item-1/workspace-diff') return new Response(JSON.stringify({ diff: {
-        workspacePath: '/tmp/workbench', branch: 'review', revision: 'hunk-revision', changedFiles: 1, additions: 1, deletions: 1,
-        publish: { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
-        files: [{ path: 'src/reviewed.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }],
-      } }), { headers: { 'Content-Type': 'application/json' } });
-      if (url.startsWith('/api/work-items/work-item-1/workspace-diff/hunk-reviews') && (!init || init.method === undefined)) {
-        return new Response(JSON.stringify({ reviews: savedReview ? [savedReview] : [] }), { headers: { 'Content-Type': 'application/json' } });
-      }
-      if (url === '/api/work-items/work-item-1/workspace-diff/hunk-reviews' && init?.method === 'PUT') {
-        putBody = JSON.parse(String(init.body));
-        savedReview = { id: 'review-1', revision: 'hunk-revision', filePath: 'src/reviewed.ts', hunkRange: '@@ -1 +1 @@', state: 'reviewed', note: null, updatedAt: '2026-08-26T00:00:00.000Z' };
-        return new Response(JSON.stringify({ review: savedReview }), { headers: { 'Content-Type': 'application/json' } });
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    }));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-
-    render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={false} /></QueryClientProvider>);
-
-    expect(await screen.findByRole('button', { name: 'Reviewed' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
-
-    await waitFor(() => expect(putBody).toEqual({ filePath: 'src/reviewed.ts', hunkRange: '@@ -1 +1 @@', state: 'reviewed', revision: 'hunk-revision' }));
-    await waitFor(async () => expect(await screen.findByRole('button', { name: 'Reviewed' })).toHaveClass('diff-hunk-review-badge', 'diff-hunk-review-badge-reviewed', 'active'));
-    expect(await screen.findByPlaceholderText('Add a note…')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workspace diff history'), { target: { value: 'before-run' } });
+    expect(await screen.findByRole('heading', { name: 'Workspace diff record' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Compare snapshot against')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /src\/unchanged\.ts/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /src\/new\.ts/ })).not.toBeInTheDocument();
   });
 
   it('opens the latest preserved version automatically when current Git changes are clean', async () => {
@@ -260,6 +225,6 @@ describe('WorkspaceDiffView', () => {
 
     expect(await screen.findByRole('heading', { name: 'Workspace diff record' })).toBeInTheDocument();
     expect(document.querySelector('.diff-line.addition')?.textContent).toContain('+preserved');
-    expect(screen.getByLabelText('Workspace diff version')).toHaveValue('recorded-version');
+    expect(screen.getByLabelText('Workspace diff history')).toHaveValue('recorded-version');
   });
 });

@@ -1116,7 +1116,8 @@ export class WorkItemRepository {
     `).all(item.id, latest.created_at) as Array<{ status: AgentRun['status'] }>;
     const agentOutcome: WorkItem['agentOutcome'] =
       recentStatuses.some(({ status }) => status === 'queued' || status === 'running') ? null
-        : recentStatuses.some(({ status }) => status === 'failed' || status === 'canceled') ? 'needs_attention'
+        : recentStatuses.some(({ status }) => status === 'failed') ? 'needs_attention'
+          : recentStatuses.some(({ status }) => status === 'canceled') ? 'canceled'
           : recentStatuses.some(({ status }) => status === 'completed')
             ? (this.getPendingExecutionPlan(item.id) ? 'follow_ups' : 'finished')
             : null;

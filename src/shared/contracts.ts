@@ -91,7 +91,7 @@ export const workItemSchema = z.object({
   completedAt: z.string().nullable(),
   parentWorkItemId: z.string().nullable(),
   completionStatus: z.enum(['incomplete', 'completed']),
-  agentOutcome: z.enum(['finished', 'follow_ups', 'needs_attention', 'promoting', 'waiting_promotion']).nullable(),
+  agentOutcome: z.enum(['finished', 'follow_ups', 'needs_attention', 'canceled', 'promoting', 'waiting_promotion']).nullable(),
   classificationKind: z.string().nullable().optional(),
   classificationComplex: z.boolean().optional(),
   sourceIdentifier: z.string().nullable(),

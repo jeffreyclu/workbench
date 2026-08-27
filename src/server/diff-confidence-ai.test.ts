@@ -40,6 +40,27 @@ describe('assessDiffBlocks caching', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it('returns visible conservative assessments when the scorer fails', async () => {
+    vi.resetModules();
+    vi.doMock('node:child_process', () => ({
+      spawn: () => {
+        const emitter = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: EventEmitter & { write: () => void }; kill: () => void };
+        emitter.stdout = new EventEmitter();
+        emitter.stderr = new EventEmitter();
+        emitter.stdin = Object.assign(new EventEmitter(), { write: () => {} });
+        emitter.kill = () => {};
+        queueMicrotask(() => emitter.emit('error', new Error('scorer unavailable')));
+        return emitter;
+      },
+    }));
+    const { assessDiffBlocks: assess } = await import('./diff-confidence-ai.js');
+    const database = openDatabase(':memory:');
+
+    await expect(assess(database, [{ key: 'changed', lines: ['+const enabled = true;'] }])).resolves.toEqual({
+      changed: { risk: null, reasoning: 'AI assessment unavailable; review this changed block.' },
+    });
+  });
+
   it('reuses a cached block score across unrelated batches instead of re-invoking the model', async () => {
     vi.resetModules();
     let spawnCalls = 0;

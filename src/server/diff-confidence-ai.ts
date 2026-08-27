@@ -3,7 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
 
 export type DiffConfidenceBlock = { key: string; lines: string[] };
-export type DiffConfidenceAssessment = { risk: number; reasoning: string };
+export type DiffConfidenceAssessment = { risk: number | null; reasoning: string };
 
 const SYSTEM_PROMPT = `Return only minified JSON: [{"key":"...","risk":0,"reasoning":"brief"}]. Score every supplied code-diff block 0–100 for review priority: 0 comment/test/format-only, 25 local and reversible, 50 unverified control flow or validation, 70 shared API/auth/data, 90 security, migration, or silent data loss. Every key exactly once. Reasoning: plain English, at most eight words. No analysis or invented context.`;
 
@@ -26,6 +26,7 @@ function readCached(database: WorkbenchDatabase, hash: string): DiffConfidenceAs
 }
 
 function writeCached(database: WorkbenchDatabase, hash: string, assessment: DiffConfidenceAssessment): void {
+  if (assessment.risk === null) return;
   database.prepare('INSERT OR REPLACE INTO diff_confidence_cache (hash, risk, reasoning, created_at) VALUES (?, ?, ?, ?)')
     .run(hash, assessment.risk, assessment.reasoning, new Date().toISOString());
 }
@@ -174,6 +175,13 @@ function trivialAssessment(block: DiffConfidenceBlock): DiffConfidenceAssessment
   return { risk: 0, reasoning: 'Comment-only change; it cannot alter runtime behavior.' };
 }
 
+/** The review surface must remain usable when the optional Haiku scorer is
+ * unavailable. This is intentionally not cached: a later refresh can replace
+ * the conservative placeholder with an AI score. */
+function unavailableAssessment(): DiffConfidenceAssessment {
+  return { risk: null, reasoning: 'AI assessment unavailable; review this changed block.' };
+}
+
 /** Reads the per-block cache first; only blocks whose content hash misses are
  * sent to the model, in a single batched spawn, and each result is persisted
  * to the database individually so future requests — from any conversation
@@ -206,7 +214,9 @@ export function assessDiffBlocks(database: WorkbenchDatabase, blocks: DiffConfid
       entries.set(block.key, single);
     }
   }
-  return Promise.all([...entries].map(([blockKey, assessment]) => assessment.then((value) => [blockKey, value] as const)))
+  return Promise.all([...entries].map(([blockKey, assessment]) => assessment
+    .then((value) => [blockKey, value] as const)
+    .catch(() => [blockKey, unavailableAssessment()] as const)))
     .then((pairs) => Object.fromEntries(pairs));
 }
 

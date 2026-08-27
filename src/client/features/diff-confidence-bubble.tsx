@@ -12,6 +12,7 @@ export function DiffConfidenceBubble({ assessment, onFollowUp }: { assessment: D
     );
   }
 
+  const unavailable = assessment.risk === null;
   const tone = confidenceTone(assessment.risk);
   const { opacity, fontWeight } = confidenceProminence(assessment.risk);
 
@@ -21,15 +22,15 @@ export function DiffConfidenceBubble({ assessment, onFollowUp }: { assessment: D
         type="button"
         className="diff-confidence-bubble"
         style={{ color: tone, borderColor: tone, opacity, fontWeight }}
-        aria-label={`AI risk assessment: ${assessment.risk} out of 100`}
+        aria-label={unavailable ? 'AI assessment unavailable' : `AI risk assessment: ${assessment.risk} out of 100`}
         aria-expanded={detailsOpen}
         onClick={() => setDetailsOpen((open) => !open)}
       >
-        {assessment.risk}
+        {unavailable ? '--' : assessment.risk}
       </button>
       {detailsOpen && (
-        <span className="diff-confidence-details" role="dialog" aria-label={`Risk assessment: ${assessment.risk} out of 100`}>
-          <strong>{assessment.risk}/100 risk</strong>
+        <span className="diff-confidence-details" role="dialog" aria-label={unavailable ? 'AI assessment unavailable' : `Risk assessment: ${assessment.risk} out of 100`}>
+          <strong>{unavailable ? 'AI assessment unavailable' : `${assessment.risk}/100 risk`}</strong>
           <p>{assessment.reasoning}</p>
           <span>
             <button type="button" onClick={() => setDetailsOpen(false)}>Close</button>

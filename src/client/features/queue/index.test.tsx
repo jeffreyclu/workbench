@@ -82,6 +82,7 @@ describe('task status badges', () => {
     [{ status: 'in_progress', agentOutcome: null }, 'In progress', 'agent-outcome-in_progress'],
     [{ agentOutcome: 'finished' }, 'Awaiting', 'agent-outcome-finished'],
     [{ agentOutcome: 'needs_attention' }, 'Needs attention', 'agent-outcome-needs_attention'],
+    [{ agentOutcome: 'canceled' }, 'Canceled', 'agent-outcome-canceled'],
     [{ agentOutcome: 'follow_ups' }, 'Follow-ups recommended', 'agent-outcome-follow_ups'],
     [{ agentOutcome: 'promoting' }, 'Approved · promoting preview', 'agent-outcome-promoting'],
     [{ agentOutcome: 'waiting_promotion' }, 'Approved and waiting promotion', 'agent-outcome-waiting_promotion'],
