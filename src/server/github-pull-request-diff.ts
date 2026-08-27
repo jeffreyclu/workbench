@@ -2,7 +2,7 @@ import type { GitHubPullRequestDiff, GitHubPullRequestFile } from '../shared/con
 import { createOutboundFetch, type OutboundPolicyName } from './outbound-policy.js';
 
 const pullRequestPattern = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/files)?\/?$/;
-const MAX_FILES = 300;
+const FILES_PER_PAGE = 100;
 
 type GitHubPullRequestResponse = {
   html_url: string;
@@ -59,17 +59,19 @@ async function getJson<T>(fetchImpl: typeof fetch, endpoint: string, token: stri
 
 export async function getGitHubPullRequestDiff(
   url: string,
-  options: { token?: string; fetchForPolicy?: (policy: OutboundPolicyName) => typeof fetch } = {},
+  options: { token?: string; page?: number; fetchForPolicy?: (policy: OutboundPolicyName) => typeof fetch } = {},
 ): Promise<GitHubPullRequestDiff> {
   const target = parseGitHubPullRequestUrl(url);
   if (!target) throw new Error('Enter a GitHub pull request URL, such as github.com/owner/repo/pull/123.');
   const fetchImpl = (options.fetchForPolicy ?? createOutboundFetch)('github-api');
   const root = `https://api.github.com/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/pulls/${target.number}`;
-  const [pullRequest, filePages] = await Promise.all([
+  const page = options.page ?? 1;
+  if (!Number.isInteger(page) || page < 1) throw new Error('Pull-request file page must be a positive integer.');
+  const [pullRequest, filePage] = await Promise.all([
     getJson<GitHubPullRequestResponse>(fetchImpl, root, options.token),
-    Promise.all(Array.from({ length: 3 }, (_, index) => getJson<GitHubFileResponse[]>(fetchImpl, `${root}/files?per_page=100&page=${index + 1}`, options.token))),
+    getJson<GitHubFileResponse[]>(fetchImpl, `${root}/files?per_page=${FILES_PER_PAGE}&page=${page}`, options.token),
   ]);
-  const files = filePages.flat().slice(0, MAX_FILES).map((file) => ({
+  const files = filePage.map((file) => ({
     path: file.filename,
     status: file.status,
     additions: file.additions,
@@ -89,5 +91,40 @@ export async function getGitHubPullRequestDiff(
     changedFiles: pullRequest.changed_files,
     additions: pullRequest.additions,
     deletions: pullRequest.deletions,
+    nextPage: filePage.length === FILES_PER_PAGE && page * FILES_PER_PAGE < pullRequest.changed_files ? page + 1 : null,
   };
+}
+
+const imageContentTypes: Record<string, string> = {
+  avif: 'image/avif', bmp: 'image/bmp', gif: 'image/gif', ico: 'image/x-icon', jpeg: 'image/jpeg', jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+};
+
+export function imageContentType(path: string): string | null {
+  const extension = path.split('.').pop()?.toLowerCase() ?? '';
+  return imageContentTypes[extension] ?? null;
+}
+
+export async function getGitHubPullRequestImage(
+  url: string,
+  path: string,
+  options: { token?: string; fetchForPolicy?: (policy: OutboundPolicyName) => typeof fetch } = {},
+): Promise<{ body: Buffer; contentType: string }> {
+  const target = parseGitHubPullRequestUrl(url);
+  if (!target) throw new Error('Enter a GitHub pull request URL, such as github.com/owner/repo/pull/123.');
+  const contentType = imageContentType(path);
+  if (!contentType) throw new Error('Only image files can be previewed.');
+  const fetchImpl = (options.fetchForPolicy ?? createOutboundFetch)('github-api');
+  const root = `https://api.github.com/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/pulls/${target.number}`;
+  const pullRequest = await getJson<GitHubPullRequestResponse>(fetchImpl, root, options.token);
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+  const response = await fetchImpl(`https://api.github.com/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/contents/${encodedPath}?ref=${encodeURIComponent(pullRequest.head.ref)}`, {
+    headers: { ...githubHeaders(options.token), Accept: 'application/vnd.github.raw+json' },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) {
+    if (response.status === 404) throw new Error('GitHub image file not found.');
+    if (response.status === 401 || response.status === 403) throw new Error('GitHub could not read this image. Reconnect GitHub in Sources.');
+    throw new Error(`GitHub could not load this image (${response.status}).`);
+  }
+  return { body: Buffer.from(await response.arrayBuffer()), contentType };
 }

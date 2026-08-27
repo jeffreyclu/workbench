@@ -40,7 +40,7 @@ describe('recorded workspace diff history', () => {
     await captureRecordedWorkspaceDiffSnapshots(repository, { conversationId: conversation.id }, directory, [conversation.id]);
 
     expect(repository.listWorkspaceDiffSnapshots({ conversationId: conversation.id })).toEqual([
-      expect.objectContaining({ revision: `commit:${commit}`, diff: expect.objectContaining({ changedFiles: 1, files: [expect.objectContaining({ path: 'file.ts' })] }) }),
+      expect.objectContaining({ revision: `commit:${commit}`, commitHash: commit, diff: expect.objectContaining({ changedFiles: 1, files: [expect.objectContaining({ path: 'file.ts' })] }) }),
     ]);
     database.close();
   });

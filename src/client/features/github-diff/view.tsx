@@ -6,7 +6,8 @@ import { DiffConfidenceBubble } from '../diff-confidence-bubble.js';
 import { useDiffBlockConfidence } from '../diff-confidence-hooks.js';
 import { groupDiffBlocks, isChangedBlock, type DiffFollowUpReference } from '../diff-confidence.js';
 import { highlightHtml, languageFromPath } from '../../syntax-highlight.js';
-import { fileLabel, parsePatch, pullRequestUrl } from './logic.js';
+import { fileLabel, isPreviewableImage, parsePatch, pullRequestUrl } from './logic.js';
+import { githubDiffData } from './data.js';
 import { useGitHubPullRequestDiff } from './hooks.js';
 
 function DiffSkeleton() {
@@ -20,8 +21,9 @@ export const GitHubDiffView = memo(function GitHubDiffView({ sourceUrl, referenc
   const url = pullRequestUrl([...(sourceUrl ? [sourceUrl] : []), ...references.map((reference) => reference.url)]);
   const query = useGitHubPullRequestDiff(url);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const diff = query.data?.diff;
-  const files = diff?.files ?? [];
+  const [failedImagePath, setFailedImagePath] = useState<string | null>(null);
+  const diff = query.data?.pages[0]?.diff;
+  const files = query.data?.pages.flatMap((page) => page.diff.files) ?? [];
   const selectedFile = files.find((file) => file.path === selectedPath) ?? files[0] ?? null;
   const patch = selectedFile?.patch ?? null;
   const blocks = useMemo(() => (patch ? groupDiffBlocks(parsePatch(patch)) : []), [patch]);
@@ -36,7 +38,7 @@ export const GitHubDiffView = memo(function GitHubDiffView({ sourceUrl, referenc
   const changedBlocks = useMemo(() => blocks.filter(isChangedBlock).map((block) => ({ key: block.key, lines: block.lines.map((line) => line.text) })), [blocks]);
   const confidence = useDiffBlockConfidence(changedBlocks);
 
-  useEffect(() => { setSelectedPath(null); }, [url]);
+  useEffect(() => { setSelectedPath(null); setFailedImagePath(null); }, [url]);
 
   if (!url) return null;
   if (query.isLoading) return <DiffSkeleton />;
@@ -49,8 +51,8 @@ export const GitHubDiffView = memo(function GitHubDiffView({ sourceUrl, referenc
       <a href={diff.url} target="_blank" rel="noreferrer">GitHub <ExternalLink size={13} /></a>
     </header>
     {files.length === 0 ? <p className="muted">GitHub reports no changed files for this pull request.</p> : <div className="github-diff-layout diff-review-layout">
-      <nav className="diff-file-list" aria-label="Changed files"><span>Files ({files.length}{diff.changedFiles > files.length ? '+' : ''})</span><div>{files.map((file) => <button key={file.path} type="button" className={selectedFile?.path === file.path ? 'selected' : ''} onClick={() => setSelectedPath(file.path)} title={fileLabel(file)}><FileDiff size={13} /><span>{file.path}</span><b>+{file.additions}</b><i>−{file.deletions}</i></button>)}</div></nav>
-      {selectedFile && <article className="github-diff-file"><header><strong>{fileLabel(selectedFile)}</strong><span>{selectedFile.isBinary ? 'Binary file' : selectedFile.status}</span></header>{selectedFile.patch ? <pre>{blocks.map((block) => { const changed = isChangedBlock(block); const assessment = confidence.data?.[block.key] ?? null; return <div key={block.key} className={changed ? 'diff-block' : undefined}>{changed && !confidence.isError && <DiffConfidenceBubble assessment={assessment} onFollowUp={assessment && onFollowUp ? () => onFollowUp({ filePath: selectedFile.path, lines: block.lines, assessment }) : undefined} />}{block.lines.map((line) => <code key={line.key} className={`diff-line ${line.kind}`}><span>{line.oldLine ?? ''}</span><span>{line.newLine ?? ''}</span><span>{line.kind === 'header' ? (line.text || ' ') : <><span className="diff-line-marker">{line.text.slice(0, 1) || ' '}</span><span className="diff-line-code" dangerouslySetInnerHTML={{ __html: lineHtml.get(line.key) || '&nbsp;' }} /></>}</span></code>)}</div>; })}</pre> : <p className="muted">GitHub does not provide a text patch for this binary or oversized file.</p>}</article>}
+      <nav className="diff-file-list" aria-label="Changed files"><span>Files ({files.length}{diff.changedFiles > files.length ? '+' : ''})</span><div>{files.map((file) => <button key={file.path} type="button" className={selectedFile?.path === file.path ? 'selected' : ''} onClick={() => setSelectedPath(file.path)} title={fileLabel(file)}><FileDiff size={13} /><span>{file.path}</span><b>+{file.additions}</b><i>−{file.deletions}</i></button>)}</div>{query.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage} aria-busy={query.isFetchingNextPage}>{query.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}</nav>
+      {selectedFile && <article className="github-diff-file"><header><strong>{fileLabel(selectedFile)}</strong><span>{selectedFile.isBinary ? 'Binary file' : selectedFile.status}</span></header>{selectedFile.patch ? <pre>{blocks.map((block) => { const changed = isChangedBlock(block); const assessment = confidence.data?.[block.key] ?? null; return <div key={block.key} className={changed ? 'diff-block' : undefined}>{changed && !confidence.isError && <DiffConfidenceBubble assessment={assessment} onFollowUp={assessment && onFollowUp ? () => onFollowUp({ filePath: selectedFile.path, lines: block.lines, assessment }) : undefined} />}{block.lines.map((line) => <code key={line.key} className={`diff-line ${line.kind}`}><span>{line.oldLine ?? ''}</span><span>{line.newLine ?? ''}</span><span>{line.kind === 'header' ? (line.text || ' ') : <><span className="diff-line-marker">{line.text.slice(0, 1) || ' '}</span><span className="diff-line-code" dangerouslySetInnerHTML={{ __html: lineHtml.get(line.key) || '&nbsp;' }} /></>}</span></code>)}</div>; })}</pre> : <div className="github-diff-unrenderable">{isPreviewableImage(selectedFile.path) && failedImagePath !== selectedFile.path && <img src={githubDiffData.imageUrl(url, selectedFile.path)} alt={`Preview of ${fileLabel(selectedFile)}`} onError={() => setFailedImagePath(selectedFile.path)} />}<p className="muted">GitHub does not provide a text patch for this binary or oversized file.</p><a href={`${diff.url}/files`} target="_blank" rel="noreferrer">View on GitHub <ExternalLink size={13} /></a></div>}</article>}
     </div>}
   </section>;
 });

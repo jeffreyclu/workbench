@@ -17,6 +17,7 @@ const baselineInventory = [
   'GET /api/runtime/promotion-status',
   'GET /api/discovery',
   'GET /api/github/pull-request-diff',
+  'GET /api/github/pull-request-image',
   'POST /api/diff-confidence',
   'GET /api/insights',
   'GET /api/process-mining/report',
@@ -50,6 +51,8 @@ const baselineInventory = [
   'GET /api/shared/conversations/:id/workspace-diff/status',
   'GET /api/shared/conversations/:id/workspaces',
   'POST /api/shared/conversations/:id/workspace-diff/commit-and-push',
+  'GET /api/shared/conversations/:id/workspace-diff/hunk-reviews',
+  'PUT /api/shared/conversations/:id/workspace-diff/hunk-reviews',
   'GET /api/shared/conversations/:id/agent-events',
   'GET /api/shared/conversations/:id/feedback',
   'GET /api/shared/conversations-unread-count',
@@ -114,6 +117,8 @@ const baselineInventory = [
   'GET /api/work-items/:id/workspace-diff/snapshots',
   'GET /api/work-items/:id/workspace-diff/status',
   'POST /api/work-items/:id/workspace-diff/commit-and-push',
+  'GET /api/work-items/:id/workspace-diff/hunk-reviews',
+  'PUT /api/work-items/:id/workspace-diff/hunk-reviews',
   'PUT /api/work-items/:id/workspaces/selection',
   'GET /api/work-items/:id/dependency-candidates',
   'POST /api/work-items/:id/references',
@@ -173,7 +178,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(141);
+    expect(baselineInventory).toHaveLength(146);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

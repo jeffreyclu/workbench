@@ -105,7 +105,7 @@ describe('primary navigation', () => {
     await waitFor(() => expect(window.location.pathname).toBe('/workbench'));
   });
 
-  it('reopens the independently saved attention, Workbench, and conversation items', () => {
+  it('opens nav tabs without restoring saved task or conversation details', async () => {
     const attentionId = '00000000-0000-4000-8000-000000000101';
     const workbenchId = '00000000-0000-4000-8000-000000000102';
     const conversationId = '00000000-0000-4000-8000-000000000103';
@@ -117,13 +117,14 @@ describe('primary navigation', () => {
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
     fireEvent.click(screen.getByRole('button', { name: /Attention stack/i }));
-    expect(window.location.pathname).toBe(`/tasks/${attentionId}`);
+    expect(window.location.pathname).toBe('/');
     window.history.replaceState(null, '', '/insights');
     fireEvent.click(screen.getByRole('button', { name: /Workbench/i }));
-    expect(window.location.pathname).toBe(`/tasks/${workbenchId}`);
+    expect(window.location.pathname).toBe('/workbench');
     window.history.replaceState(null, '', '/insights');
     fireEvent.click(screen.getByRole('button', { name: /Conversations/i }));
-    expect(window.location.pathname).toBe(`/conversations/${conversationId}`);
+    expect(window.location.pathname).toBe('/conversations');
+    expect(await screen.findByRole('heading', { name: 'New conversation' })).toBeTruthy();
   });
 
   it('opens the active stack and scrolls to pinned tasks from the reminder toast', async () => {
@@ -305,6 +306,7 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
     fireEvent.click(screen.getByRole('button', { name: /conversations/i }));
+    fireEvent.click(await within(screen.getByLabelText('Conversations')).findByRole('button', { name: /Workbench/ }));
     expect((await screen.findByRole('main')).className).toContain('shared-workspace');
     expect(await screen.findByText('No messages yet. Ask Codex or Claude to get started.')).toBeTruthy();
   });
@@ -2286,6 +2288,7 @@ describe('stack navigation', () => {
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
     fireEvent.click(await screen.findByRole('button', { name: /conversations/i }));
+    fireEvent.click(await within(screen.getByLabelText('Conversations')).findByRole('button', { name: /Task conversation/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Back to task' }));
 
     expect(await screen.findByRole('heading', { name: 'Attention stack' })).toBeTruthy();
@@ -2630,10 +2633,9 @@ describe('addressable navigation', () => {
     expect(await screen.findByRole('heading', { name: 'Attention stack' })).toBeTruthy();
   });
 
-  it('closes a remembered Workbench task back to Workbench after leaving Archive', async () => {
+  it('closes an open Workbench task when Workbench is selected again', async () => {
     const workbenchItem = { ...item, projectName: 'Workbench', stack: 'workbench' };
-    window.localStorage.setItem('workbench:last-opened-workbench-item', taskId);
-    window.history.replaceState(null, '', '/archive');
+    window.history.replaceState(null, '', `/tasks/${taskId}`);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       const body = url === '/api/work-item-counts' ? { active: 0, workbench: 1, archive: 0 }
@@ -2646,17 +2648,14 @@ describe('addressable navigation', () => {
     }));
     renderApp();
 
-    fireEvent.click(await screen.findByRole('button', { name: /workbench/i }));
     expect(await screen.findByRole('heading', { name: item.title })).toBeTruthy();
-    expect(window.location.pathname).toBe(`/tasks/${taskId}`);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Close details' }));
-
+    fireEvent.click(await within(document.querySelector('#primary-nav')!).findByRole('button', { name: /workbench/i }));
     expect(window.location.pathname).toBe('/workbench');
     expect(await screen.findByRole('heading', { name: 'Workbench focus' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: item.title })).toBeNull();
   });
 
-  it('drops an archived remembered Workbench task instead of navigating to the Archive filter', async () => {
+  it('opens Workbench without consuming an archived saved task', async () => {
     const archivedWorkbenchItem = { ...item, projectName: 'Workbench', stack: 'workbench', archivedAt: '2026-01-03T00:00:00Z', completedAt: '2026-01-03T00:00:00Z', completionStatus: 'completed' };
     window.localStorage.setItem('workbench:last-opened-workbench-item', taskId);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -2675,7 +2674,7 @@ describe('addressable navigation', () => {
 
     await waitFor(() => expect(window.location.pathname).toBe('/workbench'));
     expect(await screen.findByRole('heading', { name: 'Workbench focus' })).toBeTruthy();
-    expect(window.localStorage.getItem('workbench:last-opened-workbench-item')).toBeNull();
+    expect(window.localStorage.getItem('workbench:last-opened-workbench-item')).toBe(taskId);
   });
 
   it('opens the conversation named in the address and addresses the next one you pick', async () => {

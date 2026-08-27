@@ -51,3 +51,7 @@ export function pullRequestUrl(urls: string[]): string | null {
 export function fileLabel(file: Pick<GitHubPullRequestFile, 'path' | 'previousPath' | 'status'>) {
   return file.status === 'renamed' && file.previousPath ? `${file.previousPath} → ${file.path}` : file.path;
 }
+
+export function isPreviewableImage(path: string) {
+  return /\.(avif|bmp|gif|ico|jpe?g|png|webp)$/i.test(path);
+}

@@ -30,7 +30,7 @@ import { summarizeWorkItemChanges } from '../activity-log.js';
 import { resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { generateFastAiTaskDraft } from '../fast-task-draft-ai.js';
 import { assessDiffBlocks } from '../diff-confidence-ai.js';
-import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
@@ -89,8 +89,8 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
       const workingDirectory = taskWorkingDirectory(item.id);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
-      const diff = await getWorkspaceDiff(workingDirectory);
-      if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff);
+      const [diff, commitHash] = await Promise.all([getWorkspaceDiff(workingDirectory), getWorkspaceHeadCommit(workingDirectory)]);
+      if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff, { originatingAgentRunId: repository.latestAgentRunForSnapshot({ workItemId: item.id })?.id ?? null, commitHash });
       response.json({ diff });
     } catch (error) { next(error); }
   });
@@ -126,6 +126,28 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before committing.' });
       const result = await commitAndPushWorkspace(workingDirectory, message ?? `chore: ${item.title}`, revision);
       response.json({ result });
+    } catch (error) { next(error); }
+  });
+  router.get('/api/work-items/:id/workspace-diff/hunk-reviews', (request, response, next) => {
+    try {
+      const item = repository.get(request.params.id);
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      const revision = z.string().trim().min(1).parse(request.query.revision);
+      response.json({ reviews: repository.listDiffHunkReviews({ workItemId: item.id }, revision) });
+    } catch (error) { next(error); }
+  });
+  router.put('/api/work-items/:id/workspace-diff/hunk-reviews', (request, response, next) => {
+    try {
+      const item = repository.get(request.params.id);
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      const input = z.object({
+        revision: z.string().trim().min(1),
+        filePath: z.string().trim().min(1),
+        hunkRange: z.string().trim().min(1),
+        state: z.enum(['reviewed', 'needs_changes', 'commented']),
+        note: z.string().trim().min(1).optional(),
+      }).parse(request.body);
+      response.json({ review: repository.upsertDiffHunkReview({ workItemId: item.id }, input) });
     } catch (error) { next(error); }
   });
   router.get('/api/work-items', (request, response) => {

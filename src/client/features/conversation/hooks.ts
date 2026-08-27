@@ -36,7 +36,7 @@ export function useConversationChangesAvailability(scope: WorkspaceDiffScope | n
   const pullRequestDiff = useGitHubPullRequestDiff(pullRequestUrlValue);
   const hasWorkspaceChanges = (workspaceDiff.data?.diff?.changedFiles ?? 0) > 0;
   const hasRecordedWorkspaceChanges = (snapshots.data?.snapshots ?? []).some((snapshot) => snapshot.diff.changedFiles > 0);
-  const hasPullRequestChanges = (pullRequestDiff.data?.diff?.changedFiles ?? 0) > 0;
+  const hasPullRequestChanges = (pullRequestDiff.data?.pages[0]?.diff.changedFiles ?? 0) > 0;
   const isError = workspaceDiff.isError || snapshots.isError || pullRequestDiff.isError;
   const retry = useCallback(async () => {
     await Promise.all([

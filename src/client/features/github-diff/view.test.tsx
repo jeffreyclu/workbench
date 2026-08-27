@@ -52,4 +52,23 @@ describe('GitHubDiffView', () => {
     expect(document.querySelector('.diff-review-layout > .diff-file-list')).toBeInTheDocument();
     expect(document.querySelector('.github-diff-file')).toBeInTheDocument();
   });
+
+  it('loads later file pages and provides image and GitHub fallbacks when GitHub omits a patch', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const page = new URL(url, 'http://localhost').searchParams.get('page');
+      const files = page === '2'
+        ? [{ path: 'assets/second.png', previousPath: null, status: 'modified', additions: 0, deletions: 0, isBinary: true, patch: null }]
+        : Array.from({ length: 100 }, (_, index) => ({ path: index === 0 ? 'assets/first.png' : `src/${index}.ts`, previousPath: null, status: 'modified', additions: 0, deletions: 0, isBinary: index === 0, patch: null }));
+      return new Response(JSON.stringify({ diff: { repository: 'writer/workbench', number: 42, title: 'Large binary review', url: 'https://github.com/writer/workbench/pull/42', baseRef: 'main', headRef: 'large', changedFiles: 101, additions: 0, deletions: 0, nextPage: page === '2' ? null : 2, files } }), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><GitHubDiffView sourceUrl="https://github.com/writer/workbench/pull/42" references={[]} /></QueryClientProvider>);
+
+    expect(await screen.findByRole('img', { name: 'Preview of assets/first.png' })).toHaveAttribute('src', expect.stringContaining('/api/github/pull-request-image?'));
+    expect(screen.getByRole('link', { name: /View on GitHub/i })).toHaveAttribute('href', 'https://github.com/writer/workbench/pull/42/files');
+    fireEvent.click(screen.getByRole('button', { name: 'Load 100 more files' }));
+    expect(await screen.findByRole('button', { name: /assets\/second\.png/ })).toBeInTheDocument();
+  });
 });

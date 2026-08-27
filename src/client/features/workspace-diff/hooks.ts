@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
+import type { DiffHunkReviewState } from '../../../shared/contracts.js';
 import { workspaceDiffData, workspaceDiffQueryKeys } from './data.js';
 
 export function useWorkspaceDiff(scope: WorkspaceDiffScope | null) {
@@ -41,6 +42,25 @@ export function useWorkspaceDiffSnapshots(scope: WorkspaceDiffScope | null, revi
   return query;
 }
 
+
+export function useDiffHunkReviews(scope: WorkspaceDiffScope, revision: string | undefined) {
+  return useQuery({
+    queryKey: workspaceDiffQueryKeys.hunkReviews(scope, revision),
+    queryFn: () => workspaceDiffData.getHunkReviews(scope, revision!),
+    enabled: Boolean(revision),
+    staleTime: Infinity,
+  });
+}
+
+export function useUpsertDiffHunkReview(scope: WorkspaceDiffScope, revision: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string }) => workspaceDiffData.upsertHunkReview(scope, { ...input, revision: revision! }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.hunkReviews(scope, revision) });
+    },
+  });
+}
 
 export function useCommitAndPushWorkspace(scope: WorkspaceDiffScope) {
   const queryClient = useQueryClient();

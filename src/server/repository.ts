@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type UsageCalibration, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type UsageCalibration, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState } from '../shared/contracts.js';
 import type { FeedbackWeight, QueueContext, QueuePlan } from './queue-intelligence.js';
 import { listProjects, resolveProjectName } from './project-registry.js';
 import type { WorkbenchDatabase } from './database.js';
@@ -51,10 +51,26 @@ interface WorkspaceDiffSnapshotRow {
   revision: string;
   diff_json: string;
   captured_at: string;
+  originating_agent_run_id: string | null;
+  commit_hash: string | null;
 }
 
 function mapWorkspaceDiffSnapshot(row: WorkspaceDiffSnapshotRow): WorkspaceDiffSnapshot {
-  return { id: row.id, revision: row.revision, diff: JSON.parse(row.diff_json) as WorkspaceDiff, capturedAt: row.captured_at };
+  return { id: row.id, revision: row.revision, diff: JSON.parse(row.diff_json) as WorkspaceDiff, capturedAt: row.captured_at, originatingAgentRunId: row.originating_agent_run_id, commitHash: row.commit_hash };
+}
+
+interface DiffHunkReviewRow {
+  id: string;
+  revision: string;
+  file_path: string;
+  hunk_range: string;
+  state: DiffHunkReviewState;
+  note: string | null;
+  updated_at: string;
+}
+
+function mapDiffHunkReview(row: DiffHunkReviewRow): DiffHunkReview {
+  return { id: row.id, revision: row.revision, filePath: row.file_path, hunkRange: row.hunk_range, state: row.state, note: row.note, updatedAt: row.updated_at };
 }
 
 function mapSavedWorkItemFilter(row: SavedWorkItemFilterRow): SavedWorkItemFilter {
@@ -714,20 +730,42 @@ export class WorkItemRepository {
     };
   }
 
-  captureWorkspaceDiffSnapshot(scope: { workItemId: string } | { conversationId: string }, diff: WorkspaceDiff): WorkspaceDiffSnapshot {
+  captureWorkspaceDiffSnapshot(scope: { workItemId: string } | { conversationId: string }, diff: WorkspaceDiff, provenance: { originatingAgentRunId?: string | null; commitHash?: string | null } = {}): WorkspaceDiffSnapshot {
     const now = new Date().toISOString();
     const id = randomUUID();
     if ('workItemId' in scope) {
-      this.database.prepare(`INSERT OR IGNORE INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at) VALUES (?, ?, NULL, ?, ?, ?)`).run(id, scope.workItemId, diff.revision, JSON.stringify(diff), now);
-      return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at FROM workspace_diff_snapshots WHERE work_item_id = ? AND revision = ?`).get(scope.workItemId, diff.revision) as unknown as WorkspaceDiffSnapshotRow);
+      this.database.prepare(`INSERT OR IGNORE INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`).run(id, scope.workItemId, diff.revision, JSON.stringify(diff), now, provenance.originatingAgentRunId ?? null, provenance.commitHash ?? null);
+      return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash FROM workspace_diff_snapshots WHERE work_item_id = ? AND revision = ?`).get(scope.workItemId, diff.revision) as unknown as WorkspaceDiffSnapshotRow);
     }
-    this.database.prepare(`INSERT OR IGNORE INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at) VALUES (?, NULL, ?, ?, ?, ?)`).run(id, scope.conversationId, diff.revision, JSON.stringify(diff), now);
-    return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at FROM workspace_diff_snapshots WHERE conversation_id = ? AND revision = ?`).get(scope.conversationId, diff.revision) as unknown as WorkspaceDiffSnapshotRow);
+    this.database.prepare(`INSERT OR IGNORE INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash) VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`).run(id, scope.conversationId, diff.revision, JSON.stringify(diff), now, provenance.originatingAgentRunId ?? null, provenance.commitHash ?? null);
+    return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash FROM workspace_diff_snapshots WHERE conversation_id = ? AND revision = ?`).get(scope.conversationId, diff.revision) as unknown as WorkspaceDiffSnapshotRow);
   }
 
   listWorkspaceDiffSnapshots(scope: { workItemId: string } | { conversationId: string }): WorkspaceDiffSnapshot[] {
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
-    return (this.database.prepare(`SELECT id, revision, diff_json, captured_at FROM workspace_diff_snapshots WHERE ${column} = ? ORDER BY captured_at DESC`).all(id) as unknown as WorkspaceDiffSnapshotRow[]).map(mapWorkspaceDiffSnapshot);
+    return (this.database.prepare(`SELECT id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash FROM workspace_diff_snapshots WHERE ${column} = ? ORDER BY captured_at DESC`).all(id) as unknown as WorkspaceDiffSnapshotRow[]).map(mapWorkspaceDiffSnapshot);
+  }
+
+  latestAgentRunForSnapshot(scope: { workItemId: string } | { conversationId: string }): AgentRun | null {
+    if ('workItemId' in scope) return this.listRuns(scope.workItemId)[0] ?? null;
+    const row = this.database.prepare('SELECT id FROM agent_runs WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(scope.conversationId) as { id: string } | undefined;
+    return row ? this.getRun(row.id) : null;
+  }
+
+  upsertDiffHunkReview(scope: { workItemId: string } | { conversationId: string }, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {
+    const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
+    const now = new Date().toISOString();
+    this.database.prepare(`INSERT INTO diff_hunk_reviews (id, ${column}, revision, file_path, hunk_range, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(${column}, revision, file_path, hunk_range) WHERE ${column} IS NOT NULL DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
+      .run(randomUUID(), id, input.revision, input.filePath, input.hunkRange, input.state, input.note ?? null, now);
+    return mapDiffHunkReview(this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? AND file_path = ? AND hunk_range = ?`)
+      .get(id, input.revision, input.filePath, input.hunkRange) as unknown as DiffHunkReviewRow);
+  }
+
+  listDiffHunkReviews(scope: { workItemId: string } | { conversationId: string }, revision: string): DiffHunkReview[] {
+    const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
+    return (this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? ORDER BY file_path ASC, hunk_range ASC`)
+      .all(id, revision) as unknown as DiffHunkReviewRow[]).map(mapDiffHunkReview);
   }
 
   createSessionFeedback(input: { conversationId?: string | null; workItemId?: string | null; rating: SessionFeedbackRating }): SessionFeedback | null {

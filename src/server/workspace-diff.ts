@@ -192,6 +192,15 @@ export async function getWorkspaceDiffRevision(workspacePath: string) {
   return (await getWorkspaceDiff(workspacePath)).revision;
 }
 
+/** Full HEAD identifier recorded alongside an immutable workspace snapshot. */
+export async function getWorkspaceHeadCommit(workspacePath: string): Promise<string | null> {
+  try {
+    return await gitOutput(workspacePath, ['rev-parse', '--verify', 'HEAD^{commit}']);
+  } catch {
+    return null;
+  }
+}
+
 function gitFailure(error: unknown) {
   if (typeof error !== 'object' || error === null) return 'Git command failed.';
   const result = error as { stderr?: unknown; stdout?: unknown; message?: unknown };

@@ -33,11 +33,26 @@ describe('WorkItemRepository', () => {
       files: [{ path: 'src/version.ts', previousPath: null, status: 'added', additions: 1, deletions: 0, patch: '@@ -0,0 +1 @@\n+version', isBinary: false }],
     };
 
-    const first = repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff);
+    const run = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Implement it.');
+    const first = repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff, { originatingAgentRunId: run.id, commitHash: '0123456789abcdef' });
     const duplicate = repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff);
 
     expect(duplicate.id).toBe(first.id);
-    expect(repository.listWorkspaceDiffSnapshots({ workItemId: item.id })).toEqual([expect.objectContaining({ id: first.id, diff })]);
+    expect(repository.listWorkspaceDiffSnapshots({ workItemId: item.id })).toEqual([expect.objectContaining({ id: first.id, diff, originatingAgentRunId: run.id, commitHash: '0123456789abcdef' })]);
+  });
+
+  it('upserts a diff hunk review by identity and lists reviews scoped to the owning work item', () => {
+    const item = repository.create({ title: 'Hunk review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const other = repository.create({ title: 'Other item', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', state: 'reviewed' });
+    const updated = repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', state: 'needs_changes', note: 'please fix' });
+    repository.upsertDiffHunkReview({ workItemId: other.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', state: 'reviewed' });
+
+    expect(updated.state).toBe('needs_changes');
+    expect(updated.note).toBe('please fix');
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-1')).toEqual([expect.objectContaining({ filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', state: 'needs_changes', note: 'please fix' })]);
+    expect(repository.listDiffHunkReviews({ workItemId: other.id }, 'rev-1')).toEqual([expect.objectContaining({ state: 'reviewed' })]);
   });
 
   it('uses the normal CLI account for repository-created runs unless a profile is explicitly selected', () => {

@@ -69,6 +69,8 @@ const EXPECTED_MIGRATIONS = [
   '056_diff_confidence_cache',
   '057_shared_conversation_workspace_selection',
   '058_work_item_workspace_selection',
+  '059_diff_hunk_reviews',
+  '060_workspace_diff_snapshot_provenance',
 ];
 
 describe('openDatabase', () => {
@@ -187,6 +189,20 @@ describe('openDatabase', () => {
     const upgraded = openDatabase(path);
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'shared_conversation_workspace_selection'").get()).toBeTruthy();
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '057_shared_conversation_workspace_selection'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds persistent diff hunk review state when upgrading from migration 058', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '059_diff_hunk_reviews'").run();
+    current.exec('DROP TABLE diff_hunk_reviews;');
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'diff_hunk_reviews'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '059_diff_hunk_reviews'").get()).toBeTruthy();
     upgraded.close();
   });
 
@@ -623,6 +639,25 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toContain('codex_thread_id');
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '053_shared_conversation_codex_thread_id'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds immutable snapshot provenance when upgrading from migration 059', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP INDEX idx_workspace_diff_snapshots_agent_run;');
+    current.exec('ALTER TABLE workspace_diff_snapshots DROP COLUMN originating_agent_run_id;');
+    current.exec('ALTER TABLE workspace_diff_snapshots DROP COLUMN commit_hash;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '060_workspace_diff_snapshot_provenance'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(workspace_diff_snapshots)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toContain('originating_agent_run_id');
+    expect(columns).toContain('commit_hash');
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_workspace_diff_snapshots_agent_run'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '060_workspace_diff_snapshot_provenance'").get()).toBeTruthy();
     upgraded.close();
   });
 

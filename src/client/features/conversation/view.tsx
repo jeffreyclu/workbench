@@ -188,7 +188,7 @@ function ConversationTaskPicker({ tasks, isLoading, isError, isPending, onRetry,
   );
 }
 
-export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectConversation, view, onViewChange }: { initialConversationId?: string | null; onOpenTask?: (taskId: string) => void; onSelectConversation?: (conversationId: string | null) => void; view?: 'active' | 'archive'; onViewChange?: (view: 'active' | 'archive') => void }) {
+export function SharedWorkspace({ initialConversationId, initialStackOnly = false, onOpenTask, onSelectConversation, view, onViewChange }: { initialConversationId?: string | null; initialStackOnly?: boolean; onOpenTask?: (taskId: string) => void; onSelectConversation?: (conversationId: string | null) => void; view?: 'active' | 'archive'; onViewChange?: (view: 'active' | 'archive') => void }) {
   const queryClient = useQueryClient();
   const [body, setBody] = useState(() => initialConversationId ? readConversationDrafts()[initialConversationId] ?? '' : '');
   const [composerSelection, setComposerSelection] = useState<ComposerSelection>(defaultComposerSelection);
@@ -295,7 +295,7 @@ export function SharedWorkspace({ initialConversationId, onOpenTask, onSelectCon
   // choose another card. Keep the rail visible until Jeffrey explicitly picks
   // a conversation (or starts one) instead of falling through to its first
   // row, which may be a pinned task conversation.
-  const [showingConversationStackOnly, setShowingConversationStackOnly] = useState(false);
+  const [showingConversationStackOnly, setShowingConversationStackOnly] = useState(initialStackOnly);
   const [exitingConversationIds, setExitingConversationIds] = useState<Set<string>>(new Set());
   const [proposedPlan, setProposedPlan] = useState<ExecutionPlan | null>(null);
   const [proposedPlanConversationId, setProposedPlanConversationId] = useState<string | null>(null);

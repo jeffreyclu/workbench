@@ -7,7 +7,7 @@ import { createSessionFeedbackSchema, createSharedConversationSchema, createShar
 import { runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, resolveSharedReplyWorkingDirectory, runSharedBackgroundJob } from '../shared-room.js';
-import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { parseFollowUpPlan } from '../app-exports.js';
 import { isRuntimeApproval } from '../runtime-promotion.js';
@@ -84,8 +84,8 @@ export function createConversationRouter({ repository, database, capabilities }:
     try {
       const workingDirectory = conversationWorkingDirectory(request.params.id);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
-      const diff = await getWorkspaceDiff(workingDirectory);
-      if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot({ conversationId: request.params.id }, diff);
+      const [diff, commitHash] = await Promise.all([getWorkspaceDiff(workingDirectory), getWorkspaceHeadCommit(workingDirectory)]);
+      if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot({ conversationId: request.params.id }, diff, { originatingAgentRunId: repository.latestAgentRunForSnapshot({ conversationId: request.params.id })?.id ?? null, commitHash });
       response.json({ diff });
     } catch (error) { next(error); }
   });
@@ -115,6 +115,27 @@ export function createConversationRouter({ repository, database, capabilities }:
       const conversation = repository.getConversation(request.params.id)!;
       const result = await commitAndPushWorkspace(workingDirectory, message ?? `chore: ${conversation.title}`, revision);
       response.json({ result });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/api/shared/conversations/:id/workspace-diff/hunk-reviews', (request, response, next) => {
+    try {
+      if (!conversationWorkingDirectory(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
+      const revision = z.string().trim().min(1).parse(request.query.revision);
+      response.json({ reviews: repository.listDiffHunkReviews({ conversationId: request.params.id }, revision) });
+    } catch (error) { next(error); }
+  });
+  router.put('/api/shared/conversations/:id/workspace-diff/hunk-reviews', (request, response, next) => {
+    try {
+      if (!conversationWorkingDirectory(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
+      const input = z.object({
+        revision: z.string().trim().min(1),
+        filePath: z.string().trim().min(1),
+        hunkRange: z.string().trim().min(1),
+        state: z.enum(['reviewed', 'needs_changes', 'commented']),
+        note: z.string().trim().min(1).optional(),
+      }).parse(request.body);
+      response.json({ review: repository.upsertDiffHunkReview({ conversationId: request.params.id }, input) });
     } catch (error) { next(error); }
   });
 

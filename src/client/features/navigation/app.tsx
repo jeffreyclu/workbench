@@ -56,7 +56,7 @@ import { useNavigation } from '../../features/navigation/hooks';
 import { NavigationView } from '../../features/navigation/view';
 import { FollowUpArchiveDialog } from '../../follow-up-archive-dialog';
 import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../formatters';
-import { clearLastOpenedItem, clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
+import { clearLastOpenedItem, clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../preferences';
 import { QueueExplanationList } from '../../queue-explanations';
 import { ProjectColorDot } from '../../project-color';
 import { InlineProjectEditor } from '../../project-field';
@@ -167,7 +167,7 @@ export function App() {
     taskEnterTimers.current.add(timer);
   };
   useEffect(() => () => taskEnterTimers.current.forEach((timer) => clearTimeout(timer)), []);
-  const agentConversationId = route.name === 'conversations' ? route.conversationId ?? readLastOpenedItem('conversation') : null;
+  const agentConversationId = route.name === 'conversations' ? route.conversationId : null;
   const handleRealtimeNotification = useCallback((notification: RealtimeNotification) => {
     if (notification.action) {
       const target = parseRoute(notification.action.route);
@@ -213,19 +213,12 @@ export function App() {
     navigate({ name: 'conversations', conversationId });
   }
   function openPrimaryStack(stack: Extract<StackName, 'active' | 'workbench'>) {
-    const surface = stack === 'active' ? 'attention' : 'workbench';
-    const taskId = readLastOpenedItem(surface);
-    // These navigations happen in one event, so React may only render the final
-    // task route. Set the close destination directly instead of relying on the
-    // stack-route effect to observe the intermediate history entry.
     setTaskStack(stack);
-    primaryStackTask.current = taskId ? { taskId, stack } : null;
-    // Keep the stack route behind the task for the mobile back gesture.
+    primaryStackTask.current = null;
     navigate({ name: 'stack', stack });
-    if (taskId) navigate({ name: 'task', taskId });
   }
   function openConversations() {
-    navigate({ name: 'conversations', conversationId: readLastOpenedItem('conversation') });
+    navigate({ name: 'conversations', conversationId: null });
   }
   function handleConversationSelected(conversationId: string | null) {
     syncedConversationId.current = conversationId;
@@ -582,7 +575,7 @@ export function App() {
         }}
       />
 
-      {view === 'context' ? <SharedWorkspace key={`conversation-${conversationNavigationVersion}`} initialConversationId={agentConversationId} view={conversationRailView} onViewChange={setConversationRailView} onSelectConversation={handleConversationSelected} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} /> : view === 'artifacts' ? <ArtifactLibraryView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : view === 'insights' ? <InsightsView /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenStack={() => navigate({ name: 'stack', stack: 'active' })} /> : <><main className="queue-panel">
+      {view === 'context' ? <SharedWorkspace key={`conversation-${conversationNavigationVersion}`} initialConversationId={agentConversationId} initialStackOnly={agentConversationId === null} view={conversationRailView} onViewChange={setConversationRailView} onSelectConversation={handleConversationSelected} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} /> : view === 'artifacts' ? <ArtifactLibraryView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : view === 'insights' ? <InsightsView /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenStack={() => navigate({ name: 'stack', stack: 'active' })} /> : <><main className="queue-panel">
         <header className="queue-header stack-toolbar">
           <div className="stack-toolbar-copy"><span className="eyebrow">{isArchiveView ? 'Archive' : 'Tasks'}</span><h2>{isWorkbenchScope ? 'Workbench focus' : 'Attention stack'}</h2></div>
           <div className="header-actions">

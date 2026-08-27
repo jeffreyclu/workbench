@@ -33,7 +33,7 @@ export async function captureRecordedWorkspaceDiffSnapshots(
   for (const reference of references) {
     try {
       const diff = await getWorkspaceCommitDiff(workspacePath, reference);
-      if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot(scope, diff);
+      if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot(scope, diff, { commitHash: diff.revision.slice('commit:'.length) });
     } catch {
       // Message bodies contain many hex-looking IDs. Only Git-resolvable commit
       // IDs become records; invalid or unrelated values are ignored.

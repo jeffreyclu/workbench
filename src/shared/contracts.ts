@@ -337,6 +337,23 @@ export interface WorkspaceDiffSnapshot {
   revision: string;
   diff: WorkspaceDiff;
   capturedAt: string;
+  /** Agent run that produced this review record, when Workbench can establish one. */
+  originatingAgentRunId: string | null;
+  /** Full Git HEAD recorded with the snapshot, or its recovered commit. */
+  commitHash: string | null;
+}
+
+export type DiffHunkReviewState = 'reviewed' | 'needs_changes' | 'commented';
+
+/** Persistent review state for one hunk of one file at a given diff revision. */
+export interface DiffHunkReview {
+  id: string;
+  revision: string;
+  filePath: string;
+  hunkRange: string;
+  state: DiffHunkReviewState;
+  note: string | null;
+  updatedAt: string;
 }
 
 export interface WorkspacePublishStatus {
@@ -374,6 +391,7 @@ export interface GitHubPullRequestDiff {
   changedFiles: number;
   additions: number;
   deletions: number;
+  nextPage: number | null;
 }
 
 export const sourceProviderSchema = z.enum(['github', 'slack', 'figma', 'confluence', 'grafana', 'gmail']);

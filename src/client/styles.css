@@ -381,6 +381,13 @@ nav { display: grid; gap: 3px; }
 .diff-line.header { color: #aaa9a2; background: #20201d; }.diff-line.header > span:nth-child(-n + 2) { background: #1c1c19; }
 .diff-line-marker { padding-right: 2px; user-select: none; }
 .diff-block { margin: 4px 0; }
+.diff-hunk-review { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 4px 84px; }
+.diff-hunk-review-states { display: inline-flex; gap: 5px; }
+.diff-hunk-review-badge { min-height: 19px; padding: 0 7px; color: #aaa9a2; background: #1c1c19; border: 1px solid #353530; border-radius: 999px; font: 700 9px 'DM Mono'; letter-spacing: .03em; text-transform: uppercase; cursor: pointer; }
+.diff-hunk-review-badge-reviewed.active { color: #14150e; background: #8bbd75; border-color: #8bbd75; }
+.diff-hunk-review-badge-needs_changes.active { color: #14150e; background: #e1a68f; border-color: #e1a68f; }
+.diff-hunk-review-badge-commented.active { color: #14150e; background: #c6f432; border-color: #c6f432; }
+.diff-hunk-review-note { min-height: 19px; min-width: 200px; padding: 0 6px; color: #eae9e2; background: transparent; border: 1px solid #353530; border-radius: 5px; font: 400 10px 'DM Mono'; }
 .token.comment, .token.prolog, .token.doctype, .token.cdata { color: #74736b; }
 .token.punctuation { color: #b3b2ab; }
 .token.property, .token.tag, .token.boolean, .token.number, .token.constant, .token.symbol, .token.deleted { color: #e2a06f; }
@@ -417,6 +424,9 @@ nav { display: grid; gap: 3px; }
 .github-diff-file > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .github-diff-file > header span { flex: 0 0 auto; color: #898880; text-transform: capitalize; }
 .github-diff-file pre { min-width: max-content; margin: 0; padding: 8px 0; overflow: visible; background: #10100f; font: 11px/1.55 'DM Mono'; }
+.github-diff-load-more { width: 100%; min-height: 40px; color: #c4c3bc; border: 0; border-top: 1px solid #302f2b; background: #191916; cursor: pointer; font: 700 10px 'DM Mono'; }
+.github-diff-load-more:hover:not(:disabled) { color: var(--acid); background: #24241f; }.github-diff-load-more:disabled { color: #85847d; cursor: wait; }
+.github-diff-unrenderable { display: grid; gap: 10px; padding: 12px; }.github-diff-unrenderable p { margin: 0; }.github-diff-unrenderable img { display: block; max-width: min(100%, 900px); max-height: 620px; border: 1px solid #302f2b; border-radius: 6px; background: repeating-conic-gradient(#252522 0 25%, #171715 0 50%) 50% / 18px 18px; object-fit: contain; }.github-diff-unrenderable a { display: inline-flex; align-items: center; gap: 5px; width: fit-content; min-height: 34px; padding: 0 9px; color: #c4c3bc; border: 1px solid #4a4942; border-radius: 6px; font: 700 10px 'DM Mono'; text-decoration: none; }.github-diff-unrenderable a:hover { color: var(--acid); border-color: #596234; }
 .github-diff-error { padding-bottom: 2px; }.github-diff-error strong { color: #e1a68f; }.github-diff-error p { margin: 5px 0 11px; }
 .github-diff-skeleton, .workspace-diff-skeleton { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 12px; border: 1px solid #302f2b; border-radius: 8px; }
 @media (max-width: 640px) {

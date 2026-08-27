@@ -1652,6 +1652,49 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // Review notes previously only reached the conversation draft, so marking
+    // a hunk reviewed didn't survive a refresh. Key on revision (a content
+    // hash) rather than a snapshot id so state applies to the diff a reviewer
+    // is actually looking at, live or snapshotted.
+    id: '059_diff_hunk_reviews',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS diff_hunk_reviews (
+          id TEXT PRIMARY KEY,
+          work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
+          conversation_id TEXT REFERENCES shared_conversations(id) ON DELETE CASCADE,
+          revision TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          hunk_range TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('reviewed', 'needs_changes', 'commented')),
+          note TEXT,
+          updated_at TEXT NOT NULL,
+          CHECK (work_item_id IS NOT NULL OR conversation_id IS NOT NULL)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_diff_hunk_reviews_work_item_key
+          ON diff_hunk_reviews(work_item_id, revision, file_path, hunk_range) WHERE work_item_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_diff_hunk_reviews_conversation_key
+          ON diff_hunk_reviews(conversation_id, revision, file_path, hunk_range) WHERE conversation_id IS NOT NULL;
+      `);
+    },
+  },
+  {
+    // Keep immutable review records traceable to the agent and Git state that
+    // produced them. Existing snapshots deliberately remain un-attributed.
+    id: '060_workspace_diff_snapshot_provenance',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(workspace_diff_snapshots)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'originating_agent_run_id')) {
+        database.exec('ALTER TABLE workspace_diff_snapshots ADD COLUMN originating_agent_run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL;');
+      }
+      if (!columns.some((column) => column.name === 'commit_hash')) {
+        database.exec('ALTER TABLE workspace_diff_snapshots ADD COLUMN commit_hash TEXT;');
+      }
+      database.exec(`CREATE INDEX IF NOT EXISTS idx_workspace_diff_snapshots_agent_run
+        ON workspace_diff_snapshots(originating_agent_run_id) WHERE originating_agent_run_id IS NOT NULL;`);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {
