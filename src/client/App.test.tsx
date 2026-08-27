@@ -1751,10 +1751,14 @@ describe('shared room', () => {
   it('keeps retry available for each failed parallel agent reply', async () => {
     const conversationId = '00000000-0000-4000-8000-000000000033';
     const timestamp = '2026-01-01T00:00:00Z';
+    let resolveRetry!: () => void;
+    const retryResponse = new Promise<Response>((resolve) => {
+      resolveRetry = () => resolve(new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } }));
+    });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Parallel retry', workItemId: null, createdAt: timestamp, updatedAt: timestamp }], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
-      if (url.startsWith('/api/shared/messages/') && url.endsWith('/retry')) return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages/') && url.endsWith('/retry')) return retryResponse;
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [
         { id: 'codex-failed', conversationId, author: 'codex', body: 'Codex stopped.', pinned: false, status: 'failed', error: 'stopped', createdAt: timestamp, attachments: [], model: null, executionProfile: 'auto', dispatchTarget: 'none' },
         { id: 'claude-canceled', conversationId, author: 'claude', body: 'Claude stopped.', pinned: false, status: 'canceled', error: '', createdAt: timestamp, attachments: [], model: null, executionProfile: 'auto', dispatchTarget: 'none' },
@@ -1768,7 +1772,10 @@ describe('shared room', () => {
     const retryButtons = await screen.findAllByRole('button', { name: 'Retry / continue' });
     expect(retryButtons).toHaveLength(2);
     fireEvent.click(retryButtons[0]);
+    expect(screen.getByRole('button', { name: 'Retrying…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Retry / continue' })).toBeEnabled();
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === '/api/shared/messages/codex-failed/retry' && init?.method === 'POST')).toBe(true));
+    resolveRetry();
   });
 
   it('searches conversations, selects a result, and restores the list on clear', async () => {
