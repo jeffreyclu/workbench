@@ -51,8 +51,8 @@ describe('assessDiffBlocks caching', () => {
         emitter.stderr = new EventEmitter();
         emitter.stdin = Object.assign(new EventEmitter(), { write: (prompt: string) => {
           queueMicrotask(() => {
-            const input = JSON.parse(prompt) as { message: { content: Array<{ text: string }> } };
-            const text = input.message.content[0].text;
+            const input = JSON.parse(prompt) as { message: { content: string } };
+            const text = input.message.content;
             const blocks = JSON.parse(text.slice(text.indexOf('Blocks:\n') + 'Blocks:\n'.length)) as Array<{ key: string }>;
             const assessments = blocks.map((block) => ({ key: block.key, risk: 70, reasoning: 'Looks fine.' }));
             emitter.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'result', result: JSON.stringify(assessments) })}\n`));
@@ -65,14 +65,11 @@ describe('assessDiffBlocks caching', () => {
     const database = openDatabase(':memory:');
 
     await assessDiffBlocks(database, [{ key: 'shared', lines: ['+const x = 1;'] }, { key: 'unique-1', lines: ['+const y = 2;'] }]);
-    // The consumed session is immediately replaced by a clean warm worker.
-    expect(spawnCalls).toBe(2);
+    expect(spawnCalls).toBe(1);
 
     // Same content under a different key in a different batch: still a cache hit, so only the new block is sent.
     const result = await assessDiffBlocks(database, [{ key: 'shared', lines: ['+const x = 1;'] }, { key: 'unique-2', lines: ['+const z = 3;'] }]);
-    // The next request gets a fresh context rather than inheriting the first
-    // diff's chat history; its successor is then pre-warmed in the background.
-    expect(spawnCalls).toBe(3);
+    expect(spawnCalls).toBe(1);
     expect(result.shared).toEqual({ risk: 70, reasoning: 'Looks fine.' });
     expect(result['unique-2']).toEqual({ risk: 70, reasoning: 'Looks fine.' });
   });
@@ -88,8 +85,8 @@ describe('assessDiffBlocks caching', () => {
         emitter.stderr = new EventEmitter();
         emitter.stdin = Object.assign(new EventEmitter(), { write: (prompt: string) => {
           queueMicrotask(() => {
-            const input = JSON.parse(prompt) as { message: { content: Array<{ text: string }> } };
-            const text = input.message.content[0].text;
+            const input = JSON.parse(prompt) as { message: { content: string } };
+            const text = input.message.content;
             const blocks = JSON.parse(text.slice(text.indexOf('Blocks:\n') + 'Blocks:\n'.length)) as Array<{ key: string }>;
             const assessments = blocks.map((block) => ({ key: block.key, risk: 42, reasoning: 'Persisted.' }));
             emitter.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'result', result: JSON.stringify(assessments) })}\n`));
@@ -102,14 +99,14 @@ describe('assessDiffBlocks caching', () => {
     const { assessDiffBlocks: assessFirstProcess } = await import('./diff-confidence-ai.js');
     const database = openDatabase(':memory:');
     await assessFirstProcess(database, [{ key: 'a', lines: ['+const persisted = true;'] }]);
-    expect(spawnCalls).toBe(2);
+    expect(spawnCalls).toBe(1);
 
     // Reload the module (simulating a fresh process) but reuse the same database handle.
     vi.resetModules();
     vi.doMock('node:child_process', mockSpawn);
     const { assessDiffBlocks: assessSecondProcess } = await import('./diff-confidence-ai.js');
     const result = await assessSecondProcess(database, [{ key: 'a', lines: ['+const persisted = true;'] }]);
-    expect(spawnCalls).toBe(2);
+    expect(spawnCalls).toBe(1);
     expect(result.a).toEqual({ risk: 42, reasoning: 'Persisted.' });
   });
 });

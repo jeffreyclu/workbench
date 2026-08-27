@@ -104,8 +104,6 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
           try { pending.resolve(parseDiffConfidenceAssessment(event.result, pending.blocks.map((block) => block.key))); }
           catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); }
         }
-        recycleWorker();
-        ensureWorker();
         dispatchNext();
       } catch { /* Ignore non-result stream events. */ }
     }
@@ -127,22 +125,7 @@ function dispatchNext(): void {
   active = queue.shift()!;
   // The rubric is already the system prompt. Sending it again used to double
   // every uncached request's input and delayed the first score unnecessarily.
-  scorer.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: `Blocks:\n${JSON.stringify(active.blocks)}` }] } })}\n`);
-}
-
-function recycleWorker(): void {
-  const scorer = worker;
-  worker = null;
-  outputBuffer = '';
-  if (!scorer) return;
-  // This is an intentional turnover after a completed response, not a scorer
-  // failure. Detach failure handlers before terminating the consumed session
-  // so queued work is claimed by the already-restarting clean worker.
-  scorer.removeAllListeners('exit');
-  scorer.removeAllListeners('error');
-  scorer.stdin.removeAllListeners('error');
-  scorer.stdout.removeAllListeners('data');
-  try { scorer.kill('SIGTERM'); } catch { /* already stopped */ }
+  scorer.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: `Blocks:\n${JSON.stringify(active.blocks)}` } })}\n`);
 }
 
 function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, DiffConfidenceAssessment>> {
