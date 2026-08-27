@@ -3,6 +3,7 @@ import { promoteRuntime } from './runtime-promotion.js';
 import { runSharedBackgroundJob } from './shared-room.js';
 import { waitForPromotionSlot } from './orchestrator.js';
 import { OWNER_ID } from './scheduler.js';
+import { cleanupIntegratedRunWorktrees } from './run-worktree.js';
 
 const POLL_MS = 1_000;
 
@@ -27,6 +28,10 @@ export function startRuntimePromotionWorker(
         await waitForPromotionSlot(repository, OWNER_ID, signal, onProgress);
         const result = await promoteRuntime(signal, onProgress);
         repository.completeQueuedPromotionMessages(id, 'Preview approval was combined into the release that just promoted.');
+        // Promotion state must flip as soon as the new runtime is verified.
+        // Cleanup is deliberately post-release so filesystem housekeeping can
+        // never leave the UI claiming a successful release is still running.
+        void cleanupIntegratedRunWorktrees().catch(() => { /* The next promotion/GC retries safe cleanup. */ });
         return result;
       },
       { claimQueuedPromotion: true },

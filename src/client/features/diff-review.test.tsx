@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DiffBlockList, DiffSummaryStrip } from './diff-review.js';
 import { LOW_RISK_THRESHOLD, isLowRiskAssessment } from './diff-review-logic.js';
 
@@ -47,7 +47,16 @@ describe('diff review presentation', () => {
   });
 
   it('renders changed-file and line totals in one concise summary strip', () => {
-    render(<DiffSummaryStrip changedFiles={3} additions={21} deletions={8} />);
+    render(<DiffSummaryStrip changedFiles={3} additions={21} deletions={8} flaggedCount={0} />);
     expect(screen.getByLabelText('3 changed files, 21 additions, 8 deletions')).toHaveTextContent('3 files+21−8');
+    expect(screen.queryByRole('button', { name: 'Next flagged block' })).not.toBeInTheDocument();
+  });
+
+  it('shows the flagged-block count and a jump action once blocks are flagged', () => {
+    const onJumpToNextFlagged = vi.fn();
+    render(<DiffSummaryStrip changedFiles={3} additions={21} deletions={8} flaggedCount={2} onJumpToNextFlagged={onJumpToNextFlagged} />);
+    expect(screen.getByLabelText('3 changed files, 21 additions, 8 deletions, 2 blocks flagged high-risk')).toHaveTextContent('2 blocks flagged high-risk');
+    fireEvent.click(screen.getByRole('button', { name: 'Next flagged block' }));
+    expect(onJumpToNextFlagged).toHaveBeenCalledTimes(1);
   });
 });

@@ -365,9 +365,10 @@ nav { display: grid; gap: 3px; }
 .workspace-diff nav > span { display: block; padding: 10px 11px; color: #85847d; border-bottom: 1px solid #302f2b; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
 .workspace-diff nav > div, .github-diff nav > div { display: flex; max-height: 60px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
 .diff-file-row { display: flex; flex: 0 0 clamp(260px, 20vw, 340px); min-width: 0; align-items: stretch; border-right: 1px solid #252522; }
-.workspace-diff nav button, .github-diff nav button { display: grid; flex: 0 0 clamp(260px, 20vw, 340px); min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 6px; min-height: 52px; padding: 7px 10px; color: #aaa9a2; text-align: left; background: transparent; border: 0; cursor: pointer; font: 10px 'DM Mono'; }
+.workspace-diff nav button, .github-diff nav button { display: grid; flex: 0 0 clamp(260px, 20vw, 340px); min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center; gap: 6px; min-height: 52px; padding: 7px 10px; color: #aaa9a2; text-align: left; background: transparent; border: 0; cursor: pointer; font: 10px 'DM Mono'; }
 .diff-file-row > button { flex: 1 1 0; min-width: 0; }
 .diff-file-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; padding: 7px 7px 7px 5px; position: relative; z-index: 1; background: #1b1b18; border-left: 1px solid #353530; }
+.diff-file-risk-badge { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; min-width: 21px; height: 15px; padding: 0 4px; border: 1px solid; border-radius: 999px; background: #10100f; font: 9px 'DM Mono'; line-height: 1; }
 .workspace-diff nav button:hover, .workspace-diff nav button.selected { color: #eee; background: #24241f; }
 .workspace-diff nav button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-diff nav button b, .workspace-diff nav button i { font-size: 9px; }
@@ -390,7 +391,11 @@ nav { display: grid; gap: 3px; }
 .diff-block { margin: 4px 0; }
 .diff-summary-strip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px; color: #aaa9a2; border: 1px solid #353530; border-radius: 999px; background: #1b1b18; font: 700 9px 'DM Mono'; }
 .diff-summary-strip b { color: #8bbd75; font-weight: 700; }.diff-summary-strip i { color: #d97b73; font-style: normal; }
+.diff-summary-flagged { color: #d97b73; }
+.diff-summary-jump { padding: 2px 7px; color: #d9d8d1; border: 1px solid #596234; border-radius: 999px; background: #24241f; font: 700 9px 'DM Mono'; cursor: pointer; }
+.diff-summary-jump:hover, .diff-summary-jump:focus-visible { color: #eee; border-color: #7a8a3f; outline: 0; }
 .diff-block-collapsed { margin-left: 84px; }
+.diff-block:focus-visible { outline: 2px solid #7a8a3f; outline-offset: 2px; border-radius: 3px; }
 .diff-block-disclosure { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 7px 3px 5px; color: #aaa9a2; border: 1px solid #353530; border-radius: 5px; background: #171715; font: 700 9px 'DM Mono'; cursor: pointer; list-style: none; }
 .diff-block-disclosure::-webkit-details-marker { display: none; }.diff-block-disclosure svg { transition: transform var(--motion-fast) var(--motion-ease); }.diff-block-collapsed[open] > .diff-block-disclosure svg { transform: rotate(90deg); }
 .diff-block-disclosure:hover, .diff-block-disclosure:focus-visible { color: #d9d8d1; border-color: #596234; outline: 0; }.diff-block-disclosure small { color: #77766f; font: 500 9px 'DM Mono'; }

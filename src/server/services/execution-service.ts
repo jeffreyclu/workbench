@@ -94,8 +94,15 @@ export class ExecutionService {
     const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
     const changed = this.database.prepare(`
       UPDATE shared_messages SET owner_id = ?, lease_expires_at = ?
-      WHERE id = ? AND status = 'running' AND (owner_id IS NULL OR lease_expires_at < ?)
+      WHERE id = ?
+        AND (status = 'running' OR (status = 'queued' AND author IN ('codex', 'claude')))
+        AND (owner_id IS NULL OR lease_expires_at < ?)
     `).run(ownerId, leaseExpiresAt, id, now).changes;
+    // A task-linked agent reply can be returned to the durable queue while its
+    // repository is busy. Claiming it is the one transition that makes it
+    // visibly live again; human turns remain exclusively owned by the normal
+    // conversation dispatcher.
+    if (changed) this.database.prepare(`UPDATE shared_messages SET status = 'running' WHERE id = ?`).run(id);
     return Number(changed) > 0;
   }
 

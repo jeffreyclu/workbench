@@ -372,12 +372,13 @@ export class RunRepository {
       if (capacity === 0) return { runIds: [] };
       const rows = this.database.prepare(`
         SELECT id FROM agent_runs
-        WHERE status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+        WHERE status = 'queued' AND message_id IS NULL
+          AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
         ORDER BY created_at ASC, rowid ASC LIMIT ?
       `).all(now, capacity) as Array<{ id: string }>;
       return { runIds: rows.map((row) => row.id) };
     }
-    const rows = this.database.prepare(`SELECT id FROM agent_runs WHERE status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at ASC, rowid ASC`).all(now) as Array<{ id: string }>;
+    const rows = this.database.prepare(`SELECT id FROM agent_runs WHERE status = 'queued' AND message_id IS NULL AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at ASC, rowid ASC`).all(now) as Array<{ id: string }>;
     return { runIds: rows.map((row) => row.id) };
   }
 

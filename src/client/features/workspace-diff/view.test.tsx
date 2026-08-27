@@ -180,4 +180,71 @@ describe('WorkspaceDiffView', () => {
     expect(document.querySelector('.diff-line.addition')?.textContent).toContain('+preserved');
     expect(screen.getByLabelText('Workspace diff history')).toHaveValue('recorded-version');
   });
+
+  it('sorts the file nav by max block risk descending and shows a risk badge per file', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/diff-confidence') {
+        const keys = (JSON.parse(String(init?.body)) as { blocks: Array<{ key: string }> }).blocks.map((block) => block.key);
+        return new Response(JSON.stringify({ assessments: Object.fromEntries(keys.map((key) => [key, { risk: key.startsWith('src/low-risk.ts') ? 5 : 90, reasoning: 'Assessed.' }])) }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url === '/api/work-items/work-item-1/workspace-diff/snapshots') return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/work-items/work-item-1/workspace-diff') return new Response(JSON.stringify({
+        diff: {
+          workspacePath: '/tmp/workbench', branch: 'review', revision: 'risk-sort', changedFiles: 2, additions: 2, deletions: 2,
+          publish: { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
+          files: [
+            { path: 'src/low-risk.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' },
+            { path: 'src/high-risk.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' },
+          ],
+        },
+      }), { headers: { 'Content-Type': 'application/json' } });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={false} /></QueryClientProvider>);
+
+    expect(await screen.findByLabelText('File AI risk assessment: 90 out of 100')).toBeInTheDocument();
+    expect(screen.getByLabelText('File AI risk assessment: 5 out of 100')).toBeInTheDocument();
+    const rows = screen.getAllByRole('button', { name: /src\/(low|high)-risk\.ts/ });
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining('src/high-risk.ts'),
+      expect.stringContaining('src/low-risk.ts'),
+    ]);
+  });
+
+  it('shows a diff-level flagged-block count and jumps into the flagged file on click', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/diff-confidence') {
+        const keys = (JSON.parse(String(init?.body)) as { blocks: Array<{ key: string }> }).blocks.map((block) => block.key);
+        return new Response(JSON.stringify({ assessments: Object.fromEntries(keys.map((key) => [key, { risk: key.startsWith('src/flagged.ts') ? 90 : 5, reasoning: 'Assessed.' }])) }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url === '/api/work-items/work-item-1/workspace-diff/snapshots') return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/work-items/work-item-1/workspace-diff') return new Response(JSON.stringify({
+        diff: {
+          workspacePath: '/tmp/workbench', branch: 'review', revision: 'flag-jump', changedFiles: 2, additions: 2, deletions: 2,
+          publish: { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
+          files: [
+            { path: 'src/safe.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' },
+            { path: 'src/flagged.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' },
+          ],
+        },
+      }), { headers: { 'Content-Type': 'application/json' } });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={false} /></QueryClientProvider>);
+
+    expect(await screen.findByLabelText('2 changed files, 2 additions, 2 deletions, 1 block flagged high-risk')).toBeInTheDocument();
+    // The risk-sorted nav opens on src/flagged.ts by default; switch to src/safe.ts so the jump has to change files.
+    fireEvent.click(screen.getByRole('button', { name: /src\/safe\.ts/ }));
+    expect(await screen.findByRole('heading', { name: 'Current workspace changes' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next flagged block' }));
+
+    expect(await screen.findByRole('button', { name: /src\/flagged\.ts/ })).toHaveClass('selected');
+  });
 });

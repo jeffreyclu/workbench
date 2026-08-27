@@ -1,6 +1,24 @@
 import { useState } from 'react';
 import { confidenceProminence, confidenceTone, type DiffConfidenceAssessment } from './diff-confidence.js';
 
+/** File-nav badge showing the max risk across a file's changed blocks, so a
+ * reviewer can gauge danger without opening the file. Absent entirely once a
+ * file has no changed blocks (binary, deletion-only rename, etc). */
+export function FileRiskBadge({ risk }: { risk: number | null }) {
+  const tone = confidenceTone(risk);
+  const { fontWeight } = confidenceProminence(risk);
+  return (
+    <span
+      className="diff-file-risk-badge"
+      style={{ color: tone, borderColor: tone, fontWeight }}
+      aria-label={risk === null ? 'File AI risk assessment pending' : `File AI risk assessment: ${risk} out of 100`}
+      title={risk === null ? 'AI risk assessment pending' : `AI risk: ${risk}/100`}
+    >
+      {risk === null ? '--' : risk}
+    </span>
+  );
+}
+
 export function DiffConfidenceBubble({ assessment, onFollowUp }: { assessment: DiffConfidenceAssessment | null; onFollowUp?: () => void }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
 

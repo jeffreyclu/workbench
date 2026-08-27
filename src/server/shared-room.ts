@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
-import { EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, warmAgentCommand, type AgentInputSteering, type AgentUsage, type RetrievedMemory } from './agent-runner.js';
+import { EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, warmAgentCommand, type AgentInputSteering, type AgentUsage, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -12,6 +12,7 @@ import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js
 import { humanizeRunOutputBlocks } from '../shared/run-output.js';
 import { agentAccountEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
+import { isolatedRunWorkspace } from './run-worktree.js';
 
 const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
@@ -633,7 +634,10 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
       return [];
     }),
   };
-  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'running', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile, accountProfile, queued.message.id));
+  // Task-linked replies become running only after they own their durable run
+  // and, for edits, the selected repository. A busy repository is a queue,
+  // not a hung provider turn.
+  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'queued', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile, accountProfile, queued.message.id));
   for (const reply of replies) {
     const agent = reply.author as AgentRun['agent'];
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'
@@ -731,7 +735,10 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       ? repository.get(linkedRun.workItemId)
       : linkedConversation?.workItemId ? repository.get(linkedConversation.workItemId) : null;
     const selectedWorkspace = repository.database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(target.conversationId) as { workspace_path: string } | undefined;
-    const cwd = resolveSharedReplyWorkingDirectory(linkedItem, selectedWorkspace?.workspace_path);
+    const sourceCwd = resolveSharedReplyWorkingDirectory(linkedItem, selectedWorkspace?.workspace_path);
+    const cwd = linkedRun
+      ? await isolatedRunWorkspace(sourceCwd, linkedRun.id, MUTATING_RUN_KINDS.has(linkedRun.kind))
+      : sourceCwd;
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}${selectedWorkspace ? ' from Repo Explorer.' : '.'}`);
     const runKind = linkedRun?.kind ?? 'analysis';
     const profile = target.executionProfile && target.executionProfile !== 'routing'
