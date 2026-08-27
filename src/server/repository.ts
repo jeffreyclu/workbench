@@ -1880,6 +1880,11 @@ export class WorkItemRepository {
     return this.execution.renewSharedMessageLease(id, ownerId, leaseMs);
   }
 
+  /** Mark work owned by a deliberately stopping runtime as interrupted now. */
+  interruptOwnedWork(ownerId: string, reason: string): { runIds: string[]; messageIds: string[] } {
+    return this.execution.interruptOwnedWork(ownerId, reason);
+  }
+
   /** Schedule a bounded retry for a run that failed transiently. Returns false when attempts are exhausted. */
   scheduleRunRetry(id: string, ownerId: string, delayMs: number): boolean {
     return this.runs.scheduleRetry(id, ownerId, delayMs);

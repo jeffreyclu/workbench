@@ -138,6 +138,26 @@ export class ExecutionService {
   }
 
   /**
+   * A controlled runtime promotion intentionally terminates this process. Do
+   * not leave its owned work marked live until lease recovery: that blocks the
+   * queue and falsely tells Jeffrey an agent is still working. Execute runs
+   * are never replayed automatically, so make the interruption explicit.
+   */
+  interruptOwnedWork(ownerId: string, reason: string): { runIds: string[]; messageIds: string[] } {
+    return this.unitOfWork.transaction(() => {
+      const now = new Date().toISOString();
+      const runIds = (this.database.prepare(`SELECT id FROM agent_runs WHERE status = 'running' AND owner_id = ?`).all(ownerId) as Array<{ id: string }>).map(({ id }) => id);
+      const messageIds = (this.database.prepare(`SELECT id FROM shared_messages
+        WHERE status = 'running' AND owner_id = ? AND author IN ('codex', 'claude')`).all(ownerId) as Array<{ id: string }>).map(({ id }) => id);
+      if (runIds.length) this.database.prepare(`UPDATE agent_runs SET status = 'failed', error = ?, completed_at = ?, owner_id = NULL, lease_expires_at = NULL
+        WHERE status = 'running' AND owner_id = ?`).run(reason, now, ownerId);
+      if (messageIds.length) this.database.prepare(`UPDATE shared_messages SET status = 'failed', error = ?, completed_at = ?, owner_id = NULL, lease_expires_at = NULL
+        WHERE status = 'running' AND owner_id = ? AND author IN ('codex', 'claude')`).run(reason, now, ownerId);
+      return { runIds, messageIds };
+    });
+  }
+
+  /**
    * Reclaim work whose lease expired without the owner finishing it (crash or restart).
    * `execute` runs perform non-idempotent filesystem edits, so they are never silently
    * re-run: they are marked failed for Jeffrey to re-trigger deliberately.

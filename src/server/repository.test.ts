@@ -62,6 +62,19 @@ describe('WorkItemRepository', () => {
     expect(repository.createRun(item.id, 'analysis', 'claude', 'claude', '', null, null, 'manual', 'work').accountProfile).toBe('work');
   });
 
+  it('finalizes work owned by a runtime that is deliberately stopping', () => {
+    const item = repository.create({ title: 'Promote safely', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.getOrCreateWorkConversation(item.id, item.title);
+    const message = repository.createSharedMessage('claude', 'Partial response', 'running', conversation.id);
+    const run = repository.createRun(item.id, 'execute', 'claude', 'claude', '', conversation.id, message.id);
+    repository.claimRun(run.id, 'runtime-a', 60_000);
+    repository.claimSharedMessage(message.id, 'runtime-a', 60_000);
+
+    expect(repository.interruptOwnedWork('runtime-a', 'Runtime promoted.')).toEqual({ runIds: [run.id], messageIds: [message.id] });
+    expect(repository.getRun(run.id)).toMatchObject({ status: 'failed', error: 'Runtime promoted.' });
+    expect(repository.getSharedMessageById(message.id)).toMatchObject({ status: 'failed', error: 'Runtime promoted.' });
+  });
+
   it('keeps fresh input, cache writes, cache reads, and output distinct in terminal-run insights', () => {
     const item = repository.create({ title: 'Measure usage', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const codexRun = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Implement it.');

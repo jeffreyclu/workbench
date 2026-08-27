@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { createApp } from './app.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { startScheduler } from './scheduler.js';
+import { OWNER_ID, startScheduler } from './scheduler.js';
 import { startRuntimePromotionWorker } from './runtime-promotion-worker.js';
 import { shutdownFastTaskDraftModel, warmFastTaskDraftModel } from './fast-task-draft-ai.js';
 import { shutdownDiffConfidenceModel, warmDiffConfidenceModel } from './diff-confidence-ai.js';
@@ -52,6 +52,10 @@ let shuttingDown = false;
 const shutdown = () => {
   if (shuttingDown) return;
   shuttingDown = true;
+  // A promotion is an intentional interruption, not a crash. Persist the
+  // terminal state before killing child process groups so the next runtime
+  // never displays ghost work for the lease-recovery grace period.
+  repository.interruptOwnedWork(OWNER_ID, 'Workbench runtime promoted while this agent was running. Retry or continue the conversation.');
   shutdownActiveAgentProcesses();
   shutdownDiffConfidenceModel();
   shutdownFastTaskDraftModel();
