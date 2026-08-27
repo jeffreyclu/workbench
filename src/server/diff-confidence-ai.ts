@@ -178,3 +178,15 @@ export function assessDiffBlocks(database: WorkbenchDatabase, blocks: DiffConfid
 export function warmDiffConfidenceModel(): void {
   ensureWorker();
 }
+
+/** Runtime promotion must reap this process; otherwise an old release can
+ * retain a Claude session and contend with a real agent turn indefinitely. */
+export function shutdownDiffConfidenceModel(): void {
+  const scorer = worker;
+  worker = null;
+  outputBuffer = '';
+  const error = new Error('AI diff scorer stopped during runtime shutdown.');
+  if (active) { active.reject(error); active = null; }
+  while (queue.length) queue.shift()!.reject(error);
+  try { scorer?.kill('SIGTERM'); } catch { /* already stopped */ }
+}

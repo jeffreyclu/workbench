@@ -4,8 +4,8 @@ import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { startScheduler } from './scheduler.js';
 import { startRuntimePromotionWorker } from './runtime-promotion-worker.js';
-import { warmFastTaskDraftModel } from './fast-task-draft-ai.js';
-import { warmDiffConfidenceModel } from './diff-confidence-ai.js';
+import { shutdownFastTaskDraftModel, warmFastTaskDraftModel } from './fast-task-draft-ai.js';
+import { shutdownDiffConfidenceModel, warmDiffConfidenceModel } from './diff-confidence-ai.js';
 import { liveRuntimeCapabilities } from './runtime-capabilities.js';
 import { createServer } from 'node:http';
 import { attachRealtimeServer } from './realtime.js';
@@ -46,3 +46,15 @@ attachRealtimeServer(server);
 server.listen(port, () => {
   console.log(`Workbench API listening on http://localhost:${port}`);
 });
+
+let shuttingDown = false;
+const shutdown = () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  shutdownDiffConfidenceModel();
+  shutdownFastTaskDraftModel();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 2_000).unref();
+};
+process.once('SIGTERM', shutdown);
+process.once('SIGINT', shutdown);

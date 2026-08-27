@@ -22,7 +22,7 @@ function parseDraft(output: string, originalPrompt: string): GeneratedTaskDraft 
 function dispatchNext(): void {
   if (!worker || active || queue.length === 0) return;
   active = queue.shift()!;
-  worker.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: active.prompt }] } })}\n`);
+  worker.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: active.prompt } })}\n`);
 }
 
 function stopWorker(error: Error): void {
@@ -78,4 +78,8 @@ export function generateFastAiTaskDraft(prompt: string): Promise<GeneratedTaskDr
 
 export function warmFastTaskDraftModel(): void {
   void generateFastAiTaskDraft('Write a task to verify the fast task-draft formatter is ready.').catch(() => undefined);
+}
+
+export function shutdownFastTaskDraftModel(): void {
+  stopWorker(new Error('Fast task-draft AI stopped during runtime shutdown.'));
 }
