@@ -51,6 +51,18 @@ describe('runtime drain state', () => {
 
     expect(repository.claimRun(run.id, ownerId, 60_000)).toBe(true);
     expect(repository.hasRuntimeWork(ownerId)).toBe(false);
+    expect(repository.hasPromotionBlockingWork(ownerId)).toBe(false);
+    database.close();
+  });
+
+  it('does not let a claimed promotion message block its own drain', () => {
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const ownerId = 'promotion-runtime';
+    const promotion = repository.createSharedMessage('system', 'Promoting…', 'running', repository.ensureDefaultConversation().id, [], 'promotion');
+
+    expect(repository.claimSharedMessage(promotion.id, ownerId, 60_000)).toBe(true);
+    expect(repository.hasPromotionBlockingWork(ownerId)).toBe(false);
     database.close();
   });
 });

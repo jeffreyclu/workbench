@@ -427,6 +427,36 @@ export class RunRepository {
     return Number(row.runs) + Number(row.messages) > 0;
   }
 
+  /**
+   * Promotion is allowed once this runtime has no Workbench-scoped agent work
+   * left to snapshot. Unlike hasRuntimeWork, deliberately exclude the
+   * promotion progress message itself: it is claimed before this predicate is
+   * checked, so including it turns every promotion into a self-deadlock.
+   */
+  hasPromotionBlockingWork(ownerId: string): boolean {
+    const workbenchRoot = resolve(process.cwd());
+    const row = this.database.prepare(`
+      SELECT
+        (SELECT COUNT(*)
+           FROM agent_runs AS run
+           JOIN work_items AS item ON item.id = run.work_item_id
+          WHERE run.status = 'running' AND run.owner_id = ?
+            AND (COALESCE(item.project_key, '') = ?
+              OR COALESCE(run.resolved_workspace, item.workspace_path, '') = ?)) AS runs,
+        (SELECT COUNT(*)
+           FROM shared_messages AS message
+           LEFT JOIN agent_runs AS run ON run.message_id = message.id AND run.status = 'running'
+           LEFT JOIN shared_conversations AS conversation ON conversation.id = message.conversation_id
+           LEFT JOIN work_items AS item ON item.id = conversation.work_item_id
+          WHERE message.status = 'running' AND message.owner_id = ?
+            AND message.dispatch_target <> 'promotion'
+            AND (run.id IS NULL AND (conversation.work_item_id IS NULL
+              OR COALESCE(item.project_key, '') = ?
+              OR COALESCE(item.workspace_path, '') = ?))) AS messages
+    `).get(ownerId, WORKBENCH_PROJECT_KEY, workbenchRoot, ownerId, WORKBENCH_PROJECT_KEY, workbenchRoot) as { runs: number; messages: number };
+    return Number(row.runs) + Number(row.messages) > 0;
+  }
+
   activeForItem(workItemId: string): AgentRun[] {
     return this.list(workItemId).filter((run) => run.status === 'queued' || run.status === 'running');
   }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { PROMOTION_QUEUED_MESSAGE } from './promotion-messages.js';
 import { WorkItemRepository } from './repository.js';
+import { OWNER_ID } from './scheduler.js';
 
 type PromoteRuntime = (signal: AbortSignal, onProgress: (body: string) => void) => Promise<string>;
 const promoteRuntimeMock = vi.fn<PromoteRuntime>(async () => 'Preview approved and promoted.');
@@ -29,8 +30,9 @@ describe('runtime promotion worker', () => {
 
   it('claims an approved promotion immediately, then waits for active work before building', async () => {
     const conversation = repository.createConversation('Promotion');
-    const item = repository.create({ title: 'Active work', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const item = repository.create({ title: 'Active work', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: process.cwd(), dueDate: null });
     const run = repository.createRun(item.id, 'analysis', 'codex', 'codex', '');
+    expect(repository.claimRun(run.id, OWNER_ID, 60_000)).toBe(true);
     const promotion = repository.createSharedMessage('system', 'Promotion queued.', 'queued', conversation.id, [], 'promotion');
     const worker = startRuntimePromotionWorker(repository);
 

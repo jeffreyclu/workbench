@@ -1960,6 +1960,10 @@ export class WorkItemRepository {
     return this.runs.hasRuntimeWork(ownerId);
   }
 
+  hasPromotionBlockingWork(ownerId: string): boolean {
+    return this.runs.hasPromotionBlockingWork(ownerId);
+  }
+
   listRunningPromotionMessageIds(): string[] {
     return this.execution.listRunningPromotionMessageIds();
   }

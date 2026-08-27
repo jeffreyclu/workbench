@@ -11,11 +11,12 @@ const POLL_MS = 1_000;
  */
 export async function waitForPromotionSlot(
   repository: WorkItemRepository,
+  ownerId: string,
   signal: AbortSignal,
   onProgress: (body: string) => void,
 ): Promise<void> {
   let announced = false;
-  while (repository.hasLiveWork()) {
+  while (repository.hasPromotionBlockingWork(ownerId)) {
     if (signal.aborted) throw new Error('Preview promotion canceled.');
     if (!announced) {
       announced = true;

@@ -2,6 +2,7 @@ import type { WorkItemRepository } from './repository.js';
 import { promoteRuntime } from './runtime-promotion.js';
 import { runSharedBackgroundJob } from './shared-room.js';
 import { waitForPromotionSlot } from './orchestrator.js';
+import { OWNER_ID } from './scheduler.js';
 
 const POLL_MS = 1_000;
 
@@ -23,7 +24,7 @@ export function startRuntimePromotionWorker(
       repository,
       id,
       async (signal, onProgress) => {
-        await waitForPromotionSlot(repository, signal, onProgress);
+        await waitForPromotionSlot(repository, OWNER_ID, signal, onProgress);
         const result = await promoteRuntime(signal, onProgress);
         repository.completeQueuedPromotionMessages(id, 'Preview approval was combined into the release that just promoted.');
         return result;
