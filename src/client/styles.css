@@ -973,11 +973,12 @@ nav { display: grid; gap: 3px; }
 .conversation-surface-tabs button:disabled { color: #595950; cursor: not-allowed; }
 .conversation-surface-tabs button:disabled:hover { color: #595950; background: transparent; }
 .conversation-surface-tabs button[aria-pressed="true"] { color: #15200d; background: var(--acid); }
-.conversation-review-layout { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); overflow: hidden; border-top: 1px solid var(--line); }
-.conversation-review-layout.layout-split { grid-template-rows: minmax(180px, 2fr) minmax(220px, 3fr); }
+.conversation-review-layout { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr); overflow: hidden; border-top: 1px solid var(--line); }
+.conversation-review-layout.layout-changes { grid-template-columns: minmax(0, 1fr); }
+.conversation-review-layout.layout-split { grid-template-columns: minmax(360px, .88fr) minmax(0, 1.32fr); }
 .conversation-thread-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .conversation-review-layout.layout-changes .conversation-thread-pane { display: none; }
-.conversation-review-layout.layout-split .conversation-thread-pane { border-right: 0; border-bottom: 1px solid var(--line); }
+.conversation-review-layout.layout-split .conversation-thread-pane { border-right: 1px solid var(--line); }
 .conversation-review-layout.layout-conversation .shared-thread { width: 100%; padding: 20px 20px 28px; }
 .conversation-review-layout.layout-conversation .shared-composer { width: calc(100% - 40px); margin-bottom: 20px; }
 .conversation-changes { min-width: 0; min-height: 0; padding: 0 28px 28px; overflow: auto; }
@@ -1128,7 +1129,7 @@ nav { display: grid; gap: 3px; }
   .thread-filter-bar { align-items: stretch; flex-wrap: wrap; padding-inline: 14px; }
   .conversation-surface-tabs { flex: 1 1 100%; margin-right: 0; }
   .conversation-surface-tabs button { flex: 1 1 50%; justify-content: center; min-height: 44px; }
-  .conversation-review-layout { border-top: 0; }
+  .conversation-review-layout { display: flex; flex: 1; min-height: 0; overflow: hidden; border-top: 0; }
   .conversation-changes { padding: 0 14px 20px; }
   .agent-presence { display: none; }
   .composer-hint { display: none; }
