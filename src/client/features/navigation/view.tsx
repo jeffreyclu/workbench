@@ -237,7 +237,7 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
       <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={onOpenActive}><Command size={16} /> Attention stack <span className={activePulse}>{counts?.active ?? '…'}</span></button>
       <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={onOpenWorkbench}><Wrench size={16} /> Workbench <span className={workbenchPulse}>{counts?.workbench ?? '…'}</span></button>
       <DiscoveryNav active={view === 'discovery'} onClick={onOpenDiscovery} />
-      <button className={`nav-item ${view === 'context' ? 'active' : ''}`} onClick={onOpenConversations}><MessageCircle size={16} /> Conversations <span className={conversationPulse}>{conversationCount ?? '…'}</span></button>
+      <button className={`nav-item mobile-conversation-nav ${view === 'context' ? 'active' : ''}`} onClick={onOpenConversations}><MessageCircle size={16} /> Conversations <span className={conversationPulse}>{conversationCount ?? '…'}</span></button>
       <div id="mobile-nav-more" className="mobile-nav-secondary" aria-label="More destinations">
         <div className="mobile-global-search"><GlobalSearch onSelectResult={onSelectGlobalSearchResult} /></div>
         <ArtifactNav active={view === 'artifacts'} onClick={onOpenArtifacts} />
