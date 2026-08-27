@@ -1113,8 +1113,8 @@ describe('shared room', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/shared/conversations/${conversationId}/workspace-diff`)).toBe(true);
 
     fireEvent.click(changes);
-    expect(await screen.findByRole('heading', { name: 'Current workspace changes' })).toBeTruthy();
-    expect(await screen.findByRole('button', { name: /src\/client\/standalone\.tsx/ })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Review workspace decisions' })).toBeTruthy();
+    expect(await screen.findAllByRole('button', { name: /src\/client\/standalone\.tsx/ })).not.toHaveLength(0);
     expect(screen.getByLabelText('Conversation changes')).toBeTruthy();
   });
 
@@ -1152,9 +1152,9 @@ describe('shared room', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/github/pull-request-diff'))).toBe(true);
 
     fireEvent.click(changes);
-    expect(await screen.findByRole('heading', { name: 'Current workspace changes' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Review workspace decisions' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Conversation review' })).toBeTruthy();
-    expect(await screen.findAllByRole('button', { name: /src\/client\/App\.tsx/ })).toHaveLength(2);
+    expect(await screen.findAllByRole('button', { name: /src\/client\/App\.tsx/ })).toHaveLength(3);
     expect(screen.getByRole('button', { name: 'Changes' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('button', { name: 'Split' })).toBeNull();
     expect(screen.getByLabelText('Message Codex or Claude').closest('.conversation-review-layout')).toHaveClass('layout-changes');
@@ -1195,13 +1195,13 @@ describe('shared room', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/workspace-diff'))).toBe(true);
 
     fireEvent.click(changes);
-    expect(await screen.findByRole('heading', { name: 'Current workspace changes' })).toBeTruthy();
-    expect(await screen.findByRole('button', { name: /src\/client\/feature\.tsx/ })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Review workspace decisions' })).toBeTruthy();
+    expect(await screen.findAllByRole('button', { name: /src\/client\/feature\.tsx/ })).not.toHaveLength(0);
     expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/shared/conversations/${conversationId}/workspace-diff`)).toBe(true);
     expect(screen.queryByText('GitHub reports no changed files for this pull request.')).toBeNull();
   });
 
-  it('disables Changes when the linked task has no local or pull-request diff', async () => {
+  it('keeps Changes available when the linked task has no local or pull-request diff', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000218';
     const taskId = '00000000-0000-4000-8000-000000000219';
@@ -1228,10 +1228,10 @@ describe('shared room', () => {
 
     const changes = await screen.findByRole('button', { name: 'Changes' });
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/shared/conversations/${conversationId}/workspace-diff`)).toBe(true));
-    expect(changes).toBeDisabled();
+    expect(changes).not.toBeDisabled();
     expect(changes).toHaveAttribute('title', 'No changes to review');
     fireEvent.click(changes);
-    expect(screen.queryByLabelText('Task changes')).toBeNull();
+    expect(await screen.findByLabelText('Current workspace changes')).toBeTruthy();
   });
 
   it('keeps Changes enabled for a recorded workspace diff after commit and push', async () => {
@@ -1262,7 +1262,7 @@ describe('shared room', () => {
     const changes = await screen.findByRole('button', { name: 'Changes' });
     await waitFor(() => expect(changes).toBeEnabled());
     fireEvent.click(changes);
-    expect(await screen.findByRole('heading', { name: 'Workspace diff record' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeTruthy();
     expect(screen.getByRole('option', { name: /1 files/ })).toBeTruthy();
   });
 

@@ -291,7 +291,7 @@ export function App() {
       });
     return () => { canceled = true; };
   }, [queryClient, resolvedTaskId, route]);
-  const queueAgentActivity = useQuery({ queryKey: ['shared-message-activity'], queryFn: () => api.listSharedMessages(), refetchInterval: 5_000 });
+  const queueAgentActivity = useQuery({ queryKey: ['shared-message-activity'], queryFn: api.listSharedMessageActivity, refetchInterval: 5_000 });
   const queueAgentStatusSignature = (queueAgentActivity.data?.messages ?? []).map((message) => `${message.id}:${message.status}`).join('|');
   useEffect(() => {
     if (queueAgentStatusSignature) void queryClient.invalidateQueries({ queryKey: ['work-items'] });

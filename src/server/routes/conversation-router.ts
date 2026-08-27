@@ -292,6 +292,8 @@ export function createConversationRouter({ repository, database, capabilities, a
 
   router.get('/api/shared/messages', (request, response) => {
     const conversationId = z.string().uuid().optional().parse(request.query.conversationId);
+    const activityOnly = z.literal('1').optional().parse(request.query.activity);
+    if (activityOnly) return response.json({ messages: repository.listSharedMessageActivity() });
     // Recovery of runs whose owner process died is the scheduler's job (lease
     // expiry + reclaimExpired), not this request handler's: canceling anything
     // this process doesn't recognize as "active" would wrongly kill legitimate

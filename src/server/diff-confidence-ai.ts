@@ -85,7 +85,9 @@ let idleShutdown: ReturnType<typeof setTimeout> | null = null;
 // bounded assessment turn to complete before declaring the scorer unavailable.
 const SCORER_TIMEOUT_MS = 25_000;
 const SCORER_IDLE_SHUTDOWN_MS = 30_000;
-const SCORER_POOL_SIZE = 2;
+// Four bounded Haiku workers keep a multi-file review responsive without
+// borrowing either of the foreground Codex/Claude task slots.
+const SCORER_POOL_SIZE = 4;
 
 function recycleWorker(worker: ScorerWorker): void {
   if (!workers.delete(worker)) return;

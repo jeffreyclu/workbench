@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, parseWorkspacePatch, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, parseWorkspacePatch, resolveWorkspaceRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -21,6 +21,13 @@ afterEach(() => {
 });
 
 describe('workspace diff parsing', () => {
+  it('recovers a repository root when persisted workspace state names a deleted subdirectory', () => {
+    const workspace = temporaryGitWorkspace();
+    const stalePath = join(workspace, 'src', 'client', 'features', 'diff', 'views');
+    mkdirSync(join(workspace, 'src'), { recursive: true });
+    expect(resolveWorkspaceRepository(stalePath)).toBe(workspace);
+  });
+
   it('creates editor deep links only for files in an available local checkout', () => {
     const workspace = temporaryGitWorkspace();
     writeFileSync(join(workspace, 'file with spaces.ts'), 'export {};\n');

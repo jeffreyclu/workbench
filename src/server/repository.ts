@@ -510,6 +510,13 @@ export class WorkItemRepository {
     return { messages, nextCursor, totalCount };
   }
 
+  /** Small active-run projection for global activity indicators. */
+  listSharedMessageActivity(): Array<Pick<SharedMessage, 'id' | 'conversationId' | 'author' | 'status'>> {
+    return this.database.prepare(`SELECT id, conversation_id, author, status FROM shared_messages
+      WHERE status IN ('queued', 'running') ORDER BY created_at DESC`).all()
+      .map((row) => ({ id: String(row.id), conversationId: String(row.conversation_id), author: row.author as SharedMessage['author'], status: row.status as SharedMessage['status'] }));
+  }
+
   /**
    * Loops listSharedMessages page by page until exhausted. For internal logic
    * that genuinely needs the whole conversation (or, with no conversationId,

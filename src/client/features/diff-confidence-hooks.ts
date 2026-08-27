@@ -4,7 +4,9 @@ import { api } from '../data/api.js';
 import { subscribeRealtimeMessages } from '../hooks/realtime.js';
 import { HIGH_RISK_THRESHOLD } from './diff-review-logic.js';
 
-const SCORE_BATCH_SIZE = 3;
+// One block per request lets the WebSocket publish each assessment as it
+// finishes. A slow block must never hold its faster siblings hostage.
+const SCORE_BATCH_SIZE = 1;
 type Block = { key: string; lines: string[] };
 type Assessment = { risk: number | null; reasoning: string };
 

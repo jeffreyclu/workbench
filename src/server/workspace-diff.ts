@@ -1,7 +1,7 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { WorkspaceDiff, WorkspaceDiffFile, WorkspacePublishResult, WorkspacePublishStatus } from '../shared/contracts.js';
 
@@ -19,6 +19,19 @@ const DEFAULT_EDITOR_URL_TEMPLATE = 'vscode://file/{path}';
 function isWithinWorkspace(workspacePath: string, candidatePath: string) {
   const path = relative(workspacePath, candidatePath);
   return path === '' || (!path.startsWith('..') && !isAbsolute(path));
+}
+
+/** Recover from a stale/deleted subdirectory persisted by an older run. */
+export function resolveWorkspaceRepository(workspacePath: string): string {
+  let candidate = resolve(workspacePath);
+  while (!existsSync(candidate) && candidate !== dirname(candidate)) candidate = dirname(candidate);
+  if (existsSync(candidate) && !statSync(candidate).isDirectory()) candidate = dirname(candidate);
+  for (;;) {
+    if (existsSync(join(candidate, '.git'))) return candidate;
+    const parent = dirname(candidate);
+    if (parent === candidate) return resolve(workspacePath);
+    candidate = parent;
+  }
 }
 
 /**
@@ -130,14 +143,15 @@ function workspaceDiffRevision(...parts: string[]) {
 }
 
 export async function getWorkspaceDiff(workspacePath: string): Promise<WorkspaceDiff> {
+  const repositoryPath = resolveWorkspaceRepository(workspacePath);
   let status: string;
   let branch: string;
   let patch: string;
   try {
     [status, branch, patch] = await Promise.all([
-      git(workspacePath, ['status', '--porcelain=v1', '-z', '--untracked-files=all']).then(({ stdout }) => stdout),
-      git(workspacePath, ['branch', '--show-current']).then(({ stdout }) => stdout.trim()),
-      git(workspacePath, ['diff', '--no-ext-diff', '--binary', '--no-color', '--no-renames', 'HEAD']).then(({ stdout }) => stdout),
+      git(repositoryPath, ['status', '--porcelain=v1', '-z', '--untracked-files=all']).then(({ stdout }) => stdout),
+      git(repositoryPath, ['branch', '--show-current']).then(({ stdout }) => stdout.trim()),
+      git(repositoryPath, ['diff', '--no-ext-diff', '--binary', '--no-color', '--no-renames', 'HEAD']).then(({ stdout }) => stdout),
     ]);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Git could not read this workspace.';
@@ -154,7 +168,7 @@ export async function getWorkspaceDiff(workspacePath: string): Promise<Workspace
 
   const untrackedPatches = await Promise.all(untracked.map(async (path) => {
     try {
-      const { stdout } = await git(workspacePath, ['diff', '--no-index', '--no-ext-diff', '--binary', '--no-color', '--', '/dev/null', path]);
+      const { stdout } = await git(repositoryPath, ['diff', '--no-index', '--no-ext-diff', '--binary', '--no-color', '--', '/dev/null', path]);
       return stdout;
     } catch (error) {
       // git diff --no-index uses exit code 1 when it finds a difference.
@@ -164,11 +178,11 @@ export async function getWorkspaceDiff(workspacePath: string): Promise<Workspace
     }
   }));
   const files = parseWorkspacePatch(`${patch}${untrackedPatches.join('')}`, statuses)
-    .map((file) => ({ ...file, editorUrl: workspaceEditorUrl(workspacePath, file.path) }));
+    .map((file) => ({ ...file, editorUrl: workspaceEditorUrl(repositoryPath, file.path) }));
   const totals = files.reduce((counts, file) => ({ additions: counts.additions + file.additions, deletions: counts.deletions + file.deletions }), { additions: 0, deletions: 0 });
-  const publish = await publishStatus(workspacePath, status, branch);
+  const publish = await publishStatus(repositoryPath, status, branch);
   return {
-    workspacePath,
+    workspacePath: repositoryPath,
     branch: branch || 'detached HEAD',
     revision: workspaceDiffRevision(status, branch, patch, ...untrackedPatches),
     files,
@@ -184,17 +198,18 @@ export async function getWorkspaceDiff(workspacePath: string): Promise<Workspace
  * the Changes pane, before its uncommitted snapshot could be captured.
  */
 export async function getWorkspaceCommitDiff(workspacePath: string, commitReference: string): Promise<WorkspaceDiff> {
-  const commit = await gitOutput(workspacePath, ['rev-parse', '--verify', `${commitReference}^{commit}`]);
+  const repositoryPath = resolveWorkspaceRepository(workspacePath);
+  const commit = await gitOutput(repositoryPath, ['rev-parse', '--verify', `${commitReference}^{commit}`]);
   const [branchResult, patchResult] = await Promise.all([
-    git(workspacePath, ['branch', '--show-current']),
-    git(workspacePath, ['show', '--format=', '--no-ext-diff', '--binary', '--no-color', '--no-renames', commit]),
+    git(repositoryPath, ['branch', '--show-current']),
+    git(repositoryPath, ['show', '--format=', '--no-ext-diff', '--binary', '--no-color', '--no-renames', commit]),
   ]);
   const files = parseWorkspacePatch(patchResult.stdout)
-    .map((file) => ({ ...file, editorUrl: workspaceEditorUrl(workspacePath, file.path) }));
+    .map((file) => ({ ...file, editorUrl: workspaceEditorUrl(repositoryPath, file.path) }));
   const totals = files.reduce((counts, file) => ({ additions: counts.additions + file.additions, deletions: counts.deletions + file.deletions }), { additions: 0, deletions: 0 });
   const branch = branchResult.stdout.trim() || 'detached HEAD';
   return {
-    workspacePath,
+    workspacePath: repositoryPath,
     branch,
     revision: `commit:${commit}`,
     files,
@@ -217,7 +232,7 @@ export async function getWorkspaceDiffRevision(workspacePath: string) {
 /** Full HEAD identifier recorded alongside an immutable workspace snapshot. */
 export async function getWorkspaceHeadCommit(workspacePath: string): Promise<string | null> {
   try {
-    return await gitOutput(workspacePath, ['rev-parse', '--verify', 'HEAD^{commit}']);
+    return await gitOutput(resolveWorkspaceRepository(workspacePath), ['rev-parse', '--verify', 'HEAD^{commit}']);
   } catch {
     return null;
   }
