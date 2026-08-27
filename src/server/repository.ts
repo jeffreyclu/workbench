@@ -188,6 +188,10 @@ export class WorkItemRepository {
     this.discovery.finishRun(id, candidateCount, errors, failed);
   }
 
+  recoverStaleDiscoveryRuns(maxAgeMs: number): DiscoveryRun[] {
+    return this.discovery.recoverStaleRuns(maxAgeMs);
+  }
+
   discoveryCandidateExists(fingerprint: string): boolean {
     return this.discovery.candidateExists(fingerprint);
   }

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { discoveryPriority, runDiscovery } from './discovery.js';
+import { DISCOVERY_RUN_MAX_AGE_MS, discoveryPriority, runDiscovery } from './discovery.js';
 import type { SourceSignal } from './source-scanner.js';
 
 vi.mock('./source-scanner.js', () => ({
@@ -88,6 +88,21 @@ describe('runDiscovery review cycle', () => {
 
     // The already-pending candidate refreshes and the three new ones are added.
     expect(repository.getDiscoveryInbox('pending').candidates).toHaveLength(4);
+  });
+
+  it('recovers a stale durable run so a crashed scan cannot permanently block discovery', async () => {
+    const { scanConnectedSources } = await import('./source-scanner.js');
+    const abandoned = repository.startDiscoveryRun();
+    database.prepare('UPDATE discovery_runs SET started_at = ? WHERE id = ?').run(new Date(Date.now() - DISCOVERY_RUN_MAX_AGE_MS - 1).toISOString(), abandoned.id);
+    vi.mocked(scanConnectedSources).mockResolvedValue({
+      signals: [{ provider: 'linear', title: 'Recover discovery', summary: 'action item', url: 'https://linear.app/recovered', occurredAt: new Date().toISOString() }],
+      errors: [],
+    });
+
+    await runDiscovery(repository);
+
+    expect(database.prepare('SELECT status, completed_at AS completedAt, errors_json AS errors FROM discovery_runs WHERE id = ?').get(abandoned.id)).toEqual(expect.objectContaining({ status: 'failed', completedAt: expect.any(String), errors: expect.stringContaining('recovered after runtime interruption') }));
+    expect(repository.getDiscoveryInbox()).toMatchObject({ running: false, pendingCount: 1, lastRun: { status: 'completed' } });
   });
 
   it('keeps a candidate in review even when a similar task exists', async () => {

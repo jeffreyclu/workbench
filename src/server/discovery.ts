@@ -12,6 +12,7 @@ function fingerprint(signal: SourceSignal): string {
 const connectorPattern = /\bconnectors?\b|connector[-_ ]gateway|manage connectors|agent studio/i;
 const reviewPattern = /\b(code|pr|pull request|implementation)\s+review\b|\breview(?:ed|ing)?\s+(?:this|my|the)?\s*(?:pr|pull request|code|change)|review-requested|github\.com\/.+\/pull\//i;
 const actionablePattern = /\b(?:please|can you|could you|would you|need you to|assigned|action item|follow[- ]?up|todo|to do|blocker|blocked|investigate|fix|implement|prepare|decide|respond|reply|review)\b/i;
+export const DISCOVERY_RUN_MAX_AGE_MS = 15 * 60_000;
 
 export function discoveryPriority(signal: SourceSignal): number {
   const text = `${signal.title}\n${signal.summary}\n${signal.url ?? ''}`;
@@ -29,6 +30,10 @@ export function discoveryPriority(signal: SourceSignal): number {
  * since that candidate was already surfaced for review in an earlier cycle.
  */
 export async function runDiscovery(repository: WorkItemRepository): Promise<void> {
+  const recovered = repository.recoverStaleDiscoveryRuns(DISCOVERY_RUN_MAX_AGE_MS);
+  for (const staleRun of recovered) {
+    repository.logDiagnostic('run_recovery', 'recovery', 'failure', `Recovered stale discovery run ${staleRun.id} started at ${staleRun.startedAt}.`, undefined, 'discovery_stale_run');
+  }
   const current = repository.getDiscoveryInbox();
   if (current.running) return;
   const since = current.lastRun?.completedAt

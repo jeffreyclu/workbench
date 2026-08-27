@@ -65,6 +65,25 @@ export class DiscoveryRepository {
       .run(failed ? 'failed' : 'completed', new Date().toISOString(), candidateCount, JSON.stringify(errors), id);
   }
 
+  /**
+   * Discovery work runs against external sources and has no process that can
+   * survive a runtime handoff. A durable `running` row therefore needs an
+   * expiry, otherwise one crashed scan blocks every later scan forever.
+   */
+  recoverStaleRuns(maxAgeMs: number): DiscoveryRun[] {
+    const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+    const rows = this.database.prepare("SELECT * FROM discovery_runs WHERE status = 'running' AND started_at <= ? ORDER BY started_at ASC").all(cutoff) as Array<Record<string, string | number | null>>;
+    if (!rows.length) return [];
+    const completedAt = new Date().toISOString();
+    for (const row of rows) {
+      const errors = JSON.parse(String(row.errors_json ?? '[]')) as string[];
+      errors.push(`Discovery worker did not finish within ${Math.round(maxAgeMs / 60_000)} minutes; recovered after runtime interruption.`);
+      this.database.prepare("UPDATE discovery_runs SET status = 'failed', completed_at = ?, errors_json = ? WHERE id = ? AND status = 'running'")
+        .run(completedAt, JSON.stringify(errors), row.id);
+    }
+    return rows.map((row) => ({ ...mapDiscoveryRun(row), status: 'failed', completedAt, errors: [...JSON.parse(String(row.errors_json ?? '[]')) as string[], `Discovery worker did not finish within ${Math.round(maxAgeMs / 60_000)} minutes; recovered after runtime interruption.`] }));
+  }
+
   candidateExists(fingerprint: string): boolean {
     return this.database.prepare('SELECT 1 FROM discovery_candidates WHERE fingerprint = ?').get(fingerprint) !== undefined;
   }

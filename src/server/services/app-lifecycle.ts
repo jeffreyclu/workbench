@@ -2,6 +2,7 @@ import type { WorkbenchDatabase } from '../database.js';
 import type { WorkItemRepository } from '../repository.js';
 import type { RuntimeCapabilities } from '../runtime-capabilities.js';
 import { setAuditSink } from '../audit-log.js';
+import { runDiscovery } from '../discovery.js';
 import type { ArtifactService } from './artifact-service.js';
 
 export interface AppLifecycleContext {
@@ -25,6 +26,9 @@ export function startAppLifecycle({ database, repository, capabilities, artifact
   if (!capabilities.runDiscoveryCatchUp) return { discoveryCatchUpScheduled: false };
   const timer = setTimeout(() => {
     if (!database.isOpen) return;
+    void runDiscovery(repository).catch((error) => {
+      repository.logDiagnostic('scheduler_error', 'scheduler', 'failure', `Discovery catch-up failed: ${error instanceof Error ? error.message : String(error)}`, undefined, 'discovery_catch_up_failed');
+    });
   }, 1_500);
   timer.unref();
   return { discoveryCatchUpScheduled: true };
