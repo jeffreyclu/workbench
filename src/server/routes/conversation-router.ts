@@ -20,6 +20,15 @@ export function createConversationRouter({ repository, database, capabilities, a
     const conversation = repository.getConversation(conversationId);
     if (!conversation) return null;
     const linkedItem = conversation.workItemId ? repository.get(conversation.workItemId) : null;
+    // A conversation can be linked to an imported/ad-hoc task before the
+    // task itself has a workspacePath. Its completed or active agent run has
+    // already resolved the repository it actually used; Changes must follow
+    // that real workspace instead of incorrectly demanding a manual picker.
+    const runWorkspace = linkedItem
+      ? repository.listRuns(linkedItem.id)
+        .filter((run) => run.conversationId === conversationId && Boolean(run.resolvedWorkspace))
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.resolvedWorkspace ?? null
+      : null;
     const selected = database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversationId) as { workspace_path: string } | undefined;
     const root = dirname(process.cwd());
     const candidates = readdirSync(root, { withFileTypes: true })
@@ -27,7 +36,9 @@ export function createConversationRouter({ repository, database, capabilities, a
       .map((entry) => join(root, entry.name))
       .filter((path) => existsSync(join(path, '.git')) || existsSync(join(path, 'package.json')))
       .map((path) => resolve(path));
-    const linkedPath = linkedItem?.workspacePath ? resolve(linkedItem.workspacePath) : null;
+    const linkedPath = linkedItem?.workspacePath
+      ? resolve(linkedItem.workspacePath)
+      : runWorkspace ? resolve(runWorkspace) : null;
     if (linkedPath && existsSync(linkedPath) && !candidates.includes(linkedPath)) candidates.unshift(linkedPath);
     const defaultPath = linkedPath ?? (!linkedItem || linkedItem.projectName === 'Workbench' ? resolve(process.cwd()) : null);
     const selectedPath = selected && candidates.includes(resolve(selected.workspace_path)) ? resolve(selected.workspace_path) : defaultPath;
