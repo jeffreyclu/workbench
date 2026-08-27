@@ -28,7 +28,7 @@ describe('WorkbenchAdminService.dispatchConversationTurn', () => {
     const conversation = repository.createConversation('Keep working', task.id);
     repository.setConversationPinned(conversation.id, true);
 
-    admin.mcpActions().dispatchConversationTurn(conversation.id, 'jeffrey', 'testing', 'claude', undefined);
+    admin.mcpActions().dispatchConversationTurn(conversation.id, 'codex', 'testing', 'claude', null);
 
     expect(repository.getConversation(conversation.id)?.pinned).toBe(false);
     expect(repository.get(task.id)?.status).not.toBe('pinned');
@@ -40,7 +40,7 @@ describe('WorkbenchAdminService.dispatchConversationTurn', () => {
     const conversation = repository.createConversation('Stay pinned', task.id);
     repository.setConversationPinned(conversation.id, true);
 
-    admin.mcpActions().dispatchConversationTurn(conversation.id, 'jeffrey', 'note only', 'none', undefined);
+    admin.mcpActions().dispatchConversationTurn(conversation.id, 'codex', 'note only', 'none', null);
 
     expect(repository.getConversation(conversation.id)?.pinned).toBe(true);
     expect(repository.get(task.id)?.status).toBe('pinned');
