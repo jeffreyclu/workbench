@@ -103,7 +103,9 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed .conversation-window-actions { display: none; }');
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed ~ .thread-filter-bar { display: none; }');
     expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) + .mobile-chrome-controls .mobile-conversation-toggle { display: none; }');
-    expect(phoneRules).toContain('.conversation-window-actions { position: fixed; top: 12px; left: 50%;');
+    expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) { position: fixed; inset: 0 0 auto; z-index: 6; height: 178px;');
+    expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle { position: fixed; top: 4px; left: 50%;');
+    expect(phoneRules).toContain('.conversation-window-actions { position: fixed; top: 30px; left: 50%;');
     expect(phoneRules).toContain('border-radius: 999px;');
     expect(phoneRules).toContain('.agent-console-header.has-conversation-actions { min-height: 0; }');
     expect(phoneRules).toContain('.agent-console-header.has-conversation-actions .agent-console-title { max-width: none; padding-top: 8px; }');
@@ -111,12 +113,12 @@ describe('conversation view controls', () => {
   });
 
   it('keeps mobile task-linked conversation controls in a centered tray without an overflow menu', () => {
-    const rule = styles.match(/\.conversation-window-actions \{ position: fixed; top: 12px; left: 50%;[^}]*\}/)?.[0] ?? '';
+    const rule = styles.match(/\.conversation-window-actions \{ position: fixed; top: 30px; left: 50%;[^}]*\}/)?.[0] ?? '';
 
     expect(rule).toContain('z-index: 6');
     expect(rule).toContain('flex-wrap: nowrap');
     expect(rule).toContain('width: max-content');
-    expect(rule).toContain('max-width: calc(100% - 28px);');
+    expect(rule).toContain('max-width: calc(100% - 72px);');
     expect(rule).not.toContain('overflow-x: auto');
     expect(styles).toContain('.conversation-window-actions .icon-button { flex: 0 0 auto; width: 32px; height: 32px; }');
   });
@@ -126,6 +128,7 @@ describe('conversation view controls', () => {
 
     expect(phoneRules).toContain('.conversation-review-layout.layout-split { display: block; }');
     expect(phoneRules).toContain('.conversation-review-layout.layout-split .conversation-thread-pane { display: none; }');
+    expect(phoneRules).toContain('.conversation-surface-tabs button:nth-child(2) { display: none; }');
   });
 
   it('collapses phone conversation metadata behind small toggle buttons while keeping actions available', () => {
