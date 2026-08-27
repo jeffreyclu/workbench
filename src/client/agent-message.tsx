@@ -24,8 +24,8 @@ function completedTokenLength(text: string, revealLength: number): number {
 // Streamed bodies arrive in server-paced network chunks, not per-character; this reveals
 // the buffered text at a smooth per-character pace so it reads as a typewriter instead of
 // snapping in per chunk. Backlog-proportional speed keeps large chunks from lagging behind.
-function useTypewriter(text: string, active: boolean): string {
-  const [revealed, setRevealed] = useState(text.length);
+function useTypewriter(text: string, active: boolean, startAtBeginning = false): string {
+  const [revealed, setRevealed] = useState(() => active && startAtBeginning ? 0 : text.length);
   const textRef = useRef(text);
   const previousTextRef = useRef(text);
   const revealedRef = useRef(revealed);
@@ -76,14 +76,29 @@ function useTypewriter(text: string, active: boolean): string {
   return text.slice(0, Math.max(completedTokenLength(text, revealed), preservedPrefixLength));
 }
 
-function StreamingMarkdown({ content, streaming, renderMarkdown }: { content: string; streaming: boolean; renderMarkdown: (content: string) => ReactElement }) {
-  const revealed = useTypewriter(content, streaming);
+function StreamingMarkdown({ content, streaming, startAtBeginning = false, renderMarkdown }: { content: string; streaming: boolean; startAtBeginning?: boolean; renderMarkdown: (content: string) => ReactElement }) {
+  const revealed = useTypewriter(content, streaming, startAtBeginning);
   return renderMarkdown(revealed);
+}
+
+function LiveActivityLine({ text, animate }: { text: string; animate: boolean }) {
+  return <span>{useTypewriter(text, animate, animate)}</span>;
 }
 
 export function LiveRunOutput({ output, interjections = [] }: { output: string; interjections?: Array<{ id: string; body: string; pending: boolean; streamOffset?: number | null }> }) {
   const [visibleCount, setVisibleCount] = useState(LIVE_RUN_OUTPUT_PAGE_SIZE);
   const blocks = humanizeRunOutputBlocks(output);
+  // Existing activity should be readable immediately when opening a running
+  // conversation. Newly received blocks (or additions to the live block) are
+  // the ones that animate, so streaming feels continuous without replaying
+  // the whole backlog after every HTTPS fallback refetch.
+  const knownBlocksRef = useRef(new Set<string>());
+  const liveStreamInitializedRef = useRef(false);
+  const isNewLiveBlock = (block: string) => liveStreamInitializedRef.current && !knownBlocksRef.current.has(block);
+  useEffect(() => {
+    blocks.forEach((block) => knownBlocksRef.current.add(block));
+    liveStreamInitializedRef.current = true;
+  }, [blocks]);
   // Pending interjections need a local boundary briefly. Accepted ones use the
   // server-captured boundary, which survives a conversation remount.
   const interjectionBoundariesRef = useRef(new Map<string, number>());
@@ -120,7 +135,7 @@ export function LiveRunOutput({ output, interjections = [] }: { output: string; 
       )}
       <ol aria-live="polite">
         {visibleBlocks.flatMap((block, index) => [
-          <li key={`activity-${hiddenCount + index}-${block}`}>{block.replace(/^●\s*/, '').replace(/^Decision:\s*/i, '')}</li>,
+          <li key={`activity-${hiddenCount + index}-${block}`}><LiveActivityLine text={block.replace(/^●\s*/, '').replace(/^Decision:\s*/i, '')} animate={isNewLiveBlock(block)} /></li>,
           ...interjectionsAt(index + 1).map((interjection) => (
             <li key={interjection.id} className={`live-run-interjection${interjection.pending ? ' pending' : ''}`}>
               <span>{interjection.pending ? 'You interjected (sending)' : 'You interjected'}</span>
@@ -162,8 +177,11 @@ export function splitBodyAtInterjections(body: string, interjections: AgentMessa
   return segments.filter((segment) => segment.body.length > 0);
 }
 
-export function AgentMessageBody({ body, running, conversationId, workItemId, interjections, detailForSingle = false }: { body: string; running: boolean; conversationId?: string; workItemId?: string; interjections?: Array<{ id: string; body: string; pending: boolean; streamOffset?: number | null }>; detailForSingle?: boolean }) {
+export function AgentMessageBody({ body, running, conversationId, workItemId, interjections, detailForSingle = false, typewriteOnCompletion = false }: { body: string; running: boolean; conversationId?: string; workItemId?: string; interjections?: Array<{ id: string; body: string; pending: boolean; streamOffset?: number | null }>; detailForSingle?: boolean; typewriteOnCompletion?: boolean }) {
   const sectionIdPrefix = useId();
+  const wasRunning = useRef(running);
+  const shouldTypewriteCompletion = typewriteOnCompletion && wasRunning.current && !running;
+  useEffect(() => { wasRunning.current = running; }, [running]);
   const humanized = running ? humanizeRunOutput(body) : body;
   const visibleBody = hideWorkbenchControlBlocks(humanized);
   if (!visibleBody && !running && !interjections?.length) return null;
@@ -182,7 +200,7 @@ export function AgentMessageBody({ body, running, conversationId, workItemId, in
     },
   }}>{content}</ReactMarkdown>;
 
-  if (!structured) return <div className="agent-markdown"><StreamingMarkdown content={visibleBody} streaming={false} renderMarkdown={renderMarkdown} /></div>;
+  if (!structured) return <div className="agent-markdown"><StreamingMarkdown content={visibleBody} streaming={shouldTypewriteCompletion} startAtBeginning={shouldTypewriteCompletion} renderMarkdown={renderMarkdown} /></div>;
 
   const detailSections = sections.length === 1 && detailForSingle ? [{ title: 'Detail', body: visibleBody }] : sections;
   const lastIndex = detailSections.length - 1;
@@ -193,7 +211,7 @@ export function AgentMessageBody({ body, running, conversationId, workItemId, in
         return <section key={`${section.title}-${index}`} className="agent-response-section" role="region" aria-labelledby={headingId} style={{ '--section-index': index } as CSSProperties}>
           <div className="agent-response-section-heading"><h3 id={headingId}>{section.title}</h3></div>
           <div className={`agent-markdown${running && index === lastIndex ? ' streaming' : ''}`}>
-            <StreamingMarkdown content={section.body} streaming={running && index === lastIndex} renderMarkdown={renderMarkdown} />
+            <StreamingMarkdown content={section.body} streaming={(running && index === lastIndex) || shouldTypewriteCompletion} startAtBeginning={shouldTypewriteCompletion} renderMarkdown={renderMarkdown} />
           </div>
         </section>;
       })}

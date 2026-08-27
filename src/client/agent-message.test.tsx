@@ -84,13 +84,13 @@ describe('splitAgentResponse', () => {
     expect(container.querySelector('.live-run-output-skeleton')).toBeInTheDocument();
   });
 
-  it('renders live activity immediately instead of treating it as a typed final reply', async () => {
+  it('typewrites newly received live activity without replacing the activity surface', async () => {
     const { container, rerender } = render(<AgentMessageBody body="Hello" running />);
     await waitForFrame();
     expect(container.textContent).toBe('Hello');
 
     rerender(<AgentMessageBody body="Hello, this is a much longer streamed chunk of text." running />);
-    expect(container.textContent).toBe('Hello, this is a much longer streamed chunk of text.');
+    expect(container.textContent).not.toBe('Hello, this is a much longer streamed chunk of text.');
     expect(container.querySelector('.agent-response')).toBeNull();
   });
 
@@ -100,8 +100,8 @@ describe('splitAgentResponse', () => {
 
     await waitForFrame();
     expect(container.querySelectorAll('.live-run-output li')).toHaveLength(2);
-    expect(container.textContent).toContain('Inspecting repository');
-    expect(container.textContent).toContain('Running tests');
+    expect(container.textContent).not.toContain('Inspecting repository');
+    expect(container.textContent).not.toContain('Running tests');
   });
 
   it('keeps an interjection at the activity boundary where it arrived', () => {
@@ -121,7 +121,7 @@ describe('splitAgentResponse', () => {
       'Inspecting',
       'Reading files',
       'You interjectedFocus on the failure.',
-      'Running tests',
+      '',
     ]);
   });
 
