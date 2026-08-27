@@ -786,6 +786,7 @@ nav { display: grid; gap: 3px; }
 .agent-console-header { display: flex; align-items: center; justify-content: space-between; min-height: 80px; padding: 17px 28px; border-bottom: 1px solid var(--line); }
 .agent-console-title { flex: 1; min-width: 0; }
 .conversation-window-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; margin-left: 16px; }
+.conversation-window-actions .mobile-detail-close, .conversation-window-actions .mobile-related-task-link { display: none; }
 .conversation-task-picker { position: relative; display: inline-flex; flex: 0 0 auto; }
 .conversation-task-picker > .icon-button { color: var(--soft); }
 .conversation-task-picker > .icon-button:hover:not(:disabled), .conversation-task-picker > .icon-button[aria-expanded="true"] { color: #fff; background: #20201d; }
@@ -1144,8 +1145,11 @@ nav { display: grid; gap: 3px; }
     max-height: 220px; overflow: hidden;
     transition: max-height var(--motion-standard) var(--motion-ease), padding var(--motion-standard) var(--motion-ease), opacity var(--motion-fast) ease, border-color var(--motion-fast) ease;
   }
-  .agent-console-header.is-mobile-header-collapsed { display: none; }
-  .agent-console-header .mobile-detail-close { position: absolute; z-index: 2; top: 12px; right: 14px; }
+  /* The compact control is a title/metadata disclosure. Conversation actions
+     stay available in their floating bar while those details are hidden. */
+  .agent-console-header.is-mobile-header-collapsed { min-height: 122px; padding: 12px 14px; border-bottom-color: transparent; }
+  .agent-console-header.is-mobile-header-collapsed .agent-console-title { display: none; }
+  .conversation-window-actions .mobile-detail-close, .conversation-window-actions .mobile-related-task-link { display: grid; }
   .agent-console-title { flex: 1 1 100%; min-width: 0; max-width: calc(100% - 44px); }
   .agent-console-header.has-conversation-actions { min-height: 176px; }
   .agent-console-header.has-conversation-actions .agent-console-title { max-width: 100%; padding-top: 108px; }

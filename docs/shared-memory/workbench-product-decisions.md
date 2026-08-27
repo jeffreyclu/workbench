@@ -226,6 +226,14 @@ composer control is the fixed bottom-right action.
 
 The mobile conversation controls are hidden entirely at desktop widths.
 
+### Mobile conversation action bar survives title collapse
+
+*Correction from Jeffrey, 2026-08-27.* The floating phone conversation action
+bar contains the conversation actions and remains available while compact. The
+small header control only hides or shows the conversation title and metadata;
+it must not hide the action bar. Leave the Conversation/Changes toggle alone
+until it is separately decided.
+
 ### Mobile composer closes as a bottom sheet
 
 *Decision from Jeffrey, 2026-08-27.* When expanded on phones, the composer is
