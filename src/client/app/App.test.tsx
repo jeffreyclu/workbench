@@ -1134,9 +1134,10 @@ describe('shared room', () => {
     fireEvent.click(changes);
     expect(await screen.findByRole('heading', { name: 'Current workspace changes' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Conversation review' })).toBeTruthy();
-    expect(await screen.findAllByRole('button', { name: /src\/client\/App\.tsx/ })).toHaveLength(2);
+    expect(await screen.findAllByRole('button', { name: /src\/client\/App\.tsx/ })).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Changes' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText('The implementation is ready to review.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Split' })).toBeNull();
+    expect(screen.getByLabelText('Message Codex or Claude').closest('.conversation-review-layout')).toHaveClass('layout-changes');
 
     fireEvent.click(screen.getByRole('button', { name: 'Conversation' }));
     expect(await screen.findByText('The implementation is ready to review.')).toBeTruthy();
@@ -1387,6 +1388,7 @@ describe('shared room', () => {
     const conversationId = '00000000-0000-4000-8000-000000000031';
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url === `/api/shared/conversations/${conversationId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'mobile-changes', changedFiles: 1, additions: 1, deletions: 0, publish: { branch: 'mobile-changes', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/mobile.tsx', previousPath: null, status: 'modified', additions: 1, deletions: 0, isBinary: false, patch: '@@ -1 +1 @@\n-old\n+new' }] } }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Compact mobile conversation', workItemId: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }] }), { headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
     }));
@@ -1409,7 +1411,10 @@ describe('shared room', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Collapse conversation tray' }));
     expect(heading.closest('header')).toHaveClass('is-mobile-header-collapsed');
 
-    expect(document.querySelector('.mobile-chrome-controls .mobile-composer-toggle')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Expand composer' })).toBeNull();
+    const changes = screen.getByRole('button', { name: 'Changes' });
+    await waitFor(() => expect(changes).toBeEnabled());
+    fireEvent.click(changes);
     fireEvent.click(screen.getByRole('button', { name: 'Expand composer' }));
     expect(composer).not.toHaveClass('is-mobile-composer-collapsed');
     expect(screen.getByRole('button', { name: 'Collapse composer' })).toBeInTheDocument();

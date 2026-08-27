@@ -124,12 +124,12 @@ describe('conversation view controls', () => {
     expect(styles).toContain('.conversation-window-actions .icon-button { flex: 0 0 auto; width: 28px; height: 28px; }');
   });
 
-  it('never renders a split conversation/changes surface on a phone', () => {
-    const phoneRules = styles;
-
-    expect(phoneRules).toContain('.conversation-review-layout.layout-split { display: block; }');
-    expect(phoneRules).toContain('.conversation-review-layout.layout-split .conversation-thread-pane { display: none; }');
-    expect(phoneRules).toContain('.conversation-surface-tabs button:nth-child(2) { display: none; }');
+  it('keeps Changes as the only review surface and gives it the composer on a phone', () => {
+    expect(styles).not.toContain('layout-split');
+    expect(styles).toContain('.conversation-review-layout.layout-changes { display: flex; flex-direction: column; }');
+    expect(styles).toContain('.conversation-review-layout.layout-changes .conversation-thread-pane { display: contents; }');
+    expect(styles).toContain('.conversation-review-layout.layout-changes .shared-thread { display: none; }');
+    expect(styles).not.toContain('.conversation-surface-tabs button:nth-child(2) { display: none; }');
   });
 
   it('collapses phone conversation metadata behind small toggle buttons while keeping actions available', () => {

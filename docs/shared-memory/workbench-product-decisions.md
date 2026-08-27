@@ -982,10 +982,12 @@ implementation without switching to Zed or another IDE. A linked GitHub PR is
 an additional remote comparison shown in the same pane, not the condition for
 local review.
 
-This is a responsive hybrid surface: on desktop, opening Changes keeps the
-conversation and composer visible in an independently scrollable left pane
-while the diff opens beside them; on phone, the controls switch between
-full-width conversation and diff panes. Fetch the local diff only when
+This is a two-surface review flow. On desktop, **Conversation** is
+reading-only; **Changes** owns the scrollable local/GitHub diff and the
+composer as its fixed footer. Do not offer a split view. On phone, the same
+Conversation/Changes switch stays available; the pencil appears only in
+Changes and opens the composer sheet there. Keep the Changes header compact
+so the diff remains the dominant surface. Fetch the local diff only when
 Changes is opened; retain the GitHub diff's existing on-demand authenticated
 path. Do not hide this workflow in task detail.
 

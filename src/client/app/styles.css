@@ -994,15 +994,21 @@ nav { display: grid; gap: 3px; }
 .conversation-surface-tabs button[aria-pressed="true"] { color: #15200d; background: var(--acid); }
 .thread-filter-bar > .icon-button { background: #171715; border-color: #373731; box-shadow: 0 6px 16px #0009; }
 .conversation-review-layout { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr); overflow: hidden; border-top: 1px solid var(--line); }
-.conversation-review-layout.layout-split { grid-template-columns: minmax(420px, 1fr) minmax(520px, 1.35fr); }
 .conversation-thread-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.conversation-review-layout.layout-changes .conversation-thread-pane { display: none; }
-.conversation-review-layout.layout-split .conversation-thread-pane { border-right: 1px solid var(--line); }
 .conversation-review-layout.layout-conversation .shared-thread { width: 100%; padding: 20px 20px 28px; }
 .conversation-review-layout.layout-conversation .shared-composer { width: calc(100% - 40px); margin-bottom: 20px; }
-.conversation-changes { min-width: 0; min-height: 0; padding: 0 28px 28px; overflow: auto; }
-.conversation-changes .workspace-diff { max-width: 1240px; margin: 0 auto; padding-top: 18px; border-top: 0; }
-.conversation-changes .github-diff { max-width: 1240px; margin: 0 auto; padding-top: 18px; border-top: 0; }
+.conversation-review-layout.layout-changes { display: flex; flex-direction: column; }
+.conversation-review-layout.layout-changes .conversation-thread-pane { display: contents; }
+.conversation-review-layout.layout-changes .shared-thread { display: none; }
+.conversation-review-layout.layout-changes .shared-composer,
+.conversation-review-layout.layout-changes .archived-composer-note { order: 2; flex: 0 0 auto; width: calc(100% - 56px); margin: 0 28px 20px; }
+.conversation-changes { order: 1; min-width: 0; min-height: 0; padding: 0 28px 14px; overflow: auto; }
+.conversation-changes .workspace-diff { max-width: 1240px; margin: 0 auto; padding-top: 10px; border-top: 0; }
+.conversation-changes .github-diff { max-width: 1240px; margin: 0 auto; padding-top: 10px; border-top: 0; }
+.conversation-changes .workspace-diff > header,
+.conversation-changes .github-diff > header { margin-bottom: 7px; }
+.conversation-changes .workspace-diff > header h2,
+.conversation-changes .github-diff > header h2 { margin-block: 2px; }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .spin { animation: spin .8s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes thinking-pulse { 0% { box-shadow: 0 0 0 0 #c6f43277; } 70% { box-shadow: 0 0 0 8px #c6f43200; } 100% { box-shadow: 0 0 0 0 #c6f43200; } }
@@ -1177,13 +1183,10 @@ nav { display: grid; gap: 3px; }
   .thread-filter-bar { position: fixed; top: 68px; right: auto; left: 10px; z-index: 7; width: auto; align-items: center; flex-wrap: nowrap; gap: 3px; padding: 0; background: transparent; border: 0; box-shadow: none; }
   .conversation-surface-tabs { flex: 0 0 auto; margin-right: 0; border: 1px solid #373731; background: #171715; }
   .conversation-surface-tabs button { flex: 0 0 auto; justify-content: center; min-height: 32px; padding-inline: 6px; font-size: 9px; }
-  .conversation-surface-tabs button:nth-child(2) { display: none; }
   .conversation-review-layout { border-top: 0; }
-  /* A phone has one review surface. If desktop split was selected before a
-     resize, show Changes alone rather than squeezing two panes together. */
-  .conversation-review-layout.layout-split { display: block; }
-  .conversation-review-layout.layout-split .conversation-thread-pane { display: none; }
-  .conversation-review-layout.layout-split .conversation-changes { min-height: 100%; }
+  .conversation-review-layout.layout-changes .conversation-thread-pane { display: contents; }
+  .conversation-review-layout.layout-changes .shared-composer,
+  .conversation-review-layout.layout-changes .archived-composer-note { width: auto; margin: 0; }
   .conversation-changes { padding: 0 14px 20px; }
   .agent-presence { display: none; }
   .composer-hint { display: none; }
