@@ -151,7 +151,7 @@ describe('classifyExecution', () => {
 
     expect(result.output).toBe('Applied the interjection.');
     const lines = readFileSync(log, 'utf8').trim().split('\n').slice(1).map((line) => JSON.parse(line));
-    expect(lines.map((line) => line.message.content[0].text)).toEqual([
+    expect(lines.map((line) => line.message.content)).toEqual([
       `Start the task.\n\nAgent debugger:\n${AGENT_DEBUGGER_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\nClaude execution budget:\n${CLAUDE_EXECUTION_CONTRACT}`,
       'Change direction now.',
     ]);

@@ -1105,7 +1105,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
         resolve(false);
         return;
       }
-      child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: body }] } })}\n`, (error) => {
+      child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: body } })}\n`, (error) => {
         resolve(!error && !stopping && !cancellationRequested && child.exitCode === null);
       });
     });
