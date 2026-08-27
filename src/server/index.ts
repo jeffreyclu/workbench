@@ -60,8 +60,23 @@ const shutdown = () => {
   shutdownExternalActionClassifier();
   shutdownDiffConfidenceModel();
   shutdownFastTaskDraftModel();
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 2_000).unref();
+  // Do not exit immediately after the graceful signal: provider CLIs create
+  // detached process groups, so the owning runtime must remain alive long
+  // enough to escalate any group that ignores SIGTERM. This is also used when
+  // the HTTP server closes promptly (the normal promotion case).
+  const forceExit = setTimeout(() => {
+    shutdownActiveAgentProcesses('SIGKILL');
+    process.exit(0);
+  }, 3_500);
+  forceExit.unref();
+  server.close(() => {
+    // The force-exit timer owns final termination. Closing the listener only
+    // stops new traffic; it must not discard responsibility for agent children.
+  });
 };
 process.once('SIGTERM', shutdown);
 process.once('SIGINT', shutdown);
+// A crash can bypass the signal path entirely. Synchronous process-group
+// termination here prevents a detached provider child from surviving without
+// a Workbench runtime to supervise it.
+process.once('exit', () => shutdownActiveAgentProcesses('SIGKILL'));

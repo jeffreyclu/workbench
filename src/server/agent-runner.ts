@@ -720,9 +720,13 @@ export function registerActiveAgentProcess(child: ReturnType<typeof spawn>): () 
 /** A runtime promotion stops the server process. Its detached agent children
  * need an explicit process-group signal or they survive as account-consuming
  * orphans with no Workbench turn left to own or cancel them. */
-export function shutdownActiveAgentProcesses(): void {
-  for (const child of activeAgentProcesses) terminateAgentProcessTree(child, 'SIGTERM');
-  activeAgentProcesses.clear();
+export function shutdownActiveAgentProcesses(signal: NodeJS.Signals = 'SIGTERM'): void {
+  for (const child of activeAgentProcesses) terminateAgentProcessTree(child, signal);
+  // Keep the registry through the graceful shutdown window so a runtime that
+  // is about to exit can escalate the *same* process groups. Clearing this on
+  // SIGTERM used to make the later forced exit powerless, leaving detached
+  // Claude/Codex descendants orphaned after a promotion.
+  if (signal === 'SIGKILL') activeAgentProcesses.clear();
   shutdownAgentPool();
 }
 
