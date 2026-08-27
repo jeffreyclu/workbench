@@ -97,20 +97,24 @@ describe('conversation view controls', () => {
   it('uses a floating mobile conversation action bar while title metadata is separate', () => {
     const phoneRules = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.conversation-window-actions \{[^}]*\}/)?.[0] ?? '';
 
-    expect(phoneRules).toContain('.conversation-window-actions .mobile-detail-close, .conversation-window-actions .mobile-related-task-link { display: grid; }');
+    expect(phoneRules).toContain('.mobile-detail-close { position: absolute; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }');
+    expect(phoneRules).toContain('.conversation-window-actions .mobile-related-task-link { display: grid; }');
     expect(phoneRules).toContain('.conversation-window-actions { position: absolute; top: 12px; left: 50%;');
     expect(phoneRules).toContain('border-radius: 999px;');
-    expect(phoneRules).toContain('.agent-console-header.has-conversation-actions .agent-console-title { max-width: 100%; padding-top: 108px; }');
+    expect(phoneRules).toContain('.agent-console-header.has-conversation-actions { min-height: 70px; }');
+    expect(phoneRules).toContain('.agent-console-header.has-conversation-actions .agent-console-title { max-width: 100%; padding-top: 0; }');
     expect(phoneRules).toContain('.agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }');
   });
 
   it('keeps mobile task-linked conversation controls in a centered floating bar without an overflow menu', () => {
     const rule = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.conversation-window-actions \{[^}]*\}/)?.[0].match(/\.conversation-window-actions \{[^}]*\}/)?.[0] ?? '';
 
-    expect(rule).toContain('flex-wrap: wrap');
+    expect(rule).toContain('z-index: 6');
+    expect(rule).toContain('flex-wrap: nowrap');
     expect(rule).toContain('width: max-content');
+    expect(rule).toContain('max-width: calc(100% - 28px);');
     expect(rule).not.toContain('overflow-x: auto');
-    expect(styles).toContain('.conversation-window-actions .icon-button { flex: 0 0 auto; width: 44px; height: 44px; }');
+    expect(styles).toContain('.conversation-window-actions .icon-button { flex: 0 0 auto; width: 32px; height: 32px; }');
   });
 
   it('collapses phone conversation metadata behind small toggle buttons while keeping actions available', () => {
@@ -123,9 +127,9 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.mobile-composer-backdrop { position: fixed; inset: 0; z-index: 10;');
     expect(phoneRules).toContain('.agent-console .shared-composer.mobile-composer-sheet {');
     expect(phoneRules).toContain('.mobile-composer-handle { display: grid; place-items: center;');
-    expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed { min-height: 122px; padding: 12px 14px; border-bottom-color: transparent; }');
+    expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed { min-height: 70px; padding: 12px 14px; border-bottom-color: transparent; }');
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed .agent-console-title { display: none; }');
-    expect(phoneRules).toContain('.conversation-window-actions .mobile-detail-close, .conversation-window-actions .mobile-related-task-link { display: grid; }');
+    expect(phoneRules).toContain('.mobile-detail-close { position: absolute; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }');
   });
 
   it('keeps the mobile composer action as a safe-area-aware bottom-right action', () => {

@@ -1147,18 +1147,20 @@ nav { display: grid; gap: 3px; }
   }
   /* The compact control is a title/metadata disclosure. Conversation actions
      stay available in their floating bar while those details are hidden. */
-  .agent-console-header.is-mobile-header-collapsed { min-height: 122px; padding: 12px 14px; border-bottom-color: transparent; }
+  .agent-console-header.is-mobile-header-collapsed { min-height: 70px; padding: 12px 14px; border-bottom-color: transparent; }
   .agent-console-header.is-mobile-header-collapsed .agent-console-title { display: none; }
-  .conversation-window-actions .mobile-detail-close, .conversation-window-actions .mobile-related-task-link { display: grid; }
+  .mobile-detail-close { position: absolute; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }
+  .conversation-window-actions .mobile-related-task-link { display: grid; }
   .agent-console-title { flex: 1 1 100%; min-width: 0; max-width: calc(100% - 44px); }
-  .agent-console-header.has-conversation-actions { min-height: 176px; }
-  .agent-console-header.has-conversation-actions .agent-console-title { max-width: 100%; padding-top: 108px; }
+  .agent-console-header.has-conversation-actions { min-height: 70px; }
+  .agent-console-header.has-conversation-actions .agent-console-title { max-width: 100%; padding-top: 0; }
   .agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .related-task-link { position: absolute; z-index: 2; top: 12px; left: 14px; display: grid; place-items: center; width: 44px; height: 44px; margin: 0; }
+  .related-task-link { display: none; }
   .related-task-link span { display: none; }
-  .conversation-window-actions { position: absolute; top: 12px; left: 50%; z-index: 1; display: flex; flex-wrap: wrap; justify-content: center; width: max-content; min-width: 44px; max-width: calc(100% - 116px); gap: 4px; margin: 0; padding: 3px; background: #20211d; border: 1px solid #3b3d32; border-radius: 999px; box-shadow: 0 8px 20px #0006; transform: translateX(-50%); }
-  .conversation-window-actions .icon-button { flex: 0 0 auto; width: 44px; height: 44px; }
-  .conversation-window-actions .conversation-task-picker { flex: 0 0 auto; min-height: 44px; }
+  /* Overlay the conversation surface; this bar must not claim its own header row. */
+  .conversation-window-actions { position: absolute; top: 12px; left: 50%; z-index: 6; display: flex; flex-wrap: nowrap; justify-content: center; width: max-content; min-width: 32px; max-width: calc(100% - 28px); gap: 2px; margin: 0; padding: 3px; background: #20211d; border: 1px solid #3b3d32; border-radius: 999px; box-shadow: 0 8px 20px #0006; transform: translateX(-50%); }
+  .conversation-window-actions .icon-button { flex: 0 0 auto; width: 32px; height: 32px; }
+  .conversation-window-actions .conversation-task-picker { flex: 0 0 auto; min-height: 32px; }
   .conversation-window-actions .conversation-delete-control { flex: 0 0 auto; }
   .thread-filter-bar { align-items: stretch; flex-wrap: wrap; padding-inline: 14px; }
   .conversation-surface-tabs { flex: 1 1 100%; margin-right: 0; }

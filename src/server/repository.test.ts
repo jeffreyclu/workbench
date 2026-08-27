@@ -1135,6 +1135,27 @@ describe('WorkItemRepository', () => {
     }
   });
 
+  it('keeps a pinned task pinned when a queued turn dispatches', async () => {
+    const task = repository.create({ title: 'Pinned task', description: '', priority: 1, status: 'pinned', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Pinned thread', task.id);
+    repository.createSharedMessage('jeffrey', 'Keep going', 'queued', conversation.id, [], 'claude');
+    const previousPath = process.env.PATH;
+    const { directory } = fakeAgentDirectory("printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'", "printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'");
+    try {
+      const replies = dispatchNextSharedTurn(repository, conversation.id);
+      const deadline = Date.now() + 2_000;
+      while (repository.listAllSharedMessages(conversation.id).some((message) => message.status === 'running')) {
+        if (Date.now() > deadline) throw new Error('Timed out waiting for reply.');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(replies.length).toBeGreaterThan(0);
+      expect(repository.get(task.id)?.status).toBe('pinned');
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('does not dispatch or cancel a queued turn while the same agent is active', () => {
     const conversation = repository.createConversation('Busy thread');
     const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);

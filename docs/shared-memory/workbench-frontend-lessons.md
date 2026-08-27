@@ -120,6 +120,16 @@ as “Conversation details” or “Show composer.” The controls need accessib
 names and hover titles, while the expanded surfaces retain their existing
 content and actions.
 
+### Phone conversation actions are one compact floating row
+
+*Decision from Jeffrey, 2026-08-27.* Keep every conversation action in a
+single unwrapped floating row above the conversation surface. It must not
+reserve a tall header or push the title/metadata down. Use compact 32px icon
+controls here so task-linked conversations fit their complete action set on a
+phone. The close X is the exception: it is its own control fixed in the
+top-right corner, outside the centered action row. The separate metadata
+disclosure remains responsible only for showing or hiding title and metadata.
+
 ### Phone composer controls must have an intentional complete layout
 
 *Correction from Jeffrey, 2026-08-24.* A responsive control strip cannot assume its desktop child count. The shared-room composer has attachment, model, account, recipient, and send controls. At phone widths, give all five explicit grid areas; do not allow a fifth control to spill into an implicit offscreen grid column. Keep model, account, and recipient visible and separately selectable. Use short visible option labels and a single compact row when it fits. The visible per-message telemetry badge is only `agent · account profile · cost`; model, token counts, requested-vs-actual routing, and other provenance remain in its hover title rather than consuming layout space.
