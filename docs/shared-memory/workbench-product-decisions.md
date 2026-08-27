@@ -1,15 +1,5 @@
 ## Workbench product decisions
 
-### Phone conversations use a Reddit-like reading surface
-
-*Decision from Jeffrey, 2026-08-27.* On phone widths, conversation messages
-should read like a threaded Reddit discussion: full-column comment rows,
-author-first metadata, clear separators, and visible reply indentation rather
-than a stack of floating chat bubbles. Keep the existing compact bottom
-navigation plus the collapsed-by-default icon controls for conversation header
-and composer; this changes the reading treatment, not the agreed navigation or
-chrome behavior.
-
 ### Workbench tracks tokens, never cost
 
 *Decision from Jeffrey, 2026-08-26.* Remove every cost metric, price table, estimate, provider-cost collector, API field, and UI surface from Workbench. Token counts are the only usage metric. Do not backfill, clear, or migrate historical database cost columns; released schema remains for compatibility, but application code must not read or write those fields.
