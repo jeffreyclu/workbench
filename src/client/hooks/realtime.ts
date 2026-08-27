@@ -8,9 +8,17 @@ type RealtimeTopic = typeof realtimeTopics[number];
 type RealtimeMessage =
   | { type: 'ready' }
   | { type: 'invalidate'; topics: RealtimeTopic[] }
-  | { type: 'notification'; tone: ToastTone; message: string; description?: string; duration?: number; action?: { label: string; route: string } };
+  | { type: 'notification'; tone: ToastTone; message: string; description?: string; duration?: number; action?: { label: string; route: string } }
+  | { type: 'diff-confidence'; assessments: Record<string, { risk: number | null; reasoning: string }> };
 
 export type RealtimeNotification = Extract<RealtimeMessage, { type: 'notification' }>;
+export type RealtimeDiffConfidence = Extract<RealtimeMessage, { type: 'diff-confidence' }>;
+const realtimeMessageListeners = new Set<(message: RealtimeMessage) => void>();
+
+export function subscribeRealtimeMessages(listener: (message: RealtimeMessage) => void): () => void {
+  realtimeMessageListeners.add(listener);
+  return () => realtimeMessageListeners.delete(listener);
+}
 
 /**
  * 'connecting' is the initial/first-attempt state; 'reconnecting' means an
@@ -49,6 +57,10 @@ function isRealtimeMessage(value: unknown): value is RealtimeMessage {
       && (notification.description === undefined || typeof notification.description === 'string')
       && (notification.duration === undefined || (typeof notification.duration === 'number' && Number.isFinite(notification.duration) && notification.duration >= 0))
       && (notification.action === undefined || (typeof notification.action.label === 'string' && typeof notification.action.route === 'string' && notification.action.route.startsWith('/')));
+  }
+  if (value.type === 'diff-confidence') {
+    const message = value as Partial<RealtimeDiffConfidence>;
+    return Boolean(message.assessments) && typeof message.assessments === 'object';
   }
   return value.type === 'invalidate'
     && 'topics' in value
@@ -123,6 +135,7 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
           if (!isRealtimeMessage(message)) return;
           if (message.type === 'invalidate') invalidateRealtimeTopics(queryClient, message.topics);
           if (message.type === 'notification') onNotification(message);
+          if (message.type === 'diff-confidence') for (const listener of realtimeMessageListeners) listener(message);
         } catch {
           // Ignore malformed frames. The server never sends application data.
         }

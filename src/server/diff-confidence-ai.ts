@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
+import { publishRealtimeDiffConfidence } from './realtime.js';
 
 export type DiffConfidenceBlock = { key: string; lines: string[] };
 export type DiffConfidenceAssessment = { risk: number | null; reasoning: string };
@@ -68,9 +69,13 @@ type PendingAssessment = {
   timeout: ReturnType<typeof setTimeout> | null;
 };
 
-let worker: ChildProcessWithoutNullStreams | null = null;
-let outputBuffer = '';
-let active: PendingAssessment | null = null;
+type ScorerWorker = {
+  scorer: ChildProcessWithoutNullStreams;
+  outputBuffer: string;
+  active: PendingAssessment | null;
+};
+
+const workers = new Set<ScorerWorker>();
 const queue: PendingAssessment[] = [];
 let idleShutdown: ReturnType<typeof setTimeout> | null = null;
 // Haiku returns a small file's assessment in roughly 5–9 seconds, but a
@@ -80,93 +85,102 @@ let idleShutdown: ReturnType<typeof setTimeout> | null = null;
 // bounded assessment turn to complete before declaring the scorer unavailable.
 const SCORER_TIMEOUT_MS = 25_000;
 const SCORER_IDLE_SHUTDOWN_MS = 30_000;
+const SCORER_POOL_SIZE = 2;
 
-function recycleWorker(expected?: ChildProcessWithoutNullStreams): void {
-  const scorer = worker;
-  if (!scorer || (expected && scorer !== expected)) return;
-  worker = null;
-  outputBuffer = '';
-  try { scorer.kill('SIGTERM'); } catch { /* already stopped */ }
+function recycleWorker(worker: ScorerWorker): void {
+  if (!workers.delete(worker)) return;
+  worker.outputBuffer = '';
+  try { worker.scorer.kill('SIGTERM'); } catch { /* already stopped */ }
 }
 
 function scheduleIdleShutdown(): void {
-  if (active || queue.length || !worker) return;
+  if (queue.length || [...workers].some((worker) => worker.active)) return;
   if (idleShutdown) clearTimeout(idleShutdown);
-  idleShutdown = setTimeout(() => recycleWorker(), SCORER_IDLE_SHUTDOWN_MS);
+  idleShutdown = setTimeout(() => { for (const worker of [...workers]) recycleWorker(worker); }, SCORER_IDLE_SHUTDOWN_MS);
   idleShutdown.unref();
 }
 
-/** A pre-started stream-json worker removes CLI boot overhead. It is recycled
- * after every assessment: Claude's stream protocol otherwise retains prior
- * file diffs as chat history, making each later file slower than the last. */
-function ensureWorker(): ChildProcessWithoutNullStreams {
-  if (worker && !worker.killed && worker.exitCode == null) return worker;
-  const scorer = worker = spawn('claude', [
+/** Two independent warm workers let separate diff blocks complete in parallel.
+ * Each is recycled after one turn so prior file text cannot accumulate in a
+ * Claude session and slow later files. */
+function startWorker(): ScorerWorker {
+  const scorer = spawn('claude', [
     '-p', '--verbose', '--model', 'haiku', '--effort', 'low', '--tools', '',
     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '',
     '--no-session-persistence', '--no-chrome', '--system-prompt', SYSTEM_PROMPT,
     '--input-format', 'stream-json', '--output-format', 'stream-json',
   ], { cwd: '/tmp', env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+  const worker: ScorerWorker = { scorer, outputBuffer: '', active: null };
+  workers.add(worker);
   (scorer.stdout as unknown as { setEncoding?: (encoding: string) => void }).setEncoding?.('utf8');
   scorer.stdout.on('data', (chunk: string) => {
-    outputBuffer += chunk;
+    worker.outputBuffer += chunk;
     for (;;) {
-      const newline = outputBuffer.indexOf('\n');
+      const newline = worker.outputBuffer.indexOf('\n');
       if (newline < 0) break;
-      const line = outputBuffer.slice(0, newline); outputBuffer = outputBuffer.slice(newline + 1);
+      const line = worker.outputBuffer.slice(0, newline); worker.outputBuffer = worker.outputBuffer.slice(newline + 1);
       try {
         const event = JSON.parse(line) as { type?: string; result?: string; is_error?: boolean };
-        if (event.type !== 'result' || !active) continue;
-        const pending = active; active = null;
+        if (event.type !== 'result' || !worker.active) continue;
+        const pending = worker.active; worker.active = null;
         if (pending.timeout) clearTimeout(pending.timeout);
         if (event.is_error || typeof event.result !== 'string') pending.reject(new Error('AI diff assessment failed.'));
         else {
-          try { pending.resolve(parseDiffConfidenceAssessment(event.result, pending.blocks.map((block) => block.key))); }
+          try {
+            const assessments = parseDiffConfidenceAssessment(event.result, pending.blocks.map((block) => block.key));
+            publishRealtimeDiffConfidence(assessments);
+            pending.resolve(assessments);
+          }
           catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); }
         }
-        // A stream-json worker retains its prior turn context. Recycle it
-        // after every score, then immediately prewarm a context-free successor.
-        recycleWorker(scorer);
-        ensureWorker();
+        recycleWorker(worker);
+        // Replace a retired worker immediately so the next visible file does
+        // not pay CLI startup before its first streamed chunk.
+        ensureWarmWorkers();
         dispatchNext();
       } catch { /* Ignore non-result stream events. */ }
     }
   });
   const stopWorker = (error: Error) => {
-    if (worker !== scorer) return;
-    worker = null; outputBuffer = '';
-    if (active) { if (active.timeout) clearTimeout(active.timeout); active.reject(error); active = null; }
-    while (queue.length) queue.shift()!.reject(error);
+    if (!workers.has(worker)) return;
+    recycleWorker(worker);
+    if (worker.active) { if (worker.active.timeout) clearTimeout(worker.active.timeout); worker.active.reject(error); worker.active = null; }
+    dispatchNext();
   };
   scorer.once('exit', () => stopWorker(new Error('AI diff scorer stopped unexpectedly.')));
   scorer.once('error', stopWorker);
   scorer.stdin.on('error', stopWorker);
-  return scorer;
+  return worker;
+}
+
+function ensureWarmWorkers(): void {
+  while (workers.size < SCORER_POOL_SIZE) startWorker();
 }
 
 function dispatchNext(): void {
-  if (active || queue.length === 0) { scheduleIdleShutdown(); return; }
+  if (queue.length === 0) { scheduleIdleShutdown(); return; }
   if (idleShutdown) clearTimeout(idleShutdown);
   idleShutdown = null;
-  const scorer = ensureWorker();
-  active = queue.shift()!;
-  active.timeout = setTimeout(() => {
-    const pending = active;
-    if (!pending) return;
-    active = null;
-    pending.reject(new Error(`AI diff scorer timed out after ${SCORER_TIMEOUT_MS / 1_000} seconds.`));
-    recycleWorker(scorer);
-    ensureWorker();
-    dispatchNext();
-  }, SCORER_TIMEOUT_MS);
-  active.timeout.unref();
-  // The rubric is already the system prompt. Sending it again used to double
-  // every uncached request's input and delayed the first score unnecessarily.
-  scorer.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: `Blocks:\n${JSON.stringify(active.blocks)}` } })}\n`);
+  ensureWarmWorkers();
+  for (const worker of workers) {
+    if (worker.active || queue.length === 0) continue;
+    const pending = worker.active = queue.shift()!;
+    pending.timeout = setTimeout(() => {
+      if (worker.active !== pending) return;
+      worker.active = null;
+      pending.reject(new Error(`AI diff scorer timed out after ${SCORER_TIMEOUT_MS / 1_000} seconds.`));
+      recycleWorker(worker);
+      dispatchNext();
+    }, SCORER_TIMEOUT_MS);
+    pending.timeout.unref();
+    // The rubric is already the system prompt. Sending it again used to double
+    // every uncached request's input and delayed the first score unnecessarily.
+    worker.scorer.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: `Blocks:\n${JSON.stringify(pending.blocks)}` } })}\n`);
+  }
 }
 
 function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, DiffConfidenceAssessment>> {
-  ensureWorker();
+  ensureWarmWorkers();
   return new Promise((resolve, reject) => {
     queue.push({ blocks, resolve, reject, timeout: null });
     dispatchNext();
@@ -206,17 +220,20 @@ export function assessDiffBlocks(database: WorkbenchDatabase, blocks: DiffConfid
     uncached.push(block);
   }
   if (uncached.length > 0) {
-    const batch = runAssessment(uncached);
-    for (const block of uncached) {
-      const hash = hashes.get(block.key)!;
-      const single = batch.then((result) => {
-        const assessment = result[block.key];
-        writeCached(database, hash, assessment);
-        return assessment;
-      });
-      inFlight.set(hash, single);
-      void single.finally(() => inFlight.delete(hash)).catch(() => {});
-      entries.set(block.key, single);
+    for (let index = 0; index < uncached.length; index += 3) {
+      const chunk = uncached.slice(index, index + 3);
+      const batch = runAssessment(chunk);
+      for (const block of chunk) {
+        const hash = hashes.get(block.key)!;
+        const single = batch.then((result) => {
+          const assessment = result[block.key];
+          writeCached(database, hash, assessment);
+          return assessment;
+        });
+        inFlight.set(hash, single);
+        void single.finally(() => inFlight.delete(hash)).catch(() => {});
+        entries.set(block.key, single);
+      }
     }
   }
   return Promise.all([...entries].map(([blockKey, assessment]) => assessment
@@ -228,7 +245,7 @@ export function assessDiffBlocks(database: WorkbenchDatabase, blocks: DiffConfid
 /** Start the dedicated scorer during server boot, before a reviewer opens a
  * diff. It remains idle and does no scoring until the first real request. */
 export function warmDiffConfidenceModel(): void {
-  ensureWorker();
+  ensureWarmWorkers();
   scheduleIdleShutdown();
 }
 
@@ -237,11 +254,12 @@ export function warmDiffConfidenceModel(): void {
 export function shutdownDiffConfidenceModel(): void {
   if (idleShutdown) clearTimeout(idleShutdown);
   idleShutdown = null;
-  const scorer = worker;
-  worker = null;
-  outputBuffer = '';
   const error = new Error('AI diff scorer stopped during runtime shutdown.');
-  if (active) { if (active.timeout) clearTimeout(active.timeout); active.reject(error); active = null; }
+  for (const worker of [...workers]) {
+    if (worker.active?.timeout) clearTimeout(worker.active.timeout);
+    worker.active?.reject(error);
+    worker.active = null;
+    recycleWorker(worker);
+  }
   while (queue.length) queue.shift()!.reject(error);
-  try { scorer?.kill('SIGTERM'); } catch { /* already stopped */ }
 }

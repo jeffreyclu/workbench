@@ -97,7 +97,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
       <nav className="diff-file-list" aria-label="Changed workspace files"><span>Files ({files.length})</span><div>{files.map((file) => <div key={file.path} className="diff-file-row"><button type="button" className={selectedFile?.path === file.path ? 'selected' : ''} onClick={() => setSelectedPath(file.path)}><FileDiff size={13} /><span>{file.path}</span><b>+{file.additions}</b><i>−{file.deletions}</i></button><CopyIconButton text={file.path} label="Copy file path" className="diff-file-copy-path" /></div>)}</div></nav>
       {selectedFile && <article className="workspace-diff-file"><header><div className="diff-file-info"><strong>{fileLabel(selectedFile)}</strong><span>{selectedFile.isBinary ? 'Binary file' : selectedFile.status}</span></div>{selectedFile.patch && <CopyIconButton text={selectedFile.patch} label="Copy patch" />}</header>{selectedFile.patch ? <pre>{blocks.map((block) => {
               const changed = isChangedBlock(block);
-              const assessment = confidence.isError
+              const assessment = confidence.failedKeys.has(block.key)
                 ? { risk: null, reasoning: 'AI assessment unavailable; review this changed block.' }
                 : confidence.data?.[block.key] ?? null;
               return <div key={block.key} className={changed ? 'diff-block' : undefined}>

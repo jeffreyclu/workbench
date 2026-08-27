@@ -13,7 +13,8 @@ export type RealtimeNotification = {
   duration?: number;
   action?: { label: string; route: string };
 };
-export type RealtimeMessage = { type: 'ready' } | { type: 'invalidate'; topics: RealtimeTopic[] } | RealtimeNotification;
+export type RealtimeDiffConfidence = { type: 'diff-confidence'; assessments: Record<string, { risk: number | null; reasoning: string }> };
+export type RealtimeMessage = { type: 'ready' } | { type: 'invalidate'; topics: RealtimeTopic[] } | RealtimeNotification | RealtimeDiffConfidence;
 
 type RealtimeSink = (message: Exclude<RealtimeMessage, { type: 'ready' }>) => void;
 let sink: RealtimeSink | null = null;
@@ -26,6 +27,12 @@ export function publishRealtimeEvent(...topics: RealtimeTopic[]): void {
 /** Sends a user-facing event. Records still come from REST after any invalidation frame. */
 export function publishRealtimeNotification(notification: Omit<RealtimeNotification, 'type'>): void {
   sink?.({ type: 'notification', ...notification });
+}
+
+/** Small ephemeral score payloads are delivered as their scorer chunk settles;
+ * unlike durable application state, they do not need a REST refetch first. */
+export function publishRealtimeDiffConfidence(assessments: RealtimeDiffConfidence['assessments']): void {
+  sink?.({ type: 'diff-confidence', assessments });
 }
 
 function rejectUpgrade(socket: Socket): void {
