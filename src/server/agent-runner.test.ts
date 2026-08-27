@@ -509,6 +509,12 @@ describe('classifyExecution', () => {
       .toThrow(/Non-Workbench task.*Link the task to its repository/);
   });
 
+  it('recovers a deleted Workbench subdirectory to the repository root', () => {
+    const staleSubdirectory = join(process.cwd(), 'src/client/features/diff/views');
+    expect(resolveWorkingDirectory({ ...item('Fix Changes panel'), projectName: 'Workbench', workspacePath: staleSubdirectory }))
+      .toBe(process.cwd());
+  });
+
   it('routes coding and review work to Codex', () => {
     expect(classifyExecution(item('Implement the connector UI')).kind).toBe('execute');
     expect(classifyExecution(item('Review PR for regressions')).kind).toBe('review');

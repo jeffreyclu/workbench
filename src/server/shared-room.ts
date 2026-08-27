@@ -428,8 +428,10 @@ export function sharedTurnKindForMessage(repository: WorkItemRepository, linkedI
 export function resolveSharedReplyWorkingDirectory(linkedItem: WorkItem | null, selectedWorkspacePath?: string | null): string {
   if (selectedWorkspacePath) {
     const selected = resolve(selectedWorkspacePath);
-    if (!existsSync(selected)) throw new Error(`Selected conversation workspace no longer exists: ${selected}`);
-    return selected;
+    if (existsSync(selected)) return selected;
+    // Repo Explorer state is durable across machines and refactors. A stale
+    // selection must never prevent a new conversation from starting.
+    return linkedItem ? resolveWorkingDirectory(linkedItem) : process.cwd();
   }
   return linkedItem ? resolveWorkingDirectory(linkedItem) : process.cwd();
 }

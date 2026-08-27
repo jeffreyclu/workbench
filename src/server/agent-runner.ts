@@ -394,11 +394,38 @@ function enforceWorkbenchWorkspaceBoundary(item: WorkItem, workspace: string): s
   throw new Error(`Non-Workbench task "${item.title}" has no external project workspace. Link the task to its repository before running an agent; the Workbench checkout accepts Workbench work only.`);
 }
 
+/**
+ * Saved workspace paths can outlive a refactor (for example, a deleted source
+ * directory). Recover the enclosing repository root instead of starting a
+ * conversation with an invalid cwd. A nested path is normalized too: agents
+ * must operate at the repository root, never inside a stale feature folder.
+ */
+function repositoryRootForSavedPath(savedPath: string): string | null {
+  let candidate = resolve(savedPath);
+  const savedPathExists = existsSync(candidate);
+  while (!existsSync(candidate) && candidate !== dirname(candidate)) candidate = dirname(candidate);
+  if (!existsSync(candidate)) return null;
+  if (!statSync(candidate).isDirectory()) candidate = dirname(candidate);
+  const existingDirectory = candidate;
+  while (candidate !== dirname(candidate)) {
+    if (existsSync(join(candidate, '.git'))) return candidate;
+    candidate = dirname(candidate);
+  }
+  if (existsSync(join(candidate, '.git'))) return candidate;
+  // Focused test workspaces and local scratch projects may not have a Git
+  // marker. Preserve a valid explicit directory; only missing paths require
+  // a recoverable repository root.
+  return savedPathExists ? existingDirectory : null;
+}
+
 export function resolveWorkingDirectory(item: WorkItem): string {
   if (item.workspacePath) {
-    const path = resolve(item.workspacePath);
-    if (!existsSync(path)) throw new Error(`Workspace path does not exist: ${path}`);
-    return enforceWorkbenchWorkspaceBoundary(item, path);
+    const recovered = repositoryRootForSavedPath(item.workspacePath);
+    if (recovered) return enforceWorkbenchWorkspaceBoundary(item, recovered);
+    // Workbench task paths are occasionally persisted as a source directory
+    // that disappears during a refactor. The server checkout is the only safe
+    // fallback for Workbench work; external projects must still be linked.
+    if (isWorkbenchProject(item.projectName)) return process.cwd();
   }
 
   const current = process.cwd();

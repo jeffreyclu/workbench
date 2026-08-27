@@ -388,6 +388,12 @@ nav { display: grid; gap: 3px; }
 .diff-line.header { color: #aaa9a2; background: #20201d; }.diff-line.header > span:nth-child(-n + 2) { background: #1c1c19; }
 .diff-line-marker { padding-right: 2px; user-select: none; }
 .diff-block { margin: 4px 0; }
+.diff-summary-strip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px; color: #aaa9a2; border: 1px solid #353530; border-radius: 999px; background: #1b1b18; font: 700 9px 'DM Mono'; }
+.diff-summary-strip b { color: #8bbd75; font-weight: 700; }.diff-summary-strip i { color: #d97b73; font-style: normal; }
+.diff-block-collapsed { margin-left: 84px; }
+.diff-block-disclosure { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 7px 3px 5px; color: #aaa9a2; border: 1px solid #353530; border-radius: 5px; background: #171715; font: 700 9px 'DM Mono'; cursor: pointer; list-style: none; }
+.diff-block-disclosure::-webkit-details-marker { display: none; }.diff-block-disclosure svg { transition: transform var(--motion-fast) var(--motion-ease); }.diff-block-collapsed[open] > .diff-block-disclosure svg { transform: rotate(90deg); }
+.diff-block-disclosure:hover, .diff-block-disclosure:focus-visible { color: #d9d8d1; border-color: #596234; outline: 0; }.diff-block-disclosure small { color: #77766f; font: 500 9px 'DM Mono'; }
 .diff-hunk-review { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 4px 84px; }
 .diff-hunk-review-states { display: inline-flex; gap: 5px; }
 .diff-hunk-review-badge { min-height: 19px; padding: 0 7px; color: #aaa9a2; background: #1c1c19; border: 1px solid #353530; border-radius: 999px; font: 700 9px 'DM Mono'; letter-spacing: .03em; text-transform: uppercase; cursor: pointer; }
@@ -457,6 +463,8 @@ nav { display: grid; gap: 3px; }
   .workspace-diff-file pre, .github-diff-file pre { font-size: 10px; }
   .diff-line { grid-template-columns: 34px 34px minmax(0, 1fr); }
   .diff-confidence-control { margin-left: 68px; }
+  .diff-block-collapsed { margin-left: 68px; }
+  .diff-block-disclosure { min-height: 44px; }
   .diff-line > span { padding-inline: 6px; }
 }
 .task-collapsible { border-top: 1px solid #272724; }

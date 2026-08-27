@@ -66,6 +66,7 @@ describe('WorkspaceDiffView', () => {
     expect(screen.getByRole('button', { name: /src\/old\.ts/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open src/old.ts in editor' })).toHaveAttribute('href', 'vscode://file/tmp/workbench/src/old.ts');
     expect(document.querySelector('.diff-review-layout > .diff-file-list')).toBeInTheDocument();
+    expect(screen.getByLabelText('1 changed files, 1 additions, 1 deletions')).toBeInTheDocument();
     expect(await screen.findByLabelText('AI risk assessment: 42 out of 100')).toBeInTheDocument();
   });
 

@@ -230,6 +230,15 @@ describe('compactConversationHistory', () => {
     database.close();
   });
 
+  it('falls back from a deleted Repo Explorer selection instead of blocking a new turn', () => {
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Repair Workbench chat', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: '/tmp/missing-workbench-source-directory', dueDate: null });
+
+    expect(resolveSharedReplyWorkingDirectory(task, '/tmp/missing-repo-selection')).toBe(process.cwd());
+    database.close();
+  });
+
   it('uses an explicit room profile, then falls back to the task-scoped default', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);

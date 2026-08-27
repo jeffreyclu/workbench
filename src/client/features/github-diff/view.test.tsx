@@ -11,6 +11,17 @@ afterEach(() => {
 });
 
 describe('GitHubDiffView', () => {
+  it('renders the shared summary strip for pull-request totals', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ diff: {
+      repository: 'writer/workbench', number: 42, title: 'Summary', url: 'https://github.com/writer/workbench/pull/42', baseRef: 'main', headRef: 'summary', changedFiles: 3, additions: 21, deletions: 8, files: [],
+    } }), { headers: { 'Content-Type': 'application/json' } })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><GitHubDiffView sourceUrl="https://github.com/writer/workbench/pull/42" references={[]} /></QueryClientProvider>);
+
+    expect(await screen.findByLabelText('3 changed files, 21 additions, 8 deletions')).toBeInTheDocument();
+  });
+
   it('shows a retry action instead of an empty-diff state when loading the pull-request diff fails', async () => {
     let attempts = 0;
     vi.stubGlobal('fetch', vi.fn(async () => {
