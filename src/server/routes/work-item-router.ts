@@ -46,10 +46,13 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       .filter((entry) => entry.isDirectory())
       .map((entry) => resolve(join(root, entry.name)))
       .filter((path) => existsSync(join(path, '.git')) || existsSync(join(path, 'package.json')));
-    const defaultPath = resolveWorkingDirectory(item);
+    const activeRunWorkspace = repository.listRuns(item.id)
+      .filter((run) => (run.status === 'queued' || run.status === 'running') && Boolean(run.resolvedWorkspace))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.resolvedWorkspace ?? null;
+    const defaultPath = activeRunWorkspace ? resolve(activeRunWorkspace) : resolveWorkingDirectory(item);
     if (existsSync(defaultPath) && !candidates.includes(defaultPath)) candidates.unshift(defaultPath);
-    const selectedPath = selected && candidates.includes(resolve(selected.workspace_path)) ? resolve(selected.workspace_path) : defaultPath;
-    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: basename(path), selected: path === selectedPath })) };
+    const selectedPath = activeRunWorkspace ? defaultPath : (selected && candidates.includes(resolve(selected.workspace_path)) ? resolve(selected.workspace_path) : defaultPath);
+    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: path === defaultPath && activeRunWorkspace ? `${basename(resolveWorkingDirectory(item))} · active agent` : basename(path), selected: path === selectedPath })) };
   };
   const taskWorkingDirectory = (workItemId: string) => taskWorkspaces(workItemId)?.selectedPath ?? null;
   router.post('/api/diff-confidence', async (request, response, next) => {

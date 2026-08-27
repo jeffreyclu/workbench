@@ -26,11 +26,14 @@ export function createConversationRouter({ repository, database, capabilities, a
     // task itself has a workspacePath. Its completed or active agent run has
     // already resolved the repository it actually used; Changes must follow
     // that real workspace instead of incorrectly demanding a manual picker.
-    const runWorkspace = linkedItem
-      ? repository.listRuns(linkedItem.id)
-        .filter((run) => run.conversationId === conversationId && Boolean(run.resolvedWorkspace))
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.resolvedWorkspace ?? null
-      : null;
+    const conversationRuns = linkedItem
+      ? repository.listRuns(linkedItem.id).filter((run) => run.conversationId === conversationId && Boolean(run.resolvedWorkspace))
+      : [];
+    const activeRunWorkspace = conversationRuns
+      .filter((run) => run.status === 'queued' || run.status === 'running')
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.resolvedWorkspace ?? null;
+    const runWorkspace = activeRunWorkspace ?? conversationRuns
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.resolvedWorkspace ?? null;
     const selected = database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversationId) as { workspace_path: string } | undefined;
     const root = dirname(process.cwd());
     const candidates = readdirSync(root, { withFileTypes: true })
@@ -38,13 +41,15 @@ export function createConversationRouter({ repository, database, capabilities, a
       .map((entry) => join(root, entry.name))
       .filter((path) => existsSync(join(path, '.git')) || existsSync(join(path, 'package.json')))
       .map((path) => resolve(path));
-    const linkedPath = linkedItem?.workspacePath
-      ? resolve(linkedItem.workspacePath)
-      : runWorkspace ? resolve(runWorkspace) : null;
+    const sourcePath = linkedItem?.workspacePath ? resolve(linkedItem.workspacePath) : null;
+    const activePath = activeRunWorkspace ? resolve(activeRunWorkspace) : null;
+    const linkedPath = activePath ?? (runWorkspace ? resolve(runWorkspace) : sourcePath);
     if (linkedPath && existsSync(linkedPath) && !candidates.includes(linkedPath)) candidates.unshift(linkedPath);
     const defaultPath = linkedPath ?? (!linkedItem || linkedItem.projectName === 'Workbench' ? resolve(process.cwd()) : null);
-    const selectedPath = selected && candidates.includes(resolve(selected.workspace_path)) ? resolve(selected.workspace_path) : defaultPath;
-    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: basename(path), selected: path === selectedPath })) };
+    // An active run is authoritative: its uncommitted files live in a detached
+    // worktree, so a prior source-checkout selection must not hide them.
+    const selectedPath = activePath ?? (selected && candidates.includes(resolve(selected.workspace_path)) ? resolve(selected.workspace_path) : defaultPath);
+    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: path === activePath ? `${basename(sourcePath ?? path)} · active agent` : basename(path), selected: path === selectedPath })) };
   };
   router.get('/api/shared/conversations', (request, response) => {
     repository.ensureDefaultConversation();

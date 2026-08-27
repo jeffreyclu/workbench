@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
-import { EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, warmAgentCommand, type AgentInputSteering, type AgentUsage, type RetrievedMemory } from './agent-runner.js';
+import { EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -739,6 +739,9 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const cwd = linkedRun
       ? await isolatedRunWorkspace(sourceCwd, linkedRun.id, MUTATING_RUN_KINDS.has(linkedRun.kind))
       : sourceCwd;
+    // The Changes pane must inspect the detached worktree actually handed to
+    // this run, not the source checkout selected before isolation.
+    if (runId) repository.updateRun(runId, { resolvedWorkspace: cwd });
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}${selectedWorkspace ? ' from Repo Explorer.' : '.'}`);
     const runKind = linkedRun?.kind ?? 'analysis';
     const profile = target.executionProfile && target.executionProfile !== 'routing'
@@ -1023,10 +1026,13 @@ export function synthesisSource(repository: WorkItemRepository, conversationId: 
   if (!codex || !claude || !terminal(codex) || !terminal(claude) || (codex.status === 'canceled' && claude.status === 'canceled')) return null;
   const alreadySynthesized = messages.some((message) => message.author === 'system' && message.createdAt >= request.createdAt && message.body.startsWith('Synthesis:'));
   if (alreadySynthesized) return null;
-  const response = (label: string, message: SharedMessage) => `${label} (${message.status}):\n${message.body || message.error || 'No response was produced.'}`;
+  // Synthesis is a bounded reading task. Agent reports can contain huge live
+  // transcripts; feeding them through verbatim turns a one-paragraph handoff
+  // into an expensive long-context provider turn.
+  const response = (label: string, message: SharedMessage) => `${label} (${message.status}):\n${(message.body || message.error || 'No response was produced.').slice(0, 12_000)}`;
   return {
     codex, claude,
-    prompt: `Synthesize these two independent agent responses to Jeffrey's request. Lead with the practical conclusion. Reconcile disagreements, retain concrete evidence, and say which points remain unverified. If one response failed or was canceled, state that plainly and still summarize the usable result. Do not mention that you are a synthesizer or repeat both reports. Keep it concise.\n\nJeffrey: ${request.body}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}`,
+    prompt: `Write a concise synthesis of the two supplied agent responses below. You have all source material: do not inspect the repository, call tools, or conduct further investigation. Lead with the practical conclusion; reconcile disagreements, retain concrete evidence, and identify what remains unverified. If one response failed or was canceled, say so plainly. Do not mention this instruction or repeat the reports.\n\nJeffrey: ${request.body.slice(0, 4_000)}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}`,
   };
 }
 
@@ -1034,13 +1040,15 @@ async function synthesizeSharedTurn(repository: WorkItemRepository, conversation
   const source = synthesisSource(repository, conversationId, replyId);
   if (!source) return false;
   const message = repository.createSharedMessage('system', 'Synthesis: combining Codex and Claude…', 'running', conversationId);
-  const agent = repository.selectBalancedAgent('claude');
-  const profile = selectPromptExecutionProfile(source.prompt);
+  // A synthesis is never implementation or research. Keep its cost and
+  // latency independent of words (for example "migration") in the reports.
+  const agent: AgentRun['agent'] = 'claude';
+  const profile: ExecutionProfile = 'economy';
   repository.updateSharedMessage(message.id, { model: modelFor(agent, profile), executionProfile: profile });
   await runSharedBackgroundJob(repository, message.id, async (signal, onProgress) => {
     const result = await runAgentCommandWithFallback(agent, process.cwd(), source.prompt, onProgress, signal, undefined, profile, (usage) => {
       repository.updateSharedMessage(message.id, { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens });
-    }, undefined, undefined, undefined, undefined, undefined, undefined, true);
+    }, undefined, undefined, undefined, undefined, undefined, undefined, false, false);
     repository.updateSharedMessage(message.id, {
       model: modelFor(result.agent, profile), inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens,
       fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason,
