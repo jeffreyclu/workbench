@@ -46,6 +46,13 @@ describe('shared message layout', () => {
 });
 
 describe('conversation view controls', () => {
+  it('keeps an existing execution conversation openable while a task dispatch starts', () => {
+    const rule = styles.match(/^\.detail-panel\.execution-starting button[^\{]*\{[^}]*\}/m)?.[0] ?? '';
+
+    expect(rule).toContain('.open-run-chat');
+    expect(rule).not.toContain('button:not(.mobile-detail-close)');
+  });
+
   it('keeps queued agent actions icon-only and does not add them to queued system promotions', () => {
     const systemQueuedRule = styles.match(/\.shared-message\.shared-system-queued\s*\{[^}]*\}/)?.[0] ?? '';
     const queuedActionRule = styles.match(/\.queued-message-action\s*\{[^}]*\}/)?.[0] ?? '';
