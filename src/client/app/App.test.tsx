@@ -1411,7 +1411,11 @@ describe('shared room', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Collapse conversation tray' }));
     expect(heading.closest('header')).toHaveClass('is-mobile-header-collapsed');
 
-    expect(screen.queryByRole('button', { name: 'Expand composer' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Expand composer' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand composer' }));
+    expect(composer).not.toHaveClass('is-mobile-composer-collapsed');
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse composer' }));
+    expect(composer).toHaveClass('is-mobile-composer-collapsed');
     const changes = screen.getByRole('button', { name: 'Changes' });
     await waitFor(() => expect(changes).toBeEnabled());
     fireEvent.click(changes);

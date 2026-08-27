@@ -111,6 +111,10 @@ center does not prove the whole touch target remains clickable through an animat
 
 *Decision from Jeffrey, 2026-08-23.* The task controls in a linked conversation header and the composer attachment control must not render text labels. Keep unlink, complete, and attach as compact, distinct icon buttons with accessible names and hover titles; regression tests must prevent visible button text from returning.
 
+### Changes view header spacing belongs to conversation chrome, not diff content
+
+*Correction from Jeffrey, 2026-08-27.* When reducing the Changes view's header panel height, do not compact the workspace or GitHub diff header. Preserve the diff's normal 18px top spacing and native heading margins. Target the surrounding conversation chrome only.
+
 ### Phone conversation chrome collapses into two icon controls
 
 *Decision from Jeffrey, 2026-08-26.* Phone conversations are reading-first:
@@ -170,6 +174,15 @@ and pin control each need a solid, elevated surface. Keep them z-layered over
 the conversation; do not turn the whole desktop control row into a panel.
 
 ### Phone composer controls must have an intentional complete layout
+
+*Correction from Jeffrey, 2026-08-27.* The phone composer sheet must be the
+same full viewport width in Conversation and Changes. Changes may retain its
+desktop 28px side gutter, but that gutter must be explicitly overridden for
+the fixed mobile sheet; do not depend on a specificity tie in the cascade.
+
+*Correction from Jeffrey, 2026-08-27.* The phone pencil opens the composer
+from both Conversation and Changes. It is not a Changes-only control; retain
+it whenever phone chrome is active and the composer sheet is closed.
 
 *Correction from Jeffrey, 2026-08-24.* A responsive control strip cannot assume its desktop child count. The shared-room composer has attachment, model, account, recipient, and send controls. At phone widths, give all five explicit grid areas; do not allow a fifth control to spill into an implicit offscreen grid column. Keep model, account, and recipient visible and separately selectable. Use short visible option labels and a single compact row when it fits. The visible per-message telemetry badge is only `agent · account profile · cost`; model, token counts, requested-vs-actual routing, and other provenance remain in its hover title rather than consuming layout space.
 

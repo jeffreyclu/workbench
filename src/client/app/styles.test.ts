@@ -140,6 +140,7 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.mobile-chrome-toggle { width: 76px; height: 44px; background: #20211d; border-color: #55564d; border-radius: 999px;');
     expect(phoneRules).toContain('.agent-console .shared-composer.is-mobile-composer-collapsed { display: none; }');
     expect(phoneRules).toContain('.mobile-composer-backdrop { position: fixed; inset: 0; z-index: 10;');
+    expect(phoneRules).toContain('.agent-console .conversation-review-layout.layout-changes .shared-composer.mobile-composer-sheet,\n  .agent-console .shared-composer.mobile-composer-sheet {');
     expect(phoneRules).toContain('.agent-console .shared-composer.mobile-composer-sheet {');
     expect(phoneRules).toContain('.mobile-composer-handle { display: grid; place-items: center;');
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed { min-height: 0; padding: 0; border-bottom-color: transparent; }');

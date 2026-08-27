@@ -1003,12 +1003,8 @@ nav { display: grid; gap: 3px; }
 .conversation-review-layout.layout-changes .shared-composer,
 .conversation-review-layout.layout-changes .archived-composer-note { order: 2; flex: 0 0 auto; width: calc(100% - 56px); margin: 0 28px 20px; }
 .conversation-changes { order: 1; min-width: 0; min-height: 0; padding: 0 28px 14px; overflow: auto; }
-.conversation-changes .workspace-diff { max-width: 1240px; margin: 0 auto; padding-top: 10px; border-top: 0; }
-.conversation-changes .github-diff { max-width: 1240px; margin: 0 auto; padding-top: 10px; border-top: 0; }
-.conversation-changes .workspace-diff > header,
-.conversation-changes .github-diff > header { margin-bottom: 7px; }
-.conversation-changes .workspace-diff > header h2,
-.conversation-changes .github-diff > header h2 { margin-block: 2px; }
+.conversation-changes .workspace-diff { max-width: 1240px; margin: 0 auto; padding-top: 18px; border-top: 0; }
+.conversation-changes .github-diff { max-width: 1240px; margin: 0 auto; padding-top: 18px; border-top: 0; }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .spin { animation: spin .8s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes thinking-pulse { 0% { box-shadow: 0 0 0 0 #c6f43277; } 70% { box-shadow: 0 0 0 8px #c6f43200; } 100% { box-shadow: 0 0 0 0 #c6f43200; } }
@@ -1139,6 +1135,9 @@ nav { display: grid; gap: 3px; }
   .mobile-composer-toggle.icon-button-active { color: var(--acid); border-color: var(--acid); }
   .agent-console .shared-composer.is-mobile-composer-collapsed { display: none; }
   .mobile-composer-backdrop { position: fixed; inset: 0; z-index: 10; display: block; padding: 0; background: #0009; border: 0; }
+  /* The Changes pane has a desktop-only 28px composer gutter. The sheet is
+     viewport anchored, so it must explicitly defeat that pane rule. */
+  .agent-console .conversation-review-layout.layout-changes .shared-composer.mobile-composer-sheet,
   .agent-console .shared-composer.mobile-composer-sheet {
     position: fixed; right: 0; bottom: calc(var(--mobile-nav) + env(safe-area-inset-bottom, 0px)); left: 0; z-index: 11;
     width: 100%; max-height: min(78dvh, 620px); margin: 0; overflow: auto; border-radius: 18px 18px 0 0;
