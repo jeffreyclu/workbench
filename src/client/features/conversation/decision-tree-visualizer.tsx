@@ -1,7 +1,7 @@
 import { Bot, ChevronDown, CircleDot, GitBranch, Terminal, X } from 'lucide-react';
 import { type ReactNode, useMemo, useState } from 'react';
 import type { AgentStreamEvent, SharedMessage } from '../../../shared/contracts';
-import { ModalDialog } from '../../modal-dialog';
+import { ModalDialog } from '../../components/dialogs/modal-dialog';
 import { buildDecisionTree, type DecisionTreeEvent, type DecisionTreeNode } from './decision-tree';
 
 type TreeEvent = DecisionTreeEvent & { stream: DecisionTreeNode };

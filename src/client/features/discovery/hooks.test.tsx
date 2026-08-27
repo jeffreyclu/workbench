@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryCandidate, DiscoveryInbox } from '../../../shared/contracts';
-import { getToasts, toast } from '../../toast-store';
+import { getToasts, toast } from '../../state/toast-store';
 import { useDiscoveryCard, useDiscoveryInbox } from './hooks';
 
 const candidateA = '00000000-0000-4000-8000-000000000001';

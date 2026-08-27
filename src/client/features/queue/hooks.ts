@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { AgentRun, WorkItem } from '../../../shared/contracts';
-import { api } from '../../api';
-import { toastError } from '../../toast-store';
+import { api } from '../../data/api';
+import { toastError } from '../../state/toast-store';
 import { queueQueryKeys } from './data';
 
 export function useTaskClassification(itemId: string) {

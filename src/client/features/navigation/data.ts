@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { api } from '../../api';
+import { api } from '../../data/api';
 
 export const navigationQueryKeys = {
   workItemCounts: ['work-item-counts'] as const,

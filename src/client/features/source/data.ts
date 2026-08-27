@@ -1,5 +1,5 @@
 import type { BrokerSourceId } from '../../../shared/contracts';
-import { api } from '../../api';
+import { api } from '../../data/api';
 
 export const sourceQueryKeys = {
   connections: ['source-connections'] as const,

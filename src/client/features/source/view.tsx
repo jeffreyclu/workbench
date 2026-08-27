@@ -5,10 +5,10 @@ import type { BrokerConnection } from '../../../shared/contracts';
 import { sourceData, sourceQueryKeys } from './data';
 import { useSourceConnections } from './hooks';
 import { canAuthorizeSource, sourceDisconnectProvider } from './state';
-import { ModalDialog } from '../../modal-dialog';
-import { ConfirmationDialog } from '../../confirmation-dialog';
-import { Skeleton } from '../../skeleton';
-import { toastError } from '../../toast-store';
+import { ModalDialog } from '../../components/dialogs/modal-dialog';
+import { ConfirmationDialog } from '../../components/dialogs/confirmation-dialog';
+import { Skeleton } from '../../components/skeleton/skeleton';
+import { toastError } from '../../state/toast-store';
 
 function SourceConnectionCardSkeleton() {
   return (

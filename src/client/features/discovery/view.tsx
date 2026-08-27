@@ -1,8 +1,8 @@
 import { ArrowUpRight, Check, LoaderCircle, RefreshCw, Search, Sparkles } from 'lucide-react';
 import type { DiscoveryCandidate, WorkItem } from '../../../shared/contracts';
-import { MarkdownComposer } from '../../markdown-composer.js';
-import { DiscoveryCardSkeleton } from '../../skeleton';
-import { Tabs } from '../../tabs';
+import { MarkdownComposer } from '../../components/markdown/markdown-composer.js';
+import { DiscoveryCardSkeleton } from '../../components/skeleton/skeleton';
+import { Tabs } from '../../components/tabs/tabs';
 import { useDiscoveryCard, useDiscoveryInbox, useDiscoveryNav } from './hooks';
 
 export function DiscoveryNav({ active, onClick }: { active: boolean; onClick: () => void }) {

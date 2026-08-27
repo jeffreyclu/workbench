@@ -3,13 +3,13 @@ import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import type { MemorySearchResult } from '../../../shared/contracts';
-import { ArtifactNav } from '../../artifacts';
-import { DiscoveryNav } from '../../discovery';
-import { InsightsNav } from '../../insights';
-import { memorySourceLabel } from '../../formatters';
-import { api } from '../../api';
-import { Skeleton, SkeletonText } from '../../skeleton';
-import { useValuePulse } from '../../use-value-pulse';
+import { ArtifactNav } from '../artifacts/view';
+import { DiscoveryNav } from '../discovery';
+import { InsightsNav } from '../insights/view';
+import { memorySourceLabel } from '../../lib/formatters';
+import { api } from '../../data/api';
+import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton';
+import { useValuePulse } from '../../hooks/use-value-pulse';
 import { useDebouncedValue } from '../conversation/hooks';
 
 export type NavigationViewName = 'active' | 'workbench' | 'archive' | 'artifacts' | 'context' | 'discovery' | 'insights';

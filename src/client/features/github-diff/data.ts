@@ -1,4 +1,4 @@
-import { api } from '../../api.js';
+import { api } from '../../data/api.js';
 
 export const githubDiffQueryKeys = {
   pullRequest: (url: string) => ['github-pull-request-diff', url] as const,

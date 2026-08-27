@@ -4,8 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryInbox } from '../../../shared/contracts';
-import { Toaster } from '../../toast';
-import { toast } from '../../toast-store';
+import { Toaster } from '../../components/toast/toast';
+import { toast } from '../../state/toast-store';
 import { DiscoveryInboxView } from './view';
 
 const candidateId = '00000000-0000-4000-8000-000000000001';

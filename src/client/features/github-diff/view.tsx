@@ -1,15 +1,15 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { ExternalLink, FileDiff, GitPullRequest } from 'lucide-react';
 import type { WorkItemReference } from '../../../shared/contracts.js';
-import { Skeleton, SkeletonText } from '../../skeleton.js';
+import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
 import { DiffConfidenceBubble } from '../diff-confidence-bubble.js';
 import { useDiffBlockConfidence } from '../diff-confidence-hooks.js';
 import { groupDiffBlocks, isChangedBlock, type DiffFollowUpReference } from '../diff-confidence.js';
-import { highlightHtml, languageFromPath } from '../../syntax-highlight.js';
+import { highlightHtml, languageFromPath } from '../../components/markdown/syntax-highlight.js';
 import { fileLabel, isPreviewableImage, parsePatch, pullRequestLabel, pullRequestUrls } from './logic.js';
 import { githubDiffData } from './data.js';
 import { useGitHubPullRequestDiff, useSelectedGitHubPullRequest } from './hooks.js';
-import { CopyIconButton } from '../../copy-code.js';
+import { CopyIconButton } from '../../components/markdown/copy-code.js';
 
 function DiffSkeleton() {
   return <section className="github-diff" aria-label="Pull request diff loading" aria-busy="true">

@@ -1,4 +1,4 @@
-import { api } from '../../api';
+import { api } from '../../data/api';
 
 export const taskQueryKeys = {
   detail: (taskId: string) => ['work-item', taskId] as const,

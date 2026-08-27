@@ -1,4 +1,4 @@
-import { api } from '../../api';
+import { api } from '../../data/api';
 
 export const conversationQueryKeys = {
   detail: (conversationId: string | null) => ['shared-conversation', conversationId] as const,

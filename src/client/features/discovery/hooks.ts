@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { DiscoveryCandidate } from '../../../shared/contracts';
-import { toast, toastError } from '../../toast-store';
+import { toast, toastError } from '../../state/toast-store';
 import { discoveryData, discoveryQueryKeys } from './data';
 import { useDiscoveryInboxState } from './state';
 

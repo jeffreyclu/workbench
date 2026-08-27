@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrokerConnection } from '../../../shared/contracts';
-import { getToasts, toast } from '../../toast-store';
+import { getToasts, toast } from '../../state/toast-store';
 import { SourcesDialog } from './view';
 
 const figmaConnection: BrokerConnection = {

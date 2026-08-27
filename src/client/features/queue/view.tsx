@@ -3,7 +3,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { AlertTriangle, Bot, Check, Clock, GripVertical, LoaderCircle, Sparkles, User } from 'lucide-react';
 import { useState, type CSSProperties, type KeyboardEvent } from 'react';
 import type { AgentRun, Assignee, WorkItem } from '../../../shared/contracts';
-import { ProjectColorDot, projectTheme } from '../../project-color';
+import { ProjectColorDot, projectTheme } from '../../components/project/project-color';
 import { useTaskClassification } from '../../features/queue/hooks';
 
 function AssigneeIcon({ assignee }: { assignee: Assignee }) {

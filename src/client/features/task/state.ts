@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type WorkItem } from '../../../shared/contracts';
-import { readTaskModelProfiles, writeTaskModelProfile } from '../../preferences';
+import { readTaskModelProfiles, writeTaskModelProfile } from '../../lib/preferences';
 
 export function useTaskExecutionProfile(taskId: string) {
   const [executionProfile, setExecutionProfileState] = useState<AgentRun['executionProfile']>(() => readTaskModelProfiles()[taskId] ?? null);

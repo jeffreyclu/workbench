@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { api } from '../api.js';
+import { api } from '../data/api.js';
 
 /** Assess the changed blocks of the file currently on screen. Keyed by block
  * content so switching files or refreshing a diff re-asks, but re-rendering

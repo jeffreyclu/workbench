@@ -231,6 +231,8 @@ composer control is the fixed bottom-right action.
 
 The mobile conversation controls are hidden entirely at desktop widths.
 
+*Clarification from Jeffrey, 2026-08-27.* The collapsed mobile conversation-tray opener is a wide, centered, opaque icon-only pill (76×44px), not a small square. It must be easy to tap while preserving the compact 32px controls inside the expanded tray.
+
 ### Mobile conversation action bar survives title collapse
 
 *Correction from Jeffrey, 2026-08-27.* The floating phone conversation action

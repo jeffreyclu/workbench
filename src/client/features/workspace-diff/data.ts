@@ -1,4 +1,4 @@
-import { api } from '../../api.js';
+import { api } from '../../data/api.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import type { DiffHunkReviewState } from '../../../shared/contracts.js';
 

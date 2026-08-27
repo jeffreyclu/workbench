@@ -1,5 +1,5 @@
 import type { DiscoveryCandidate } from '../../../shared/contracts';
-import { api } from '../../api';
+import { api } from '../../data/api';
 
 export const discoveryQueryKeys = {
   inbox: (view: 'pending' | 'reviewed') => ['discovery', view] as const,

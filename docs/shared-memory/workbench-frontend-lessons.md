@@ -158,8 +158,16 @@ phone review switch to Conversation and Changes only; never show Split.
 tray, show the conversation details first. The next row shares the
 Conversation/Changes switch on the left and compact action controls on the
 right; do not give those actions a separate pill or panel. The collapsed tray
-expand control needs an opaque background. On desktop, the review switch and
-pin are z-layered over the conversation without a solid enclosing surface.
+expand control needs an opaque background.
+
+*Correction from Jeffrey, 2026-08-27.* The expanded phone conversation tray's
+grab handle belongs on its bottom edge, below the details and shared review /
+actions row. Keep the tray compact and deliberate: details begin near its top,
+controls form the middle row, and the handle closes the surface at its boundary.
+
+*Correction from Jeffrey, 2026-08-27.* On desktop, the floating review switch
+and pin control each need a solid, elevated surface. Keep them z-layered over
+the conversation; do not turn the whole desktop control row into a panel.
 
 ### Phone composer controls must have an intentional complete layout
 

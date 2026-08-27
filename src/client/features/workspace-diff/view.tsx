@@ -1,19 +1,19 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { FileDiff, GitCommitHorizontal, History, RefreshCw, Upload } from 'lucide-react';
-import { Skeleton, SkeletonText } from '../../skeleton.js';
+import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import type { DiffHunkReview, DiffHunkReviewState } from '../../../shared/contracts.js';
 import { DiffConfidenceBubble } from '../diff-confidence-bubble.js';
 import { useDiffBlockConfidence } from '../diff-confidence-hooks.js';
 import { groupDiffBlocks, isChangedBlock, type DiffFollowUpReference } from '../diff-confidence.js';
-import { highlightHtml, languageFromPath } from '../../syntax-highlight.js';
+import { highlightHtml, languageFromPath } from '../../components/markdown/syntax-highlight.js';
 import { compareWorkspaceDiffSnapshots, fileLabel, parsePatch } from './logic.js';
 import { useCommitAndPushWorkspace, useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
 import { workspaceDiffQueryKeys } from './data.js';
-import { CopyIconButton } from '../../copy-code.js';
+import { CopyIconButton } from '../../components/markdown/copy-code.js';
 
 const HUNK_REVIEW_STATES: { state: DiffHunkReviewState; label: string }[] = [
   { state: 'reviewed', label: 'Reviewed' },
