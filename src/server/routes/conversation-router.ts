@@ -14,7 +14,7 @@ import { isRuntimeApproval } from '../runtime-promotion.js';
 import { PROMOTION_QUEUED_MESSAGE } from '../promotion-messages.js';
 import type { RouteContext } from '../route-context.js';
 
-export function createConversationRouter({ repository, database, capabilities }: RouteContext) {
+export function createConversationRouter({ repository, database, capabilities, admin }: RouteContext) {
   const router = Router();
   const conversationWorkspaces = (conversationId: string) => {
     const conversation = repository.getConversation(conversationId);
@@ -350,7 +350,22 @@ export function createConversationRouter({ repository, database, capabilities }:
     if ((prior.author !== 'codex' && prior.author !== 'claude') || (prior.status !== 'failed' && prior.status !== 'canceled')) {
       return response.status(409).json({ error: 'Only failed or canceled agent responses can be continued.' });
     }
-    if (repository.getRunByMessage(prior.id)) return response.status(409).json({ error: 'Retry this response from its related task run.' });
+    // The conversation view may not yet have refreshed its task-run cache
+    // after cancel. Resolve the link here instead of sending that stale client
+    // state down a dead standalone-message retry path.
+    const linkedRun = repository.getRunByMessage(prior.id);
+    if (linkedRun) {
+      void (async () => {
+        const retried = await admin.retryRun(linkedRun.id, { force: false });
+        if ('body' in retried) {
+          response.status(retried.status).json(retried.body);
+          return;
+        }
+        const reply = repository.getSharedMessageById(prior.id) ?? prior;
+        response.status(202).json({ reply, replies: [reply], run: retried.run });
+      })().catch((error) => response.status(500).json({ error: error instanceof Error ? error.message : 'Could not retry the linked agent run.' }));
+      return;
+    }
     const retryGroup = prior.dispatchGroupId
       ? repository.listAllSharedMessages(prior.conversationId).filter((message) => message.dispatchGroupId === prior.dispatchGroupId && (message.author === 'codex' || message.author === 'claude') && (message.status === 'failed' || message.status === 'canceled'))
       : [prior];

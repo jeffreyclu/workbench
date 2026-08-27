@@ -669,6 +669,30 @@ export function modelFor(agent: AgentRun['agent'], profile: ExecutionProfile): s
       : { economy: 'haiku', standard: 'sonnet', deep: 'opus' }[profile]);
 }
 
+/**
+ * Starts one input-ready provider process for a known upcoming turn. This is
+ * deliberately separate from replenishment: Claude may claim this process,
+ * but never gets a second speculative sibling while it is doing real work.
+ */
+export function warmAgentCommand(
+  agent: AgentRun['agent'],
+  cwd: string,
+  profile: ExecutionProfile,
+  accountProfile = DEFAULT_ACCOUNT_PROFILE,
+  kind: AgentRun['kind'] = 'analysis',
+): void {
+  const { command, args } = commandFor(agent, cwd, profile, undefined, undefined, kind);
+  if (hasPooledProcess(agent, cwd, command, args, accountProfile)) return;
+  startPoolSweep();
+  const child = spawn(command, args, {
+    cwd,
+    env: agentAccountEnv(agent, accountProfile),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
+  });
+  warmProcess(agent, cwd, command, args, child, null, accountProfile);
+}
+
 export async function judgeExecutionProfile(prompt: string, cwd: string, signal?: AbortSignal): Promise<ExecutionProfile> {
   // Routing must not consume a second agent turn. The deterministic policy is explainable,
   // cheap, and keeps the requested agent's response as the only billable execution.
@@ -902,11 +926,10 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     // never returned to the pool; a fresh replacement is warmed in the
     // background under the same (agent, cwd, command, args) key so the pool
     // stays populated for the next matching task.
-    // A Claude CLI process holds provider-session/account capacity even while
-    // it is idle. Speculatively starting a second one makes the real turn wait
-    // behind its own warm sibling. Claude therefore always has exactly one
-    // process per durable run; only dedicated local services keep warm state.
-    const canUseWarmPool = poolEligible && agent !== 'claude';
+    // Claude may claim the single turn-specific process prestarted by the
+    // shared-room dispatcher. It is never background-replenished: a second
+    // idle Claude sibling competes for the same provider capacity.
+    const canUseWarmPool = poolEligible;
     const claimed = canUseWarmPool ? claimWarmProcess(agent, cwd, command, args, accountProfile) : null;
     const child = claimed ?? spawnFresh();
     const unregisterProcess = registerActiveAgentProcess(child);
@@ -914,7 +937,7 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     // extra process, which pre-existing tests asserting exact spawn logs
     // don't expect. The pool mechanics themselves are covered directly by
     // agent-pool.test.ts.
-    if (canUseWarmPool && !process.env.VITEST) {
+    if (canUseWarmPool && agent !== 'claude' && !process.env.VITEST) {
       startPoolSweep();
       if (!hasPooledProcess(agent, cwd, command, args, accountProfile)) {
         try { warmProcess(agent, cwd, command, args, spawnFresh(), null, accountProfile); } catch { /* best-effort warm; a fresh spawn still serves the next task */ }

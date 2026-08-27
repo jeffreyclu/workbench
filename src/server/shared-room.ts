@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
-import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type AgentInputSteering, type AgentUsage, type RetrievedMemory } from './agent-runner.js';
+import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, warmAgentCommand, type AgentInputSteering, type AgentUsage, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -730,15 +730,30 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const selectedWorkspace = repository.database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(target.conversationId) as { workspace_path: string } | undefined;
     const cwd = resolveSharedReplyWorkingDirectory(linkedItem, selectedWorkspace?.workspace_path);
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}${selectedWorkspace ? ' from Repo Explorer.' : '.'}`);
-    const externalAuthorization = await classifyExternalActionAuthorization(latestUserMessage, precedingUserMessage, undefined, precedingAgentResponse);
-    const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
-    const retrievedMemory = await (retrievalSnapshot?.matches ?? repository.searchActivityMemory(memoryQuery, PROMPT_MEMORY_CANDIDATE_LIMIT, {
+    const runKind = linkedRun?.kind ?? 'analysis';
+    const profile = target.executionProfile && target.executionProfile !== 'routing'
+      ? target.executionProfile
+      : await judgeExecutionProfile(latestUserMessage || 'analysis', cwd, controller.signal);
+    repository.updateSharedMessage(messageId, { model: modelFor(agent, profile), executionProfile: profile });
+    if (runId) repository.updateRun(runId, { model: modelFor(agent, profile), executionProfile: profile });
+    repository.setConversationExecutionProfile(target.conversationId, profile);
+    // Provider boot is the largest cold-start cost. Start the one exact
+    // process this turn will claim while the independent prompt prerequisites
+    // run; Claude deliberately gets no replenished sibling.
+    if (!process.env.VITEST) {
+      if (agent === 'codex') warmSharedRoomCodex(cwd, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE);
+      else warmAgentCommand(agent, cwd, profile, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, runKind);
+    }
+    const externalAuthorizationPromise = classifyExternalActionAuthorization(latestUserMessage, precedingUserMessage, undefined, precedingAgentResponse);
+    const retrievedMemoryPromise = retrievalSnapshot?.matches ?? repository.searchActivityMemory(memoryQuery, PROMPT_MEMORY_CANDIDATE_LIMIT, {
       excludeExactBody: memoryQuery,
       projectKey: linkedItem ? projectKey(linkedItem.projectName) || undefined : undefined,
     }).catch((error) => {
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
-    }));
+    });
+    const [externalAuthorization, retrievedMemory] = await Promise.all([externalAuthorizationPromise, retrievedMemoryPromise]);
+    const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const injectedMemory = selectRelevantMemoryForPrompt(retrievedMemory, undefined, target.conversationId);
     repository.updateSharedMessage(messageId, {
       retrievedMemoryCount: injectedMemory.length,
@@ -764,14 +779,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       retrievedMemoryCount: injectedMemory.length,
       retrievedMemoryChars: injectedMemory.reduce((total, match) => total + match.title.length + match.body.length, 0),
     });
-    repository.updateSharedMessage(messageId, { model: modelFor('codex', 'economy'), executionProfile: 'routing' });
     const guardedPrompt = prompt;
-    const profile = target.executionProfile && target.executionProfile !== 'routing'
-      ? target.executionProfile
-      : await judgeExecutionProfile(latestUserMessage || guardedPrompt, cwd, controller.signal);
-    repository.updateSharedMessage(messageId, { model: modelFor(agent, profile), executionProfile: profile });
-    if (runId) repository.updateRun(runId, { model: modelFor(agent, profile), executionProfile: profile });
-    repository.setConversationExecutionProfile(target.conversationId, profile);
     let result: { output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; codexThreadId?: string };
     try {
       result = agent === 'codex'
