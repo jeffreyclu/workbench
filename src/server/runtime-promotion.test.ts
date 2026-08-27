@@ -41,4 +41,16 @@ describe('runtime drain state', () => {
     expect(repository.hasRuntimeWork(ownerId)).toBe(false);
     database.close();
   });
+
+  it('does not make a linked external-repository agent stream block a Workbench promotion', () => {
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const ownerId = 'old-runtime';
+    const item = repository.create({ title: 'Writer-only work', description: '', priority: 1, status: 'ready', projectName: 'Writer', workspacePath: '/Users/jeffrey.lu/dev/writer-monorepo', dueDate: null });
+    const run = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement the Writer change.');
+
+    expect(repository.claimRun(run.id, ownerId, 60_000)).toBe(true);
+    expect(repository.hasRuntimeWork(ownerId)).toBe(false);
+    database.close();
+  });
 });

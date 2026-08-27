@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
 
 import { DEFAULT_ACCOUNT_PROFILE, type AgentRun } from '../../shared/contracts.js';
+import { WORKBENCH_PROJECT_KEY } from '../../shared/project-name.js';
 import type { UnitOfWork } from '../unit-of-work.js';
 
 export interface RunPatch {
@@ -395,17 +397,33 @@ export class RunRepository {
   }
 
   /**
-   * Work that must finish in the serving process before a promoted runtime can
-   * be drained. This is deliberately broader than hasLiveWork(): system jobs
-   * such as promotion must persist their own terminal message before the old
-   * backend exits too.
+   * Only Workbench-scoped work holds a Workbench runtime during promotion.
+   * Agent streams in a linked project repository are independent subprocesses
+   * with durable leases; keeping this backend alive for them makes unrelated
+   * Writer/project work block a Workbench-only release indefinitely. System
+   * promotion work and unlinked (therefore Workbench) room turns still drain.
    */
   hasRuntimeWork(ownerId: string): boolean {
+    const workbenchRoot = resolve(process.cwd());
     const row = this.database.prepare(`
       SELECT
-        (SELECT COUNT(*) FROM agent_runs WHERE status = 'running' AND owner_id = ?) AS runs,
-        (SELECT COUNT(*) FROM shared_messages WHERE status = 'running' AND owner_id = ?) AS messages
-    `).get(ownerId, ownerId) as { runs: number; messages: number };
+        (SELECT COUNT(*)
+           FROM agent_runs AS run
+           JOIN work_items AS item ON item.id = run.work_item_id
+          WHERE run.status = 'running' AND run.owner_id = ?
+            AND (COALESCE(item.project_key, '') = ?
+              OR COALESCE(run.resolved_workspace, item.workspace_path, '') = ?)) AS runs,
+        (SELECT COUNT(*)
+           FROM shared_messages AS message
+           LEFT JOIN agent_runs AS run ON run.message_id = message.id AND run.status = 'running'
+           LEFT JOIN shared_conversations AS conversation ON conversation.id = message.conversation_id
+           LEFT JOIN work_items AS item ON item.id = conversation.work_item_id
+          WHERE message.status = 'running' AND message.owner_id = ?
+            AND (message.dispatch_target = 'promotion'
+              OR (run.id IS NULL AND (conversation.work_item_id IS NULL
+                OR COALESCE(item.project_key, '') = ?
+                OR COALESCE(item.workspace_path, '') = ?)))) AS messages
+    `).get(ownerId, WORKBENCH_PROJECT_KEY, workbenchRoot, ownerId, WORKBENCH_PROJECT_KEY, workbenchRoot) as { runs: number; messages: number };
     return Number(row.runs) + Number(row.messages) > 0;
   }
 
