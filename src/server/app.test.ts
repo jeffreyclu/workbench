@@ -653,6 +653,19 @@ describe('GET /api/shared/conversations/:id', () => {
     expect(repository.get(task.id)?.status).toBe('ready');
   });
 
+  it('unpins a pinned task and its linked conversation when restoring from the task', async () => {
+    const task = repository.create({ title: 'Restart from task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.update(task.id, { status: 'pinned' });
+    const conversation = repository.createConversation('Linked restart', task.id);
+    repository.setConversationPinned(conversation.id, true);
+    repository.archive(task.id, false);
+
+    const restored = await fetch(`${baseUrl}/api/work-items/${task.id}/restore`, { method: 'POST' });
+    expect(restored.status).toBe(200);
+    expect((await restored.json()) as { item: { status: string } }).toEqual({ item: expect.objectContaining({ status: 'ready' }) });
+    expect(repository.getConversation(conversation.id)).toEqual(expect.objectContaining({ archivedAt: null, pinned: false, linkedWorkItemPinned: false }));
+  });
+
   it('persists all composer dropdown choices before a message is sent', async () => {
     const conversation = repository.createConversation('Remember composer choices');
 

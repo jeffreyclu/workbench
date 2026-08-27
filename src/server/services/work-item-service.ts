@@ -58,10 +58,13 @@ export class WorkItemService {
     const item = this.collaborators.get(id);
     if (!item || !item.archivedAt) return item;
     const now = new Date().toISOString();
-    const status = item.status === 'done' || item.status === 'canceled' ? 'ready' : item.status;
+    // Restoring is a restart, not a return to the parked state that preceded
+    // archiving. A pinned task and its linked conversation must both re-enter
+    // their ready/active stacks.
+    const status = item.status === 'done' || item.status === 'canceled' || item.status === 'pinned' ? 'ready' : item.status;
     return this.unitOfWork.transaction(() => {
       this.workItems.setRestored(id, { status, updatedAt: now });
-      this.database.prepare(`UPDATE shared_conversations SET archived_at = NULL, updated_at = ?
+      this.database.prepare(`UPDATE shared_conversations SET archived_at = NULL, pinned = 0, updated_at = ?
         WHERE work_item_id = ? OR id IN (SELECT conversation_id FROM agent_runs WHERE work_item_id = ? AND conversation_id IS NOT NULL)`).run(now, id, id);
       this.collaborators.recordLifecycleEvent({
         workItemId: id, transition: 'restored', fromStatus: item.status, toStatus: status, isInitial: false,
