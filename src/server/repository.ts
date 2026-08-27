@@ -361,7 +361,9 @@ export class WorkItemRepository {
   }
 
   setConversationWorkItem(id: string, workItemId: string | null): SharedConversation | null {
-    return this.conversationService.setWorkItem(id, workItemId);
+    const conversation = this.conversationService.setWorkItem(id, workItemId);
+    if (conversation?.workItemId) this.syncConversationAttachmentsToWorkItem(conversation);
+    return conversation;
   }
 
   /** Materializes pre-existing chat replies as task runs so either surface has the same execution history. */
@@ -634,9 +636,28 @@ export class WorkItemRepository {
       INSERT INTO shared_messages (id, conversation_id, author, body, pinned, status, error, attachments_json, dispatch_target, created_at, completed_at, execution_profile, account_profile, dispatch_group_id)
       VALUES (?, ?, ?, ?, 0, ?, '', ?, ?, ?, ?, ?, ?, ?)
     `).run(message.id, message.conversationId, author, body, status, JSON.stringify(attachments), dispatchTarget, message.createdAt, message.completedAt, executionProfile, accountProfile, dispatchGroupId);
+    if (attachments.length && conversation.workItemId) this.syncConversationAttachmentsToWorkItem(conversation);
     this.database.prepare('UPDATE shared_conversations SET updated_at = ?, title = CASE WHEN title = ? AND ? = ? THEN substr(?, 1, 80) ELSE title END WHERE id = ?')
       .run(message.createdAt, 'New conversation', author, 'jeffrey', body, message.conversationId);
     return message;
+  }
+
+  /** Mirrors linked conversation files into the task's durable agent context. */
+  private syncConversationAttachmentsToWorkItem(conversation: SharedConversation): void {
+    if (!conversation.workItemId) return;
+    const item = this.get(conversation.workItemId);
+    if (!item) return;
+    const existingPaths = new Set((item.attachments ?? []).map((attachment) => attachment.path));
+    const attachments = this.listAllSharedMessages(conversation.id)
+      .flatMap((message) => message.attachments)
+      .filter((attachment) => {
+        if (existingPaths.has(attachment.path)) return false;
+        existingPaths.add(attachment.path);
+        return true;
+      });
+    if (!attachments.length) return;
+    this.update(item.id, { attachments: [...(item.attachments ?? []), ...attachments] }, false, { actor: 'jeffrey', source: 'conversation' });
+    this.addActivity(item.id, 'jeffrey', 'attachment_added', `Added ${attachments.length} conversation attachment${attachments.length === 1 ? '' : 's'} to task files.`);
   }
 
   /** Promotion is a global control-plane action: concurrent approvals share

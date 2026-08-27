@@ -598,6 +598,31 @@ describe('WorkItemRepository', () => {
     expect(repository.listActivity(task.id).some((entry) => entry.kind === 'conversation_unlinked')).toBe(true);
   });
 
+  it('adds conversation attachments to the linked task files without duplicating their saved path', () => {
+    const task = repository.create({ title: 'Attachment target', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Attachment thread', task.id);
+    const attachment = { name: 'requirements.pdf', path: '/tmp/requirements.pdf', mimeType: 'application/pdf', size: 42 };
+
+    repository.createSharedMessage('jeffrey', 'Please use this file.', 'completed', conversation.id, [attachment]);
+    repository.createSharedMessage('jeffrey', 'Same file for reference.', 'completed', conversation.id, [attachment]);
+
+    expect(repository.get(task.id)?.attachments).toEqual([attachment]);
+    expect(repository.listActivity(task.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'attachment_added', body: 'Added 1 conversation attachment to task files.' }),
+    ]));
+  });
+
+  it('backfills existing conversation attachments when a task is linked later', () => {
+    const task = repository.create({ title: 'Late attachment target', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Previously unlinked thread');
+    const attachment = { name: 'mockup.png', path: '/tmp/mockup.png', mimeType: 'image/png', size: 84 };
+    repository.createSharedMessage('jeffrey', 'Attached before task linking.', 'completed', conversation.id, [attachment]);
+
+    repository.setConversationWorkItem(conversation.id, task.id);
+
+    expect(repository.get(task.id)?.attachments).toEqual([attachment]);
+  });
+
   it('logs a model preference activity on the linked task when Jeffrey sets or clears a conversation tier', () => {
     const task = repository.create({ title: 'Model tier task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const conversation = repository.createConversation('Tier thread', task.id);
