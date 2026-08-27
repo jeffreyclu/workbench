@@ -387,7 +387,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   // under a mid-scroll finger) every second. Key off the row shape instead --
   // it only changes when a card actually moves between groups or a header
   // count changes.
-  const conversationStackShape = conversationStackRows.map((row) => row.type === 'header' ? `h:${row.id}:${row.count}` : `i:${row.id}:${row.group}`).join('|');
+  const conversationStackShape = conversationStackRows.map((row) => row.type === 'header' ? `h:${row.id}:${row.count}` : `i:${row.id}:${row.state ?? 'finished'}`).join('|');
   useEffect(() => {
     // Group headers change the virtual row geometry as conversations move
     // between stacks, so recalculate instead of waiting for a scroll event.
