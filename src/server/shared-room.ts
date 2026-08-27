@@ -896,8 +896,18 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     activeReplies.delete(messageId);
     activeReplySteering.delete(messageId);
     replyRunIds.delete(messageId);
-    const synthesized = await synthesizeSharedTurn(repository, target.conversationId, target.createdAt);
-    const dispatched = dispatchNextSharedTurn(repository, target.conversationId);
+    // Test/runtime teardown may close the repository while an already-started
+    // provider is settling. Do not turn that shutdown race into an unhandled
+    // rejection; a serving runtime never treats a lost repository as a reply.
+    let synthesized = false;
+    let dispatched: SharedMessage[] = [];
+    try {
+      synthesized = await synthesizeSharedTurn(repository, target.conversationId, target.id);
+      dispatched = dispatchNextSharedTurn(repository, target.conversationId);
+    } catch (error) {
+      if ((error as { code?: string } | undefined)?.code !== 'ERR_INVALID_STATE') throw error;
+      return;
+    }
     if (!synthesized && !dispatched.length) settleLinkedTask(repository, target.conversationId, `${agent} finished responding; review the conversation.`);
     if (!synthesized && !dispatched.length) {
       const completed = repository.getSharedMessageById(messageId);
@@ -985,25 +995,34 @@ export async function deliverPendingSharedInterjections(repository: WorkItemRepo
   }
 }
 
-function synthesisSource(repository: WorkItemRepository, conversationId: string, replyCreatedAt: string): { prompt: string; codex: SharedMessage; claude: SharedMessage } | null {
+export function synthesisSource(repository: WorkItemRepository, conversationId: string, replyId: string): { prompt: string; codex: SharedMessage; claude: SharedMessage } | null {
   const messages = repository.listAllSharedMessages(conversationId);
-  const request = [...messages].reverse().find((message) => message.author === 'jeffrey' && message.dispatchTarget === 'both' && message.createdAt <= replyCreatedAt);
+  const reply = messages.find((message) => message.id === replyId);
+  // A timestamp is not an identity. Multiple messages can share a timestamp,
+  // while every dual reply is durably tied to its human request by this ID.
+  const request = reply?.dispatchGroupId
+    ? messages.find((message) => message.id === reply.dispatchGroupId && message.author === 'jeffrey' && message.dispatchTarget === 'both')
+    : null;
   if (!request) return null;
-  const replies = messages.filter((message) => message.createdAt >= request.createdAt && (message.author === 'codex' || message.author === 'claude'));
+  const replies = messages.filter((message) => message.dispatchGroupId === request.id && (message.author === 'codex' || message.author === 'claude'));
   const requestedAgentFor = (message: SharedMessage) => repository.getRunByMessage(message.id)?.requestedAgent ?? message.author;
   const codex = [...replies].reverse().find((message) => requestedAgentFor(message) === 'codex');
   const claude = [...replies].reverse().find((message) => requestedAgentFor(message) === 'claude');
-  if (!codex || !claude || codex.status !== 'completed' || claude.status !== 'completed') return null;
+  const terminal = (message: SharedMessage) => message.status === 'completed' || message.status === 'failed' || message.status === 'canceled';
+  // A partial result still needs a durable conclusion. Only an explicitly
+  // canceled pair avoids spending another provider turn on a summary.
+  if (!codex || !claude || !terminal(codex) || !terminal(claude) || (codex.status === 'canceled' && claude.status === 'canceled')) return null;
   const alreadySynthesized = messages.some((message) => message.author === 'system' && message.createdAt >= request.createdAt && message.body.startsWith('Synthesis:'));
   if (alreadySynthesized) return null;
+  const response = (label: string, message: SharedMessage) => `${label} (${message.status}):\n${message.body || message.error || 'No response was produced.'}`;
   return {
     codex, claude,
-    prompt: `Synthesize these two independent agent responses to Jeffrey's request. Lead with the practical conclusion. Reconcile disagreements, retain concrete evidence, and say which points remain unverified. Do not mention that you are a synthesizer or repeat both reports. Keep it concise.\n\nJeffrey: ${request.body}\n\nCodex-requested response (executed by ${codex.author}):\n${codex.body}\n\nClaude-requested response (executed by ${claude.author}):\n${claude.body}`,
+    prompt: `Synthesize these two independent agent responses to Jeffrey's request. Lead with the practical conclusion. Reconcile disagreements, retain concrete evidence, and say which points remain unverified. If one response failed or was canceled, state that plainly and still summarize the usable result. Do not mention that you are a synthesizer or repeat both reports. Keep it concise.\n\nJeffrey: ${request.body}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}`,
   };
 }
 
-async function synthesizeSharedTurn(repository: WorkItemRepository, conversationId: string, replyCreatedAt: string): Promise<boolean> {
-  const source = synthesisSource(repository, conversationId, replyCreatedAt);
+async function synthesizeSharedTurn(repository: WorkItemRepository, conversationId: string, replyId: string): Promise<boolean> {
+  const source = synthesisSource(repository, conversationId, replyId);
   if (!source) return false;
   const message = repository.createSharedMessage('system', 'Synthesis: combining Codex and Claude…', 'running', conversationId);
   const agent = repository.selectBalancedAgent('claude');

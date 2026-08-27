@@ -206,15 +206,15 @@ describe('phone dialogs', () => {
 describe('diff review layout', () => {
   it('gives both local and GitHub diffs a compact file rail and a full-width patch pane on every viewport', () => {
     expect(styles).toContain('.workspace-diff-layout, .github-diff-layout { display: grid; grid-template-columns: minmax(0, 1fr);');
-    expect(styles).toContain('.workspace-diff nav > div, .github-diff nav > div { display: flex; max-height: 68px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }');
-    expect(styles).toContain('.workspace-diff nav button, .github-diff nav button { display: grid; flex: 0 0 min(280px, 40vw);');
+    expect(styles).toContain('.workspace-diff nav > div, .github-diff nav > div { display: flex; max-height: 60px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }');
+    expect(styles).toContain('.workspace-diff nav button, .github-diff nav button { display: grid; flex: 0 0 clamp(260px, 20vw, 340px);');
 
     const phoneRules = styles.match(/@media \(max-width: 640px\) \{[\s\S]*?\.task-collapsible/)?.[0] ?? '';
 
     expect(phoneRules).toContain('.diff-file-list button { flex-basis: min(220px, 68vw); }');
     expect(styles).toContain('.diff-file-row > button { flex: 1 1 0; min-width: 0; }');
-    expect(styles).toContain('.diff-file-actions { display: flex; flex: 0 0 auto;');
-    expect(styles).toContain('.diff-file-row > .diff-file-actions .diff-file-copy-path');
+    expect(styles).toContain('.diff-file-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; padding: 7px 7px 7px 5px;');
+    expect(styles).toContain('.diff-file-row > .diff-file-actions .diff-file-copy-path, .diff-file-row > .diff-file-actions .diff-file-open-editor { display: inline-flex; flex: 0 0 28px;');
     expect(styles).toContain('.workspace-diff-file { min-width: 0; overflow: hidden; }');
     expect(styles).toContain('.github-diff-file { min-width: 0; overflow: hidden; }');
     expect(styles).toContain('.workspace-diff-file pre { min-width: 0; max-width: 100%;');

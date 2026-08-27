@@ -3,7 +3,7 @@ import type { WorkspaceDiff } from '../shared/contracts.js';
 import { readFileSync, rmSync } from 'node:fs';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
-import { cancelSharedReply, deliverPendingSharedInterjections, dispatchNextSharedTurn, interjectQueuedSharedMessage, interjectionSteeringPrompt, isSharedReplyActive, registerActiveReplySteering, runSharedBackgroundJob } from './shared-room.js';
+import { cancelSharedReply, deliverPendingSharedInterjections, dispatchNextSharedTurn, interjectQueuedSharedMessage, interjectionSteeringPrompt, isSharedReplyActive, registerActiveReplySteering, runSharedBackgroundJob, synthesisSource } from './shared-room.js';
 import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
@@ -1099,6 +1099,24 @@ describe('WorkItemRepository', () => {
     expect(repository.nextQueuedSharedTurn(conversation.id)).toBeNull();
   });
 
+  it('synthesizes the exact dual-dispatch group after both replies reach terminal states', () => {
+    const conversation = repository.createConversation('Dual synthesis');
+    const firstRequest = repository.createSharedMessage('jeffrey', 'Earlier dual request', 'completed', conversation.id, [], 'both');
+    repository.createSharedMessage('codex', 'Earlier Codex answer', 'completed', conversation.id, [], 'none', null, null, firstRequest.id);
+    repository.createSharedMessage('claude', 'Earlier Claude answer', 'completed', conversation.id, [], 'none', null, null, firstRequest.id);
+    const request = repository.createSharedMessage('jeffrey', 'Current dual request', 'completed', conversation.id, [], 'both');
+    const codex = repository.createSharedMessage('codex', 'Current Codex answer', 'completed', conversation.id, [], 'none', null, null, request.id);
+    const claude = repository.createSharedMessage('claude', '', 'failed', conversation.id, [], 'none', null, null, request.id);
+    repository.updateSharedMessage(claude.id, { error: 'Claude unavailable.' });
+
+    const source = synthesisSource(repository, conversation.id, codex.id);
+
+    expect(source?.prompt).toContain('Current dual request');
+    expect(source?.prompt).toContain('Current Codex answer');
+    expect(source?.prompt).toContain('Claude unavailable.');
+    expect(source?.prompt).not.toContain('Earlier Codex answer');
+  });
+
   it('shares one retrieval snapshot between concurrent Codex and Claude replies', async () => {
     const task = repository.create({ title: 'Connectors retrieval', description: '', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
     const conversation = repository.createConversation('Concurrent retrieval', task.id);
@@ -1124,11 +1142,11 @@ describe('WorkItemRepository', () => {
         projectKey: 'connectors',
       });
       expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(expect.arrayContaining(['claude', 'codex']));
-      const expectedTitles = matches.map((match) => match.title);
-      expect(replies.map((reply) => repository.getRetrievedMemoryDetail(reply.id)?.items.map((item) => item.title))).toEqual([
-        expectedTitles,
-        expectedTitles,
-      ]);
+      const injectedTitles = replies.map((reply) => repository.getRetrievedMemoryDetail(reply.id)?.items.map((item) => item.title));
+      // The prompt budget deliberately trims the tail; the dual recipients
+      // must receive the same bounded snapshot, not every raw candidate.
+      expect(injectedTitles[0]).toEqual(injectedTitles[1]);
+      expect(injectedTitles[0]).toEqual(expect.arrayContaining(['Relevant 1', 'Relevant 2']));
     } finally {
       process.env.PATH = previousPath;
       rmSync(directory, { recursive: true, force: true });

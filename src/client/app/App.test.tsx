@@ -555,7 +555,7 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
-    expect(await screen.findByText('Claude · sonnet (standard) · personal · $0.050 · 1 in · 1 out · 2.0s · fallback from codex (quota)')).toBeTruthy();
+    expect(await screen.findByText('Claude · sonnet (standard) · personal · 1 in · 1 out · 2.0s · fallback from codex (quota)')).toBeTruthy();
   });
 
   it('keeps the approved-awaiting-promotion badge on the conversation card while promotion runs', async () => {
@@ -1135,7 +1135,7 @@ describe('shared room', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === `/api/work-items/${taskId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'diff-in-chat', changedFiles: 1, additions: 2, deletions: 1, publish: { branch: 'diff-in-chat', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/App.tsx', previousPath: null, status: 'modified', additions: 2, deletions: 1, isBinary: false, patch: '@@ -1 +1,2 @@\n-old\n+new\n+next' }] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'diff-in-chat', changedFiles: 1, additions: 2, deletions: 1, publish: { branch: 'diff-in-chat', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/App.tsx', previousPath: null, status: 'modified', additions: 2, deletions: 1, isBinary: false, patch: '@@ -1 +1,2 @@\n-old\n+new\n+next' }] } }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/github/pull-request-diff')) return new Response(JSON.stringify({ diff: { url: item.sourceUrl, repository: 'writer/workbench', number: 42, title: 'Conversation review', baseRef: 'main', headRef: 'diff-in-chat', changedFiles: 1, additions: 2, deletions: 1, files: [{ path: 'src/client/App.tsx', previousPath: null, status: 'modified', additions: 2, deletions: 1, isBinary: false, patch: '@@ -1 +1,2 @@\n-old\n+new\n+next' }] } }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [message] }), { headers: { 'Content-Type': 'application/json' } });
@@ -1154,7 +1154,7 @@ describe('shared room', () => {
     fireEvent.click(changes);
     expect(await screen.findByRole('heading', { name: 'Current workspace changes' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Conversation review' })).toBeTruthy();
-    expect(await screen.findAllByRole('button', { name: /src\/client\/App\.tsx/ })).toHaveLength(1);
+    expect(await screen.findAllByRole('button', { name: /src\/client\/App\.tsx/ })).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'Changes' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('button', { name: 'Split' })).toBeNull();
     expect(screen.getByLabelText('Message Codex or Claude').closest('.conversation-review-layout')).toHaveClass('layout-changes');
@@ -1181,7 +1181,7 @@ describe('shared room', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === `/api/work-items/${taskId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'feature/local-diff', changedFiles: 1, additions: 1, deletions: 1, publish: { branch: 'feature/local-diff', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/feature.tsx', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'feature/local-diff', changedFiles: 1, additions: 1, deletions: 1, publish: { branch: 'feature/local-diff', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/feature.tsx', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }] } }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
@@ -1197,7 +1197,7 @@ describe('shared room', () => {
     fireEvent.click(changes);
     expect(await screen.findByRole('heading', { name: 'Current workspace changes' })).toBeTruthy();
     expect(await screen.findByRole('button', { name: /src\/client\/feature\.tsx/ })).toBeTruthy();
-    expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/work-items/${taskId}/workspace-diff`)).toBe(true);
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/shared/conversations/${conversationId}/workspace-diff`)).toBe(true);
     expect(screen.queryByText('GitHub reports no changed files for this pull request.')).toBeNull();
   });
 
@@ -1217,7 +1217,7 @@ describe('shared room', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === `/api/work-items/${taskId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'clean', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'clean', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'clean', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'clean', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
@@ -1227,7 +1227,7 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     const changes = await screen.findByRole('button', { name: 'Changes' });
-    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/work-items/${taskId}/workspace-diff`)).toBe(true));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/shared/conversations/${conversationId}/workspace-diff`)).toBe(true));
     expect(changes).toBeDisabled();
     expect(changes).toHaveAttribute('title', 'No changes to review');
     fireEvent.click(changes);
@@ -1249,8 +1249,8 @@ describe('shared room', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === `/api/work-items/${taskId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'main', revision: 'current-clean', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === `/api/work-items/${taskId}/workspace-diff/snapshots`) return new Response(JSON.stringify({ snapshots: [{ id: 'snapshot-1', capturedAt: timestamp, diff: { workspacePath: item.workspacePath, branch: 'main', revision: 'committed-change', changedFiles: 1, additions: 1, deletions: 0, publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [{ path: 'src/client/fixed.tsx', previousPath: null, status: 'added', additions: 1, deletions: 0, isBinary: false, patch: '@@ -0,0 +1 @@\n+fixed' }] } }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'main', revision: 'current-clean', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}/workspace-diff/snapshots`) return new Response(JSON.stringify({ snapshots: [{ id: 'snapshot-1', capturedAt: timestamp, diff: { workspacePath: item.workspacePath, branch: 'main', revision: 'committed-change', changedFiles: 1, additions: 1, deletions: 0, publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [{ path: 'src/client/fixed.tsx', previousPath: null, status: 'added', additions: 1, deletions: 0, isBinary: false, patch: '@@ -0,0 +1 @@\n+fixed' }] } }] }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
@@ -1732,12 +1732,15 @@ describe('shared room', () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const firstId = '00000000-0000-4000-8000-000000000001';
     const secondId = '00000000-0000-4000-8000-000000000002';
+    const conversations = [
+      { id: firstId, title: 'First task', workItemId: null, preferredExecutionProfile: 'deep', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+      { id: secondId, title: 'Second task', workItemId: null, preferredExecutionProfile: null, createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
+    ];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const body = String(input).includes('/api/shared/conversations') ? { conversations: [
-        { id: firstId, title: 'First task', workItemId: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
-        { id: secondId, title: 'Second task', workItemId: null, createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
-      ] } : { messages: [] };
-      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      const url = String(input);
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations, nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${firstId}` || url === `/api/shared/conversations/${secondId}`) return new Response(JSON.stringify({ conversation: conversations.find((conversation) => conversation.id === url.split('/').at(-1)) }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={firstId} /></QueryClientProvider>);
@@ -1746,10 +1749,10 @@ describe('shared room', () => {
     fireEvent.change(modelChoice, { target: { value: 'deep' } });
     expect(modelChoice.value).toBe('deep');
     fireEvent.click(screen.getByRole('button', { name: /Second task/i }));
-    expect(modelChoice.value).toBe('auto');
-    fireEvent.change(modelChoice, { target: { value: 'standard' } });
+    expect((await screen.findByLabelText('Model choice') as HTMLSelectElement).value).toBe('auto');
+    fireEvent.change(screen.getByLabelText('Model choice'), { target: { value: 'standard' } });
     fireEvent.click(screen.getByRole('button', { name: /First task/i }));
-    expect(modelChoice.value).toBe('deep');
+    expect((await screen.findByLabelText('Model choice') as HTMLSelectElement).value).toBe('deep');
   });
 
   it('keeps Both selected after switching away from and back to a conversation', async () => {
@@ -1766,6 +1769,7 @@ describe('shared room', () => {
         conversations[0] = { ...conversations[0], preferredDispatchTarget: 'both' };
         return new Response(JSON.stringify({ conversation: conversations[0] }), { headers: { 'Content-Type': 'application/json' } });
       }
+      if (url === `/api/shared/conversations/${firstId}` || url === `/api/shared/conversations/${secondId}`) return new Response(JSON.stringify({ conversation: conversations.find((conversation) => conversation.id === url.split('/').at(-1)) }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations, nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
@@ -1777,9 +1781,9 @@ describe('shared room', () => {
     fireEvent.change(recipient, { target: { value: 'both' } });
     await waitFor(() => expect(recipient.value).toBe('both'));
     fireEvent.click(screen.getByRole('button', { name: /Other conversation/i }));
-    await waitFor(() => expect(recipient.value).toBe('claude'));
+    await waitFor(() => expect((screen.getByLabelText('Who should respond') as HTMLSelectElement).value).toBe('claude'));
     fireEvent.click(screen.getByRole('button', { name: /Both recipients/i }));
-    await waitFor(() => expect(recipient.value).toBe('both'));
+    await waitFor(() => expect((screen.getByLabelText('Who should respond') as HTMLSelectElement).value).toBe('both'));
   });
 
   it('restores the last recipient and model choice from conversation history', async () => {
@@ -1788,7 +1792,7 @@ describe('shared room', () => {
     const timestamp = '2026-01-01T00:00:00Z';
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Continue with Claude', workItemId: null, preferredExecutionProfile: null, createdAt: timestamp, updatedAt: timestamp }], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Continue with Claude', workItemId: null, preferredExecutionProfile: 'deep', preferredAccountProfile: 'default', preferredDispatchTarget: 'claude', createdAt: timestamp, updatedAt: timestamp }], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [
         { id: 'request-1', conversationId, author: 'jeffrey', body: 'Please investigate.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: null, accountProfile: 'default', executionProfile: 'deep', inputTokens: null, outputTokens: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'claude' },
         { id: 'reply-1', conversationId, author: 'claude', body: 'I found the regression.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: 'opus', accountProfile: 'default', executionProfile: 'deep', inputTokens: null, outputTokens: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'none' },
