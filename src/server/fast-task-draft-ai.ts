@@ -9,6 +9,15 @@ let worker: ChildProcessWithoutNullStreams | null = null;
 let outputBuffer = '';
 let active: Pending | null = null;
 const queue: Pending[] = [];
+let idleShutdown: ReturnType<typeof setTimeout> | null = null;
+const IDLE_SHUTDOWN_MS = 30_000;
+
+function scheduleIdleShutdown(): void {
+  if (active || queue.length || !worker) return;
+  if (idleShutdown) clearTimeout(idleShutdown);
+  idleShutdown = setTimeout(() => stopWorker(new Error('Fast task-draft AI stopped after being idle.')), IDLE_SHUTDOWN_MS);
+  idleShutdown.unref();
+}
 
 function parseDraft(output: string, originalPrompt: string): GeneratedTaskDraft {
   const json = output.match(/\{[\s\S]*\}/)?.[0];
@@ -20,12 +29,19 @@ function parseDraft(output: string, originalPrompt: string): GeneratedTaskDraft 
 }
 
 function dispatchNext(): void {
-  if (!worker || active || queue.length === 0) return;
+  if (!worker || active || queue.length === 0) {
+    scheduleIdleShutdown();
+    return;
+  }
+  if (idleShutdown) clearTimeout(idleShutdown);
+  idleShutdown = null;
   active = queue.shift()!;
   worker.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: active.prompt } })}\n`);
 }
 
 function stopWorker(error: Error): void {
+  if (idleShutdown) clearTimeout(idleShutdown);
+  idleShutdown = null;
   worker?.kill('SIGTERM');
   worker = null;
   outputBuffer = '';

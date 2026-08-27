@@ -23,7 +23,9 @@ export interface PooledProcess {
   ready: boolean;
 }
 
-const IDLE_TTL_MS = 5 * 60_000;
+// Speculative agents are a latency optimization, never background work. Keep
+// them only long enough to cover an immediate next turn.
+const IDLE_TTL_MS = 30_000;
 const MAX_IDLE_PER_KEY = 1;
 
 const idleByKey = new Map<string, PooledProcess[]>();
@@ -123,6 +125,6 @@ export function shutdownAgentPool(): void {
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
 export function startPoolSweep(): void {
   if (sweepTimer) return;
-  sweepTimer = setInterval(sweepIdlePool, 60_000);
+  sweepTimer = setInterval(sweepIdlePool, 5_000);
   sweepTimer.unref();
 }

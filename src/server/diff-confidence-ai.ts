@@ -64,26 +64,45 @@ type PendingAssessment = {
   blocks: DiffConfidenceBlock[];
   resolve: (value: Record<string, DiffConfidenceAssessment>) => void;
   reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout> | null;
 };
 
 let worker: ChildProcessWithoutNullStreams | null = null;
 let outputBuffer = '';
 let active: PendingAssessment | null = null;
 const queue: PendingAssessment[] = [];
+let idleShutdown: ReturnType<typeof setTimeout> | null = null;
+const SCORER_TIMEOUT_MS = 12_000;
+const SCORER_IDLE_SHUTDOWN_MS = 30_000;
+
+function recycleWorker(expected?: ChildProcessWithoutNullStreams): void {
+  const scorer = worker;
+  if (!scorer || (expected && scorer !== expected)) return;
+  worker = null;
+  outputBuffer = '';
+  try { scorer.kill('SIGTERM'); } catch { /* already stopped */ }
+}
+
+function scheduleIdleShutdown(): void {
+  if (active || queue.length || !worker) return;
+  if (idleShutdown) clearTimeout(idleShutdown);
+  idleShutdown = setTimeout(() => recycleWorker(), SCORER_IDLE_SHUTDOWN_MS);
+  idleShutdown.unref();
+}
 
 /** A pre-started stream-json worker removes CLI boot overhead. It is recycled
  * after every assessment: Claude's stream protocol otherwise retains prior
  * file diffs as chat history, making each later file slower than the last. */
 function ensureWorker(): ChildProcessWithoutNullStreams {
   if (worker && !worker.killed && worker.exitCode == null) return worker;
-  worker = spawn('claude', [
+  const scorer = worker = spawn('claude', [
     '-p', '--verbose', '--model', 'haiku', '--effort', 'low', '--tools', '',
     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '',
     '--no-session-persistence', '--no-chrome', '--system-prompt', SYSTEM_PROMPT,
     '--input-format', 'stream-json', '--output-format', 'stream-json',
   ], { cwd: '/tmp', env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
-  (worker.stdout as unknown as { setEncoding?: (encoding: string) => void }).setEncoding?.('utf8');
-  worker.stdout.on('data', (chunk: string) => {
+  (scorer.stdout as unknown as { setEncoding?: (encoding: string) => void }).setEncoding?.('utf8');
+  scorer.stdout.on('data', (chunk: string) => {
     outputBuffer += chunk;
     for (;;) {
       const newline = outputBuffer.indexOf('\n');
@@ -93,30 +112,48 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
         const event = JSON.parse(line) as { type?: string; result?: string; is_error?: boolean };
         if (event.type !== 'result' || !active) continue;
         const pending = active; active = null;
+        if (pending.timeout) clearTimeout(pending.timeout);
         if (event.is_error || typeof event.result !== 'string') pending.reject(new Error('AI diff assessment failed.'));
         else {
           try { pending.resolve(parseDiffConfidenceAssessment(event.result, pending.blocks.map((block) => block.key))); }
           catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); }
         }
+        // A stream-json worker retains its prior turn context. Recycle it
+        // after every score, then immediately prewarm a context-free successor.
+        recycleWorker(scorer);
+        ensureWorker();
         dispatchNext();
       } catch { /* Ignore non-result stream events. */ }
     }
   });
   const stopWorker = (error: Error) => {
+    if (worker !== scorer) return;
     worker = null; outputBuffer = '';
-    if (active) { active.reject(error); active = null; }
+    if (active) { if (active.timeout) clearTimeout(active.timeout); active.reject(error); active = null; }
     while (queue.length) queue.shift()!.reject(error);
   };
-  worker.once('exit', () => stopWorker(new Error('AI diff scorer stopped unexpectedly.')));
-  worker.once('error', stopWorker);
-  worker.stdin.on('error', stopWorker);
-  return worker;
+  scorer.once('exit', () => stopWorker(new Error('AI diff scorer stopped unexpectedly.')));
+  scorer.once('error', stopWorker);
+  scorer.stdin.on('error', stopWorker);
+  return scorer;
 }
 
 function dispatchNext(): void {
-  if (active || queue.length === 0) return;
+  if (active || queue.length === 0) { scheduleIdleShutdown(); return; }
+  if (idleShutdown) clearTimeout(idleShutdown);
+  idleShutdown = null;
   const scorer = ensureWorker();
   active = queue.shift()!;
+  active.timeout = setTimeout(() => {
+    const pending = active;
+    if (!pending) return;
+    active = null;
+    pending.reject(new Error('AI diff scorer timed out after 12 seconds.'));
+    recycleWorker(scorer);
+    ensureWorker();
+    dispatchNext();
+  }, SCORER_TIMEOUT_MS);
+  active.timeout.unref();
   // The rubric is already the system prompt. Sending it again used to double
   // every uncached request's input and delayed the first score unnecessarily.
   scorer.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: `Blocks:\n${JSON.stringify(active.blocks)}` } })}\n`);
@@ -125,7 +162,7 @@ function dispatchNext(): void {
 function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, DiffConfidenceAssessment>> {
   ensureWorker();
   return new Promise((resolve, reject) => {
-    queue.push({ blocks, resolve, reject });
+    queue.push({ blocks, resolve, reject, timeout: null });
     dispatchNext();
   });
 }
@@ -177,16 +214,19 @@ export function assessDiffBlocks(database: WorkbenchDatabase, blocks: DiffConfid
  * diff. It remains idle and does no scoring until the first real request. */
 export function warmDiffConfidenceModel(): void {
   ensureWorker();
+  scheduleIdleShutdown();
 }
 
 /** Runtime promotion must reap this process; otherwise an old release can
  * retain a Claude session and contend with a real agent turn indefinitely. */
 export function shutdownDiffConfidenceModel(): void {
+  if (idleShutdown) clearTimeout(idleShutdown);
+  idleShutdown = null;
   const scorer = worker;
   worker = null;
   outputBuffer = '';
   const error = new Error('AI diff scorer stopped during runtime shutdown.');
-  if (active) { active.reject(error); active = null; }
+  if (active) { if (active.timeout) clearTimeout(active.timeout); active.reject(error); active = null; }
   while (queue.length) queue.shift()!.reject(error);
   try { scorer?.kill('SIGTERM'); } catch { /* already stopped */ }
 }

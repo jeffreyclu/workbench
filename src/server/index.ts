@@ -4,13 +4,14 @@ import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { OWNER_ID, startScheduler } from './scheduler.js';
 import { startRuntimePromotionWorker } from './runtime-promotion-worker.js';
-import { shutdownFastTaskDraftModel, warmFastTaskDraftModel } from './fast-task-draft-ai.js';
+import { shutdownFastTaskDraftModel } from './fast-task-draft-ai.js';
 import { shutdownDiffConfidenceModel, warmDiffConfidenceModel } from './diff-confidence-ai.js';
 import { liveRuntimeCapabilities } from './runtime-capabilities.js';
 import { createServer } from 'node:http';
 import { attachRealtimeServer } from './realtime.js';
 import { collectMemoryDocuments, indexPendingMemory } from './memory-index.js';
 import { shutdownActiveAgentProcesses } from './agent-runner.js';
+import { shutdownExternalActionClassifier } from './external-action-ai.js';
 
 const port = Number(process.env.PORT ?? 4317);
 const database = openDatabase();
@@ -22,7 +23,6 @@ const app = createApp(database, liveRuntimeCapabilities);
 const repository = new WorkItemRepository(database);
 if (liveRuntimeCapabilities.ownScheduler) startScheduler(repository);
 if (liveRuntimeCapabilities.promoteRuntime) startRuntimePromotionWorker(repository);
-warmFastTaskDraftModel();
 warmDiffConfidenceModel();
 
 // Keeps the vectorized memory index (memory-index.ts) warm so the very first
@@ -57,6 +57,7 @@ const shutdown = () => {
   // never displays ghost work for the lease-recovery grace period.
   repository.interruptOwnedWork(OWNER_ID, 'Workbench runtime promoted while this agent was running. Retry or continue the conversation.');
   shutdownActiveAgentProcesses();
+  shutdownExternalActionClassifier();
   shutdownDiffConfidenceModel();
   shutdownFastTaskDraftModel();
   server.close(() => process.exit(0));

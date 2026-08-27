@@ -346,6 +346,10 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
           rejectPendingSteers();
           resolveOutput({ output: output.trim(), threadId, usage });
           child.stdin.end();
+          const terminalShutdown = setTimeout(() => {
+            if (child.exitCode === null) stop();
+          }, 5_000);
+          terminalShutdown.unref();
         }
         if (event.error) {
           if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
@@ -714,6 +718,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const thread = repository.listSharedMessages(100, null, target.conversationId).messages.filter((message) => message.id !== messageId);
     const latestUserMessage = latestHumanMessageForSharedReply(thread);
     const precedingUserMessage = precedingHumanMessageForSharedReply(thread);
+    const precedingAgentResponse = [...thread].reverse().find((message) => message.author === 'claude' || message.author === 'codex')?.body ?? '';
     const memoryQuery = retrievalSnapshot?.query ?? memoryQueryForSharedReply(thread);
     const recentSourceReferences = thread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body);
     const connectionContext = await connectionContextForPrompt(repository, [latestUserMessage, ...recentSourceReferences].join('\n'));
@@ -725,7 +730,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const selectedWorkspace = repository.database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(target.conversationId) as { workspace_path: string } | undefined;
     const cwd = resolveSharedReplyWorkingDirectory(linkedItem, selectedWorkspace?.workspace_path);
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}${selectedWorkspace ? ' from Repo Explorer.' : '.'}`);
-    const externalAuthorization = await classifyExternalActionAuthorization(latestUserMessage, precedingUserMessage);
+    const externalAuthorization = await classifyExternalActionAuthorization(latestUserMessage, precedingUserMessage, undefined, precedingAgentResponse);
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const retrievedMemory = await (retrievalSnapshot?.matches ?? repository.searchActivityMemory(memoryQuery, PROMPT_MEMORY_CANDIDATE_LIMIT, {
       excludeExactBody: memoryQuery,
