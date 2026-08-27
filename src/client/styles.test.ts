@@ -128,9 +128,9 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('bottom: calc(var(--mobile-nav) + env(safe-area-inset-bottom, 0px) + 14px);');
   });
 
-  it('hides the mobile conversation controls outside the phone breakpoint', () => {
+  it('keeps the primary conversation destination available outside the phone breakpoint', () => {
     expect(styles).toMatch(/^\.mobile-chrome-controls \{ display: none; \}/m);
-    expect(styles).toContain('@media (min-width: 821px) {\n  .sidebar .mobile-conversation-nav { display: none; }');
+    expect(styles).not.toContain('.sidebar .mobile-conversation-nav { display: none; }');
   });
 });
 

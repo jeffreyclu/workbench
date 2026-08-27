@@ -1399,7 +1399,6 @@ nav { display: grid; gap: 3px; }
    column rather than covering the workspace: controls must never slide under
    navigation just because the pointer passed over the rail. */
 @media (min-width: 821px) {
-  .sidebar .mobile-conversation-nav { display: none; }
   .app-shell { grid-template-columns: 56px var(--stack-column-width) minmax(0, 1fr); }
   .app-shell:has(.sidebar:hover), .app-shell:has(.sidebar:focus-within) {
     grid-template-columns: 220px var(--stack-column-width) minmax(0, 1fr);
