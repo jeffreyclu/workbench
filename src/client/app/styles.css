@@ -360,12 +360,6 @@ nav { display: grid; gap: 3px; }
 .workspace-repository-picker select { min-width: 0; max-width: 180px; color: inherit; border: 0; outline: 0; background: transparent; font: inherit; }
 .workspace-diff-timeline { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 0 7px; color: #aaa9a2; border: 1px solid #353530; border-radius: 6px; font: 700 10px 'DM Mono'; }
 .workspace-diff-timeline select { min-width: 0; max-width: 190px; color: inherit; border: 0; outline: 0; background: transparent; font: inherit; }
-.workspace-diff-commit-message input { min-height: 28px; min-width: 200px; padding: 0 8px; color: #eae9e2; border: 1px solid #353530; border-radius: 6px; background: transparent; font: 400 11px 'DM Mono'; }
-.workspace-diff-commit-message input:disabled { color: #85847d; cursor: not-allowed; }
-.workspace-diff-publish { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 0 9px; color: #171713; border: 1px solid #c6f432; border-radius: 6px; background: #c6f432; cursor: pointer; font: 700 10px 'DM Mono'; }
-.workspace-diff-publish:hover:not(:disabled) { border-color: #d9ff5d; background: #d9ff5d; }.workspace-diff-publish:disabled { color: #85847d; border-color: #353530; background: transparent; cursor: not-allowed; }
-.workspace-diff-publish-error { margin: -5px 0 12px; color: #e1a68f; font-size: 11px; line-height: 1.4; }
-.workspace-diff-publish-success { margin: -5px 0 12px; color: #8bbd75; font-size: 11px; line-height: 1.4; }
 .workspace-diff-layout, .github-diff-layout { display: grid; grid-template-columns: minmax(0, 1fr); overflow: hidden; border: 1px solid #302f2b; border-radius: 8px; background: #10100f; }
 .workspace-diff nav, .github-diff nav { min-width: 0; border-bottom: 1px solid #302f2b; background: #151513; }
 .workspace-diff nav > span { display: block; padding: 10px 11px; color: #85847d; border-bottom: 1px solid #302f2b; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
@@ -375,7 +369,7 @@ nav { display: grid; gap: 3px; }
 .workspace-diff nav button:hover, .workspace-diff nav button.selected { color: #eee; background: #24241f; }
 .workspace-diff nav button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-diff nav button b, .workspace-diff nav button i { font-size: 9px; }
-.diff-file-row .diff-file-copy-path { flex: 0 0 auto; align-self: stretch; width: 26px; border-left: 1px solid #252522; border-radius: 0; }
+.diff-file-row .diff-file-copy-path, .diff-file-open-editor { flex: 0 0 auto; align-self: stretch; width: 26px; border-left: 1px solid #252522; border-radius: 0; }
 .workspace-diff-file { min-width: 0; overflow: auto; }
 .workspace-diff-file > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 39px; padding: 0 12px; color: #d5d4cd; border-bottom: 1px solid #302f2b; font: 10px 'DM Mono'; }
 .workspace-diff-file > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -438,6 +432,8 @@ nav { display: grid; gap: 3px; }
 .copy-icon-button:hover { color: var(--acid); border-color: #596234; }
 .diff-file-copy-path { width: 26px; height: auto; color: #77766f; border: 0; border-radius: 0; }
 .diff-file-copy-path:hover { color: var(--acid); background: #24241f; }
+.diff-file-open-editor { display: inline-flex; align-items: center; justify-content: center; color: #77766f; text-decoration: none; }
+.diff-file-open-editor:hover, .diff-file-open-editor:focus-visible { color: var(--acid); background: #24241f; outline: 0; }
 .github-diff-file pre { min-width: max-content; margin: 0; padding: 8px 0; overflow: visible; background: #10100f; font: 11px/1.55 'DM Mono'; }
 .github-diff-load-more { width: 100%; min-height: 40px; color: #c4c3bc; border: 0; border-top: 1px solid #302f2b; background: #191916; cursor: pointer; font: 700 10px 'DM Mono'; }
 .github-diff-load-more:hover:not(:disabled) { color: var(--acid); background: #24241f; }.github-diff-load-more:disabled { color: #85847d; cursor: wait; }
@@ -1004,7 +1000,7 @@ nav { display: grid; gap: 3px; }
 .conversation-review-layout.layout-changes .shared-thread { display: none; }
 .conversation-review-layout.layout-changes .shared-composer,
 .conversation-review-layout.layout-changes .archived-composer-note { order: 2; flex: 0 0 auto; width: calc(100% - 56px); margin: 0 28px 20px; }
-.conversation-changes { order: 1; min-width: 0; min-height: 0; padding: 0 28px 14px; overflow: auto; }
+.conversation-changes { order: 1; flex: 1 1 auto; min-width: 0; min-height: 0; padding: 0 28px 14px; overflow: auto; }
 .conversation-changes .workspace-diff { max-width: 1240px; margin: 0 auto; padding-top: 18px; border-top: 0; }
 .conversation-changes .github-diff { max-width: 1240px; margin: 0 auto; padding-top: 18px; border-top: 0; }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

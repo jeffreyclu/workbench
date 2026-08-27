@@ -129,6 +129,7 @@ describe('conversation view controls', () => {
     expect(styles).toContain('.conversation-review-layout.layout-changes { display: flex; flex-direction: column; }');
     expect(styles).toContain('.conversation-review-layout.layout-changes .conversation-thread-pane { display: contents; }');
     expect(styles).toContain('.conversation-review-layout.layout-changes .shared-thread { display: none; }');
+    expect(styles).toContain('.conversation-changes { order: 1; flex: 1 1 auto; min-width: 0; min-height: 0;');
     expect(styles).not.toContain('.conversation-surface-tabs button:nth-child(2) { display: none; }');
   });
 

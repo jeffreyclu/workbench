@@ -122,6 +122,15 @@ composer send from Changes immediately selects Conversation so the submitted
 turn and ensuing streamed reply are visible. Apply this through the shared
 send mutation so the Send button and keyboard submission behave identically.
 
+### Changes composer stays bottom-anchored
+
+*Decision from Jeffrey, 2026-08-27.* In the desktop Changes review surface,
+the composer stays anchored at the bottom of the console. The changes content
+is the growing, independently scrollable flex region above it; it must not
+size only to its intrinsic content and leave the composer immediately after
+the diff. Both review panes use the same single composer instance and state;
+CSS may reposition it but Changes must never render a separate composer.
+
 ### Phone conversation chrome collapses into two icon controls
 
 *Decision from Jeffrey, 2026-08-26.* Phone conversations are reading-first:

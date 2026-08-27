@@ -1,5 +1,7 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { existsSync, statSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { WorkspaceDiff, WorkspaceDiffFile, WorkspacePublishResult, WorkspacePublishStatus } from '../shared/contracts.js';
 
@@ -11,6 +13,24 @@ const execFile = promisify(execFileCallback);
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
 type ChangedFileStatus = WorkspaceDiffFile['status'];
+
+const DEFAULT_EDITOR_URL_TEMPLATE = 'vscode://file/{path}';
+
+function isWithinWorkspace(workspacePath: string, candidatePath: string) {
+  const path = relative(workspacePath, candidatePath);
+  return path === '' || (!path.startsWith('..') && !isAbsolute(path));
+}
+
+/**
+ * Build a configurable deep link only for files in an available local
+ * checkout. `WORKBENCH_EDITOR_URL_TEMPLATE` accepts `{path}` and defaults to
+ * VS Code's URL scheme, so another local editor can be selected at startup.
+ */
+export function workspaceEditorUrl(workspacePath: string, filePath: string, template = process.env.WORKBENCH_EDITOR_URL_TEMPLATE ?? DEFAULT_EDITOR_URL_TEMPLATE): string | null {
+  const absolutePath = resolve(workspacePath, filePath);
+  if (!existsSync(workspacePath) || !statSync(workspacePath).isDirectory() || !isWithinWorkspace(workspacePath, absolutePath)) return null;
+  return template.includes('{path}') ? template.replaceAll('{path}', encodeURI(absolutePath)) : null;
+}
 
 function statusFor(code: string): ChangedFileStatus {
   if (code.includes('A') || code === '??') return 'added';
@@ -143,7 +163,8 @@ export async function getWorkspaceDiff(workspacePath: string): Promise<Workspace
       throw error;
     }
   }));
-  const files = parseWorkspacePatch(`${patch}${untrackedPatches.join('')}`, statuses);
+  const files = parseWorkspacePatch(`${patch}${untrackedPatches.join('')}`, statuses)
+    .map((file) => ({ ...file, editorUrl: workspaceEditorUrl(workspacePath, file.path) }));
   const totals = files.reduce((counts, file) => ({ additions: counts.additions + file.additions, deletions: counts.deletions + file.deletions }), { additions: 0, deletions: 0 });
   const publish = await publishStatus(workspacePath, status, branch);
   return {
@@ -168,7 +189,8 @@ export async function getWorkspaceCommitDiff(workspacePath: string, commitRefere
     git(workspacePath, ['branch', '--show-current']),
     git(workspacePath, ['show', '--format=', '--no-ext-diff', '--binary', '--no-color', '--no-renames', commit]),
   ]);
-  const files = parseWorkspacePatch(patchResult.stdout);
+  const files = parseWorkspacePatch(patchResult.stdout)
+    .map((file) => ({ ...file, editorUrl: workspaceEditorUrl(workspacePath, file.path) }));
   const totals = files.reduce((counts, file) => ({ additions: counts.additions + file.additions, deletions: counts.deletions + file.deletions }), { additions: 0, deletions: 0 });
   const branch = branchResult.stdout.trim() || 'detached HEAD';
   return {

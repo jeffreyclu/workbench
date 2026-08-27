@@ -311,6 +311,8 @@ export const diffConfidenceRequestSchema = z.object({
 /** A read-only snapshot of the uncommitted changes in a task's local workspace. */
 export interface WorkspaceDiffFile {
   path: string;
+  /** A local editor deep link when this file still exists in the selected checkout. */
+  editorUrl?: string | null;
   status: 'added' | 'modified' | 'removed' | 'renamed' | 'copied' | 'changed';
   additions: number;
   deletions: number;

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, parseWorkspacePatch, workspaceStatuses } from './workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, parseWorkspacePatch, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -21,6 +21,17 @@ afterEach(() => {
 });
 
 describe('workspace diff parsing', () => {
+  it('creates editor deep links only for files in an available local checkout', () => {
+    const workspace = temporaryGitWorkspace();
+    writeFileSync(join(workspace, 'file with spaces.ts'), 'export {};\n');
+
+    expect(workspaceEditorUrl(workspace, 'file with spaces.ts')).toBe(`vscode://file/${encodeURI(join(workspace, 'file with spaces.ts'))}`);
+    expect(workspaceEditorUrl(workspace, 'missing.ts')).toBe(`vscode://file/${encodeURI(join(workspace, 'missing.ts'))}`);
+    expect(workspaceEditorUrl(workspace, '../outside.ts')).toBeNull();
+    expect(workspaceEditorUrl(workspace, 'file with spaces.ts', 'cursor://file/{path}')).toBe(`cursor://file/${encodeURI(join(workspace, 'file with spaces.ts'))}`);
+    expect(workspaceEditorUrl(join(workspace, 'missing-checkout'), 'file.ts')).toBeNull();
+  });
+
   it('returns reviewable file patches with line totals and status', () => {
     const patch = 'diff --git a/src/example.ts b/src/example.ts\nindex 111..222 100644\n--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1,2 +1,2 @@\n-old\n+new\n same\n';
     expect(parseWorkspacePatch(patch, new Map([['src/example.ts', 'modified']]))).toEqual([expect.objectContaining({ path: 'src/example.ts', status: 'modified', additions: 1, deletions: 1, isBinary: false })]);

@@ -15,7 +15,6 @@ export const workspaceDiffData = {
   get: (scope: WorkspaceDiffScope) => api.getWorkspaceDiff(scope),
   getSnapshots: (scope: WorkspaceDiffScope) => api.getWorkspaceDiffSnapshots(scope),
   getStatus: (scope: WorkspaceDiffScope, revision: string) => api.getWorkspaceDiffStatus(scope, revision),
-  commitAndPush: (scope: WorkspaceDiffScope, revision: string, message?: string) => api.commitAndPushWorkspace(scope, revision, message),
   getHunkReviews: (scope: WorkspaceDiffScope, revision: string) => api.getDiffHunkReviews(scope, revision),
   upsertHunkReview: (scope: WorkspaceDiffScope, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string }) => api.upsertDiffHunkReview(scope, input),
 };

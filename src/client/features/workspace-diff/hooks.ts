@@ -61,14 +61,3 @@ export function useUpsertDiffHunkReview(scope: WorkspaceDiffScope, revision: str
     },
   });
 }
-
-export function useCommitAndPushWorkspace(scope: WorkspaceDiffScope) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ revision, message }: { revision: string; message?: string }) => workspaceDiffData.commitAndPush(scope, revision, message),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.detail(scope) });
-      await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.snapshots(scope) });
-    },
-  });
-}

@@ -119,6 +119,10 @@ LINEAR_API_KEY=lin_api_...
 
 Linear synchronization is read-only. Workbench owns queue order, local assignments, agent history, and manual task fields; Linear owns its title, description, workflow status, project, labels, URL, and due date.
 
+### Editor deep links
+
+Changed local files open in VS Code by default. To use another editor's URL scheme, set `WORKBENCH_EDITOR_URL_TEMPLATE` with a `{path}` placeholder, for example `cursor://file/{path}`. Workbench only renders the link while the selected local checkout is available.
+
 ### Shared Workbench MCP API
 
 Codex and Claude can access the same canonical Workbench state through the Streamable HTTP endpoint:

@@ -1138,6 +1138,7 @@ describe('shared room', () => {
     expect(screen.getByRole('button', { name: 'Changes' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('button', { name: 'Split' })).toBeNull();
     expect(screen.getByLabelText('Message Codex or Claude').closest('.conversation-review-layout')).toHaveClass('layout-changes');
+    expect(document.querySelectorAll('#conversation-composer')).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Conversation' }));
     expect(await screen.findByText('The implementation is ready to review.')).toBeTruthy();
