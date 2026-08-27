@@ -392,7 +392,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     for (const message of conversationActivity.data?.messages ?? []) {
       if (message.author !== 'codex' && message.author !== 'claude') continue;
       states.set(message.conversationId, message.status === 'running' || message.status === 'queued' ? 'working'
-        : message.status === 'failed' || message.status === 'canceled' ? 'needs_attention'
+        : message.status === 'failed' ? 'needs_attention'
+          : message.status === 'canceled' ? 'canceled'
           : message.status === 'completed' ? 'finished' : null);
     }
     return states;
@@ -408,11 +409,13 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
 
     const progress = rows.filter((row) => !row.conversation.pinned && !row.conversation.linkedWorkItemPinned && (row.state === 'working' || row.state === 'promoting' || row.state === 'waiting_promotion'));
     const pinned = rows.filter((row) => row.conversation.pinned || row.conversation.linkedWorkItemPinned);
-    const attention = rows.filter((row) => !row.conversation.pinned && !row.conversation.linkedWorkItemPinned && row.state !== 'working' && row.state !== 'promoting' && row.state !== 'waiting_promotion');
+    const attention = rows.filter((row) => !row.conversation.pinned && !row.conversation.linkedWorkItemPinned && row.state !== 'working' && row.state !== 'promoting' && row.state !== 'waiting_promotion' && row.state !== 'canceled');
+    const inactive = rows.filter((row) => !row.conversation.pinned && !row.conversation.linkedWorkItemPinned && row.state === 'canceled');
     const groups = [
       { id: 'conversation-in-progress-header', label: 'In progress', group: 'progress' as const, rows: progress },
       { id: 'conversation-attention-header', label: 'Attention stack', group: 'attention' as const, rows: attention },
       { id: 'conversation-pinned-header', label: 'Pinned for you', group: 'pinned' as const, rows: pinned },
+      { id: 'conversation-canceled-header', label: 'Canceled', group: 'attention' as const, rows: inactive },
     ];
     return groups.flatMap((group) => group.rows.length === 0 && group.group !== 'pinned' ? [] : [
       { type: 'header' as const, id: group.id, label: group.label, count: group.rows.length, group: group.group },
@@ -1101,7 +1104,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
 
                   const { conversation, state } = row;
                   const isUnread = Boolean(conversation.isUnread && !locallyReadConversationIds.has(conversation.id) && conversation.id !== conversationId);
-                  const stateLabel = state === 'working' ? 'Working' : state === 'needs_attention' ? 'Failed or canceled' : state === 'waiting_approval' ? 'Review follow-ups' : state === 'promoting' ? 'Approved · promoting preview' : state === 'waiting_promotion' ? 'Approved and waiting promotion' : state === 'finished' ? 'Awaiting' : null;
+                  const stateLabel = state === 'working' ? 'Working' : state === 'needs_attention' ? 'Failed' : state === 'canceled' ? 'Canceled' : state === 'waiting_approval' ? 'Review follow-ups' : state === 'promoting' ? 'Approved · promoting preview' : state === 'waiting_promotion' ? 'Approved and waiting promotion' : state === 'finished' ? 'Awaiting' : null;
                   const stateClass = state;
                   const color = conversation.linkedProjectName ? projectTheme(conversation.linkedProjectName) : null;
                   const cardStyle = color ? { '--task-accent': color.accent, '--task-tint': color.tint, '--task-border': color.border } as CSSProperties : undefined;

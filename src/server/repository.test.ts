@@ -663,10 +663,10 @@ describe('WorkItemRepository', () => {
 
     const states = new Map(repository.listConversations().map((conversation) => [conversation.id, conversation.state]));
     expect(states.get(working.id)).toBe('working');
-    expect(states.get(failed.id)).toBe('needs_attention');
+    expect(states.get(failed.id)).toBe('canceled');
     expect(states.get(finished.id)).toBe('finished');
     expect(states.get(approval.id)).toBe('waiting_approval');
-    expect(repository.countAttentionConversations()).toBe(2);
+    expect(repository.countAttentionConversations()).toBe(1);
     expect(repository.countUnreadConversations()).toBe(4);
     repository.markConversationRead(finished.id);
     expect(repository.countUnreadConversations()).toBe(3);

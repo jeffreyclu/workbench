@@ -779,6 +779,7 @@ nav { display: grid; gap: 3px; }
 .conversation-state { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; padding: 3px 5px; border-radius: 4px; font: 700 7px/1 'DM Mono'; letter-spacing: .03em; text-transform: uppercase; }
 .conversation-state-working { color: #f2d26b; background: #3a3018; }
 .conversation-state-needs_attention { color: #fff; background: #a83027; box-shadow: 0 0 12px #e3423338; }
+.conversation-state-canceled { color: #aaa9a2; background: #252522; border: 1px solid #41413b; }
 .conversation-state-waiting_approval { color: #ffe06a; background: #493a08; }
 .conversation-state-promoting { color: #8bb8ff; background: #17263a; }
 .conversation-state-waiting_promotion { color: #8bb8ff; background: #17263a; }
@@ -788,6 +789,7 @@ nav { display: grid; gap: 3px; }
 .conversation-tabs button.conversation-working::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(105deg, transparent 18%, #f0cf5a08 34%, #ffe98a24 48%, #f0cf5a08 62%, transparent 78%); transform: translateX(-120%); animation: task-shimmer 1.8s ease-in-out infinite; }
 .conversation-tabs button.conversation-working > * { position: relative; z-index: 1; }
 .conversation-tabs button.conversation-needs_attention { border-color: #7e2922; background: linear-gradient(90deg, #301614, #181719 58%); }
+.conversation-tabs button.conversation-canceled { border-color: #3d3d38; background: linear-gradient(90deg, #1c1c1a, #181719 58%); opacity: .74; }
 .conversation-tabs button.conversation-waiting_approval { border-color: #5a4814; background: linear-gradient(90deg, #28230f, #181719 58%); }
 .conversation-tabs button.conversation-promoting,
 .conversation-tabs button.conversation-waiting_promotion { border-color: #345681; background: linear-gradient(90deg, #142238, #181719 58%); }

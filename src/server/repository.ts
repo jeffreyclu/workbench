@@ -341,7 +341,8 @@ export class WorkItemRepository {
       ORDER BY created_at DESC, rowid DESC LIMIT 1
     `).get(conversation.id) as { status: SharedMessage['status'] } | undefined;
     if (hasLiveWork || conversation.isActive || latest?.status === 'running' || latest?.status === 'queued') return { ...conversation, state: 'working' };
-    if (latest?.status === 'failed' || latest?.status === 'canceled') return { ...conversation, state: 'needs_attention' };
+    if (latest?.status === 'failed') return { ...conversation, state: 'needs_attention' };
+    if (latest?.status === 'canceled') return { ...conversation, state: 'canceled' };
     if (conversation.workItemId && this.getPendingExecutionPlan(conversation.workItemId)) return { ...conversation, state: 'waiting_approval' };
     if (latest?.status === 'completed') return { ...conversation, state: 'finished' };
     return { ...conversation, state: null };

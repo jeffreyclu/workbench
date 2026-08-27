@@ -1695,6 +1695,34 @@ const schemaMigrations: readonly Migration[] = [
         ON workspace_diff_snapshots(originating_agent_run_id) WHERE originating_agent_run_id IS NOT NULL;`);
     },
   },
+  {
+    // A completed coding run produces one reviewer map. Keep it distinct from
+    // agent_handoffs, which is conversation memory rather than review evidence.
+    // The JSON sections are versioned and stored together because capture and
+    // review always write/read the handoff as one document:
+    // - changes: affected files plus what changed and why
+    // - acceptance criteria: each criterion mapped to files and decisions
+    // - contract changes: API, schema, and externally visible behavior changes
+    // - verification: commands and explicitly observed results
+    // - uncertainties and tradeoffs: what remains unknown or was deliberate
+    id: '061_agent_run_review_handoffs',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE agent_run_review_handoffs (
+          agent_run_id TEXT PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
+          format_version INTEGER NOT NULL DEFAULT 1 CHECK (format_version = 1),
+          summary TEXT NOT NULL CHECK (length(trim(summary)) > 0),
+          changes_json TEXT NOT NULL CHECK (json_valid(changes_json) AND json_type(changes_json) = 'array'),
+          acceptance_criteria_json TEXT NOT NULL CHECK (json_valid(acceptance_criteria_json) AND json_type(acceptance_criteria_json) = 'array'),
+          contract_changes_json TEXT NOT NULL CHECK (json_valid(contract_changes_json) AND json_type(contract_changes_json) = 'array'),
+          verification_json TEXT NOT NULL CHECK (json_valid(verification_json) AND json_type(verification_json) = 'array'),
+          uncertainties_json TEXT NOT NULL CHECK (json_valid(uncertainties_json) AND json_type(uncertainties_json) = 'array'),
+          tradeoffs_json TEXT NOT NULL CHECK (json_valid(tradeoffs_json) AND json_type(tradeoffs_json) = 'array'),
+          created_at TEXT NOT NULL
+        );
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {
