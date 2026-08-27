@@ -1201,6 +1201,7 @@ export async function runAgentCommandWithFallback(
   onSteeringReady?: (steer: AgentInputSteering) => void,
   resumeSessionId?: string,
   poolEligible = false,
+  allowFallback = true,
 ): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null }> {
   try {
     const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, resumeSessionId, poolEligible, kind);
@@ -1215,7 +1216,7 @@ export async function runAgentCommandWithFallback(
       const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, undefined, false, kind);
       return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
     }
-    if (signal?.aborted || modelOverride || !isAgentCapacityError(error)) throw error;
+    if (signal?.aborted || modelOverride || !allowFallback || !isAgentCapacityError(error)) throw error;
     const fallback = primary === 'claude' ? 'codex' : 'claude';
     const reason = error instanceof Error ? error.message : String(error);
     onFallback?.(fallback, reason);

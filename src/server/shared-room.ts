@@ -716,6 +716,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
   }
   try {
     const thread = repository.listSharedMessages(100, null, target.conversationId).messages.filter((message) => message.id !== messageId);
+    const isPairedReply = Boolean(target.dispatchGroupId && thread.some((message) => message.dispatchGroupId === target.dispatchGroupId && (message.author === 'codex' || message.author === 'claude')));
     const latestUserMessage = latestHumanMessageForSharedReply(thread);
     const precedingUserMessage = precedingHumanMessageForSharedReply(thread);
     const precedingAgentResponse = [...thread].reverse().find((message) => message.author === 'claude' || message.author === 'codex')?.body ?? '';
@@ -826,7 +827,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     // Workbench already supplies a bounded conversation prompt. Resuming the
     // separate Claude CLI session also replays its old tool history: the last
     // short follow-up read 199k cached tokens and took 57 seconds.
-    undefined, true);
+    undefined, true, !isPairedReply);
     } catch (error) {
       if (agent !== 'claude' || !linkedConversation?.claudeSessionId || !isMissingClaudeSessionError(error)) throw error;
       repository.setConversationClaudeSessionId(target.conversationId, null);
@@ -844,11 +845,12 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       }))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
         registerActiveReplySteering(messageId, steer);
         void deliverPendingSharedInterjections(repository, messageId);
-      }, undefined, false);
+      }, undefined, false, !isPairedReply);
     }
     if (result.agent === 'codex') repository.setConversationCodexThreadId(target.conversationId, null);
     if (result.agent === 'claude') repository.setConversationClaudeSessionId(target.conversationId, result.sessionId ?? null);
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
+      if (isPairedReply) throw new Error('Claude reported an invalid workspace-scope blocker. Its paired response was kept as a Claude failure and was not replaced with Codex.');
       if (controller.signal.aborted) throw new Error('Agent run canceled.');
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the turn to Codex.';
       if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'agent_fallback', reason);
