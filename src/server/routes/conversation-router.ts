@@ -7,7 +7,7 @@ import { createSessionFeedbackSchema, createSharedConversationSchema, createShar
 import { runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, resolveSharedReplyWorkingDirectory, runSharedBackgroundJob } from '../shared-room.js';
-import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileDiff, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { parseFollowUpPlan } from '../app-exports.js';
 import { isRuntimeApproval } from '../runtime-promotion.js';
@@ -104,6 +104,16 @@ export function createConversationRouter({ repository, database, capabilities }:
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
       const revision = await getWorkspaceDiffRevision(workingDirectory);
       response.json({ changed: revision !== request.query.revision });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/api/shared/conversations/:id/workspace-diff/file', async (request, response, next) => {
+    try {
+      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
+      const { filePath, context } = z.object({ filePath: z.string().trim().min(1), context: z.coerce.number().int().positive() }).parse(request.query);
+      const patch = await getWorkspaceFileDiff(workingDirectory, filePath, context);
+      response.json({ patch });
     } catch (error) { next(error); }
   });
 

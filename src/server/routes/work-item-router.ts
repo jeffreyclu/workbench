@@ -30,7 +30,7 @@ import { summarizeWorkItemChanges } from '../activity-log.js';
 import { resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { generateFastAiTaskDraft } from '../fast-task-draft-ai.js';
 import { assessDiffBlocks } from '../diff-confidence-ai.js';
-import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileDiff, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
@@ -115,6 +115,17 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
       const revision = await getWorkspaceDiffRevision(workingDirectory);
       response.json({ changed: revision !== request.query.revision });
+    } catch (error) { next(error); }
+  });
+  router.get('/api/work-items/:id/workspace-diff/file', async (request, response, next) => {
+    try {
+      const item = repository.get(request.params.id);
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      const workingDirectory = taskWorkingDirectory(item.id);
+      if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
+      const { filePath, context } = z.object({ filePath: z.string().trim().min(1), context: z.coerce.number().int().positive() }).parse(request.query);
+      const patch = await getWorkspaceFileDiff(workingDirectory, filePath, context);
+      response.json({ patch });
     } catch (error) { next(error); }
   });
   router.post('/api/work-items/:id/workspace-diff/commit-and-push', async (request, response, next) => {

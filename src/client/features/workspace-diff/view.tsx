@@ -8,7 +8,7 @@ import { useDiffBlockConfidence } from '../diff-confidence-hooks.js';
 import { groupDiffBlocks, isChangedBlock, type DiffFollowUpReference } from '../diff-confidence.js';
 import { highlightHtml, languageFromPath } from '../../syntax-highlight.js';
 import { compareWorkspaceDiffSnapshots, fileLabel, parsePatch } from './logic.js';
-import { useCommitAndPushWorkspace, useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
+import { useCommitAndPushWorkspace, useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots, useWorkspaceFileDiff } from './hooks.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
@@ -19,6 +19,22 @@ const HUNK_REVIEW_STATES: { state: DiffHunkReviewState; label: string }[] = [
   { state: 'needs_changes', label: 'Needs changes' },
   { state: 'commented', label: 'Comment' },
 ];
+
+// git's default unified-diff context is 3 lines; these are absolute context
+// sizes (not deltas) so repeated clicks are idempotent. A huge value clips at
+// the file's real boundaries, which is exactly "show whole file".
+const DIFF_CONTEXT_OPTIONS = [
+  { context: 8, label: '+5 lines' },
+  { context: 13, label: '+10 lines' },
+  { context: 1_000_000, label: 'Whole file' },
+];
+
+function DiffContextControl({ context, loading, onSelect }: { context: number | null; loading: boolean; onSelect: (context: number | null) => void }) {
+  return <div className="diff-context-control">
+    {DIFF_CONTEXT_OPTIONS.map((option) => <button key={option.context} type="button" className={`button secondary compact${context === option.context ? ' active' : ''}`} disabled={loading} onClick={() => onSelect(option.context)}>{option.label}</button>)}
+    {context !== null && <button type="button" className="button secondary compact" disabled={loading} onClick={() => onSelect(null)}>Default context</button>}
+  </div>;
+}
 
 function HunkReviewControl({ review, saving, onSave }: { review: DiffHunkReview | undefined; saving: boolean; onSave: (input: { state: DiffHunkReviewState; note?: string }) => void }) {
   const [note, setNote] = useState(review?.note ?? '');
@@ -89,7 +105,13 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     for (const review of hunkReviews.data?.reviews ?? []) map.set(`${review.filePath}::${review.hunkRange}`, review);
     return map;
   }, [hunkReviews.data]);
-  const patch = selectedFile?.patch ?? null;
+  // Expanding context re-reads the live workspace, so it only applies while
+  // viewing current changes — a recorded snapshot's patch is fixed history.
+  const canExpandContext = !isSnapshotComparison && !selectedSnapshot;
+  const [contextOverride, setContextOverride] = useState<number | null>(null);
+  useEffect(() => { setContextOverride(null); }, [selectedFile?.path]);
+  const fileDiff = useWorkspaceFileDiff(canExpandContext ? scope : null, selectedFile?.path ?? null, contextOverride);
+  const patch = (contextOverride && fileDiff.data ? fileDiff.data.patch : null) ?? selectedFile?.patch ?? null;
   const blocks = useMemo(() => (patch ? groupDiffBlocks(parsePatch(patch)) : []), [patch]);
   const language = selectedFile ? languageFromPath(selectedFile.path) : null;
   const lineHtml = useMemo(() => {
@@ -128,7 +150,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     {publish.data?.result.pushed && <p className="workspace-diff-publish-success" role="status">Committed and pushed{publish.data.result.commit ? ` ${publish.data.result.commit}` : ''}.</p>}
     {files.length === 0 ? <p className="muted">No uncommitted changes to review.</p> : <div className="workspace-diff-layout diff-review-layout">
       <nav className="diff-file-list" aria-label="Changed workspace files"><span>Files ({files.length})</span><div>{files.map((file) => <button key={file.path} type="button" className={selectedFile?.path === file.path ? 'selected' : ''} onClick={() => setSelectedPath(file.path)}><FileDiff size={13} /><span>{file.path}</span><b>+{file.additions}</b><i>−{file.deletions}</i></button>)}</div></nav>
-      {selectedFile && <article className="workspace-diff-file"><header><strong>{fileLabel(selectedFile)}</strong><span>{selectedFile.isBinary ? 'Binary file' : selectedFile.status}</span></header>{selectedFile.patch ? <pre>{blocks.map((block) => {
+      {selectedFile && <article className="workspace-diff-file"><header><strong>{fileLabel(selectedFile)}</strong><span>{selectedFile.isBinary ? 'Binary file' : selectedFile.status}</span>{canExpandContext && !selectedFile.isBinary && <DiffContextControl context={contextOverride} loading={fileDiff.isFetching} onSelect={setContextOverride} />}</header>{fileDiff.isError && <p className="workspace-diff-publish-error" role="alert">Could not load additional context. {fileDiff.error.message}</p>}{selectedFile.patch ? <pre>{blocks.map((block) => {
               const changed = isChangedBlock(block);
               const assessment = confidence.data?.[block.key] ?? null;
               const isHunkHeader = block.lines[0]?.kind === 'header';
@@ -137,7 +159,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
               return <div key={block.key} className={changed ? 'diff-block' : undefined}>
                 {changed && !confidence.isError && <DiffConfidenceBubble assessment={assessment} onFollowUp={assessment && onFollowUp ? () => onFollowUp({ filePath: selectedFile.path, lines: block.lines, assessment }) : undefined} />}
                 {block.lines.map((line) => <code key={line.key} className={`diff-line ${line.kind}`}><span>{line.oldLine ?? ''}</span><span>{line.newLine ?? ''}</span><span>{line.kind === 'header' ? (line.text || ' ') : <><span className="diff-line-marker">{line.text.slice(0, 1) || ' '}</span><span className="diff-line-code" dangerouslySetInnerHTML={{ __html: lineHtml.get(line.key) || '&nbsp;' }} /></>}</span></code>)}
-                {hunkRange && !isSnapshotComparison && <HunkReviewControl review={review} saving={upsertHunkReview.isPending} onSave={(input) => upsertHunkReview.mutate({ filePath: selectedFile.path, hunkRange, ...input })} />}
+                {hunkRange && !isSnapshotComparison && !contextOverride && <HunkReviewControl review={review} saving={upsertHunkReview.isPending} onSave={(input) => upsertHunkReview.mutate({ filePath: selectedFile.path, hunkRange, ...input })} />}
               </div>;
             })}</pre> : <p className="muted">This binary file cannot be rendered as a text diff.</p>}</article>}
     </div>}

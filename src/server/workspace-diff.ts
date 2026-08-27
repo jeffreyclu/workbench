@@ -158,6 +158,35 @@ export async function getWorkspaceDiff(workspacePath: string): Promise<Workspace
 }
 
 /**
+ * Regenerate a single file's patch with a wider unified-diff context than the
+ * default 3 lines, so a reviewer can expand a hunk (or see the whole file)
+ * without leaving the diff pane. A very large context naturally clips at the
+ * file's boundaries and merges nearby hunks, which is exactly "whole file".
+ */
+export async function getWorkspaceFileDiff(workspacePath: string, filePath: string, context: number): Promise<string | null> {
+  const status = await gitOutput(workspacePath, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const statuses = workspaceStatuses(status);
+  const isUntracked = status.split('\0').filter(Boolean).some((entry) => entry.slice(0, 2) === '??' && entry.slice(3) === filePath);
+
+  let stdout: string;
+  if (isUntracked) {
+    try {
+      ({ stdout } = await git(workspacePath, ['diff', '--no-index', `-U${context}`, '--no-ext-diff', '--binary', '--no-color', '--', '/dev/null', filePath]));
+    } catch (error) {
+      // git diff --no-index uses exit code 1 when it finds a difference.
+      const output = typeof error === 'object' && error !== null && 'stdout' in error ? String((error as { stdout?: unknown }).stdout ?? '') : '';
+      if (!output) throw error;
+      stdout = output;
+    }
+  } else {
+    ({ stdout } = await git(workspacePath, ['diff', `-U${context}`, '--no-ext-diff', '--binary', '--no-color', '--no-renames', 'HEAD', '--', filePath]));
+  }
+
+  const [file] = parseWorkspacePatch(stdout, statuses);
+  return file?.patch ?? null;
+}
+
+/**
  * Rebuild a reviewable patch from a commit that an agent explicitly recorded
  * in the conversation. This is the recovery path for work committed outside
  * the Changes pane, before its uncommitted snapshot could be captured.

@@ -9,12 +9,14 @@ export const workspaceDiffQueryKeys = {
   snapshots: (scope: WorkspaceDiffScope) => ['workspace-diff-snapshots', scopeKey(scope)] as const,
   status: (scope: WorkspaceDiffScope, revision: string) => ['workspace-diff-status', scopeKey(scope), revision] as const,
   hunkReviews: (scope: WorkspaceDiffScope, revision: string | undefined) => ['workspace-diff-hunk-reviews', scopeKey(scope), revision] as const,
+  fileContext: (scope: WorkspaceDiffScope, filePath: string, context: number) => ['workspace-diff-file', scopeKey(scope), filePath, context] as const,
 };
 
 export const workspaceDiffData = {
   get: (scope: WorkspaceDiffScope) => api.getWorkspaceDiff(scope),
   getSnapshots: (scope: WorkspaceDiffScope) => api.getWorkspaceDiffSnapshots(scope),
   getStatus: (scope: WorkspaceDiffScope, revision: string) => api.getWorkspaceDiffStatus(scope, revision),
+  getFileDiff: (scope: WorkspaceDiffScope, filePath: string, context: number) => api.getWorkspaceFileDiff(scope, filePath, context),
   commitAndPush: (scope: WorkspaceDiffScope, revision: string, message?: string) => api.commitAndPushWorkspace(scope, revision, message),
   getHunkReviews: (scope: WorkspaceDiffScope, revision: string) => api.getDiffHunkReviews(scope, revision),
   upsertHunkReview: (scope: WorkspaceDiffScope, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string }) => api.upsertDiffHunkReview(scope, input),
