@@ -71,6 +71,7 @@ const EXPECTED_MIGRATIONS = [
   '058_work_item_workspace_selection',
   '059_diff_hunk_reviews',
   '060_workspace_diff_snapshot_provenance',
+  '061_agent_run_review_handoffs',
 ];
 
 describe('openDatabase', () => {
@@ -658,6 +659,80 @@ describe('openDatabase', () => {
     expect(columns).toContain('commit_hash');
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_workspace_diff_snapshots_agent_run'").get()).toBeTruthy();
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '060_workspace_diff_snapshot_provenance'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds structured review handoffs when upgrading from migration 060', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE agent_run_review_handoffs;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '061_agent_run_review_handoffs'").run();
+    expect(current.prepare("SELECT id FROM schema_migrations WHERE id = '060_workspace_diff_snapshot_provenance'").get())
+      .toEqual({ id: '060_workspace_diff_snapshot_provenance' });
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(agent_run_review_handoffs)').all() as Array<{
+      name: string;
+      notnull: number;
+      dflt_value: string | null;
+      pk: number;
+    }>;
+    expect(columns.map((column) => column.name)).toEqual([
+      'agent_run_id',
+      'format_version',
+      'summary',
+      'changes_json',
+      'acceptance_criteria_json',
+      'contract_changes_json',
+      'verification_json',
+      'uncertainties_json',
+      'tradeoffs_json',
+      'created_at',
+    ]);
+    expect(columns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'agent_run_id', pk: 1 }),
+      expect.objectContaining({ name: 'format_version', notnull: 1, dflt_value: '1' }),
+    ]));
+    expect(upgraded.prepare('PRAGMA foreign_key_list(agent_run_review_handoffs)').all()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ table: 'agent_runs', from: 'agent_run_id', to: 'id', on_delete: 'CASCADE' }),
+    ]));
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '061_agent_run_review_handoffs'").get())
+      .toEqual({ id: '061_agent_run_review_handoffs' });
+
+    upgraded.prepare(`
+      INSERT INTO work_items (id, title, queue_position, created_at, updated_at)
+      VALUES ('handoff-item', 'Review handoff', 1, '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z')
+    `).run();
+    upgraded.prepare(`
+      INSERT INTO agent_runs (id, work_item_id, kind, requested_target, agent, status, created_at)
+      VALUES ('handoff-run', 'handoff-item', 'coding', 'codex', 'codex', 'completed', '2026-08-27T00:00:00.000Z')
+    `).run();
+    upgraded.prepare(`
+      INSERT INTO agent_run_review_handoffs (
+        agent_run_id, summary, changes_json, acceptance_criteria_json,
+        contract_changes_json, verification_json, uncertainties_json,
+        tradeoffs_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'handoff-run',
+      'Added the structured review handoff schema.',
+      '[{"path":"src/server/database.ts","summary":"Added migration","rationale":"Persist review evidence"}]',
+      '[{"criterion":"Upgrade from migration 060","files":["src/server/database.test.ts"],"decisions":["Use one row per run"]}]',
+      '[{"kind":"schema","summary":"Added agent_run_review_handoffs"}]',
+      '[{"command":"vitest run src/server/database.test.ts","exitCode":0,"result":"passed"}]',
+      '["Capture logic is a separate task"]',
+      '[{"decision":"Use validated JSON sections","rationale":"The handoff is written and read as one document"}]',
+      '2026-08-27T00:01:00.000Z',
+    );
+    expect(upgraded.prepare("SELECT format_version FROM agent_run_review_handoffs WHERE agent_run_id = 'handoff-run'").get())
+      .toEqual({ format_version: 1 });
+    expect(() => upgraded.prepare("UPDATE agent_run_review_handoffs SET changes_json = '{}' WHERE agent_run_id = 'handoff-run'").run())
+      .toThrow(/constraint/i);
+
+    upgraded.prepare("DELETE FROM agent_runs WHERE id = 'handoff-run'").run();
+    expect(upgraded.prepare('SELECT count(*) AS count FROM agent_run_review_handoffs').get()).toEqual({ count: 0 });
     upgraded.close();
   });
 
