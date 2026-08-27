@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
-import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, warmAgentCommand, type AgentInputSteering, type AgentUsage, type RetrievedMemory } from './agent-runner.js';
+import { EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, warmAgentCommand, type AgentInputSteering, type AgentUsage, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -516,17 +516,17 @@ export function buildSharedReplyPrompt(
   linked?: { item: WorkItem; run: AgentRun },
   retrievedMemory?: RetrievedMemory[],
   localId?: string | null,
-  currentUserInstruction?: string,
-  precedingUserInstruction?: string,
   externalActionContract?: string,
 ): string {
   const roleContext = linked
-    ? buildPrompt(linked.item, linked.run, sharedContext, [], currentUserInstruction, precedingUserInstruction, externalActionContract)
+    ? buildPrompt(linked.item, linked.run, sharedContext, [], externalActionContract)
     : `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.
 
 This conversation is not linked to a project task, so its workspace is Workbench-only. Do not modify Writer or any other repository from this conversation. To work in another repository, Jeffrey must link this conversation to a task whose workspace is that repository.
 
-${compactSharedBrief(sharedContext)}`;
+${compactSharedBrief(sharedContext)}
+
+${externalActionContract ?? EXTERNAL_ACTION_CONTRACT}`;
   return `${roleContext}
 
 ${connectionContext}
@@ -744,7 +744,11 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       if (agent === 'codex') warmSharedRoomCodex(cwd, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE);
       else warmAgentCommand(agent, cwd, profile, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, runKind);
     }
-    const externalAuthorizationPromise = classifyExternalActionAuthorization(latestUserMessage, precedingUserMessage, undefined, precedingAgentResponse);
+    const externalAuthorizationPromise = classifyExternalActionAuthorization({
+      currentMessage: latestUserMessage,
+      precedingHumanMessage: precedingUserMessage,
+      precedingAgentMessage: precedingAgentResponse,
+    });
     const retrievedMemoryPromise = retrievalSnapshot?.matches ?? repository.searchActivityMemory(memoryQuery, PROMPT_MEMORY_CANDIDATE_LIMIT, {
       excludeExactBody: memoryQuery,
       projectKey: linkedItem ? projectKey(linkedItem.projectName) || undefined : undefined,
@@ -767,8 +771,6 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       linkedRun && linkedItem ? { item: linkedItem, run: linkedRun } : undefined,
       injectedMemory,
       target.conversationId,
-      latestUserMessage,
-      precedingUserMessage,
       externalActionContract,
     );
     if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'prompt', {

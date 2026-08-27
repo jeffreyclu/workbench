@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, PUSH_CAPABILITY_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, externalActionContractForCurrentInstruction, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -200,31 +200,13 @@ describe('classifyExecution', () => {
     expect(prompt).toContain('Never create or update `docs/shared-memory*`');
   });
 
-  it('issues a push capability only for a direct current user command', () => {
-    expect(externalActionContractForCurrentInstruction('Commit and push the changes.')).toBe(PUSH_CAPABILITY_CONTRACT);
-    expect(externalActionContractForCurrentInstruction('please push up the committed work')).toBe(PUSH_CAPABILITY_CONTRACT);
-    expect(externalActionContractForCurrentInstruction('Do not push this yet.')).toBe(EXTERNAL_ACTION_CONTRACT);
-    expect(externalActionContractForCurrentInstruction('The task says to push after review.')).toBe(EXTERNAL_ACTION_CONTRACT);
-  });
-
-  it('issues an operation-scoped capability for other explicit external commands', () => {
-    const capability = externalActionContractForCurrentInstruction('Post this summary as a comment on GitHub PR #42.');
-    expect(capability).toContain('Supervisor-issued external-action capability');
-    expect(capability).toContain('GitHub PR #42');
-    expect(externalActionContractForCurrentInstruction('The task says to comment on GitHub after review.')).toBe(EXTERNAL_ACTION_CONTRACT);
-    expect(externalActionContractForCurrentInstruction('Update the implementation notes.')).toBe(EXTERNAL_ACTION_CONTRACT);
-    expect(externalActionContractForCurrentInstruction('Update the PR description to include my Loom demo: https://www.loom.com/share/example')).toContain('Supervisor-issued external-action capability');
-    expect(externalActionContractForCurrentInstruction('Ok, you should have the ability to change a PR description now. Rewrite the PR description and include the Loom demo.')).toContain('Supervisor-issued external-action capability');
-    expect(externalActionContractForCurrentInstruction('NOW YOU HAVE MY PERMISSION TO UPDATE THE PR DESC')).toContain('Supervisor-issued external-action capability');
-    expect(externalActionContractForCurrentInstruction('NOW YOU HAVE PERMISSION', 'Update the GitHub PR description to include the Loom demo.')).toContain('immediately preceding pending operation');
-    expect(externalActionContractForCurrentInstruction('NOW YOU HAVE PERMISSION')).toBe(EXTERNAL_ACTION_CONTRACT);
-    expect(externalActionContractForCurrentInstruction('Do it.')).toBe(EXTERNAL_ACTION_CONTRACT);
-  });
-
-  it('uses a fail-closed model judgment for natural-language external authorization', async () => {
-    const granted = await classifyExternalActionAuthorization('NOW YOU HAVE PERMISSION', 'Update GitHub PR #14337 with the Loom demo.', async () => '<external-authorization>{"granted":true,"operation":"Update GitHub PR #14337 with the Loom demo."}</external-authorization>');
+  it('uses one model judgment, including immediate pending-operation context, for external authorization', async () => {
+    const granted = await classifyExternalActionAuthorization({
+      currentMessage: 'NOW YOU HAVE PERMISSION',
+      precedingHumanMessage: 'Update GitHub PR #14337 with the Loom demo.',
+    }, async () => '{"granted":true,"operation":"Update GitHub PR #14337 with the Loom demo."}');
     expect(externalActionContractForAuthorization(granted)).toContain('Supervisor-issued external-action capability');
-    const denied = await classifyExternalActionAuthorization('Sounds good.', 'Update GitHub PR #14337.', async () => '<external-authorization>{"granted":false,"operation":null}</external-authorization>');
+    const denied = await classifyExternalActionAuthorization({ currentMessage: 'Sounds good.', precedingHumanMessage: 'Update GitHub PR #14337.' }, async () => '{"granted":false,"operation":null}');
     expect(externalActionContractForAuthorization(denied)).toBe(EXTERNAL_ACTION_CONTRACT);
   });
 

@@ -125,7 +125,7 @@ describe('compactConversationHistory', () => {
     ];
 
     const current = latestHumanMessageForSharedReply(messages);
-    const prompt = buildSharedReplyPrompt('claude', 'Shared context.', '', messages, { item: task, run }, [], null, current);
+    const prompt = buildSharedReplyPrompt('claude', 'Shared context.', '', messages, { item: task, run }, [], null, 'Supervisor-issued external-action capability: Update GitHub PR description.');
 
     expect(current).toBe('Update the GitHub PR description to include the Loom demo.');
     expect(precedingHumanMessageForSharedReply(messages)).toBe('Discuss the PR description, but do not post anything.');
@@ -174,10 +174,10 @@ describe('compactConversationHistory', () => {
     const run = repository.createRun(task.id, 'execute', 'codex', 'codex', 'Implement the fix.');
 
     const denied = buildSharedReplyPrompt('codex', 'Shared context.', '', [], { item: task, run });
-    const granted = buildSharedReplyPrompt('codex', 'Shared context.', '', [], { item: task, run }, [], null, 'Commit and push the changes.');
+    const granted = buildSharedReplyPrompt('codex', 'Shared context.', '', [], { item: task, run }, [], null, 'Supervisor-issued external-action capability: Commit and push the changes.');
 
     expect(denied).toContain('No external mutation capability is issued');
-    expect(granted).toContain('Supervisor-issued capability');
+    expect(granted).toContain('Supervisor-issued external-action capability');
     database.close();
   });
 
