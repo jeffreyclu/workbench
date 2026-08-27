@@ -62,26 +62,49 @@ function runtimeWorkActive(port: number): Promise<boolean | null> {
   });
 }
 
+function ownedAgentWorkActive(port: number): Promise<boolean | null> {
+  return new Promise((resolveStatus) => {
+    const request = httpGet({ hostname: '127.0.0.1', port, path: '/api/health', timeout: 750 }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => { body = `${body}${chunk}`.slice(-4_000); });
+      response.on('end', () => {
+        try { const status = JSON.parse(body) as { ownedAgentWorkActive?: boolean }; resolveStatus(typeof status.ownedAgentWorkActive === 'boolean' ? status.ownedAgentWorkActive : null); }
+        catch { resolveStatus(null); }
+      });
+    });
+    request.on('timeout', () => request.destroy());
+    request.on('error', () => resolveStatus(null));
+  });
+}
+
+function retireRuntime(port: number): void {
+  const request = httpRequest({ hostname: '127.0.0.1', port, path: '/api/runtime/retire', method: 'POST', timeout: 750 }, (response) => response.resume());
+  request.on('error', () => undefined);
+  request.on('timeout', () => request.destroy());
+  request.end();
+}
+
 async function stopAfterDrain(runtime: Runtime): Promise<void> {
   // A failed provider cancellation is owned by the old process. Without a
   // ceiling it can keep that retired release (and its agent subprocesses)
   // alive forever, even after the new runtime is serving normally.
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 31 * 60_000;
   let reported = false;
   while (runtime.child.exitCode === null && Date.now() < deadline) {
-    const activeWork = await runtimeWorkActive(runtime.port);
-    if (activeWork === false) {
+    const [activeWork, activeAgents] = await Promise.all([runtimeWorkActive(runtime.port), ownedAgentWorkActive(runtime.port)]);
+    if (activeWork === false && activeAgents === false) {
       runtime.child.kill('SIGTERM');
       return;
     }
-    if (activeWork && !reported) {
+    if ((activeWork || activeAgents) && !reported) {
       reported = true;
-      console.log(`Workbench backend on port ${runtime.port} is draining in-flight work before shutdown.`);
+      console.log(`Workbench backend on port ${runtime.port} is retaining in-flight agent work before shutdown.`);
     }
     await new Promise((resolveWait) => setTimeout(resolveWait, 250));
   }
   if (runtime.child.exitCode === null) {
-    console.warn(`Workbench backend on port ${runtime.port} exceeded its 15s drain window; terminating the retired runtime.`);
+    console.warn(`Workbench backend on port ${runtime.port} exceeded its external-agent drain window; terminating the retired runtime.`);
     runtime.child.kill('SIGTERM');
   }
 }
@@ -132,7 +155,10 @@ async function deploy(releasePath = currentRelease()): Promise<void> {
       }, 250).unref();
     });
     console.log(`Workbench live runtime switched to ${releasePath.split('/').at(-1)}.`);
-    if (previous) void stopAfterDrain(previous);
+    if (previous) {
+      retireRuntime(previous.port);
+      void stopAfterDrain(previous);
+    }
   } catch (error) {
     child.kill('SIGTERM');
     throw error;

@@ -52,6 +52,7 @@ describe('runtime drain state', () => {
     expect(repository.claimRun(run.id, ownerId, 60_000)).toBe(true);
     expect(repository.hasRuntimeWork(ownerId)).toBe(false);
     expect(repository.hasPromotionBlockingWork(ownerId)).toBe(false);
+    expect(repository.hasOwnedAgentWork(ownerId)).toBe(true);
     database.close();
   });
 

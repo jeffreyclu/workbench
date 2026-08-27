@@ -1978,6 +1978,10 @@ export class WorkItemRepository {
     return this.runs.hasRuntimeWork(ownerId);
   }
 
+  hasOwnedAgentWork(ownerId: string): boolean {
+    return this.runs.hasOwnedAgentWork(ownerId);
+  }
+
   hasPromotionBlockingWork(ownerId: string): boolean {
     return this.runs.hasPromotionBlockingWork(ownerId);
   }

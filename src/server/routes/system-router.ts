@@ -9,17 +9,22 @@ import { lastCompletedRuntimePromotion } from '../runtime-release.js';
 import { LIFECYCLE_REPORT_MS, lifecycleReportMinimumCases, OWNER_ID } from '../scheduler.js';
 import { DEFAULT_LIFECYCLE_REPORT_DIRECTORY, lifecycleReportStatus } from '../lifecycle-report.js';
 import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMessage } from '../slack-notify.js';
+import { beginRuntimeRetirement } from '../runtime-retirement.js';
 
 export function createHealthRouter({ repository, capabilities, buildId }: RouteContext) {
   const router = Router();
   router.get('/api/health', (_request, response) => {
-    response.json({ ok: true, mode: capabilities.mode, runtimeWorkActive: repository.hasRuntimeWork(OWNER_ID), buildId });
+    response.json({ ok: true, mode: capabilities.mode, runtimeWorkActive: repository.hasRuntimeWork(OWNER_ID), ownedAgentWorkActive: repository.hasOwnedAgentWork(OWNER_ID), buildId });
   });
   return router;
 }
 
 export function createSystemRouter({ repository, admin }: RouteContext) {
   const router = Router();
+  router.post('/api/runtime/retire', (_request, response) => {
+    beginRuntimeRetirement();
+    response.json({ retiring: true });
+  });
   router.get('/api/runtime/preview-status', (_request, response) => {
     response.json(runtimePreviewStatus());
   });

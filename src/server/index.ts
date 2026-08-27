@@ -12,6 +12,7 @@ import { attachRealtimeServer } from './realtime.js';
 import { collectMemoryDocuments, indexPendingMemory } from './memory-index.js';
 import { shutdownActiveAgentProcesses } from './agent-runner.js';
 import { shutdownExternalActionClassifier } from './external-action-ai.js';
+import { configureRuntimeRetirement } from './runtime-retirement.js';
 
 const port = Number(process.env.PORT ?? 4317);
 const database = openDatabase();
@@ -21,8 +22,12 @@ const app = createApp(database, liveRuntimeCapabilities);
 // and keep retrying/dispatching queued work going forward. Must start before the
 // server accepts traffic so nothing queued while the process was down sits idle.
 const repository = new WorkItemRepository(database);
-if (liveRuntimeCapabilities.ownScheduler) startScheduler(repository);
-if (liveRuntimeCapabilities.promoteRuntime) startRuntimePromotionWorker(repository);
+const scheduler = liveRuntimeCapabilities.ownScheduler ? startScheduler(repository) : null;
+const promotionWorker = liveRuntimeCapabilities.promoteRuntime ? startRuntimePromotionWorker(repository) : null;
+configureRuntimeRetirement(() => {
+  scheduler?.stop();
+  promotionWorker?.stop();
+});
 warmDiffConfidenceModel();
 
 // Keeps the vectorized memory index (memory-index.ts) warm so the very first

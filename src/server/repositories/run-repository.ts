@@ -427,6 +427,19 @@ export class RunRepository {
     return Number(row.runs) + Number(row.messages) > 0;
   }
 
+  /** Any active agent owned by this backend, including linked project work.
+   * Used only by a retiring backend: external work must not block promotion,
+   * but its process must remain supervised until it reaches a terminal state. */
+  hasOwnedAgentWork(ownerId: string): boolean {
+    const row = this.database.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM agent_runs WHERE status = 'running' AND owner_id = ?) AS runs,
+        (SELECT COUNT(*) FROM shared_messages
+          WHERE status = 'running' AND owner_id = ? AND author IN ('codex', 'claude')) AS messages
+    `).get(ownerId, ownerId) as { runs: number; messages: number };
+    return Number(row.runs) + Number(row.messages) > 0;
+  }
+
   /**
    * Promotion is allowed once this runtime has no Workbench-scoped agent work
    * left to snapshot. Unlike hasRuntimeWork, deliberately exclude the
