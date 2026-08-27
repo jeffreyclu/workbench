@@ -10,6 +10,7 @@ import { liveRuntimeCapabilities } from './runtime-capabilities.js';
 import { createServer } from 'node:http';
 import { attachRealtimeServer } from './realtime.js';
 import { collectMemoryDocuments, indexPendingMemory } from './memory-index.js';
+import { shutdownActiveAgentProcesses } from './agent-runner.js';
 
 const port = Number(process.env.PORT ?? 4317);
 const database = openDatabase();
@@ -51,6 +52,7 @@ let shuttingDown = false;
 const shutdown = () => {
   if (shuttingDown) return;
   shuttingDown = true;
+  shutdownActiveAgentProcesses();
   shutdownDiffConfidenceModel();
   shutdownFastTaskDraftModel();
   server.close(() => process.exit(0));

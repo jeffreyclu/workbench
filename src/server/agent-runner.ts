@@ -703,6 +703,16 @@ function terminateAgentProcessTree(child: ReturnType<typeof spawn>, signal: Node
  */
 export interface AgentEventContext { subagents: Map<string, string>; sessionId?: string }
 
+const activeAgentProcesses = new Set<ReturnType<typeof spawn>>();
+
+/** A runtime promotion stops the server process. Its detached agent children
+ * need an explicit process-group signal or they survive as account-consuming
+ * orphans with no Workbench turn left to own or cancel them. */
+export function shutdownActiveAgentProcesses(): void {
+  for (const child of activeAgentProcesses) terminateAgentProcessTree(child, 'SIGTERM');
+  activeAgentProcesses.clear();
+}
+
 /**
  * Claude does not provide its hidden reasoning in stream-json. A visible
  * `Decision:` preamble is therefore the only rationale we persist: it is
@@ -881,6 +891,7 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     // stays populated for the next matching task.
     const claimed = poolEligible ? claimWarmProcess(agent, cwd, command, args, accountProfile) : null;
     const child = claimed ?? spawnFresh();
+    activeAgentProcesses.add(child);
     // Skip background replenishment under the test runner: it spawns a real
     // extra process, which pre-existing tests asserting exact spawn logs
     // don't expect. The pool mechanics themselves are covered directly by
@@ -1061,6 +1072,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
       stopProcessTree();
     });
     child.on('close', (code) => {
+      activeAgentProcesses.delete(child);
       clearTimeout(timeout);
       clearInterval(heartbeat);
       if (pendingFlush) clearTimeout(pendingFlush);
