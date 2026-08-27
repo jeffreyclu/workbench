@@ -94,7 +94,7 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('position: sticky; bottom: 12px;');
   });
 
-  it('uses one mobile conversation tray for actions and details while the close control stays separate', () => {
+  it('uses one mobile conversation tray with details above a shared review/action row', () => {
     const phoneRules = styles;
 
     expect(phoneRules).toContain('.agent-console-header { position: absolute; inset: 0; z-index: 6; flex: 0 0 0; min-height: 0; height: 0; padding: 0; overflow: visible; border: 0; }');
@@ -103,24 +103,25 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed .conversation-window-actions { display: none; }');
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed ~ .thread-filter-bar { display: none; }');
     expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) + .mobile-chrome-controls .mobile-conversation-toggle { display: none; }');
-    expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) { position: fixed; inset: 0 0 auto; z-index: 6; height: 178px;');
+    expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) { position: fixed; inset: 0 0 auto; z-index: 6; height: 136px;');
     expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle { position: fixed; top: 4px; left: 50%;');
-    expect(phoneRules).toContain('.conversation-window-actions { position: fixed; top: 30px; left: 50%;');
-    expect(phoneRules).toContain('border-radius: 999px;');
+    expect(phoneRules).toContain('.agent-console-title { position: fixed; top: 32px; right: 58px; left: 14px;');
+    expect(phoneRules).toContain('.conversation-window-actions { position: fixed; top: 90px; right: 10px; left: auto; z-index: 7;');
+    expect(phoneRules).toContain('.thread-filter-bar { position: fixed; top: 86px; right: auto; left: 10px; z-index: 7;');
     expect(phoneRules).toContain('.agent-console-header.has-conversation-actions { min-height: 0; }');
     expect(phoneRules).toContain('.agent-console-header.has-conversation-actions .agent-console-title { max-width: none; padding-top: 8px; }');
     expect(phoneRules).toContain('.agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }');
   });
 
-  it('keeps mobile task-linked conversation controls in a centered tray without an overflow menu', () => {
-    const rule = styles.match(/\.conversation-window-actions \{ position: fixed; top: 30px; left: 50%;[^}]*\}/)?.[0] ?? '';
+  it('keeps mobile task-linked conversation controls compact beside the review toggle', () => {
+    const rule = styles.match(/\.conversation-window-actions \{ position: fixed; top: 90px; right: 10px; left: auto;[^}]*\}/)?.[0] ?? '';
 
-    expect(rule).toContain('z-index: 6');
+    expect(rule).toContain('z-index: 7');
     expect(rule).toContain('flex-wrap: nowrap');
     expect(rule).toContain('width: max-content');
-    expect(rule).toContain('max-width: calc(100% - 72px);');
-    expect(rule).not.toContain('overflow-x: auto');
-    expect(styles).toContain('.conversation-window-actions .icon-button { flex: 0 0 auto; width: 32px; height: 32px; }');
+    expect(rule).toContain('max-width: calc(100% - 146px);');
+    expect(rule).toContain('background: transparent');
+    expect(styles).toContain('.conversation-window-actions .icon-button { flex: 0 0 auto; width: 28px; height: 28px; }');
   });
 
   it('never renders a split conversation/changes surface on a phone', () => {
@@ -136,7 +137,7 @@ describe('conversation view controls', () => {
 
     expect(phoneRules).not.toContain('mobile-conversation-disclosure');
     expect(phoneRules).not.toContain('mobile-composer-disclosure');
-    expect(phoneRules).toContain('.mobile-chrome-toggle { width: 32px; height: 32px; }');
+    expect(phoneRules).toContain('.mobile-chrome-toggle { width: 32px; height: 32px; background: #20211d;');
     expect(phoneRules).toContain('.agent-console .shared-composer.is-mobile-composer-collapsed { display: none; }');
     expect(phoneRules).toContain('.mobile-composer-backdrop { position: fixed; inset: 0; z-index: 10;');
     expect(phoneRules).toContain('.agent-console .shared-composer.mobile-composer-sheet {');
@@ -144,6 +145,16 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed { min-height: 0; padding: 0; border-bottom-color: transparent; }');
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed .agent-console-title { display: none; }');
     expect(phoneRules).toContain('.mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }');
+  });
+
+  it('floats desktop review controls over the conversation without a solid control surface', () => {
+    const barRule = styles.match(/^\.thread-filter-bar\s*\{[^}]*\}/m)?.[0] ?? '';
+    const tabsRule = styles.match(/^\.conversation-surface-tabs\s*\{[^}]*\}/m)?.[0] ?? '';
+
+    expect(barRule).toContain('position: absolute');
+    expect(barRule).toContain('z-index: 6');
+    expect(tabsRule).toContain('border: 0');
+    expect(tabsRule).toContain('background: transparent');
   });
 
   it('keeps the mobile composer action as a safe-area-aware bottom-right action', () => {

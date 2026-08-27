@@ -120,6 +120,12 @@ as “Conversation details” or “Show composer.” The controls need accessib
 names and hover titles, while the expanded surfaces retain their existing
 content and actions.
 
+*Correction from Jeffrey, 2026-08-27.* Phone-only tray grab handles and
+composer controls must not merely be CSS-hidden on desktop. Gate their React
+rendering on the same `max-width: 820px` and coarse-pointer condition, and
+close their state when that condition stops matching. This prevents a stale or
+overriding desktop style from exposing mobile chrome.
+
 ### Phone conversation actions are one compact floating row
 
 *Decision from Jeffrey, 2026-08-27.* Keep every conversation action in a
@@ -147,6 +153,13 @@ quiet, bounded top surface, not separate floating pills for actions, title,
 and review controls. Use a centered horizontal grab handle — matching the
 composer sheet — to collapse the tray on tap or an upward swipe. Keep the
 phone review switch to Conversation and Changes only; never show Split.
+
+*Correction from Jeffrey, 2026-08-27.* In the expanded phone conversation
+tray, show the conversation details first. The next row shares the
+Conversation/Changes switch on the left and compact action controls on the
+right; do not give those actions a separate pill or panel. The collapsed tray
+expand control needs an opaque background. On desktop, the review switch and
+pin are z-layered over the conversation without a solid enclosing surface.
 
 ### Phone composer controls must have an intentional complete layout
 

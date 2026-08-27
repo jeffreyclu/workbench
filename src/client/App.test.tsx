@@ -1383,6 +1383,7 @@ describe('shared room', () => {
   });
 
   it('opens the mobile conversation tray from one centered control and collapses it with an upward swipe', async () => {
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({ matches: query === '(max-width: 820px) and (pointer: coarse)', media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     const conversationId = '00000000-0000-4000-8000-000000000031';
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
