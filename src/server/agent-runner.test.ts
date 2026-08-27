@@ -87,7 +87,7 @@ describe('classifyExecution', () => {
     expect(claude).not.toContain('--dangerously-skip-permissions');
     expect(claude).toEqual(expect.arrayContaining(['--input-format', 'stream-json']));
     expect(claude).not.toContain('--forward-subagent-text');
-    expect(claude).toEqual(expect.arrayContaining(['--autocompact', '100k']));
+    expect(claude).toEqual(expect.arrayContaining(['--autocompact', '180k']));
     expect(claude).toEqual(expect.arrayContaining(['--add-dir', '/tmp/project', homedir()]));
     expect(commandFor('claude', '/tmp/project', 'standard').args).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions']));
     expect(commandFor('claude', '/tmp/project', 'standard').args).not.toContain('--no-session-persistence');

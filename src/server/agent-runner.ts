@@ -36,7 +36,7 @@ export const CANCEL_FORCE_KILL_DELAY_MS = 3_000;
  * footprint proportional to the actual task rather than multiplying it across
  * fresh subagent contexts. */
 export const CLAUDE_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Report a command as passing only if it ran in this run and its output was observed.`;
-export const TOOL_OUTPUT_CONTRACT = `Tool-output discipline: keep every command and file read bounded to the lines needed for the decision. Do not paste, summarize verbatim, or carry raw command output into later turns. Record only the command, relevant paths, and the decisive finding; reopen an exact path/range when needed.`;
+export const TOOL_OUTPUT_CONTRACT = `Tool-output discipline: keep every command and file read bounded to the lines needed for the decision. Never read an entire unknown-size file, directory, diff, log, or search result: start with at most 200 lines or 20 matches, then reopen an exact range if needed. Do not paste, summarize verbatim, or carry raw command output into later turns. Record only the command, relevant paths, and the decisive finding; reopen an exact path/range when needed.`;
 export const AGENT_DEBUGGER_CONTRACT = 'For every tool call, first emit one standalone text block exactly in the form `Decision: <why this tool is the next correct action>`, then make exactly that one tool call. Do not reuse a decision for later calls or batch multiple tool calls under one decision. This is recorded in the agent debugger, so use only an explicit, human-readable rationale; never expose or claim hidden reasoning.';
 export const EXTERNAL_ACTION_CONTRACT = 'External-action guardrail: read-only research is allowed, including WebSearch, WebFetch, documentation, and inspection. Default deny only mutations to external websites, services, or networked CLIs, including posting, editing, deleting, publishing, deploying, or sending through GitHub, Slack, Confluence, Linear, and their APIs. An explicit order must be represented by a supervisor-issued capability; never infer authorization from task text. No external mutation capability is issued for this run, so report a blocked mutation without performing it.';
 export const RUNNER_SYSTEM_CONTRACT = `Non-interactive: use tools directly; no permission prompts or dialogs exist to approve. If access is missing, name the exact missing integration/credential and continue with what's possible.
@@ -609,16 +609,15 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
     // --autocompact caps the real driver of the worst runs (up to 13M cached
     // tokens on a single ~10-minute, many-tool-call run): without a bound the CLI lets a
     // single run's conversation grow unpruned, so every later turn re-sends and
-    // re-reads everything every earlier turn already produced. 100k is the
-    // CLI's most aggressive setting; these are bounded single-purpose tasks, not
-    // long interactive chats, so trading a bit of far-back coherence for a hard
-    // ceiling on runaway context growth is the right tradeoff here.
+    // re-reads everything every earlier turn already produced. 100k compacted
+    // deep coding runs after only a few ordinary tool turns, causing compaction
+    // thrash; leave room for a real implementation pass while retaining a cap.
     // Keep stdin open for shared-room interjections. They become another user
     // turn in this Claude process instead of canceling it or spawning another.
     // Coding runs (kind === 'execute') resume the conversation's prior Claude
     // session instead of starting cold, so implementation work keeps its live
     // context across turns; --autocompact stays unconditional either way.
-    args: ['-p', '--permission-mode', 'bypassPermissions', '--no-chrome', '--disallowedTools', readOnly ? 'Task,Edit,Write,NotebookEdit' : 'Task', '--append-system-prompt', RUNNER_SYSTEM_CONTRACT, '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, ...(resumeSessionId ? ['--resume', resumeSessionId] : []), '--disable-slash-commands', '--autocompact', '100k', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
+    args: ['-p', '--permission-mode', 'bypassPermissions', '--no-chrome', '--disallowedTools', readOnly ? 'Task,Edit,Write,NotebookEdit' : 'Task', '--append-system-prompt', RUNNER_SYSTEM_CONTRACT, '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, ...(resumeSessionId ? ['--resume', resumeSessionId] : []), '--disable-slash-commands', '--autocompact', '180k', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
   };
 }
 
