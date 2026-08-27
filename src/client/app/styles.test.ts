@@ -212,7 +212,9 @@ describe('diff review layout', () => {
     const phoneRules = styles.match(/@media \(max-width: 640px\) \{[\s\S]*?\.task-collapsible/)?.[0] ?? '';
 
     expect(phoneRules).toContain('.diff-file-list button { flex-basis: min(220px, 68vw); }');
-    expect(styles).toContain('.diff-file-row > button { flex: 1 1 auto; }');
+    expect(styles).toContain('.diff-file-row > button { flex: 1 1 0; min-width: 0; }');
+    expect(styles).toContain('.diff-file-actions { display: flex; flex: 0 0 auto;');
+    expect(styles).toContain('.diff-file-row > .diff-file-actions .diff-file-copy-path');
     expect(styles).toContain('.workspace-diff-file { min-width: 0; overflow: hidden; }');
     expect(styles).toContain('.github-diff-file { min-width: 0; overflow: hidden; }');
     expect(styles).toContain('.workspace-diff-file pre { min-width: 0; max-width: 100%;');

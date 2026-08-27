@@ -366,11 +366,12 @@ nav { display: grid; gap: 3px; }
 .workspace-diff nav > div, .github-diff nav > div { display: flex; max-height: 68px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
 .diff-file-row { display: flex; flex: 0 0 min(280px, 40vw); min-width: 0; align-items: stretch; border-right: 1px solid #252522; }
 .workspace-diff nav button, .github-diff nav button { display: grid; flex: 0 0 min(280px, 40vw); min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 6px; min-height: 52px; padding: 7px 10px; color: #aaa9a2; text-align: left; background: transparent; border: 0; cursor: pointer; font: 10px 'DM Mono'; }
-.diff-file-row > button { flex: 1 1 auto; }
+.diff-file-row > button { flex: 1 1 0; min-width: 0; }
+.diff-file-actions { display: flex; flex: 0 0 auto; align-items: stretch; position: relative; z-index: 1; background: #1b1b18; border-left: 1px solid #353530; box-shadow: -5px 0 10px #10100f; }
 .workspace-diff nav button:hover, .workspace-diff nav button.selected { color: #eee; background: #24241f; }
 .workspace-diff nav button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-diff nav button b, .workspace-diff nav button i { font-size: 9px; }
-.diff-file-row .diff-file-copy-path, .diff-file-open-editor { flex: 0 0 auto; align-self: stretch; width: 26px; border-left: 1px solid #252522; border-radius: 0; }
+.diff-file-row > .diff-file-actions .diff-file-copy-path, .diff-file-row > .diff-file-actions .diff-file-open-editor { display: inline-flex; flex: 0 0 34px; align-items: center; align-self: stretch; justify-content: center; width: 34px; min-height: 0; padding: 0; color: #b9b8b0; background: #1b1b18; border: 0; border-left: 1px solid #353530; border-radius: 0; }
 .workspace-diff-file { min-width: 0; overflow: hidden; }
 .workspace-diff-file > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 39px; padding: 0 12px; color: #d5d4cd; border-bottom: 1px solid #302f2b; font: 10px 'DM Mono'; }
 .workspace-diff-file > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

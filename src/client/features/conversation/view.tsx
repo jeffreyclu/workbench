@@ -255,6 +255,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     // picker state for the conversation Jeffrey just opened.
     conversationIdRef.current = nextConversationId;
     pendingComposerSelectionRef.current = source ? composerSelectionFromConversation(source) : null;
+    if (pendingComposerSelectionRef.current) setComposerSelection(pendingComposerSelectionRef.current);
     setConversationId(nextConversationId);
   }
   function addDiffFollowUp(reference: DiffFollowUpReference) {

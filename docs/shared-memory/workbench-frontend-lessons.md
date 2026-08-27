@@ -138,6 +138,11 @@ lines inside its visible width. Do not offer horizontal scrolling for source
 review. File-path rows reserve space for their editor/copy actions so long
 paths cannot collide with those controls.
 
+*Correction from Jeffrey, 2026-08-27.* That reservation must be a dedicated,
+opaque trailing actions group, not unbordered glyphs or controls that share the
+filename's flex cell. The filename is the only truncating child; editor and
+copy actions keep visible fixed-width tap targets at every viewport.
+
 ### Phone conversation chrome collapses into two icon controls
 
 *Decision from Jeffrey, 2026-08-26.* Phone conversations are reading-first:
