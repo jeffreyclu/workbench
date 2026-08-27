@@ -117,6 +117,9 @@ describe('conversation view controls', () => {
     expect(phoneRules).not.toContain('mobile-composer-disclosure');
     expect(phoneRules).toContain('.mobile-chrome-toggle { width: 32px; height: 32px; }');
     expect(phoneRules).toContain('.agent-console .shared-composer.is-mobile-composer-collapsed { display: none; }');
+    expect(phoneRules).toContain('.mobile-composer-backdrop { position: fixed; inset: 0; z-index: 10;');
+    expect(phoneRules).toContain('.agent-console .shared-composer.mobile-composer-sheet {');
+    expect(phoneRules).toContain('.mobile-composer-handle { display: grid; place-items: center;');
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed { display: none; }');
   });
 

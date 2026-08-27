@@ -226,6 +226,15 @@ composer control is the fixed bottom-right action.
 
 The mobile conversation controls are hidden entirely at desktop widths.
 
+### Mobile composer closes as a bottom sheet
+
+*Decision from Jeffrey, 2026-08-27.* When expanded on phones, the composer is
+a bottom sheet with a centered grab handle. Tap the handle or swipe it down to
+collapse; tapping the dimmed area outside the sheet also dismisses it. Do not
+show a separate close icon while the sheet is open, because it overlaps the
+composer controls. The bottom-right pen appears only while the composer is
+closed.
+
 ### Agent conversations are visual, not text walls
 
 *Decision from Jeffrey, 2026-08-23.*

@@ -1404,6 +1404,14 @@ describe('shared room', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand composer' }));
     expect(composer).not.toHaveClass('is-mobile-composer-collapsed');
     expect(screen.getByRole('button', { name: 'Collapse composer' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Expand composer' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse composer' }));
+    expect(composer).toHaveClass('is-mobile-composer-collapsed');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand composer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss composer' }));
+    expect(composer).toHaveClass('is-mobile-composer-collapsed');
   });
 
   it('sends an ordinary composer message without turning it into an interjection', async () => {
