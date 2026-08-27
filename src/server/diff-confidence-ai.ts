@@ -77,9 +77,9 @@ let outputBuffer = '';
 let active: PendingAssessment | null = null;
 const queue: PendingAssessment[] = [];
 
-/** A persistent stream-json worker removes Claude CLI startup/auth overhead
- * from every review. Requests remain serialized and independently parsed; the
- * scorer has no tools and receives only the block batch for that request. */
+/** A pre-started stream-json worker removes CLI boot overhead. It is recycled
+ * after every assessment: Claude's stream protocol otherwise retains prior
+ * file diffs as chat history, making each later file slower than the last. */
 function ensureWorker(): ChildProcessWithoutNullStreams {
   if (worker && !worker.killed && worker.exitCode == null) return worker;
   worker = spawn('claude', [
@@ -104,6 +104,8 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
           try { pending.resolve(parseDiffConfidenceAssessment(event.result, pending.blocks.map((block) => block.key))); }
           catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); }
         }
+        recycleWorker();
+        ensureWorker();
         dispatchNext();
       } catch { /* Ignore non-result stream events. */ }
     }
@@ -126,6 +128,21 @@ function dispatchNext(): void {
   // The rubric is already the system prompt. Sending it again used to double
   // every uncached request's input and delayed the first score unnecessarily.
   scorer.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: `Blocks:\n${JSON.stringify(active.blocks)}` }] } })}\n`);
+}
+
+function recycleWorker(): void {
+  const scorer = worker;
+  worker = null;
+  outputBuffer = '';
+  if (!scorer) return;
+  // This is an intentional turnover after a completed response, not a scorer
+  // failure. Detach failure handlers before terminating the consumed session
+  // so queued work is claimed by the already-restarting clean worker.
+  scorer.removeAllListeners('exit');
+  scorer.removeAllListeners('error');
+  scorer.stdin.removeAllListeners('error');
+  scorer.stdout.removeAllListeners('data');
+  try { scorer.kill('SIGTERM'); } catch { /* already stopped */ }
 }
 
 function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, DiffConfidenceAssessment>> {
