@@ -1118,7 +1118,7 @@ nav { display: grid; gap: 3px; }
     position: relative; z-index: 2; flex: 0 0 auto; width: calc(100% - 24px);
     margin: 0 12px calc(8px + env(safe-area-inset-bottom, 0px));
   }
-  .mobile-chrome-controls { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 6px 14px; border-bottom: 1px solid var(--line); }
+  .mobile-chrome-controls { position: fixed; top: 58px; right: 14px; z-index: 7; display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 0; }
   .mobile-chrome-toggle { width: 32px; height: 32px; }
   .mobile-composer-toggle {
     position: fixed; right: 14px; bottom: calc(var(--mobile-nav) + env(safe-area-inset-bottom, 0px) + 14px); z-index: 9;
@@ -1140,25 +1140,22 @@ nav { display: grid; gap: 3px; }
   .agent-console .shared-thread .jump-to-latest-button {
     position: sticky; bottom: 12px; left: 50%; z-index: 5; margin: 12px 0;
   }
-  .agent-console-header {
-    position: relative; flex-wrap: wrap; align-items: flex-start; min-height: 70px; justify-content: flex-start; padding: 12px 14px;
-    max-height: 220px; overflow: hidden;
-    transition: max-height var(--motion-standard) var(--motion-ease), padding var(--motion-standard) var(--motion-ease), opacity var(--motion-fast) ease, border-color var(--motion-fast) ease;
-  }
+  /* Chrome lives over the surface, never in front of it in document flow. */
+  .agent-console-header { position: absolute; inset: 0; z-index: 6; flex: 0 0 0; min-height: 0; height: 0; padding: 0; overflow: visible; border: 0; }
   /* The compact control is a title/metadata disclosure. Conversation actions
      stay available in their floating bar while those details are hidden. */
-  .agent-console-header.is-mobile-header-collapsed { min-height: 70px; padding: 12px 14px; border-bottom-color: transparent; }
+  .agent-console-header.is-mobile-header-collapsed { min-height: 0; padding: 0; border-bottom-color: transparent; }
   .agent-console-header.is-mobile-header-collapsed .agent-console-title { display: none; }
-  .mobile-detail-close { position: absolute; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }
+  .mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }
   .conversation-window-actions .mobile-related-task-link { display: grid; }
-  .agent-console-title { flex: 1 1 100%; min-width: 0; max-width: calc(100% - 44px); }
-  .agent-console-header.has-conversation-actions { min-height: 70px; }
-  .agent-console-header.has-conversation-actions .agent-console-title { max-width: 100%; padding-top: 0; }
+  .agent-console-title { position: fixed; top: 58px; right: 58px; left: 14px; z-index: 6; min-width: 0; padding: 8px 10px; background: #11120fee; border: 1px solid var(--line); border-radius: 8px; }
+  .agent-console-header.has-conversation-actions { min-height: 0; }
+  .agent-console-header.has-conversation-actions .agent-console-title { max-width: none; padding-top: 8px; }
   .agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .related-task-link { display: none; }
   .related-task-link span { display: none; }
   /* Overlay the conversation surface; this bar must not claim its own header row. */
-  .conversation-window-actions { position: absolute; top: 12px; left: 50%; z-index: 6; display: flex; flex-wrap: nowrap; justify-content: center; width: max-content; min-width: 32px; max-width: calc(100% - 28px); gap: 2px; margin: 0; padding: 3px; background: #20211d; border: 1px solid #3b3d32; border-radius: 999px; box-shadow: 0 8px 20px #0006; transform: translateX(-50%); }
+  .conversation-window-actions { position: fixed; top: 12px; left: 50%; z-index: 6; display: flex; flex-wrap: nowrap; justify-content: center; width: max-content; min-width: 32px; max-width: calc(100% - 28px); gap: 2px; margin: 0; padding: 3px; background: #20211d; border: 1px solid #3b3d32; border-radius: 999px; box-shadow: 0 8px 20px #0006; transform: translateX(-50%); }
   .conversation-window-actions .icon-button { flex: 0 0 auto; width: 32px; height: 32px; }
   .conversation-window-actions .conversation-task-picker { flex: 0 0 auto; min-height: 32px; }
   .conversation-window-actions .conversation-delete-control { flex: 0 0 auto; }

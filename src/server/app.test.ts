@@ -665,6 +665,22 @@ describe('GET /api/shared/conversations/:id', () => {
     expect(repository.get(task.id)?.status).toBe('ready');
   });
 
+  it('unpins a pinned conversation and its linked task when a new message is dispatched to an agent', async () => {
+    const task = repository.create({ title: 'Pinned dispatch target', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.update(task.id, { status: 'pinned' });
+    const conversation = repository.createConversation('Keep working', task.id);
+    repository.setConversationPinned(conversation.id, true);
+
+    const response = await fetch(`${baseUrl}/api/shared/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ body: 'testing', conversationId: conversation.id, attachments: [], dispatchTo: 'claude' }),
+    });
+    expect(response.status).toBe(202);
+    expect(repository.getConversation(conversation.id)?.pinned).toBe(false);
+    expect(repository.get(task.id)?.status).not.toBe('pinned');
+  });
+
   it('unpins a standalone pinned conversation with no linked task on restore', async () => {
     const conversation = repository.createConversation('Solo pinned thread');
     repository.setConversationPinned(conversation.id, true);

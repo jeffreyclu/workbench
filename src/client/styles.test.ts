@@ -97,12 +97,13 @@ describe('conversation view controls', () => {
   it('uses a floating mobile conversation action bar while title metadata is separate', () => {
     const phoneRules = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.conversation-window-actions \{[^}]*\}/)?.[0] ?? '';
 
-    expect(phoneRules).toContain('.mobile-detail-close { position: absolute; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }');
+    expect(phoneRules).toContain('.agent-console-header { position: absolute; inset: 0; z-index: 6; flex: 0 0 0; min-height: 0; height: 0; padding: 0; overflow: visible; border: 0; }');
+    expect(phoneRules).toContain('.mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }');
     expect(phoneRules).toContain('.conversation-window-actions .mobile-related-task-link { display: grid; }');
-    expect(phoneRules).toContain('.conversation-window-actions { position: absolute; top: 12px; left: 50%;');
+    expect(phoneRules).toContain('.conversation-window-actions { position: fixed; top: 12px; left: 50%;');
     expect(phoneRules).toContain('border-radius: 999px;');
-    expect(phoneRules).toContain('.agent-console-header.has-conversation-actions { min-height: 70px; }');
-    expect(phoneRules).toContain('.agent-console-header.has-conversation-actions .agent-console-title { max-width: 100%; padding-top: 0; }');
+    expect(phoneRules).toContain('.agent-console-header.has-conversation-actions { min-height: 0; }');
+    expect(phoneRules).toContain('.agent-console-header.has-conversation-actions .agent-console-title { max-width: none; padding-top: 8px; }');
     expect(phoneRules).toContain('.agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }');
   });
 
@@ -127,9 +128,9 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.mobile-composer-backdrop { position: fixed; inset: 0; z-index: 10;');
     expect(phoneRules).toContain('.agent-console .shared-composer.mobile-composer-sheet {');
     expect(phoneRules).toContain('.mobile-composer-handle { display: grid; place-items: center;');
-    expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed { min-height: 70px; padding: 12px 14px; border-bottom-color: transparent; }');
+    expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed { min-height: 0; padding: 0; border-bottom-color: transparent; }');
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed .agent-console-title { display: none; }');
-    expect(phoneRules).toContain('.mobile-detail-close { position: absolute; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }');
+    expect(phoneRules).toContain('.mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }');
   });
 
   it('keeps the mobile composer action as a safe-area-aware bottom-right action', () => {

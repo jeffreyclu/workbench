@@ -130,6 +130,11 @@ phone. The close X is the exception: it is its own control fixed in the
 top-right corner, outside the centered action row. The separate metadata
 disclosure remains responsible only for showing or hiding title and metadata.
 
+*Correction from Jeffrey, 2026-08-27.* “Floating above” means z-space, not a
+separate vertical chrome region. On phone, the conversation header must reserve
+zero layout height: the X, action bar, and metadata disclosure overlay the
+conversation surface, which reaches the top of the app viewport.
+
 ### Phone composer controls must have an intentional complete layout
 
 *Correction from Jeffrey, 2026-08-24.* A responsive control strip cannot assume its desktop child count. The shared-room composer has attachment, model, account, recipient, and send controls. At phone widths, give all five explicit grid areas; do not allow a fifth control to spill into an implicit offscreen grid column. Keep model, account, and recipient visible and separately selectable. Use short visible option labels and a single compact row when it fits. The visible per-message telemetry badge is only `agent · account profile · cost`; model, token counts, requested-vs-actual routing, and other provenance remain in its hover title rather than consuming layout space.

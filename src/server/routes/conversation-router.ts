@@ -17,6 +17,15 @@ import type { RouteContext } from '../route-context.js';
 
 export function createConversationRouter({ repository, database, capabilities, admin }: RouteContext) {
   const router = Router();
+  const unpinConversationAndLinkedItem = (conversationId: string) => {
+    const conversation = repository.getConversation(conversationId);
+    if (!conversation) return;
+    if (conversation.workItemId) {
+      const linkedItem = repository.get(conversation.workItemId);
+      if (linkedItem?.status === 'pinned') repository.update(linkedItem.id, { status: 'ready' }, false, { actor: 'jeffrey', source: 'http' });
+    }
+    if (conversation.pinned) repository.setConversationPinned(conversationId, false);
+  };
   const conversationWorkspaces = (conversationId: string) => {
     const conversation = repository.getConversation(conversationId);
     if (!conversation) return null;
@@ -198,14 +207,10 @@ export function createConversationRouter({ repository, database, capabilities, a
   });
 
   router.post('/api/shared/conversations/:id/restore', (request, response) => {
-    let conversation = repository.setConversationArchived(request.params.id, false);
-    if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
-    if (conversation.workItemId) {
-      const linkedItem = repository.get(conversation.workItemId);
-      if (linkedItem?.status === 'pinned') repository.update(linkedItem.id, { status: 'ready' }, false, { actor: 'jeffrey', source: 'http' });
-    }
-    if (conversation.pinned) conversation = repository.setConversationPinned(conversation.id, false) ?? conversation;
-    else conversation = repository.getConversation(conversation.id) ?? conversation;
+    const restored = repository.setConversationArchived(request.params.id, false);
+    if (!restored) return response.status(404).json({ error: 'Conversation not found.' });
+    unpinConversationAndLinkedItem(restored.id);
+    const conversation = repository.getConversation(restored.id) ?? restored;
     response.json({ conversation });
   });
 
@@ -335,6 +340,7 @@ export function createConversationRouter({ repository, database, capabilities, a
     }
     const agents = input.dispatchTo === 'both' ? ['codex', 'claude'] as const
       : input.dispatchTo === 'none' ? [] : [input.dispatchTo];
+    if (agents.length) unpinConversationAndLinkedItem(input.conversationId);
     const message = repository.createSharedMessage('jeffrey', input.body, agents.length ? 'queued' : 'completed', input.conversationId, attachments, input.dispatchTo, input.executionProfile, input.accountProfile ?? null);
     const replies = agents.length ? dispatchNextSharedTurn(repository, input.conversationId) : [];
     // Dispatch claims the queued human turn synchronously. Return the
