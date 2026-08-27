@@ -155,7 +155,7 @@ describe('conversation view controls', () => {
   });
 
   it('keeps the primary conversation destination in the mobile tab bar', () => {
-    expect(styles).toMatch(/^\.mobile-chrome-controls \{ display: none; \}/m);
+    expect(styles).toMatch(/^\.mobile-chrome-controls, \.mobile-composer-toggle \{ display: none; \}/m);
     expect(styles).not.toContain('.sidebar .mobile-conversation-nav,');
   });
 });

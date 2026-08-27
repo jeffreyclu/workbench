@@ -309,6 +309,10 @@ prompt visible with an inline retry path.
 
 ## Stale responsive overrides survive UI convention changes — check media queries when a "fixed" style regresses
 
+### Mobile-only controls must be hidden in the base stylesheet
+
+*Confirmed 2026-08-27.* A mobile composer button rendered unconditionally in React and only received its fixed bottom-right positioning inside the coarse-pointer media query. On desktop, the query correctly did not match, but the unstyled button still appeared at the left edge. Every mobile-only control needs `display: none` in the base stylesheet and an explicit display rule inside its phone media query. Test both halves: desktop-hidden and phone-visible.
+
 ### Restoring a control must not turn it into a large text CTA
 
 *Correction from Jeffrey, 2026-08-25.* When restoring a missing agent-run

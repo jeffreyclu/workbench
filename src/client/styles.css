@@ -731,7 +731,7 @@ nav { display: grid; gap: 3px; }
 @keyframes conversation-card-exit { to { max-height: 0; margin-block: 0; padding-block: 0; opacity: 0; transform: translate3d(28px, -4px, 0) scale(.96); } }
 .conversation-header-actions { display: flex; gap: 5px; }
 .conversation-header-actions .icon-button { width: 29px; height: 29px; }
-.mobile-chrome-controls { display: none; }
+.mobile-chrome-controls, .mobile-composer-toggle { display: none; }
 .mobile-composer-backdrop, .mobile-composer-handle { display: none; }
 .conversation-header-actions .delete-conversation-button { color: #8e6862; }
 .conversation-header-actions .delete-conversation-button:hover { color: #ff9384; background: #2b1715; border-color: #542b26; }
