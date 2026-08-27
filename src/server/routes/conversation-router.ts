@@ -381,7 +381,14 @@ export function createConversationRouter({ repository, database, capabilities, a
       ? repository.listAllSharedMessages(prior.conversationId).filter((message) => message.dispatchGroupId === prior.dispatchGroupId && (message.author === 'codex' || message.author === 'claude') && (message.status === 'failed' || message.status === 'canceled'))
       : [prior];
     const retryIds = new Set(retryGroup.map((message) => message.id));
-    if (repository.listAllSharedMessages(prior.conversationId).some((message) => !retryIds.has(message.id) && (message.status === 'running' || message.status === 'queued'))) {
+    // A "Both" dispatch creates sibling Codex and Claude replies under one
+    // durable dispatch group. Either may be canceled/failed and retried while
+    // the other is still working; treating that sibling as a conflicting turn
+    // made retries appear broken and prevented retrying both agents together.
+    // Only a different user dispatch is a sequencing conflict.
+    if (repository.listAllSharedMessages(prior.conversationId).some((message) => !retryIds.has(message.id)
+      && message.dispatchGroupId !== prior.dispatchGroupId
+      && (message.status === 'running' || message.status === 'queued'))) {
       return response.status(409).json({ error: 'Wait for the active response to finish before continuing this one.' });
     }
     const replies = retryGroup.map((message) => {
