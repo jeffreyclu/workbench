@@ -110,12 +110,12 @@ describe('conversation view controls', () => {
     expect(styles).toContain('.conversation-window-actions .icon-button { flex: 0 0 auto; width: 44px; height: 44px; }');
   });
 
-  it('starts phone conversation chrome behind explicit disclosure controls', () => {
+  it('keeps phone conversation chrome automatic without disclosure controls', () => {
     const phoneRules = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.queued-message-action \{[^}]*\}/)?.[0] ?? '';
 
-    expect(phoneRules).toContain('.mobile-conversation-disclosure { display: block;');
-    expect(phoneRules).toContain('.mobile-composer-disclosure { display: block;');
-    expect(phoneRules).toContain('.agent-console .shared-composer.is-mobile-composer-collapsed { display: none; }');
+    expect(phoneRules).not.toContain('mobile-conversation-disclosure');
+    expect(phoneRules).not.toContain('mobile-composer-disclosure');
+    expect(phoneRules).toContain('.agent-console .shared-composer.is-mobile-composer-collapsed > .markdown-composer { display: none; }');
   });
 });
 

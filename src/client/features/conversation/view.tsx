@@ -18,7 +18,6 @@ import {
   FileDiff,
   GitBranch,
   LoaderCircle,
-  MessageCircle,
   MessageSquarePlus,
   Link2,
   Link2Off,
@@ -309,22 +308,9 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const lastThreadScrollTopRef = useRef(0);
   const [consoleHeaderHidden, setConsoleHeaderHidden] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
-  const [isPhoneLayout, setIsPhoneLayout] = useState(() => typeof window !== 'undefined' && window.matchMedia?.('(max-width: 820px)').matches);
-  // Phone conversations open directly onto the thread. The full header and
-  // composer stay available behind explicit, compact controls.
-  const [mobileHeaderOpen, setMobileHeaderOpen] = useState(false);
-  const [mobileComposerOpen, setMobileComposerOpen] = useState(false);
   const THREAD_PAGE_SIZE = 5;
   const [threadVisibleCount, setThreadVisibleCount] = useState(THREAD_PAGE_SIZE);
   const [hasNewActivityBelow, setHasNewActivityBelow] = useState(false);
-  useEffect(() => {
-    const media = window.matchMedia?.('(max-width: 820px)');
-    if (!media) return;
-    const updateLayout = () => setIsPhoneLayout(media.matches);
-    updateLayout();
-    media.addEventListener('change', updateLayout);
-    return () => media.removeEventListener('change', updateLayout);
-  }, []);
   const conversations = useInfiniteQuery({
     queryKey: conversationQueryKeys.rail(conversationView), queryFn: ({ pageParam }) => conversationData.list(conversationView, pageParam),
     initialPageParam: undefined as string | undefined, getNextPageParam: (page) => page.nextCursor ?? undefined, refetchInterval: 1_000,
@@ -883,8 +869,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     setThreadVisibleCount(THREAD_PAGE_SIZE);
     setHasNewActivityBelow(false);
     setConsoleHeaderHidden(false);
-    setMobileHeaderOpen(false);
-    setMobileComposerOpen(false);
     lastThreadScrollTopRef.current = 0;
   }, [conversationId]);
   useEffect(() => {
@@ -1090,8 +1074,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
         )}
       </aside>
       <section className="agent-console" aria-label="Shared agent workspace">
-        <div className="mobile-conversation-disclosure"><button type="button" className="button secondary compact" aria-expanded={mobileHeaderOpen} aria-controls="conversation-header" onClick={() => { setMobileHeaderOpen((open) => !open); setConsoleHeaderHidden(false); }}><MessageCircle size={14} /> {mobileHeaderOpen ? 'Hide details' : 'Conversation details'}</button></div>
-        <header id="conversation-header" inert={isPhoneLayout && !mobileHeaderOpen ? true : undefined} className={`agent-console-header${consoleHeaderHidden || !mobileHeaderOpen ? ' is-header-hidden' : ''}`}><button type="button" className="mobile-detail-close icon-button" aria-label="Close conversation" onClick={() => setRailOpen(true)}><X size={16} /></button><div className="agent-console-title">{selectedConversation ? <ConversationOriginBadge workItemId={selectedConversation.workItemId} /> : <span className="eyebrow">Shared context</span>}<h2>{selectedConversation?.title
+        <header id="conversation-header" className={`agent-console-header${consoleHeaderHidden ? ' is-header-hidden' : ''}`}><button type="button" className="mobile-detail-close icon-button" aria-label="Close conversation" onClick={() => setRailOpen(true)}><X size={16} /></button><div className="agent-console-title">{selectedConversation ? <ConversationOriginBadge workItemId={selectedConversation.workItemId} /> : <span className="eyebrow">Shared context</span>}<h2>{selectedConversation?.title
               ?? (pendingSelectedConversation?.id === conversationId ? pendingSelectedConversation.title
                   : conversationDetail.isLoading ? <span className="conversation-title-skeleton"><Skeleton width="240px" height="19px" /></span>
                   : selectedConversationMissing ? 'Conversation not found'
@@ -1246,7 +1229,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           <div ref={endRef} />
           {hasNewActivityBelow && <button type="button" className="jump-to-latest-button" onClick={jumpToLatest}><ArrowDown size={13} /> New activity · Jump to latest</button>}
         </div>
-        {conversationDetail.isLoading ? <ConversationComposerSkeleton /> : conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <><div className="mobile-composer-disclosure"><button type="button" className="button primary compact" aria-expanded={mobileComposerOpen} aria-controls="conversation-composer" onClick={() => setMobileComposerOpen((open) => !open)}><Plus size={14} /> {mobileComposerOpen ? 'Hide composer' : 'Compose'}</button></div><form id="conversation-composer" className={`shared-composer${mobileComposerOpen ? '' : ' is-mobile-composer-collapsed'}`} onSubmit={submit}>
+        {conversationDetail.isLoading ? <ConversationComposerSkeleton /> : conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <form id="conversation-composer" className={`shared-composer${consoleHeaderHidden && !composerFocused && !body.trim() && files.length === 0 ? ' is-mobile-composer-collapsed' : ''}`} onSubmit={submit}>
           {files.length > 0 && <div className="pending-files">{files.map((file) => <button type="button" key={`${file.name}-${file.size}`} onClick={() => setFiles((current) => current.filter((item) => item !== file))}><Paperclip size={11} /> {file.name} <X size={10} /></button>)}</div>}
           <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} placeholder="Message Codex or Claude…" ariaLabel="Message Codex or Claude" onFocus={() => setComposerFocused(true)} onBlur={() => setComposerFocused(false)} onSubmit={() => {
             if ((body.trim() || files.length) && conversationId && !send.isPending && conversationReadyToSend) {
@@ -1268,7 +1251,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
             <button className="icon-button primary composer-send" aria-label="Send message" title="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
           </div>
           {send.error && <p className="error-message">{send.error.message}</p>}
-        </form></>}
+        </form>}
         </div>
         {(activePane === 'changes' || activePane === 'split') && workspaceDiffScope && <div className="conversation-changes" aria-label="Conversation changes"><WorkspaceDiffView scope={workspaceDiffScope} isRunning={linkedWorkItem.data?.runs.some((run) => run.status === 'queued' || run.status === 'running') ?? false} defaultCommitMessage={`chore: ${selectedConversation?.title ?? 'update'}`} onFollowUp={addDiffFollowUp} />{linkedWorkItem.data?.item && linkedPullRequestUrl && <GitHubDiffView sourceUrl={linkedWorkItem.data.item.sourceUrl} references={linkedWorkItem.data.references} onFollowUp={addDiffFollowUp} />}</div>}
         </div>

@@ -771,7 +771,6 @@ nav { display: grid; gap: 3px; }
 .jump-to-latest-button { position: absolute; bottom: 96px; left: 50%; z-index: 5; display: flex; align-items: center; gap: 6px; padding: 8px 14px; color: #10110c; font-size: 12px; font-weight: 600; white-space: nowrap; background: var(--acid); border: 0; border-radius: 999px; box-shadow: 0 10px 30px #0008; transform: translateX(-50%); }
 .jump-to-latest-button:hover { background: #d4ff45; }
 .agent-console-header { display: flex; align-items: center; justify-content: space-between; min-height: 80px; padding: 17px 28px; border-bottom: 1px solid var(--line); }
-.mobile-conversation-disclosure, .mobile-composer-disclosure { display: none; }
 .agent-console-title { flex: 1; min-width: 0; }
 .conversation-window-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; margin-left: 16px; }
 .conversation-task-picker { position: relative; display: inline-flex; flex: 0 0 auto; }
@@ -1097,11 +1096,11 @@ nav { display: grid; gap: 3px; }
     position: relative; z-index: 2; flex: 0 0 auto; width: calc(100% - 24px);
     margin: 0 12px calc(8px + env(safe-area-inset-bottom, 0px));
   }
-  .mobile-conversation-disclosure { display: block; flex: 0 0 auto; padding: 8px 14px 0; }
-  .mobile-conversation-disclosure .button { width: 100%; min-height: 44px; justify-content: center; }
-  .mobile-composer-disclosure { display: block; flex: 0 0 auto; padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px)); }
-  .mobile-composer-disclosure .button { width: 100%; min-height: 44px; justify-content: center; }
-  .agent-console .shared-composer.is-mobile-composer-collapsed { display: none; }
+  /* The thread's scroll direction controls the conversation chrome. Keep a
+     compact toolbar in view while reading; scrolling back up restores the
+     editor without a separate disclosure button. */
+  .agent-console .shared-composer.is-mobile-composer-collapsed > .markdown-composer { display: none; }
+  .agent-console .shared-composer.is-mobile-composer-collapsed { border-color: transparent; box-shadow: none; }
   .agent-console .shared-thread { padding-inline: 14px; }
   .agent-console .shared-thread .jump-to-latest-button {
     position: sticky; bottom: 12px; left: 50%; z-index: 5; margin: 12px 0;
