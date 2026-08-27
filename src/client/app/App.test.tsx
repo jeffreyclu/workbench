@@ -1455,6 +1455,40 @@ describe('shared room', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/interject'))).toBe(false);
   });
 
+  it('returns to Conversation when sending from Changes', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000032';
+    const conversation = { id: conversationId, title: 'Send from changes', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/shared/conversations/${conversationId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'send-from-changes', changedFiles: 1, additions: 1, deletions: 0, publish: { branch: 'send-from-changes', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/change.tsx', previousPath: null, status: 'modified', additions: 1, deletions: 0, isBinary: false, patch: '@@ -1 +1 @@\n-old\n+new' }] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}`) return new Response(JSON.stringify({ conversation }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/shared/messages' && init?.method === 'POST') return new Response(JSON.stringify({ message: { id: 'human-from-changes', status: 'completed' }, replies: [{ id: 'reply-from-changes' }] }), { status: 202, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    await screen.findByRole('heading', { name: 'Send from changes' });
+    const changes = screen.getByRole('button', { name: 'Changes' });
+    await waitFor(() => expect(changes).toBeEnabled());
+    fireEvent.click(changes);
+    expect(changes).toHaveAttribute('aria-pressed', 'true');
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [new File(['follow-up'], 'follow-up.txt', { type: 'text/plain' })] } });
+    await screen.findByText('follow-up.txt');
+    const sendMessage = screen.getByRole('button', { name: 'Send message' });
+    await waitFor(() => expect(sendMessage).toBeEnabled());
+    fireEvent.click(sendMessage);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Conversation' })).toHaveAttribute('aria-pressed', 'true'));
+    expect(screen.getByRole('button', { name: 'Changes' })).toHaveAttribute('aria-pressed', 'false');
+    expect(fetchMock.mock.calls.some(([input, init]) => String(input) === '/api/shared/messages' && init?.method === 'POST')).toBe(true);
+  });
+
   it('sends an ordinary composer message without exposing a separate Queue action', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000027';

@@ -115,6 +115,13 @@ center does not prove the whole touch target remains clickable through an animat
 
 *Correction from Jeffrey, 2026-08-27.* When reducing the Changes view's header panel height, do not compact the workspace or GitHub diff header. Preserve the diff's normal 18px top spacing and native heading margins. Target the surrounding conversation chrome only.
 
+### Sending from Changes returns to the conversation thread
+
+*Decision from Jeffrey, 2026-08-27.* Changes is a review surface. A valid
+composer send from Changes immediately selects Conversation so the submitted
+turn and ensuing streamed reply are visible. Apply this through the shared
+send mutation so the Send button and keyboard submission behave identically.
+
 ### Phone conversation chrome collapses into two icon controls
 
 *Decision from Jeffrey, 2026-08-26.* Phone conversations are reading-first:

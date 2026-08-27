@@ -602,6 +602,10 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       return { intent, pending: interjection.pending };
     },
     onMutate: async () => {
+      // Changes is a review surface. Once Jeffrey sends a follow-up from its
+      // composer, return to the thread immediately so the resulting turn and
+      // streamed reply are visible.
+      setActivePane('conversation');
       if (!linkedWorkItemId) return undefined;
       await queryClient.cancelQueries({ queryKey: ['work-item', linkedWorkItemId] });
       const previous = queryClient.getQueryData<WorkItemDetail>(['work-item', linkedWorkItemId]);
