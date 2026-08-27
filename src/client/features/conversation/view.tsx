@@ -22,11 +22,13 @@ import {
   Link2,
   Link2Off,
   Paperclip,
+  PanelTop,
   Pin,
   Plus,
   RefreshCw,
   Search,
   Send,
+  SquarePen,
   Trash2,
   Sparkles,
   User,
@@ -305,9 +307,11 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const conversationScrollRef = useRef<HTMLDivElement>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
   const isNearThreadBottomRef = useRef(true);
-  const lastThreadScrollTopRef = useRef(0);
-  const [consoleHeaderHidden, setConsoleHeaderHidden] = useState(false);
-  const [composerFocused, setComposerFocused] = useState(false);
+  // Phone conversations open directly onto the thread; header and composer
+  // start collapsed into small toggle buttons to keep the thread the
+  // dominant surface, and expand on tap rather than on scroll direction.
+  const [mobileHeaderOpen, setMobileHeaderOpen] = useState(false);
+  const [mobileComposerOpen, setMobileComposerOpen] = useState(false);
   const THREAD_PAGE_SIZE = 5;
   const [threadVisibleCount, setThreadVisibleCount] = useState(THREAD_PAGE_SIZE);
   const [hasNewActivityBelow, setHasNewActivityBelow] = useState(false);
@@ -868,8 +872,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     isNearThreadBottomRef.current = true;
     setThreadVisibleCount(THREAD_PAGE_SIZE);
     setHasNewActivityBelow(false);
-    setConsoleHeaderHidden(false);
-    lastThreadScrollTopRef.current = 0;
+    setMobileHeaderOpen(false);
+    setMobileComposerOpen(false);
   }, [conversationId]);
   useEffect(() => {
     const container = threadScrollRef.current;
@@ -883,70 +887,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     updateNearBottom();
     container.addEventListener('scroll', updateNearBottom, { passive: true });
     return () => container.removeEventListener('scroll', updateNearBottom);
-  }, [conversationId]);
-  useEffect(() => {
-    // Reading the thread on a small screen costs more vertical space to the
-    // header than desktop can spare, so slide it away on downward scroll and
-    // bring it back the moment the reader scrolls up — mirroring how mobile
-    // browser chrome behaves rather than gating the header behind a menu.
-    const container = threadScrollRef.current;
-    if (!container) return;
-    lastThreadScrollTopRef.current = container.scrollTop;
-    const revealThreshold = 24;
-    // Mobile momentum scrolling delivers dozens of 'scroll' events per
-    // gesture with noisy sub-pixel deltas, and rubber-band overscroll at the
-    // top/bottom can momentarily report scrollTop outside the real content
-    // range. Reacting to every raw event (as before) let that noise flip the
-    // hidden state back and forth within a single gesture, reading as the
-    // whole thread jittering up and down. Sampling once per animation frame
-    // and requiring a larger cumulative delta before committing a flip
-    // absorbs that noise.
-    let queued = false;
-    // Collapsing/expanding the header animates its height, which resizes this
-    // flex sibling mid-transition and can genuinely shift scrollTop as
-    // scrollHeight changes — a real, large-magnitude scroll event that clears
-    // the noise threshold above and reads as the reader reversing direction,
-    // flipping the header right back. Lock out flips for the transition's
-    // duration and re-anchor the baseline once layout has settled so the
-    // transition's own reflow never gets mistaken for reader intent.
-    let transitionLockTimer: ReturnType<typeof setTimeout> | undefined;
-    const settleDelayMs = 260;
-    const updateHeaderVisibility = () => {
-      queued = false;
-      if (transitionLockTimer) return;
-      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
-      const scrollTop = Math.min(Math.max(container.scrollTop, 0), maxScrollTop);
-      const delta = scrollTop - lastThreadScrollTopRef.current;
-      let flipped = false;
-      if (scrollTop <= revealThreshold) {
-        setConsoleHeaderHidden(false);
-        flipped = true;
-      } else if (delta > revealThreshold) {
-        setConsoleHeaderHidden(true);
-        flipped = true;
-      } else if (delta < -revealThreshold) {
-        setConsoleHeaderHidden(false);
-        flipped = true;
-      }
-      if (flipped) {
-        transitionLockTimer = setTimeout(() => {
-          transitionLockTimer = undefined;
-          lastThreadScrollTopRef.current = Math.min(Math.max(container.scrollTop, 0), Math.max(0, container.scrollHeight - container.clientHeight));
-        }, settleDelayMs);
-      } else {
-        lastThreadScrollTopRef.current = scrollTop;
-      }
-    };
-    const onScroll = () => {
-      if (queued) return;
-      queued = true;
-      requestAnimationFrame(updateHeaderVisibility);
-    };
-    container.addEventListener('scroll', onScroll, { passive: true });
-    return () => {
-      container.removeEventListener('scroll', onScroll);
-      if (transitionLockTimer) clearTimeout(transitionLockTimer);
-    };
   }, [conversationId]);
   const jumpToLatest = () => {
     isNearThreadBottomRef.current = true;
@@ -1074,11 +1014,12 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
         )}
       </aside>
       <section className="agent-console" aria-label="Shared agent workspace">
-        <header id="conversation-header" className={`agent-console-header${consoleHeaderHidden ? ' is-header-hidden' : ''}`}><button type="button" className="mobile-detail-close icon-button" aria-label="Close conversation" onClick={() => setRailOpen(true)}><X size={16} /></button><div className="agent-console-title">{selectedConversation ? <ConversationOriginBadge workItemId={selectedConversation.workItemId} /> : <span className="eyebrow">Shared context</span>}<h2>{selectedConversation?.title
+        <header id="conversation-header" className={`agent-console-header${mobileHeaderOpen ? '' : ' is-mobile-header-collapsed'}`}><button type="button" className="mobile-detail-close icon-button" aria-label="Close conversation" onClick={() => setRailOpen(true)}><X size={16} /></button><div className="agent-console-title">{selectedConversation ? <ConversationOriginBadge workItemId={selectedConversation.workItemId} /> : <span className="eyebrow">Shared context</span>}<h2>{selectedConversation?.title
               ?? (pendingSelectedConversation?.id === conversationId ? pendingSelectedConversation.title
                   : conversationDetail.isLoading ? <span className="conversation-title-skeleton"><Skeleton width="240px" height="19px" /></span>
                   : selectedConversationMissing ? 'Conversation not found'
                   : 'New conversation')}</h2>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={12} /> Back to task</button>}</div>{conversationId && selectedConversation && <div className="conversation-window-actions"><button type="button" className="icon-button" onClick={() => setDecisionTreeOpen(true)} aria-label="Open agent decision tree" title="Open agent decision tree"><GitBranch size={14} /></button>{!selectedConversation.workItemId && <ConversationTaskPicker tasks={linkableTasks.data?.items ?? []} isLoading={linkableTasks.isLoading} isError={linkableTasks.isError} isPending={setConversationTask.isPending} onRetry={() => void linkableTasks.refetch()} onSelect={(workItemId) => setConversationTask.mutate(workItemId)} />}{selectedConversation.workItemId && <button type="button" className="icon-button conversation-unlink-task" onClick={() => setConversationTask.mutate(null)} disabled={setConversationTask.isPending} aria-label="Unlink task" title="Unlink task"><Link2Off size={14} /></button>}{linkedWorkItem.data?.item && <button type="button" className="icon-button complete-task-button" disabled={linkedTaskCompleted || completeLinkedTask.isPending} onClick={() => completeLinkedTask.mutate()} aria-label={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'} title={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'}>{completeLinkedTask.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}</button>}<button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<span className={`conversation-delete-control ${selectedConversation.workItemId ? 'is-disabled' : ''}`} tabIndex={selectedConversation.workItemId ? 0 : undefined}><button className="icon-button delete-conversation-button" disabled={Boolean(selectedConversation.workItemId)} onClick={() => setDeleteConversationPromptOpen(true)} aria-label="Delete conversation" aria-describedby={selectedConversation.workItemId ? 'linked-conversation-delete-help' : undefined} title={selectedConversation.workItemId ? undefined : 'Delete permanently'}><Trash2 size={14} /></button>{selectedConversation.workItemId && <span id="linked-conversation-delete-help" className="action-tooltip" role="tooltip">Delete the related task to delete this conversation.</span>}</span></div>}</header>
+        <div className="mobile-chrome-controls"><button type="button" className={`mobile-chrome-toggle icon-button${mobileHeaderOpen ? ' icon-button-active' : ''}`} onClick={() => setMobileHeaderOpen((open) => !open)} aria-label={mobileHeaderOpen ? 'Collapse conversation header' : 'Expand conversation header'} title={mobileHeaderOpen ? 'Collapse conversation header' : 'Expand conversation header'}><PanelTop size={16} /></button><button type="button" className={`mobile-chrome-toggle icon-button${mobileComposerOpen ? ' icon-button-active' : ''}`} onClick={() => setMobileComposerOpen((open) => !open)} aria-label={mobileComposerOpen ? 'Collapse composer' : 'Expand composer'} title={mobileComposerOpen ? 'Collapse composer' : 'Expand composer'}><SquarePen size={16} /></button></div>
         {conversationId && <div className="thread-filter-bar"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-pressed={activePane === 'conversation'} onClick={() => setActivePane('conversation')}>Conversation</button><button type="button" aria-pressed={activePane === 'split'} onClick={() => setActivePane('split')} disabled={!changesAvailability.hasChanges && !changesAvailability.isError} title={changesAvailability.hasChanges ? 'Review changes alongside the conversation' : 'No changes to review'}><FileDiff size={13} /> Split</button><button type="button" aria-pressed={activePane === 'changes'} onClick={() => setActivePane('changes')} disabled={!changesAvailability.hasChanges && !changesAvailability.isError} title={changesAvailability.hasChanges ? 'Review changes' : changesAvailability.isError ? 'Could not check for changes' : changesAvailability.isLoading ? 'Checking for changes…' : 'No changes to review'}><FileDiff size={13} /> Changes</button></div>{changesAvailability.isError && <button type="button" className="button secondary compact" onClick={() => void changesAvailability.retry()} disabled={changesAvailability.isLoading}>Retry</button>}{selectedConversation && <button type="button" className={`icon-button${selectedConversation.pinned ? ' icon-button-active' : ''}`} onClick={() => setConversationPinned.mutate(!selectedConversation.pinned)} disabled={setConversationPinned.isPending} aria-pressed={Boolean(selectedConversation.pinned)} aria-label={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'} title={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'}><Pin size={13} fill={selectedConversation.pinned ? 'currentColor' : 'none'} /></button>}{linkedWorkItem.data?.item && <TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} disclosure />}</div>}
         <div className={`conversation-review-layout layout-${activePane}`}>
         <div className="conversation-thread-pane">
@@ -1229,15 +1170,15 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           <div ref={endRef} />
           {hasNewActivityBelow && <button type="button" className="jump-to-latest-button" onClick={jumpToLatest}><ArrowDown size={13} /> New activity · Jump to latest</button>}
         </div>
-        {conversationDetail.isLoading ? <ConversationComposerSkeleton /> : conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <form id="conversation-composer" className={`shared-composer${consoleHeaderHidden && !composerFocused && !body.trim() && files.length === 0 ? ' is-mobile-composer-collapsed' : ''}`} onSubmit={submit}>
+        {conversationDetail.isLoading ? <ConversationComposerSkeleton /> : conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <form id="conversation-composer" className={`shared-composer${mobileComposerOpen ? '' : ' is-mobile-composer-collapsed'}`} onSubmit={submit}>
           {files.length > 0 && <div className="pending-files">{files.map((file) => <button type="button" key={`${file.name}-${file.size}`} onClick={() => setFiles((current) => current.filter((item) => item !== file))}><Paperclip size={11} /> {file.name} <X size={10} /></button>)}</div>}
-          <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} placeholder="Message Codex or Claude…" ariaLabel="Message Codex or Claude" onFocus={() => setComposerFocused(true)} onBlur={() => setComposerFocused(false)} onSubmit={() => {
+          <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} placeholder="Message Codex or Claude…" ariaLabel="Message Codex or Claude" onSubmit={() => {
             if ((body.trim() || files.length) && conversationId && !send.isPending && conversationReadyToSend) {
               sentDraftRef.current = { conversationId, body };
               send.mutate({ intent: 'queue' });
             }
           }} disabled={send.isPending} />
-          <div className={`composer-toolbar${consoleHeaderHidden && !composerFocused && !body.trim() && files.length === 0 ? ' is-toolbar-hidden' : ''}`}>
+          <div className="composer-toolbar">
             <input ref={fileRef} className="visually-hidden" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
             <button type="button" className="composer-tool attach-button" onClick={() => fileRef.current?.click()} aria-label="Attach files" title="Attach files"><Paperclip size={14} /></button>
             <span className="composer-hint">Files, screenshots, or context</span>

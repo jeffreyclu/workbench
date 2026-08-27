@@ -1096,11 +1096,9 @@ nav { display: grid; gap: 3px; }
     position: relative; z-index: 2; flex: 0 0 auto; width: calc(100% - 24px);
     margin: 0 12px calc(8px + env(safe-area-inset-bottom, 0px));
   }
-  /* The thread's scroll direction controls the conversation chrome. Keep a
-     compact toolbar in view while reading; scrolling back up restores the
-     editor without a separate disclosure button. */
-  .agent-console .shared-composer.is-mobile-composer-collapsed > .markdown-composer { display: none; }
-  .agent-console .shared-composer.is-mobile-composer-collapsed { border-color: transparent; box-shadow: none; }
+  .mobile-chrome-controls { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 6px 14px; border-bottom: 1px solid var(--line); }
+  .mobile-chrome-toggle { width: 32px; height: 32px; }
+  .agent-console .shared-composer.is-mobile-composer-collapsed { display: none; }
   .agent-console .shared-thread { padding-inline: 14px; }
   .agent-console .shared-thread .jump-to-latest-button {
     position: sticky; bottom: 12px; left: 50%; z-index: 5; margin: 12px 0;
@@ -1110,8 +1108,7 @@ nav { display: grid; gap: 3px; }
     max-height: 220px; overflow: hidden;
     transition: max-height var(--motion-standard) var(--motion-ease), padding var(--motion-standard) var(--motion-ease), opacity var(--motion-fast) ease, border-color var(--motion-fast) ease;
   }
-  .agent-console-header.is-header-hidden { min-height: 0; max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; border-bottom-color: transparent; pointer-events: none; }
-  .agent-console-header.is-header-hidden + .thread-filter-bar { margin-top: 8px; }
+  .agent-console-header.is-mobile-header-collapsed { display: none; }
   .agent-console-header .mobile-detail-close { position: absolute; top: 12px; right: 14px; }
   .agent-console-title { flex: 1 1 100%; min-width: 0; max-width: calc(100% - 44px); }
   .agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

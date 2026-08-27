@@ -1378,7 +1378,7 @@ describe('shared room', () => {
     expect(composer.getAttribute('contenteditable')).toBe('true');
   });
 
-  it('keeps mobile conversation chrome free of disclosure controls', async () => {
+  it('collapses mobile conversation chrome behind two icon controls', async () => {
     const conversationId = '00000000-0000-4000-8000-000000000031';
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -1389,11 +1389,17 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     const heading = await screen.findByRole('heading', { name: 'Compact mobile conversation' });
-    expect(heading.closest('header')).not.toHaveClass('is-header-hidden');
+    expect(heading.closest('header')).toHaveClass('is-mobile-header-collapsed');
     const composer = screen.getByLabelText('Message Codex or Claude').closest('form');
+    expect(composer).toHaveClass('is-mobile-composer-collapsed');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand conversation header' }));
+    expect(heading.closest('header')).not.toHaveClass('is-mobile-header-collapsed');
+    expect(screen.getByRole('button', { name: 'Collapse conversation header' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand composer' }));
     expect(composer).not.toHaveClass('is-mobile-composer-collapsed');
-    expect(screen.queryByRole('button', { name: 'Conversation details' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Compose' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Collapse composer' })).toBeInTheDocument();
   });
 
   it('sends an ordinary composer message without turning it into an interjection', async () => {

@@ -111,6 +111,15 @@ center does not prove the whole touch target remains clickable through an animat
 
 *Decision from Jeffrey, 2026-08-23.* The task controls in a linked conversation header and the composer attachment control must not render text labels. Keep unlink, complete, and attach as compact, distinct icon buttons with accessible names and hover titles; regression tests must prevent visible button text from returning.
 
+### Phone conversation chrome collapses into two icon controls
+
+*Decision from Jeffrey, 2026-08-26.* Phone conversations are reading-first:
+the full header and composer start collapsed, with one small icon-only control
+for each. Do not replace them with full-width or text disclosure buttons such
+as “Conversation details” or “Show composer.” The controls need accessible
+names and hover titles, while the expanded surfaces retain their existing
+content and actions.
+
 ### Phone composer controls must have an intentional complete layout
 
 *Correction from Jeffrey, 2026-08-24.* A responsive control strip cannot assume its desktop child count. The shared-room composer has attachment, model, account, recipient, and send controls. At phone widths, give all five explicit grid areas; do not allow a fifth control to spill into an implicit offscreen grid column. Keep model, account, and recipient visible and separately selectable. Use short visible option labels and a single compact row when it fits. The visible per-message telemetry badge is only `agent · account profile · cost`; model, token counts, requested-vs-actual routing, and other provenance remain in its hover title rather than consuming layout space.

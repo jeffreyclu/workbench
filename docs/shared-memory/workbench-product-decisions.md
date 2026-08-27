@@ -204,13 +204,17 @@ clipped or sit behind the workspace. Hybrid-memory search must never silently
 truncate its visible result cap; state how many results are shown and provide
 an explicit way to load the next set when more ranked matches exist.
 
-### Mobile conversation chrome collapses automatically
+### Mobile conversation chrome collapses behind small toggle buttons
 
-*Decision from Jeffrey, 2026-08-26, superseding the disclosure-controls
-decision.* Preserve automatic mobile conversation-chrome collapse to reclaim
-thread space. Do not render **Conversation details** or **Compose/Show
-composer** buttons; they are unacceptable. Thread scroll direction controls
-the chrome instead: reading collapses it, and scrolling back restores it.
+*Decision from Jeffrey, 2026-08-26, superseding both the original
+disclosure-controls decision and the scroll-driven auto-collapse decision
+that briefly replaced it.* Preserve the screen real estate win of collapsing
+the header and composer on phone layouts, but drive it from two small
+icon-only toggle buttons (tap to expand/collapse), not from thread scroll
+direction. Scroll-driven auto-hide read as janky and unpredictable in
+practice. Do not render full-width, text-labeled **Conversation details** or
+**Compose/Show composer** buttons; they are unacceptable. The header and
+composer default to collapsed on phone layouts to maximize thread space.
 
 ### Agent conversations are visual, not text walls
 
