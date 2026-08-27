@@ -216,6 +216,13 @@ practice. Do not render full-width, text-labeled **Conversation details** or
 **Compose/Show composer** buttons; they are unacceptable. The header and
 composer default to collapsed on phone layouts to maximize thread space.
 
+### Mobile conversation-header control sits at the bottom-right
+
+*Decision from Jeffrey, 2026-08-27.* On phones, the compact control that opens
+and closes conversation details belongs in the bottom-right corner of the
+page, above the bottom navigation and safe-area inset. Keep the composer
+control separate; this relocates only the conversation-header control.
+
 ### Agent conversations are visual, not text walls
 
 *Decision from Jeffrey, 2026-08-23.*

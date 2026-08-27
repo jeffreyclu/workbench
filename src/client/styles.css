@@ -1112,6 +1112,7 @@ nav { display: grid; gap: 3px; }
   }
   .mobile-chrome-controls { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 6px 14px; border-bottom: 1px solid var(--line); }
   .mobile-chrome-toggle { width: 32px; height: 32px; }
+  .mobile-conversation-toggle { position: fixed; right: 14px; bottom: calc(var(--mobile-nav) + env(safe-area-inset-bottom, 0px) + 14px); z-index: 7; width: 44px; height: 44px; border-color: #55564d; background: #252520; box-shadow: 0 8px 20px #0009; }
   .agent-console .shared-composer.is-mobile-composer-collapsed { display: none; }
   .agent-console .shared-thread { padding-inline: 14px; }
   .agent-console .shared-thread .jump-to-latest-button {

@@ -119,6 +119,13 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.agent-console .shared-composer.is-mobile-composer-collapsed { display: none; }');
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed { display: none; }');
   });
+
+  it('keeps the mobile conversation toggle as a safe-area-aware bottom-right action', () => {
+    const phoneRules = styles.match(/@media \(max-width: 820px\) \{[\s\S]*?\.queued-message-action \{[^}]*\}/)?.[0] ?? '';
+
+    expect(phoneRules).toContain('.mobile-conversation-toggle { position: fixed; right: 14px;');
+    expect(phoneRules).toContain('bottom: calc(var(--mobile-nav) + env(safe-area-inset-bottom, 0px) + 14px);');
+  });
 });
 
 describe('phone dialogs', () => {
