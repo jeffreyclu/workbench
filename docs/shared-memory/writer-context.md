@@ -152,6 +152,18 @@ local source on 2026-08-24.
 
 **Verified from source and focused regression tests on 2026-08-26.** When Connector Gateway fetches multiple Manage Connectors pages concurrently, every call must pass the shared TanStack Query `QueryClient` to `fetchUnifiedUserProfilesPage`. The shared query key then coalesces the `profiles/my` request, so it is fetched once rather than once per page. `actionagentmanageconnectorsv2` is a default-off structural/UI-rewrite gate only; it must never switch this cache-sharing behavior on or off. The regression coverage exercises both gate states.
 
+### Manage Connectors must never auto-drain pages **(always)**
+
+Jeffrey's standing rule, stated on 2026-08-27 while directing the Manage Connectors V2 projection work:
+*"we are definitely not autodraining. no unnecessary fetches anywhere, please."* Pagination in the
+Manage Connectors surfaces is strictly caller-driven — a view model may expose `hasNextPage` and
+`fetchNextPage`, but nothing may loop or chain them to pull every page eagerly. The rule generalizes
+beyond pagination: any query that a screen does not currently need must be disabled rather than fired
+and discarded, which is why Connector Gateway mode gates the legacy agent-config query behind
+`enabled: !useConnectorGateway` and closed modals gate their list queries behind `open`. When adding a
+query or an effect that triggers one, the default expectation is that it fetches only what the user is
+actually looking at.
+
 ### Treat terminology in Jeffrey's meeting notes as phonetic
 
 Jeffrey writes meeting notes by typing what he hears in the moment. He confirmed this on 2026-08-19

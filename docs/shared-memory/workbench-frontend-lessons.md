@@ -135,6 +135,13 @@ separate vertical chrome region. On phone, the conversation header must reserve
 zero layout height: the X, action bar, and metadata disclosure overlay the
 conversation surface, which reaches the top of the app viewport.
 
+*Decision from Jeffrey, 2026-08-27.* Phone conversation review never uses a
+split pane. The centered top control opens a single tray containing the action
+bar, conversation details, and Conversation/Changes switch; the close X stays
+fixed independently at top-right. The tray starts collapsed and can be closed
+with its accessible toggle or an upward swipe on the action bar. If a desktop
+split selection survives a resize, render the Changes surface alone on phone.
+
 ### Phone composer controls must have an intentional complete layout
 
 *Correction from Jeffrey, 2026-08-24.* A responsive control strip cannot assume its desktop child count. The shared-room composer has attachment, model, account, recipient, and send controls. At phone widths, give all five explicit grid areas; do not allow a fifth control to spill into an implicit offscreen grid column. Keep model, account, and recipient visible and separately selectable. Use short visible option labels and a single compact row when it fits. The visible per-message telemetry badge is only `agent · account profile · cost`; model, token counts, requested-vs-actual routing, and other provenance remain in its hover title rather than consuming layout space.

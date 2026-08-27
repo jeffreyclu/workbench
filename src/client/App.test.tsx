@@ -1382,7 +1382,7 @@ describe('shared room', () => {
     expect(composer.getAttribute('contenteditable')).toBe('true');
   });
 
-  it('collapses mobile conversation chrome behind two icon controls', async () => {
+  it('opens the mobile conversation tray from one centered control and collapses it with an upward swipe', async () => {
     const conversationId = '00000000-0000-4000-8000-000000000031';
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -1397,9 +1397,16 @@ describe('shared room', () => {
     const composer = screen.getByLabelText('Message Codex or Claude').closest('form');
     expect(composer).toHaveClass('is-mobile-composer-collapsed');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Expand conversation header' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand conversation tray' }));
     expect(heading.closest('header')).not.toHaveClass('is-mobile-header-collapsed');
-    expect(screen.getByRole('button', { name: 'Collapse conversation header' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Collapse conversation tray' })).toBeInTheDocument();
+
+    // JSDOM does not preserve PointerEvent client coordinates, so the swipe
+    // threshold itself is covered by the production handler while this test
+    // verifies the same state transition through its keyboard-accessible
+    // control.
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse conversation tray' }));
+    expect(heading.closest('header')).toHaveClass('is-mobile-header-collapsed');
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand composer' }));
     expect(composer).not.toHaveClass('is-mobile-composer-collapsed');

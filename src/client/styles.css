@@ -1118,8 +1118,9 @@ nav { display: grid; gap: 3px; }
     position: relative; z-index: 2; flex: 0 0 auto; width: calc(100% - 24px);
     margin: 0 12px calc(8px + env(safe-area-inset-bottom, 0px));
   }
-  .mobile-chrome-controls { position: fixed; top: 58px; right: 14px; z-index: 7; display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 0; }
+  .mobile-chrome-controls { position: fixed; top: 12px; left: 50%; z-index: 7; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0; transform: translateX(-50%); }
   .mobile-chrome-toggle { width: 32px; height: 32px; }
+  .agent-console-header:not(.is-mobile-header-collapsed) + .mobile-chrome-controls .mobile-conversation-toggle { display: none; }
   .mobile-composer-toggle {
     position: fixed; right: 14px; bottom: calc(var(--mobile-nav) + env(safe-area-inset-bottom, 0px) + 14px); z-index: 9;
     display: grid; place-items: center; width: 44px; height: 44px; padding: 0; color: #d9d8d0; background: #252520; border: 1px solid #55564d; border-radius: 50%; box-shadow: 0 8px 20px #0009;
@@ -1142,10 +1143,12 @@ nav { display: grid; gap: 3px; }
   }
   /* Chrome lives over the surface, never in front of it in document flow. */
   .agent-console-header { position: absolute; inset: 0; z-index: 6; flex: 0 0 0; min-height: 0; height: 0; padding: 0; overflow: visible; border: 0; }
-  /* The compact control is a title/metadata disclosure. Conversation actions
-     stay available in their floating bar while those details are hidden. */
+  /* The compact control opens a single conversation tray. It owns the action
+     bar, title, metadata, and review switch; the close X stays independent. */
   .agent-console-header.is-mobile-header-collapsed { min-height: 0; padding: 0; border-bottom-color: transparent; }
   .agent-console-header.is-mobile-header-collapsed .agent-console-title { display: none; }
+  .agent-console-header.is-mobile-header-collapsed .conversation-window-actions { display: none; }
+  .agent-console-header.is-mobile-header-collapsed ~ .thread-filter-bar { display: none; }
   .mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }
   .conversation-window-actions .mobile-related-task-link { display: grid; }
   .agent-console-title { position: fixed; top: 58px; right: 58px; left: 14px; z-index: 6; min-width: 0; padding: 8px 10px; background: #11120fee; border: 1px solid var(--line); border-radius: 8px; }
@@ -1159,12 +1162,15 @@ nav { display: grid; gap: 3px; }
   .conversation-window-actions .icon-button { flex: 0 0 auto; width: 32px; height: 32px; }
   .conversation-window-actions .conversation-task-picker { flex: 0 0 auto; min-height: 32px; }
   .conversation-window-actions .conversation-delete-control { flex: 0 0 auto; }
-  .thread-filter-bar { align-items: stretch; flex-wrap: wrap; padding-inline: 14px; }
+  .thread-filter-bar { position: fixed; top: 106px; right: 14px; left: 14px; z-index: 6; align-items: stretch; flex-wrap: wrap; padding: 8px; background: #11120fee; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 20px #0006; }
   .conversation-surface-tabs { flex: 1 1 100%; margin-right: 0; }
   .conversation-surface-tabs button { flex: 1 1 50%; justify-content: center; min-height: 44px; }
   .conversation-review-layout { border-top: 0; }
-  .conversation-review-layout.layout-split { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
-  .conversation-review-layout.layout-split .conversation-thread-pane { border-right: 0; border-bottom: 1px solid var(--line); }
+  /* A phone has one review surface. If desktop split was selected before a
+     resize, show Changes alone rather than squeezing two panes together. */
+  .conversation-review-layout.layout-split { display: block; }
+  .conversation-review-layout.layout-split .conversation-thread-pane { display: none; }
+  .conversation-review-layout.layout-split .conversation-changes { min-height: 100%; }
   .conversation-changes { padding: 0 14px 20px; }
   .agent-presence { display: none; }
   .composer-hint { display: none; }
