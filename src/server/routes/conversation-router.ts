@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { createSessionFeedbackSchema, createSharedConversationSchema, createSharedMessageSchema, setConversationPinnedSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema } from '../../shared/contracts.js';
+import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
 import { runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, resolveSharedReplyWorkingDirectory, runSharedBackgroundJob } from '../shared-room.js';
@@ -361,51 +362,52 @@ export function createConversationRouter({ repository, database, capabilities, a
     response.json({ message });
   });
 
-  router.post('/api/shared/messages/:id/retry', (request, response) => {
+  router.post('/api/shared/messages/:id/retry', async (request, response) => {
     const prior = repository.getSharedMessageById(request.params.id);
     if (!prior) return response.status(404).json({ error: 'Chat response not found.' });
     if ((prior.author !== 'codex' && prior.author !== 'claude') || (prior.status !== 'failed' && prior.status !== 'canceled')) {
       return response.status(409).json({ error: 'Only failed or canceled agent responses can be continued.' });
     }
-    // The conversation view may not yet have refreshed its task-run cache
-    // after cancel. Resolve the link here instead of sending that stale client
-    // state down a dead standalone-message retry path.
-    const linkedRun = repository.getRunByMessage(prior.id);
-    if (linkedRun) {
-      void (async () => {
-        const retried = await admin.retryRun(linkedRun.id, { force: false });
-        if ('body' in retried) {
-          response.status(retried.status).json(retried.body);
-          return;
-        }
-        const reply = repository.getSharedMessageById(prior.id) ?? prior;
-        response.status(202).json({ reply, replies: [reply], run: retried.run });
-      })().catch((error) => response.status(500).json({ error: error instanceof Error ? error.message : 'Could not retry the linked agent run.' }));
-      return;
-    }
-    const retryGroup = prior.dispatchGroupId
+    // The message is the single retry identity. Resolve every terminal agent
+    // sibling in its original dispatch group on the server; never rely on a
+    // stale task-run cache or force the user to retry Codex and Claude through
+    // different pathways.
+    const targets = prior.dispatchGroupId
       ? repository.listAllSharedMessages(prior.conversationId).filter((message) => message.dispatchGroupId === prior.dispatchGroupId && (message.author === 'codex' || message.author === 'claude') && (message.status === 'failed' || message.status === 'canceled'))
       : [prior];
-    const retryIds = new Set(retryGroup.map((message) => message.id));
-    // A "Both" dispatch creates sibling Codex and Claude replies under one
-    // durable dispatch group. Either may be canceled/failed and retried while
-    // the other is still working; treating that sibling as a conflicting turn
-    // made retries appear broken and prevented retrying both agents together.
-    // Only a different user dispatch is a sequencing conflict.
-    if (repository.listAllSharedMessages(prior.conversationId).some((message) => !retryIds.has(message.id)
-      && message.dispatchGroupId !== prior.dispatchGroupId
-      && (message.status === 'running' || message.status === 'queued'))) {
-      return response.status(409).json({ error: 'Wait for the active response to finish before continuing this one.' });
+    if (!targets.length) return response.status(409).json({ error: 'No terminal agent replies remain to retry.' });
+
+    // A retry may run alongside its counterpart from the same original
+    // dispatch. It may not create a second live turn for the *same* agent.
+    const activeByAgent = new Set(repository.listAllSharedMessages(prior.conversationId)
+      .filter((message) => message.status === 'running' || message.status === 'queued')
+      .map((message) => message.author));
+    for (const target of targets) {
+      if (activeByAgent.has(target.author)) {
+        return response.status(409).json({ error: `${target.author[0].toUpperCase()}${target.author.slice(1)} already has an active reply in this conversation.` });
+      }
     }
-    const replies = retryGroup.map((message) => {
-      const executionProfile = message.executionProfile === 'routing' ? null : message.executionProfile;
-      const reply = repository.prepareSharedMessageRetry(message.id);
-      if (!reply) return null;
-      return executionProfile !== message.executionProfile ? repository.updateSharedMessage(reply.id, { executionProfile }) ?? reply : reply;
-    });
-    if (replies.some((reply) => !reply)) return response.status(409).json({ error: 'This response is no longer retryable.' });
-    for (const reply of replies) void replyInSharedRoom(repository, reply!.author as 'codex' | 'claude', reply!.id);
-    response.status(202).json({ reply: replies[0], replies });
+
+    const replies = [] as SharedMessage[];
+    const runs = [] as AgentRun[];
+    for (const target of targets) {
+      const linkedRun = repository.getRunByMessage(target.id);
+      if (linkedRun) {
+        const retried = await admin.retryRun(linkedRun.id, { force: false });
+        if ('body' in retried) return response.status(retried.status).json(retried.body);
+        const reply = repository.getSharedMessageById(target.id);
+        if (!reply) return response.status(409).json({ error: 'Retry did not restore its conversation reply.' });
+        replies.push(reply);
+        runs.push(retried.run);
+        continue;
+      }
+      const executionProfile = target.executionProfile === 'routing' ? null : target.executionProfile;
+      const reply = repository.prepareSharedMessageRetry(target.id);
+      if (!reply) return response.status(409).json({ error: 'This response is no longer retryable.' });
+      replies.push(executionProfile !== target.executionProfile ? repository.updateSharedMessage(reply.id, { executionProfile }) ?? reply : reply);
+    }
+    for (const reply of replies.filter((reply) => !repository.getRunByMessage(reply.id))) void replyInSharedRoom(repository, reply.author as 'codex' | 'claude', reply.id);
+    response.status(202).json({ reply: replies[0], replies, runs });
   });
 
   router.post('/api/shared/messages/:id/interject', async (request, response) => {

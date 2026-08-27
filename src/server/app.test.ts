@@ -177,6 +177,21 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     await vi.waitFor(() => expect(isAgentRunActive(retriedClaudeRun.id)).toBe(false));
   });
 
+  it('retries a canceled shared reply while its other-agent dispatch sibling is still running', async () => {
+    fakeAgentDirectory('exit 1', 'exit 1');
+    const conversation = repository.createConversation('Retry mixed group');
+    const groupId = 'same-original-dispatch';
+    const codex = repository.createSharedMessage('codex', 'Canceled Codex reply', 'canceled', conversation.id, [], 'none', null, null, groupId);
+    repository.createSharedMessage('claude', 'Claude is still working', 'running', conversation.id, [], 'none', null, null, groupId);
+
+    const retry = await fetch(`${baseUrl}/api/shared/messages/${codex.id}/retry`, { method: 'POST' });
+
+    expect(retry.status).toBe(202);
+    const body = await retry.json() as { replies: Array<{ id: string; author: string }> };
+    expect(body.replies).toEqual([expect.objectContaining({ id: codex.id, author: 'codex' })]);
+    await vi.waitFor(() => expect(repository.getSharedMessageById(codex.id)?.status).toBe('failed'));
+  });
+
   describe('open-prerequisite dispatch gate', () => {
     const seedBlockedTask = () => {
       const blocker = repository.create({ title: 'Schema lands first', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
