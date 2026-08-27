@@ -1174,9 +1174,11 @@ export function isAgentCapacityError(value: unknown): boolean {
  * answer Jeffrey has to manually unwind.
  */
 export function hasUnsupportedClaudeScopeClaim(output: string): boolean {
-  const denial = /\b(?:cannot|can['’]t|unable|blocked|denied|rejected|read[- ]only)\b/i;
-  const scope = /\b(?:sandbox|read[- ]only|allowed directory|filesystem|write access|permission(?:s)?|working directory)\b/i;
-  return denial.test(output) && scope.test(output);
+  // Do not route on a pair of words found anywhere in a long report. Claude
+  // legitimately says things like "ran a read-only query"; only a direct,
+  // first-person statement that it lacks workspace access is a false scope
+  // claim worth recovering from.
+  return /\b(?:i(?:\s+am|'m)?\s+(?:unable|blocked|denied|restricted|read[- ]only)|i\s+(?:cannot|can't|can’t)|this\s+(?:session|environment)\s+is\s+read[- ]only)\b[\s\S]{0,180}\b(?:sandbox|allowed directory|filesystem|write access|permission(?:s)?|working directory|read[- ]only)\b/i.test(output);
 }
 
 export function claudeScopeRecoveryPrompt(prompt: string, cwd: string): string {

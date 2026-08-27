@@ -225,6 +225,7 @@ describe('classifyExecution', () => {
 
   it('detects imaginary Claude scope claims and states the concrete fresh-session contract', () => {
     expect(hasUnsupportedClaudeScopeClaim('This session is read-only and my allowed directory is fixed elsewhere.')).toBe(true);
+    expect(hasUnsupportedClaudeScopeClaim('I ran a read-only query against the live corpus.')).toBe(false);
     expect(hasUnsupportedClaudeScopeClaim('The GitHub credential is unavailable.')).toBe(false);
     const recovery = claudeScopeRecoveryPrompt('Fix the component.', '/Users/jeffrey.lu/dev/writer-monorepo');
     expect(recovery).toContain('freshly spawned Claude CLI invocation');
