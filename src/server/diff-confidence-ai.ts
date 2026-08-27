@@ -73,7 +73,12 @@ let outputBuffer = '';
 let active: PendingAssessment | null = null;
 const queue: PendingAssessment[] = [];
 let idleShutdown: ReturnType<typeof setTimeout> | null = null;
-const SCORER_TIMEOUT_MS = 12_000;
+// Haiku returns a small file's assessment in roughly 5–9 seconds, but a
+// legitimate multi-block file can take longer. Twelve seconds turned every
+// block in those files into an unavailable marker even though the scorer was
+// healthy. Keep the UI responsive through its pending state, but allow one
+// bounded assessment turn to complete before declaring the scorer unavailable.
+const SCORER_TIMEOUT_MS = 25_000;
 const SCORER_IDLE_SHUTDOWN_MS = 30_000;
 
 function recycleWorker(expected?: ChildProcessWithoutNullStreams): void {
@@ -149,7 +154,7 @@ function dispatchNext(): void {
     const pending = active;
     if (!pending) return;
     active = null;
-    pending.reject(new Error('AI diff scorer timed out after 12 seconds.'));
+    pending.reject(new Error(`AI diff scorer timed out after ${SCORER_TIMEOUT_MS / 1_000} seconds.`));
     recycleWorker(scorer);
     ensureWorker();
     dispatchNext();
