@@ -113,6 +113,13 @@ export function resetPoolForTest(): void {
   idleByKey.clear();
 }
 
+/** Stops every speculative provider process during a runtime handoff. */
+export function shutdownAgentPool(): void {
+  resetPoolForTest();
+  if (sweepTimer) clearInterval(sweepTimer);
+  sweepTimer = null;
+}
+
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
 export function startPoolSweep(): void {
   if (sweepTimer) return;

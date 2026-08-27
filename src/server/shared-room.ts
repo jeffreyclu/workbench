@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
-import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type AgentInputSteering, type AgentUsage, type RetrievedMemory } from './agent-runner.js';
+import { buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, type AgentInputSteering, type AgentUsage, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -217,6 +217,7 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
     const command = codexAppServerCommand();
     const claimed = claimWarmProcess('codex', cwd, command, CODEX_APP_SERVER_ARGS, accountProfile);
     const child = claimed ?? spawnCodexAppServer(cwd, accountProfile);
+    const unregisterProcess = registerActiveAgentProcess(child);
     const initialized = Boolean(claimed);
     if (!process.env.VITEST) warmSharedRoomCodex(cwd, accountProfile);
     let buffered = ''; let output = ''; let liveOutput = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
@@ -354,7 +355,10 @@ function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onP
         }
       }
     });
-    child.on('close', (code) => { if (!settled) fail(signal.aborted ? new Error('Agent run canceled.') : new Error(`Codex app-server exited with code ${code}.`)); });
+    child.on('close', (code) => {
+      unregisterProcess();
+      if (!settled) fail(signal.aborted ? new Error('Agent run canceled.') : new Error(`Codex app-server exited with code ${code}.`));
+    });
     const initialRequest = codexAppServerInitialRequest(cwd, resumeThreadId, initialized);
     request(initialRequest.method, initialRequest.params);
     startupTimeout = setTimeout(() => fail(new Error('Codex app-server did not start a turn within 20 seconds.')), 20_000);

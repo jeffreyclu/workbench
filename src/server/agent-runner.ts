@@ -9,7 +9,7 @@ import { AUTONOMOUS_MODEL_ALLOWLIST } from './autonomy-governor.js';
 const AUTONOMOUS_MODELS = new Set<string>(AUTONOMOUS_MODEL_ALLOWLIST);
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
 import { agentAccountEnv } from './agent-security.js';
-import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
+import { claimWarmProcess, hasPooledProcess, shutdownAgentPool, startPoolSweep, warmProcess } from './agent-pool.js';
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
@@ -705,12 +705,19 @@ export interface AgentEventContext { subagents: Map<string, string>; sessionId?:
 
 const activeAgentProcesses = new Set<ReturnType<typeof spawn>>();
 
+/** Registers a provider process with the runtime-wide lifecycle owner. */
+export function registerActiveAgentProcess(child: ReturnType<typeof spawn>): () => void {
+  activeAgentProcesses.add(child);
+  return () => activeAgentProcesses.delete(child);
+}
+
 /** A runtime promotion stops the server process. Its detached agent children
  * need an explicit process-group signal or they survive as account-consuming
  * orphans with no Workbench turn left to own or cancel them. */
 export function shutdownActiveAgentProcesses(): void {
   for (const child of activeAgentProcesses) terminateAgentProcessTree(child, 'SIGTERM');
   activeAgentProcesses.clear();
+  shutdownAgentPool();
 }
 
 /**
@@ -889,14 +896,19 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     // never returned to the pool; a fresh replacement is warmed in the
     // background under the same (agent, cwd, command, args) key so the pool
     // stays populated for the next matching task.
-    const claimed = poolEligible ? claimWarmProcess(agent, cwd, command, args, accountProfile) : null;
+    // A Claude CLI process holds provider-session/account capacity even while
+    // it is idle. Speculatively starting a second one makes the real turn wait
+    // behind its own warm sibling. Claude therefore always has exactly one
+    // process per durable run; only dedicated local services keep warm state.
+    const canUseWarmPool = poolEligible && agent !== 'claude';
+    const claimed = canUseWarmPool ? claimWarmProcess(agent, cwd, command, args, accountProfile) : null;
     const child = claimed ?? spawnFresh();
-    activeAgentProcesses.add(child);
+    const unregisterProcess = registerActiveAgentProcess(child);
     // Skip background replenishment under the test runner: it spawns a real
     // extra process, which pre-existing tests asserting exact spawn logs
     // don't expect. The pool mechanics themselves are covered directly by
     // agent-pool.test.ts.
-    if (poolEligible && !process.env.VITEST) {
+    if (canUseWarmPool && !process.env.VITEST) {
       startPoolSweep();
       if (!hasPooledProcess(agent, cwd, command, args, accountProfile)) {
         try { warmProcess(agent, cwd, command, args, spawnFresh(), null, accountProfile); } catch { /* best-effort warm; a fresh spawn still serves the next task */ }
@@ -1072,7 +1084,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
       stopProcessTree();
     });
     child.on('close', (code) => {
-      activeAgentProcesses.delete(child);
+      unregisterProcess();
       clearTimeout(timeout);
       clearInterval(heartbeat);
       if (pendingFlush) clearTimeout(pendingFlush);
