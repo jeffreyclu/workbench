@@ -637,7 +637,10 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   // Task-linked replies become running only after they own their durable run
   // and, for edits, the selected repository. A busy repository is a queue,
   // not a hung provider turn.
-  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'queued', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile, accountProfile, queued.message.id));
+  // conversations-execution-type LEGACY-AFFECTING: standalone replies now
+  // persist their per-turn classification so the displayed type and execution
+  // permissions match the same routing decision already used below.
+  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'queued', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile, accountProfile, queued.message.id, taskKind));
   for (const reply of replies) {
     const agent = reply.author as AgentRun['agent'];
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'
@@ -743,7 +746,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     // this run, not the source checkout selected before isolation.
     if (runId) repository.updateRun(runId, { resolvedWorkspace: cwd });
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}${selectedWorkspace ? ' from Repo Explorer.' : '.'}`);
-    const runKind = linkedRun?.kind ?? 'analysis';
+    const runKind = linkedRun?.kind ?? target.kind ?? 'analysis';
     const profile = target.executionProfile && target.executionProfile !== 'routing'
       ? target.executionProfile
       : await judgeExecutionProfile(latestUserMessage || 'analysis', cwd, controller.signal);
