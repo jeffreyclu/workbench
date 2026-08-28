@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
+import type { AgentRunReviewHandoff, DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { formatDiffFollowUpReference, type DiffFollowUpReference } from '../diff-confidence.js';
 import { WorkspaceDiffView } from './view.js';
 
@@ -23,7 +23,7 @@ function workspaceDiff(files: WorkspaceDiffFile[], revision = 'review-revision')
 /** The queue scores every decision through the shared AI endpoint. Tests supply
  * the scores by decision id; any decision without an explicit score is scored
  * low so ordering assertions stay about the values under test. */
-function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, scores: Record<string, { risk: number | null; reasoning: string }> = {}, onFollowUp?: (reference: DiffFollowUpReference) => void) {
+function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, scores: Record<string, { risk: number | null; reasoning: string }> = {}, onFollowUp?: (reference: DiffFollowUpReference) => void, reviewHandoff?: AgentRunReviewHandoff | null) {
   const withConfidence = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).endsWith('/api/diff-confidence')) {
       const blocks = (JSON.parse(String(init?.body)) as { blocks: Array<{ key: string }> }).blocks;
@@ -33,7 +33,7 @@ function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, scor
   });
   vi.stubGlobal('fetch', withConfidence);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} onFollowUp={onFollowUp} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} reviewHandoff={reviewHandoff} onFollowUp={onFollowUp} /></QueryClientProvider>);
 }
 
 afterEach(() => {
@@ -42,6 +42,26 @@ afterEach(() => {
 });
 
 describe('WorkspaceDiffView decision queue', () => {
+  it('renders the agent handoff before the review decision queue', async () => {
+    const files: WorkspaceDiffFile[] = [{ path: 'src/app.ts', editorUrl: null, previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff(files) });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock, false, {}, undefined, {
+      agentRunId: 'run-1', formatVersion: 1, summary: 'Implemented the requested change.', changes: [], acceptanceCriteria: [], contractChanges: [], verification: [],
+      uncertainties: ['No completed test, build, typecheck, or lint command was observed by the runner.'], tradeoffs: [], createdAt: '2026-08-27T01:00:00.000Z',
+    });
+
+    const handoff = await screen.findByRole('region', { name: 'Agent review handoff' });
+    const queue = await screen.findByRole('navigation', { name: /review decision queue/i });
+    expect(handoff.compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('shows a retry action instead of an empty state when loading the workspace diff fails', async () => {
     let attempts = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

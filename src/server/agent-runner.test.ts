@@ -41,6 +41,16 @@ const item = (title: string, description = ''): WorkItem => ({
 });
 
 describe('classifyExecution', () => {
+  it('records verification commands only after Codex or Claude reports completion', () => {
+    const codex = readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'pnpm typecheck', exit_code: 0 } }));
+    expect(codex.audit).toEqual([expect.objectContaining({ command: 'pnpm typecheck', exitCode: 0 })]);
+
+    const context = { subagents: new Map<string, string>(), pendingBash: new Map<string, string>() };
+    readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'bash-1', name: 'Bash', input: { command: 'pytest -q' } }] } }), context);
+    const claude = readableAgentEvent('claude', JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'bash-1', is_error: false }] } }), context);
+    expect(claude.audit).toEqual([expect.objectContaining({ command: 'pytest -q', exitCode: 0 })]);
+  });
+
   it('includes durable task attachment paths in the execution prompt', () => {
     const task = { ...item('Inspect the supplied design'), attachments: [{ name: 'brief.pdf', path: '/tmp/workbench-attachments/brief.pdf', mimeType: 'application/pdf', size: 42 }] };
     const prompt = buildPrompt(task, { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun);
@@ -272,6 +282,12 @@ describe('classifyExecution', () => {
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['codex', 'claude']);
     expect(repository.getRun(run.id)).toEqual(expect.objectContaining({
       status: 'completed', requestedAgent: 'codex', agent: 'claude', fallbackFrom: 'codex', fallbackReason: expect.stringContaining('429'),
+    }));
+    expect(repository.getRun(run.id)?.reviewHandoff).toEqual(expect.objectContaining({
+      agentRunId: run.id,
+      formatVersion: 1,
+      verification: [],
+      uncertainties: ['No completed test, build, typecheck, or lint command was observed by the runner.'],
     }));
     database.close();
   });

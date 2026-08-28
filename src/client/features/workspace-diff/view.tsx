@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { FileDiff, History, RefreshCw } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
-import type { DiffHunkReviewState } from '../../../shared/contracts.js';
+import type { AgentRunReviewHandoff, DiffHunkReviewState } from '../../../shared/contracts.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
@@ -15,6 +15,7 @@ import type { ReviewDecision, ReviewDecisionAssessments } from '../diff-review/l
 import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, reviewDecisionBlocks, reviewDecisionFollowUpReference } from '../diff-review/logic.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
+import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js';
 import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
 import { workspaceDiffQueryKeys } from './data.js';
 
@@ -25,10 +26,11 @@ function DiffSkeleton() {
   </section>;
 }
 
-export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, onFollowUp }: {
+export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, reviewHandoff, onFollowUp }: {
   scope: WorkspaceDiffScope;
   isRunning?: boolean;
   activeWorkspacePaths?: string[];
+  reviewHandoff?: AgentRunReviewHandoff | null;
   onFollowUp?: (reference: DiffFollowUpReference) => void;
 }) {
   const queryClient = useQueryClient();
@@ -158,6 +160,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
       : hunkReviews.isLoading ? <DiffSkeleton />
         : hunkReviews.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load review decisions.</strong><p>{hunkReviews.error.message}</p><button type="button" className="button secondary compact" onClick={() => void hunkReviews.refetch()} disabled={hunkReviews.isFetching}>Retry</button></section>
           : <div className="workspace-diff-layout diff-review-layout">
+            {reviewHandoff && <AgentRunReviewHandoffCard handoff={reviewHandoff} />}
             <DiffReviewSummaryView decisions={decisions} assessments={assessments} />
             {selectedDecision && <>
               <DiffReviewDecisionQueue decisions={orderedDecisions} assessments={assessments} selectedId={selectedDecision.id} onSelect={setSelectedDecisionId} />

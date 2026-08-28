@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 
-import { DEFAULT_ACCOUNT_PROFILE, type AgentRun } from '../../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type AgentRunReviewHandoff } from '../../shared/contracts.js';
 import { WORKBENCH_PROJECT_KEY } from '../../shared/project-name.js';
 import type { UnitOfWork } from '../unit-of-work.js';
 
@@ -28,6 +28,22 @@ export interface RunPatch {
   resolvedWorkspace?: string | null;
 }
 
+function mapReviewHandoffRow(row: Record<string, string | null>): AgentRunReviewHandoff | null {
+  if (!row.handoff_agent_run_id) return null;
+  return {
+    agentRunId: row.handoff_agent_run_id,
+    formatVersion: Number(row.handoff_format_version) as 1,
+    summary: row.handoff_summary!,
+    changes: JSON.parse(row.handoff_changes_json!) as AgentRunReviewHandoff['changes'],
+    acceptanceCriteria: JSON.parse(row.handoff_acceptance_criteria_json!) as AgentRunReviewHandoff['acceptanceCriteria'],
+    contractChanges: JSON.parse(row.handoff_contract_changes_json!) as AgentRunReviewHandoff['contractChanges'],
+    verification: JSON.parse(row.handoff_verification_json!) as AgentRunReviewHandoff['verification'],
+    uncertainties: JSON.parse(row.handoff_uncertainties_json!) as AgentRunReviewHandoff['uncertainties'],
+    tradeoffs: JSON.parse(row.handoff_tradeoffs_json!) as AgentRunReviewHandoff['tradeoffs'],
+    createdAt: row.handoff_created_at!,
+  };
+}
+
 function mapRunRow(row: Record<string, string | null>): AgentRun {
   return {
     id: row.id!, workItemId: row.work_item_id!, kind: row.kind as AgentRun['kind'],
@@ -44,6 +60,7 @@ function mapRunRow(row: Record<string, string | null>): AgentRun {
     nextAttemptAt: row.next_attempt_at ?? null,
     resolvedWorkspace: row.resolved_workspace ?? null,
     origin: (row.origin ?? 'manual') as AgentRun['origin'],
+    reviewHandoff: mapReviewHandoffRow(row),
   };
 }
 
@@ -67,9 +84,33 @@ export class RunRepository {
 
   list(workItemId: string): AgentRun[] {
     return (this.database
-      .prepare('SELECT * FROM agent_runs WHERE work_item_id = ? ORDER BY created_at DESC')
+      .prepare(`SELECT agent_runs.*,
+        handoff.agent_run_id AS handoff_agent_run_id,
+        handoff.format_version AS handoff_format_version,
+        handoff.summary AS handoff_summary,
+        handoff.changes_json AS handoff_changes_json,
+        handoff.acceptance_criteria_json AS handoff_acceptance_criteria_json,
+        handoff.contract_changes_json AS handoff_contract_changes_json,
+        handoff.verification_json AS handoff_verification_json,
+        handoff.uncertainties_json AS handoff_uncertainties_json,
+        handoff.tradeoffs_json AS handoff_tradeoffs_json,
+        handoff.created_at AS handoff_created_at
+        FROM agent_runs
+        LEFT JOIN agent_run_review_handoffs AS handoff ON handoff.agent_run_id = agent_runs.id
+        WHERE agent_runs.work_item_id = ? ORDER BY agent_runs.created_at DESC`)
       .all(workItemId) as Array<Record<string, string | null>>)
       .map(mapRunRow);
+  }
+
+  recordReviewHandoff(handoff: AgentRunReviewHandoff): void {
+    this.database.prepare(`INSERT INTO agent_run_review_handoffs (
+      agent_run_id, format_version, summary, changes_json, acceptance_criteria_json,
+      contract_changes_json, verification_json, uncertainties_json, tradeoffs_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(handoff.agentRunId, handoff.formatVersion, handoff.summary,
+        JSON.stringify(handoff.changes), JSON.stringify(handoff.acceptanceCriteria),
+        JSON.stringify(handoff.contractChanges), JSON.stringify(handoff.verification),
+        JSON.stringify(handoff.uncertainties), JSON.stringify(handoff.tradeoffs), handoff.createdAt);
   }
 
   get(id: string): AgentRun | null {
