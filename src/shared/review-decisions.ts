@@ -225,6 +225,17 @@ export function reviewStateLabel(state: DiffHunkReviewState | null): string {
   return 'Pending';
 }
 
+/** The badge form of the same label. The queue scrolls horizontally and
+ * reviewed decisions sort to its tail, so a reviewer coming back around needs
+ * to read "have I settled this one?" from a glance at a narrow chip rather than
+ * from a sentence that would be truncated at that width. */
+export function reviewStateShortLabel(state: DiffHunkReviewState | null): string {
+  if (state === 'reviewed') return 'Done';
+  if (state === 'needs_changes') return 'Changes';
+  if (state === 'commented') return 'Noted';
+  return 'To do';
+}
+
 /** The one place a decision is turned into an AI-assist request payload. Both
  * the reviewer's click and the background scorer go through it, so a decision
  * hashes to the same cache key from either side. */

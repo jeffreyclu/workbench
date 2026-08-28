@@ -13,7 +13,7 @@ import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-car
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import type { ReviewDecision } from '../diff-review/logic.js';
-import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, reviewDecisionFollowUpReference } from '../diff-review/logic.js';
+import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, reviewDecisionFollowUpReference, reviewStateShortLabel } from '../diff-review/logic.js';
 import { useAutoReviewScores } from '../diff-review/auto-score.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
@@ -189,7 +189,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
             {selectedDecision && <>
               <div className="mobile-decision-navigator" aria-label="Decision navigation">
                 <button type="button" onClick={() => moveDecision(-1)} disabled={selectedDecisionIndex <= 0} aria-label="Previous decision"><ChevronLeft size={18} aria-hidden="true" /></button>
-                <span>Decision {selectedDecision.ordinal} of {orderedDecisions.length}</span>
+                <span>Decision {selectedDecision.ordinal} of {orderedDecisions.length}<em className={`diff-review-decision-state state-${selectedDecision.state ?? 'pending'}`}>{reviewStateShortLabel(selectedDecision.state)}</em></span>
                 <button type="button" onClick={() => moveDecision(1)} disabled={selectedDecisionIndex >= orderedDecisions.length - 1} aria-label="Next decision"><ChevronRight size={18} aria-hidden="true" /></button>
                 <button type="button" className="mobile-decision-detail-toggle" onClick={() => setMobileDecisionDetailOpen(true)} aria-expanded={mobileDecisionDetailOpen} aria-controls="mobile-decision-detail">View decision</button>
               </div>

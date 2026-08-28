@@ -37,7 +37,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         return <section
           key={hunk.range}
           ref={active ? activeBlock : undefined}
-          className={`diff-review-diff-block${active ? ' active' : ''}`}
+          className={`diff-review-diff-block state-${state ?? 'pending'}${state === null ? '' : ' settled'}${active ? ' active' : ''}`}
           aria-current={active ? 'location' : undefined}
           aria-label={`${hunk.location} · ${reviewStateLabel(state)}${active ? ' · selected decision' : ''}`}
         >

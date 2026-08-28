@@ -1,9 +1,20 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Check, Circle, MessageSquare, TriangleAlert } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sourceClient, type ReviewAssistActionName } from '../../data/source-client.js';
 import type { ReviewDecision } from './logic.js';
 import { aiRiskBand, parseAiRiskScore, reviewAssistDecisionPayload, reviewStateLabel, riskSignalLabel } from './logic.js';
 import type { AutoScoreResult } from './auto-score.js';
+
+/** Mirrors the queue's state icons so the same decision reads the same way in
+ * both places — the reviewer should recognise "already handled" from the card
+ * without re-reading the word. */
+function CompletionIcon({ state }: { state: ReviewDecision['state'] }) {
+  if (state === 'reviewed') return <Check size={12} aria-hidden="true" />;
+  if (state === 'needs_changes') return <TriangleAlert size={12} aria-hidden="true" />;
+  if (state === 'commented') return <MessageSquare size={12} aria-hidden="true" />;
+  return <Circle size={10} aria-hidden="true" />;
+}
 
 export type ReviewAssistAction = ReviewAssistActionName;
 export type ReviewAssistTaskIntent = { title: string; description: string } | null;
@@ -121,7 +132,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
         <span className="diff-review-decision-eyebrow">Behavior decision</span>
         <h3 id="diff-review-decision-title">{decision.behavior}</h3>
       </div>
-      <span className={`diff-review-completion-state state-${decision.state ?? 'pending'}`}>{reviewStateLabel(decision.state)}</span>
+      <span className={`diff-review-completion-state state-${decision.state ?? 'pending'}`}><CompletionIcon state={decision.state} />{reviewStateLabel(decision.state)}</span>
     </header>
     <section className="diff-review-exact-change" aria-labelledby="diff-review-exact-change-title">
       <h4 id="diff-review-exact-change-title">Exact change</h4>
