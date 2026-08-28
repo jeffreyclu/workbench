@@ -273,8 +273,6 @@ describe('classifyExecution', () => {
     expect(repository.getRun(run.id)).toEqual(expect.objectContaining({
       status: 'completed', requestedAgent: 'codex', agent: 'claude', fallbackFrom: 'codex', fallbackReason: expect.stringContaining('429'),
     }));
-    // A completed mutating run must leave a persisted reviewer map behind for the review queue.
-    expect(repository.getRun(run.id)?.reviewHandoff).toEqual(expect.objectContaining({ agentRunId: run.id, formatVersion: 1 }));
     database.close();
   });
 
@@ -324,8 +322,6 @@ describe('classifyExecution', () => {
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['claude']);
     expect(repository.getRun(analysis.id)).toEqual(expect.objectContaining({ status: 'completed' }));
     expect(repository.workspaceLeaseHolder(directory)).toBe(holder.id);
-    // A non-mutating kind has no reviewable diff, so it must not receive a handoff.
-    expect(repository.getRun(analysis.id)?.reviewHandoff).toBeNull();
     database.close();
   });
 
@@ -742,37 +738,6 @@ describe('classifyExecution', () => {
     expect(multiLineClaudeText.audit).toEqual([expect.objectContaining({ streamKind: 'decision', detail: 'Inspect the route.' })]);
 
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'system', subtype: 'init' })).audit).toEqual([]);
-  });
-
-  it('attaches a command and exit code to audit entries only once a command has actually completed', () => {
-    // Codex: item.started has no exit code yet; item.completed carries the observed exit_code.
-    const started = readableAgentEvent('codex', JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'npm test' } }));
-    expect(started.audit[0]).not.toHaveProperty('exitCode');
-    const passed = readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'npm test', exit_code: 0 } }));
-    expect(passed.audit).toEqual([expect.objectContaining({ command: 'npm test', exitCode: 0 })]);
-    const failed = readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'npm run build', exit_code: 1 } }));
-    expect(failed.audit).toEqual([expect.objectContaining({ command: 'npm run build', exitCode: 1 })]);
-    // No exit_code observed yet (still running): no verification-grade audit entry.
-    const stillRunning = readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'npm test' } }));
-    expect(stillRunning.audit).toEqual([]);
-
-    // Claude: the Bash tool_use only names the command; the exit code arrives later on
-    // a separate tool_result event, correlated by tool_use id via the event context.
-    const context = { subagents: new Map(), pendingBash: new Map() };
-    const bashCall = readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'npm test' } } ] } }), context);
-    expect(bashCall.audit.some((entry) => 'exitCode' in entry)).toBe(false);
-    expect(context.pendingBash.get('toolu_1')).toBe('npm test');
-    const bashResult = readableAgentEvent('claude', JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', is_error: false }] } }), context);
-    expect(bashResult.audit).toEqual([expect.objectContaining({ command: 'npm test', exitCode: 0 })]);
-    expect(context.pendingBash.has('toolu_1')).toBe(false);
-
-    const failingContext = { subagents: new Map(), pendingBash: new Map([['toolu_2', 'npm run build']]) };
-    const bashFailure = readableAgentEvent('claude', JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_2', is_error: true }] } }), failingContext);
-    expect(bashFailure.audit).toEqual([expect.objectContaining({ command: 'npm run build', exitCode: 1 })]);
-
-    // A tool_result with no matching pending Bash command (e.g. a Read result) is not verification evidence.
-    const unrelatedResult = readableAgentEvent('claude', JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_unknown', is_error: false }] } }), { subagents: new Map(), pendingBash: new Map() });
-    expect(unrelatedResult.audit).toEqual([]);
   });
 
   it('keeps a codex Decision preamble out of the composed final reply while still streaming it live', () => {

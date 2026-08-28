@@ -399,17 +399,6 @@ nav { display: grid; gap: 3px; }
 .diff-block-disclosure { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 7px 3px 5px; color: #aaa9a2; border: 1px solid #353530; border-radius: 5px; background: #171715; font: 700 9px 'DM Mono'; cursor: pointer; list-style: none; }
 .diff-block-disclosure::-webkit-details-marker { display: none; }.diff-block-disclosure svg { transition: transform var(--motion-fast) var(--motion-ease); }.diff-block-collapsed[open] > .diff-block-disclosure svg { transform: rotate(90deg); }
 .diff-block-disclosure:hover, .diff-block-disclosure:focus-visible { color: #d9d8d1; border-color: #596234; outline: 0; }.diff-block-disclosure small { color: #77766f; font: 500 9px 'DM Mono'; }
-.review-handoff-card { display: grid; gap: 10px; padding: 14px; border-bottom: 1px solid #302f2b; background: #171715; }
-.review-handoff-card header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.review-handoff-card header strong { color: #deddd6; font-size: 13px; }
-.review-handoff-card header span { color: #85847d; font: 10px 'DM Mono'; }
-.review-handoff-summary { color: #c7c6bf; font-size: 12px; margin: 0; }
-.review-handoff-section h3 { margin: 0 0 4px; color: #aaa9a2; font: 700 9px 'DM Mono'; text-transform: uppercase; letter-spacing: 0.04em; }
-.review-handoff-section ul { margin: 0; padding-left: 16px; display: grid; gap: 3px; }
-.review-handoff-section li { color: #c7c6bf; font-size: 11px; }
-.review-handoff-verification-failed { color: #d98a7a; }
-.review-handoff-verification-passed { color: #9ab26a; }
-.review-handoff-verification-tally { display: block; margin-top: 4px; color: #85847d; font: 10px 'DM Mono'; }
 .diff-review-layout { display: grid; grid-template-columns: minmax(0, 1fr); }
 .diff-review-summary { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px; border-bottom: 1px solid #302f2b; background: #171715; }
 .diff-review-summary > div { display: grid; gap: 3px; min-width: 0; }
