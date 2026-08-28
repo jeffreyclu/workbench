@@ -1029,7 +1029,7 @@ export async function deliverPendingSharedInterjections(repository: WorkItemRepo
   }
 }
 
-export function synthesisSource(repository: WorkItemRepository, conversationId: string, replyId: string): { prompt: string; codex: SharedMessage; claude: SharedMessage } | null {
+export function synthesisSource(repository: WorkItemRepository, conversationId: string, replyId: string, ignoredSynthesisMessageId?: string): { prompt: string; codex: SharedMessage; claude: SharedMessage } | null {
   const messages = repository.listAllSharedMessages(conversationId);
   const reply = messages.find((message) => message.id === replyId);
   // A timestamp is not an identity. Multiple messages can share a timestamp,
@@ -1046,7 +1046,7 @@ export function synthesisSource(repository: WorkItemRepository, conversationId: 
   // A partial result still needs a durable conclusion. Only an explicitly
   // canceled pair avoids spending another provider turn on a summary.
   if (!codex || !claude || !terminal(codex) || !terminal(claude) || (codex.status === 'canceled' && claude.status === 'canceled')) return null;
-  const alreadySynthesized = messages.some((message) => message.author === 'system' && message.createdAt >= request.createdAt && message.body.startsWith('Synthesis:'));
+  const alreadySynthesized = messages.some((message) => message.id !== ignoredSynthesisMessageId && message.author === 'system' && message.createdAt >= request.createdAt && message.body.startsWith('Synthesis:'));
   if (alreadySynthesized) return null;
   // Synthesis is a bounded reading task. Agent reports can contain huge live
   // transcripts; feeding them through verbatim turns a one-paragraph handoff
@@ -1058,8 +1058,8 @@ export function synthesisSource(repository: WorkItemRepository, conversationId: 
   };
 }
 
-async function synthesizeSharedTurn(repository: WorkItemRepository, conversationId: string, replyId: string): Promise<boolean> {
-  const source = synthesisSource(repository, conversationId, replyId);
+async function synthesizeSharedTurn(repository: WorkItemRepository, conversationId: string, replyId: string, ignoredSynthesisMessageId?: string): Promise<boolean> {
+  const source = synthesisSource(repository, conversationId, replyId, ignoredSynthesisMessageId);
   if (!source) return false;
   const message = repository.createSharedMessage('system', 'Synthesis: combining Codex and Claude…', 'running', conversationId);
   // A synthesis is never implementation or research. Keep its cost and
@@ -1080,4 +1080,21 @@ async function synthesizeSharedTurn(repository: WorkItemRepository, conversation
   const completed = repository.getSharedMessageById(message.id);
   if (completed?.status === 'completed') repository.recordAgentHandoff(conversationId, message.id, 'system', completed.body);
   return true;
+}
+
+/** Retry a failed system handoff without re-running either underlying agent. */
+export async function retrySharedSynthesis(repository: WorkItemRepository, failedMessageId: string): Promise<SharedMessage | null> {
+  const failed = repository.getSharedMessageById(failedMessageId);
+  if (!failed || failed.author !== 'system' || failed.status !== 'failed' || !failed.body.startsWith('Synthesis:')) return null;
+  const candidates = repository.listAllSharedMessages(failed.conversationId)
+    .filter((message) => (message.author === 'codex' || message.author === 'claude') && Boolean(message.dispatchGroupId) && message.createdAt <= failed.createdAt)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  for (const candidate of candidates) {
+    if (!synthesisSource(repository, failed.conversationId, candidate.id, failed.id)) continue;
+    await synthesizeSharedTurn(repository, failed.conversationId, candidate.id, failed.id);
+    return repository.listAllSharedMessages(failed.conversationId)
+      .filter((message) => message.author === 'system' && message.body.startsWith('Synthesis:') && message.id !== failed.id)
+      .at(-1) ?? null;
+  }
+  return null;
 }

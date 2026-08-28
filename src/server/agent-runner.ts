@@ -695,8 +695,18 @@ export function effortFor(profile: ExecutionProfile): 'low' | 'medium' | 'high' 
  * coding runs, which is why deep stays well above it.
  */
 export function autocompactCeilingFor(profile: ExecutionProfile): string {
-  return process.env[`WORKBENCH_AUTOCOMPACT_${profile.toUpperCase()}`]?.trim()
-    || { economy: '60k', standard: '100k', deep: '140k' }[profile];
+  const fallback = { economy: '100k', standard: '100k', deep: '140k' }[profile];
+  const configured = process.env[`WORKBENCH_AUTOCOMPACT_${profile.toUpperCase()}`]?.trim().toLowerCase();
+  if (!configured) return fallback;
+  if (configured === 'auto') return configured;
+  const match = /^(\d+(?:\.\d+)?)(k|m)?$/.exec(configured);
+  if (!match) return fallback;
+  const scale = match[2] === 'm' ? 1_000_000 : match[2] === 'k' ? 1_000 : 1;
+  const tokens = Number(match[1]) * scale;
+  // Claude rejects smaller values before opening a stream. Validate here so a
+  // stale environment override can never turn an economy synthesis into an
+  // immediate, tokenless failure.
+  return Number.isFinite(tokens) && tokens >= 100_000 && tokens <= 1_000_000 ? configured : fallback;
 }
 
 /**

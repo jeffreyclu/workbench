@@ -81,6 +81,7 @@ const baselineInventory = [
   'PATCH /api/shared/messages/:id',
   'GET /api/shared/messages/:id/retrieved-memory',
   'POST /api/shared/messages/:id/cancel',
+  'POST /api/shared/messages/:id/retry-synthesis',
   'POST /api/shared/messages/:id/retry',
   'POST /api/shared/messages/:id/interject',
   'POST /api/shared/messages/:id/create-tasks',
@@ -180,7 +181,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(148);
+    expect(baselineInventory).toHaveLength(149);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

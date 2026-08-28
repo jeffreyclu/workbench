@@ -106,7 +106,7 @@ describe('classifyExecution', () => {
     expect(claude).not.toContain('--dangerously-skip-permissions');
     expect(claude).toEqual(expect.arrayContaining(['--input-format', 'stream-json']));
     expect(claude).not.toContain('--forward-subagent-text');
-    expect(claude).toEqual(expect.arrayContaining(['--autocompact', '60k']));
+    expect(claude).toEqual(expect.arrayContaining(['--autocompact', '100k']));
     expect(claude).toEqual(expect.arrayContaining(['--add-dir', '/tmp/project', homedir()]));
     expect(commandFor('claude', '/tmp/project', 'standard').args).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions']));
     expect(commandFor('claude', '/tmp/project', 'standard').args).not.toContain('--no-session-persistence');
@@ -115,14 +115,14 @@ describe('classifyExecution', () => {
   it('bounds in-run context by profile so the ceiling actually fires on long runs', () => {
     // The flat 180k ceiling was inert: the worst measured run peaked at 146k and
     // never compacted once, so every later request re-read a ~100k context.
-    expect(commandFor('claude', '/tmp/project', 'economy').args).toEqual(expect.arrayContaining(['--autocompact', '60k']));
+    expect(commandFor('claude', '/tmp/project', 'economy').args).toEqual(expect.arrayContaining(['--autocompact', '100k']));
     expect(commandFor('claude', '/tmp/project', 'standard').args).toEqual(expect.arrayContaining(['--autocompact', '100k']));
     expect(commandFor('claude', '/tmp/project', 'deep').args).toEqual(expect.arrayContaining(['--autocompact', '140k']));
     expect(commandFor('claude', '/tmp/project', 'deep').args).not.toContain('180k');
   });
 
   it('parses the context ceiling into tokens so the checkpoint cannot drift from compaction', () => {
-    expect(autocompactCeilingTokens('economy')).toBe(60_000);
+    expect(autocompactCeilingTokens('economy')).toBe(100_000);
     expect(autocompactCeilingTokens('standard')).toBe(100_000);
     expect(autocompactCeilingTokens('deep')).toBe(140_000);
   });
@@ -134,6 +134,15 @@ describe('classifyExecution', () => {
       expect(autocompactCeilingTokens('standard')).toBe(100_000);
     } finally {
       delete process.env.WORKBENCH_AUTOCOMPACT_STANDARD;
+    }
+  });
+
+  it('does not pass Claude an out-of-range compact ceiling from the environment', () => {
+    process.env.WORKBENCH_AUTOCOMPACT_ECONOMY = '60k';
+    try {
+      expect(commandFor('claude', '/tmp/project', 'economy').args).toEqual(expect.arrayContaining(['--autocompact', '100k']));
+    } finally {
+      delete process.env.WORKBENCH_AUTOCOMPACT_ECONOMY;
     }
   });
 

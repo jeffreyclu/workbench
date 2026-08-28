@@ -7,7 +7,7 @@ import { createSessionFeedbackSchema, createSharedConversationSchema, createShar
 import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
 import { resolveWorkingDirectory, runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
-import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, resolveSharedReplyWorkingDirectory, runSharedBackgroundJob } from '../shared-room.js';
+import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, resolveSharedReplyWorkingDirectory, retrySharedSynthesis, runSharedBackgroundJob } from '../shared-room.js';
 import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { parseFollowUpPlan } from '../app-exports.js';
@@ -439,6 +439,12 @@ export function createConversationRouter({ repository, database, capabilities, a
     }
     for (const reply of replies.filter((reply) => !repository.getRunByMessage(reply.id))) void replyInSharedRoom(repository, reply.author as 'codex' | 'claude', reply.id);
     response.status(202).json({ reply: replies[0], replies, runs });
+  });
+
+  router.post('/api/shared/messages/:id/retry-synthesis', async (request, response) => {
+    const message = await retrySharedSynthesis(repository, request.params.id);
+    if (!message) return response.status(409).json({ error: 'This failed synthesis cannot be retried without rerunning an agent.' });
+    response.status(202).json({ message });
   });
 
   router.post('/api/shared/messages/:id/interject', async (request, response) => {
