@@ -212,6 +212,12 @@ just a visual one: render the phone Conversation/Changes switch in its own
 phone-only control outside the header and desktop filter bar. Do not leave the
 mobile switch inside header chrome and position it to look separate.
 
+*Correction from Jeffrey, 2026-08-28.* Phone conversation controls use one
+compact visual system: 44px targets, the same dark solid surface, 1px border,
+8px radius, and consistent icon treatment. Do not use a wide pill for the
+collapsed tray while the Conversation/Changes switch uses segmented square
+targets.
+
 *Decision from Jeffrey, 2026-08-27.* The constrained one-line title in the
 expanded phone conversation tray scrolls horizontally on touch; it does not
 ellipsis. Keep the title bounded between the floating review switch and close
