@@ -180,6 +180,10 @@ nav { display: grid; gap: 3px; }
 .queue-item.dragging { z-index: 5; background: #22221e; border-color: #647137; box-shadow: 0 14px 32px #000a; opacity: .92; }
 .drag-handle { display: grid; place-items: center; width: 27px; height: 28px; margin-top: -5px; color: #62615b; background: transparent; border: 0; border-radius: 5px; cursor: grab; touch-action: none; }
 .drag-handle:hover, .drag-handle:focus-visible { color: var(--acid); background: #292a22; outline: none; }.drag-handle:active { cursor: grabbing; }
+.conversation-sortable { position: relative; }.conversation-sortable.dragging { z-index: 5; opacity: .92; }.conversation-tabs.is-dragging .stack-card { transition: none; }
+.conversation-drag-handle { position: absolute; z-index: 2; top: 50%; left: 4px; display: grid; width: 28px; height: 32px; place-items: center; padding: 0; color: #77766f; background: transparent; border: 0; border-radius: 5px; cursor: grab; transform: translateY(-50%); touch-action: none; }
+.conversation-drag-handle:hover, .conversation-drag-handle:focus-visible { color: var(--acid); background: #292a22; outline: none; }.conversation-drag-handle:active { cursor: grabbing; }
+.conversation-sortable .stack-card { padding-left: 38px; }
 .rank { padding-top: 2px; color: #565650; font: 10px 'DM Mono'; }
 .item-copy { display: grid; gap: 5px; min-width: 0; }
 .item-copy strong { display: -webkit-box; overflow: hidden; font-size: 12px; font-weight: 600; line-height: 1.35; text-overflow: ellipsis; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }

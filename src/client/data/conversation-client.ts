@@ -28,6 +28,7 @@ export const conversationClient = {
   updateSharedConversationDraft: (id: string, body: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/draft`, { method: 'PATCH', body: JSON.stringify({ body }) }),
   setSharedConversationTask: (id: string, workItemId: string | null) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/task`, { method: 'PATCH', body: JSON.stringify({ workItemId }) }),
   setSharedConversationPinned: (id: string, pinned: boolean) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/pin`, { method: 'PATCH', body: JSON.stringify({ pinned }) }),
+  reorderSharedConversation: (id: string, input: { beforeId?: string; afterId?: string }) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/order`, { method: 'PUT', body: JSON.stringify(input) }),
   markSharedConversationRead: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/read`, { method: 'POST' }),
   forkSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/fork`, { method: 'POST' }),
   deleteSharedConversation: (id: string) => request<void>(`/api/shared/conversations/${id}`, { method: 'DELETE' }),

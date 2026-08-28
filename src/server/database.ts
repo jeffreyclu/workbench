@@ -1738,6 +1738,15 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // Conversation ordering is locally owned. Activity still determines the
+    // visible stack; this rank only orders peers within that stack.
+    id: '063_shared_conversation_manual_position',
+    apply(database) {
+      database.exec('ALTER TABLE shared_conversations ADD COLUMN manual_position REAL NOT NULL DEFAULT 0;');
+      database.exec('CREATE INDEX idx_shared_conversations_manual_position ON shared_conversations(manual_position, updated_at DESC);');
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

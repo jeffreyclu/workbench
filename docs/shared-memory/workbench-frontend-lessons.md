@@ -1,5 +1,13 @@
 ## Workbench frontend lessons
 
+### Conversation rail DnD is independent from task-stack DnD
+
+*Correction from Jeffrey, 2026-08-27.* A working Workbench task-stack drag
+handle does not establish that conversations are draggable. The conversation
+rail needs its own visible desktop handle, sortable wiring, and persisted
+conversation order. Do not diagnose a conversation DnD report by inspecting
+only the task queue.
+
 ### New Task Linear identifiers resolve beyond the current sync scope
 
 *Confirmed 2026-08-25.* The New Task modal searches through

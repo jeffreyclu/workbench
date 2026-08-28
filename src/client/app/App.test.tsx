@@ -658,6 +658,16 @@ describe('shared room', () => {
     expect(screen.getByText('Pinned conversation')).toBeTruthy();
   });
 
+  it('exposes a desktop drag handle for each conversation card', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversation = { id: '00000000-0000-4000-8000-000000000016', title: 'Reorderable conversation', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).includes('/api/shared/conversations') ? { conversations: [conversation], nextCursor: null } : { messages: [] }), { headers: { 'Content-Type': 'application/json' } })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace /></QueryClientProvider>);
+
+    expect(await screen.findByRole('button', { name: 'Reorder conversation' })).toHaveAttribute('title', 'Reorder Reorderable conversation');
+  });
+
   it('keeps the pinned section visible in the conversation rail even with no pinned conversations', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversations = [{ id: '00000000-0000-4000-8000-000000000014', title: 'Unpinned conversation', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }];
