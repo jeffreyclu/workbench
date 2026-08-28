@@ -136,6 +136,32 @@ export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountPr
   return env;
 }
 
+const WRITER_TEST_FILE_ARGUMENT = /(?:^|\/)[^\s/]+\.(?:test|spec)\.[cm]?[jt]sx?(?=$|\s)/i;
+
+/** PATH shims cover normal launchers; this catches direct binary bypasses in provider shell events. */
+export function blockedWriterTestSuiteCommand(command: string): boolean {
+  const normalized = command.replace(/\\\n/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!normalized || WRITER_TEST_FILE_ARGUMENT.test(normalized)) return false;
+  const runsPackageSuite = /\b(?:npm|pnpm|yarn)\b[^\n;&|]*(?:\btest(?:\:[\w-]+)?\b|\brun\s+test(?:\:[\w-]+)?\b)/i.test(normalized);
+  const runsTestRunner = /(?:^|[\s;&|])(?:npx\s+(?:--\S+\s+)*(?:vitest|jest)|(?:\S*\/)?(?:vitest|jest)(?:\.m?js)?)(?:\s|$)/i.test(normalized);
+  return runsPackageSuite || runsTestRunner;
+}
+
+function toolCommandFromAgentEvent(agent: AgentRun['agent'], line: string): string | null {
+  try {
+    const event = JSON.parse(line) as Record<string, unknown>;
+    if (agent === 'codex') {
+      const item = event.item as Record<string, unknown> | undefined;
+      return item?.type === 'command_execution' && typeof item.command === 'string' ? item.command : null;
+    }
+    if (event.type !== 'assistant') return null;
+    const message = event.message as { content?: Array<Record<string, unknown>> } | undefined;
+    const bash = message?.content?.find((content) => content.type === 'tool_use' && content.name === 'Bash');
+    const input = bash?.input as Record<string, unknown> | undefined;
+    return typeof input?.command === 'string' ? input.command : null;
+  } catch { return null; }
+}
+
 const FRONTEND_REVIEWER_PERSONA = `
 Authoritative persona: frontend-reviewer
 
@@ -1108,6 +1134,14 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
       buffered = lines.pop() ?? '';
       for (const line of lines.filter(Boolean)) {
         lastEventAt = Date.now();
+        const toolCommand = isWriterWorkspace(cwd) ? toolCommandFromAgentEvent(agent, line) : null;
+        if (toolCommand && blockedWriterTestSuiteCommand(toolCommand)) {
+          terminationError = new Error(`Workbench blocked a full Writer test-suite command before execution: ${toolCommand.slice(0, 500)}`);
+          cancellationRequested = true;
+          progress += `${progress ? '\n\n' : ''}● Blocked a full Writer test-suite command. Run one directly relevant test file instead.`;
+          stopProcessTree();
+          continue;
+        }
         terminalError ||= terminalAgentError(agent, line) ?? '';
         try { const usage = usageFromEvent(agent, JSON.parse(line)); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
         const event = readableAgentEvent(agent, line, eventContext);
