@@ -118,6 +118,7 @@ describe('task status badges', () => {
 
     expect(screen.queryByRole('button', { name: `Reorder ${item.title}` })).toBeNull();
   });
+
 });
 
 describe('prerequisite-blocked queue cards', () => {
