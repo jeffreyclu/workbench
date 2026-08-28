@@ -8,6 +8,16 @@ import { promisify } from 'node:util';
 const execFile = promisify(execFileCallback);
 let integrationTail: Promise<void> = Promise.resolve();
 
+// Dependencies and runtime output are local machine state, never Workbench
+// source. A nested Git repository here is reported as a gitlink and can make
+// `git checkout HEAD -- node_modules` erase the local executable shims.
+function isIntegrationExcludedPath(path: string): boolean {
+  return path === 'node_modules' || path.startsWith('node_modules/')
+    || path === '.workbench-runtime' || path.startsWith('.workbench-runtime/');
+}
+
+const integrationPathspec = ['.', ':(exclude)node_modules', ':(exclude).workbench-runtime'];
+
 function changedPaths(cwd: string, range: string[]): Set<string> {
   const output = execFileSync('git', ['diff', '--name-only', '-z', ...range], { cwd, encoding: 'utf8', timeout: 5_000, maxBuffer: 1_000_000 });
   return new Set(output.split('\0').filter(Boolean));
@@ -72,9 +82,9 @@ export function integrateWorkbenchRunWorktree(sourceWorkspace: string, worktree:
     // `git diff HEAD` omits untracked files. Mark them intent-to-add in the
     // detached tree so its binary patch includes newly created source files;
     // the detached tree is reset after successful integration.
-    const untracked = untrackedPaths(detached);
+    const untracked = untrackedPaths(detached).filter((path) => !isIntegrationExcludedPath(path));
     if (untracked.length) execFileSync('git', ['add', '--intent-to-add', '--', ...untracked], { cwd: detached, stdio: 'ignore', timeout: 15_000 });
-    const patch = execFileSync('git', ['diff', '--binary', 'HEAD'], { cwd: detached, encoding: 'utf8', timeout: 15_000, maxBuffer: 4_000_000 });
+    const patch = execFileSync('git', ['diff', '--binary', 'HEAD', '--', ...integrationPathspec], { cwd: detached, encoding: 'utf8', timeout: 15_000, maxBuffer: 4_000_000 });
     if (!patch.trim()) return { integrated: false, commitHash: null };
     try {
       // Do not use `git apply --index` here: it insists that the primary
@@ -87,7 +97,7 @@ export function integrateWorkbenchRunWorktree(sourceWorkspace: string, worktree:
       // `--cached` intentionally leaves the working tree alone. Refresh only
       // files created by this commit that were clean before integration;
       // otherwise a clean primary would appear dirty after every handoff.
-      const integratedPaths = [...changedPaths(source, ['HEAD^', 'HEAD'])].filter((path) => !primaryDirtyPaths.has(path));
+      const integratedPaths = [...changedPaths(source, ['HEAD^', 'HEAD'])].filter((path) => !primaryDirtyPaths.has(path) && !isIntegrationExcludedPath(path));
       if (integratedPaths.length) {
         execFileSync('git', ['checkout', '--quiet', 'HEAD', '--', ...integratedPaths], { cwd: source, stdio: 'ignore', timeout: 15_000 });
       }

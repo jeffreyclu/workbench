@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -129,6 +129,37 @@ describe('isolatedRunWorkspace', () => {
       expect(result.integrated).toBe(true);
       expect(execFileSync('git', ['show', 'HEAD:created.ts'], { cwd: directory, encoding: 'utf8' })).toBe('export const created = true;\n');
       expect(execFileSync('git', ['status', '--porcelain'], { cwd: directory, encoding: 'utf8' })).toBe('');
+    } finally {
+      if (previous === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previous;
+    }
+  });
+
+  it('never integrates or checks out a nested node_modules repository', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
+    directories.push(directory);
+    execFileSync('git', ['init', '-q'], { cwd: directory });
+    execFileSync('git', ['config', 'user.email', 'workbench@example.test'], { cwd: directory });
+    execFileSync('git', ['config', 'user.name', 'Workbench Test'], { cwd: directory });
+    writeFileSync(join(directory, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', 'seed.txt'], { cwd: directory });
+    execFileSync('git', ['commit', '-qm', 'seed'], { cwd: directory });
+    execFileSync('git', ['branch', '-M', 'main'], { cwd: directory });
+    mkdirSync(join(directory, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(directory, 'node_modules', '.bin', 'tsx'), 'local executable\n');
+
+    const previous = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      const workspace = await isolatedRunWorkspace(directory, 'dependency-safe-run', true, true);
+      writeFileSync(join(workspace, 'created.ts'), 'export const created = true;\n');
+      mkdirSync(join(workspace, 'node_modules'), { recursive: true });
+      execFileSync('git', ['init', '--quiet'], { cwd: join(workspace, 'node_modules') });
+
+      await expect(integrateWorkbenchRunWorktree(directory, workspace, 'dependency-safe-run', true)).resolves.toEqual(expect.objectContaining({ integrated: true }));
+      expect(execFileSync('git', ['show', 'HEAD:created.ts'], { cwd: directory, encoding: 'utf8' })).toBe('export const created = true;\n');
+      expect(execFileSync('git', ['ls-tree', 'HEAD', 'node_modules'], { cwd: directory, encoding: 'utf8' })).toBe('');
+      expect(execFileSync('cat', ['node_modules/.bin/tsx'], { cwd: directory, encoding: 'utf8' })).toBe('local executable\n');
     } finally {
       if (previous === undefined) delete process.env.VITEST;
       else process.env.VITEST = previous;
