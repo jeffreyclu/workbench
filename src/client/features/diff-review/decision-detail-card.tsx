@@ -133,8 +133,8 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
     </section>
     <section className="diff-review-ai-risk-score" aria-labelledby="diff-review-risk-score-title">
       <h4 id="diff-review-risk-score-title">AI risk score</h4>
-      {!displayedRiskScore && !riskScore.isPending && !riskScore.isError && <button type="button" onClick={() => riskScore.mutate()}>Score risk (AI)</button>}
-      {riskScore.isPending && <p role="status">Scoring…</p>}
+      {!displayedRiskScore && !riskScore.isPending && !riskScore.isError && <button type="button" onClick={() => riskScore.mutate()}>Score risk</button>}
+      {riskScore.isPending && <p className="diff-review-ai-status" role="status">Scoring…</p>}
       {riskScore.isError && <div className="diff-review-ai-assist-error" role="alert">
         <p>{riskScore.error instanceof Error ? riskScore.error.message : 'AI risk score failed.'}</p>
         <button type="button" onClick={() => riskScore.mutate()}>Retry</button>
@@ -145,15 +145,17 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
         const tone = confidenceTone(assessment.risk);
         const { opacity, fontWeight } = confidenceProminence(assessment.risk);
         return <div className="diff-review-risk-score-result">
-          <span
-            className="diff-review-risk-score-value"
-            style={{ color: tone, borderColor: tone, opacity, fontWeight }}
-            aria-label={unavailable ? 'AI risk assessment unavailable' : `AI risk assessment: ${assessment.risk} out of 100`}
-          >
-            {unavailable ? '--' : `${assessment.risk}/100`}
-          </span>
-          <p>{assessment.reasoning}</p>
-          <button type="button" onClick={() => riskScore.mutate()}>Rescore</button>
+          <div className="diff-review-risk-score-head">
+            <span
+              className="diff-review-risk-score-value"
+              style={{ color: tone, borderColor: tone, opacity, fontWeight }}
+              aria-label={unavailable ? 'AI risk assessment unavailable' : `AI risk assessment: ${assessment.risk} out of 100`}
+            >
+              {unavailable ? '--' : `${assessment.risk}/100`}
+            </span>
+            <button type="button" onClick={() => riskScore.mutate()}>Rescore</button>
+          </div>
+          <p className="diff-review-ai-assist-answer">{assessment.reasoning}</p>
         </div>;
       })()}
     </section>
@@ -173,7 +175,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
       </div>
       {assist.isPending && (streamedAnswer
         ? <p className="diff-review-ai-assist-answer" role="status">{streamedAnswer}</p>
-        : <p role="status">Asking the model…</p>)}
+        : <p className="diff-review-ai-status" role="status">Asking the model…</p>)}
       {assist.isError && <div className="diff-review-ai-assist-error" role="alert">
         <p>{assist.error instanceof Error ? assist.error.message : 'AI assist failed.'}</p>
         <button type="button" onClick={() => assist.variables && assist.mutate(assist.variables)}>Retry</button>
