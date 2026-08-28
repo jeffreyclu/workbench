@@ -885,6 +885,8 @@ export interface SharedMessage {
   interjectionStreamOffset?: number | null;
   /** Number of memory matches retrieved from RAG for this reply's prompt, or null if retrieval was not run (e.g. the human's own message). */
   retrievedMemoryCount: number | null;
+  /** Execution type this reply was dispatched under (research/analysis/strategy/execute/review/bugfix), set for both linked and standalone conversations. Null for messages created before this field existed, or for non-agent messages (e.g. jeffrey's own turns, system notices). */
+  kind?: z.infer<typeof runKindSchema> | null;
 }
 
 export interface SharedAttachment { name: string; path: string; mimeType: string; size: number; }

@@ -1793,6 +1793,19 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    id: '066_shared_message_kind',
+    // Standalone conversations already classify each turn (research/execute/etc)
+    // for agent routing, but that classification was discarded instead of being
+    // recorded on the reply. This column lets every reply, linked or not, carry
+    // the execution type it was actually dispatched under.
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'kind')) {
+        database.exec('ALTER TABLE shared_messages ADD COLUMN kind TEXT;');
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

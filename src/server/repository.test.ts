@@ -1260,6 +1260,29 @@ describe('WorkItemRepository', () => {
     }
   });
 
+  it('persists the classified execution type onto a reply in a standalone conversation', async () => {
+    const conversation = repository.createConversation('Unlinked thread');
+    repository.createSharedMessage('jeffrey', 'Build the pool warming.', 'queued', conversation.id, [], 'claude');
+    const previousPath = process.env.PATH;
+    const { directory } = fakeAgentDirectory("printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'", "printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'");
+    try {
+      const replies = dispatchNextSharedTurn(repository, conversation.id);
+      expect(replies).toHaveLength(1);
+      // Set at creation time, before the run resolves, so a queued reply
+      // already carries the routing decision it was dispatched under.
+      expect(replies[0].kind).toBe('execute');
+      const deadline = Date.now() + 2_000;
+      while (repository.listAllSharedMessages(conversation.id).some((message) => message.status === 'running')) {
+        if (Date.now() > deadline) throw new Error('Timed out waiting for reply.');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(repository.getSharedMessageById(replies[0].id)?.kind).toBe('execute');
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('does not dispatch or cancel a queued turn while the same agent is active', () => {
     const conversation = repository.createConversation('Busy thread');
     const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);

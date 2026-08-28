@@ -76,6 +76,7 @@ const EXPECTED_MIGRATIONS = [
   '063_shared_conversation_manual_position',
   '064_review_assist_cache',
   '065_backfill_estimated_cost',
+  '066_shared_message_kind',
 ];
 
 describe('openDatabase', () => {
@@ -500,6 +501,21 @@ describe('openDatabase', () => {
     expect(unknown.cost).toBeNull();
     expect(unknown.source).toBeNull();
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '065_backfill_estimated_cost'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds the shared-message kind column when upgrading from migration 065', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE shared_messages DROP COLUMN kind;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '066_shared_message_kind'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(shared_messages)').all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toContain('kind');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '066_shared_message_kind'").get()).toBeTruthy();
     upgraded.close();
   });
 

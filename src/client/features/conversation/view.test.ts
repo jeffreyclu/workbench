@@ -49,6 +49,23 @@ describe('replyBadge', () => {
       cacheReadInputTokens: 5_400,
     })).toBe('Codex · gpt-5.6 (economy) · default · 120 in · 340 out · 5.4K cached · 1.5s · fallback from claude (rate limited)');
   });
+
+  it('surfaces the classified execution type when the reply carries one', () => {
+    expect(replyBadge({
+      author: 'claude',
+      model: 'claude-sonnet-5',
+      accountProfile: 'default',
+      inputTokens: 120,
+      outputTokens: 340,
+      createdAt: '2026-08-25T12:00:00.000Z',
+      completedAt: '2026-08-25T12:00:01.500Z',
+      executionProfile: 'standard',
+      fallbackFrom: null,
+      fallbackReason: null,
+      cacheReadInputTokens: null,
+      kind: 'execute',
+    })).toBe('Claude · execute · claude-sonnet-5 (standard) · default · 120 in · 340 out · 1.5s');
+  });
 });
 
 describe('composerSelectionFromConversation', () => {

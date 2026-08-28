@@ -637,7 +637,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   // Task-linked replies become running only after they own their durable run
   // and, for edits, the selected repository. A busy repository is a queue,
   // not a hung provider turn.
-  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'queued', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile, accountProfile, queued.message.id));
+  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'queued', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile, accountProfile, queued.message.id, taskKind));
   for (const reply of replies) {
     const agent = reply.author as AgentRun['agent'];
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'

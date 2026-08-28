@@ -106,7 +106,7 @@ export function composerSelectionFromConversation(conversation: Pick<SharedConve
   };
 }
 
-export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'accountProfile' | 'inputTokens' | 'outputTokens' | 'completedAt' | 'createdAt' | 'executionProfile' | 'fallbackFrom' | 'fallbackReason' | 'cacheReadInputTokens'>): string {
+export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'accountProfile' | 'inputTokens' | 'outputTokens' | 'completedAt' | 'createdAt' | 'executionProfile' | 'fallbackFrom' | 'fallbackReason' | 'cacheReadInputTokens' | 'kind'>): string {
   const agent = message.author[0].toUpperCase() + message.author.slice(1);
   const tier = message.executionProfile && message.executionProfile !== 'routing' ? message.executionProfile : null;
   const model = `${message.model ?? 'model unavailable'}${tier ? ` (${tier})` : ''}`;
@@ -116,7 +116,7 @@ export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'ac
   const durationMs = message.completedAt ? new Date(message.completedAt).getTime() - new Date(message.createdAt).getTime() : null;
   const duration = durationMs === null ? null : `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
   const fallback = message.fallbackFrom ? `fallback from ${message.fallbackFrom}${message.fallbackReason ? ` (${message.fallbackReason})` : ''}` : null;
-  return [`${agent} · ${model} · ${profile} · ${usage}`, cacheRead, duration, fallback].filter(Boolean).join(' · ');
+  return [`${agent}${message.kind ? ` · ${message.kind}` : ''} · ${model} · ${profile} · ${usage}`, cacheRead, duration, fallback].filter(Boolean).join(' · ');
 }
 
 type ConversationTaskPickerProps = {
