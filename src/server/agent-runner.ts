@@ -12,7 +12,7 @@ import { classifyExternalActionWithHaiku } from './external-action-ai.js';
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
-import { isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
+import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
 
 const MAX_OUTPUT_BYTES = 1_000_000;
 /** How long a run may produce no stream event before its output gets a visible elapsed marker. */
@@ -1301,8 +1301,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   // and then reverted. An unresolvable workspace falls through to the normal
   // failure path inside the try below.
   let workspace: string | null = null;
+  let sourceWorkspace: string | null = null;
   try {
-    const sourceWorkspace = resolveWorkingDirectory(item);
+    sourceWorkspace = resolveWorkingDirectory(item);
     // Keep the runner's synchronous setup boundary in tests: cancellation
     // coverage intentionally observes the registered process immediately.
     workspace = process.env.VITEST
@@ -1497,6 +1498,10 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         if (typeof task.title !== 'string' || typeof task.description !== 'string') throw new Error('Every planned task needs a title and description.');
         return { title: task.title, description: task.description, workspacePath: typeof task.workspacePath === 'string' ? task.workspacePath : null };
       }) };
+    }
+    if (sourceWorkspace && workspace && MUTATING_RUN_KINDS.has(run.kind)) {
+      const integration = await integrateWorkbenchRunWorktree(sourceWorkspace, workspace, run.id);
+      if (integration.integrated) repository.addActivity(item.id, 'system', 'progress', `Integrated Workbench agent changes into main at ${integration.commitHash?.slice(0, 12)}.`);
     }
     if (!repository.finishRun(run.id, ownerId, { agent: result.agent, status: 'completed', output, completedAt: new Date().toISOString(), ...telemetry })) return;
     if (executionPlan) repository.createExecutionPlan(item.id, executionPlan.summary, executionPlan.tasks);

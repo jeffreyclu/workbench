@@ -12,7 +12,7 @@ import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js
 import { humanizeRunOutputBlocks } from '../shared/run-output.js';
 import { agentAccountEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
-import { isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
+import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
 
 const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
@@ -888,6 +888,10 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       if (runId) repository.updateRun(runId, { agent: result.agent, output: result.output, status: 'failed', error, completedAt: new Date().toISOString(), ...telemetry });
       if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'blocker', error);
       return;
+    }
+    if (linkedRun && MUTATING_RUN_KINDS.has(linkedRun.kind)) {
+      const integration = await integrateWorkbenchRunWorktree(sourceCwd, cwd, linkedRun.id);
+      if (integration.integrated && linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Integrated Workbench agent changes into main at ${integration.commitHash?.slice(0, 12)}.`);
     }
     repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'completed', ...telemetry });
     repository.recordAgentHandoff(target.conversationId, messageId, result.agent, result.output);
