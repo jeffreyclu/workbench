@@ -1,7 +1,8 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, FileDiff, History, RefreshCw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileDiff, History, RefreshCw, X } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
+import { ModalDialog } from '../../components/dialogs/modal-dialog.js';
 import type { AgentRunReviewHandoff, DiffHunkReviewState } from '../../../shared/contracts.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { conversationClient } from '../../data/conversation-client.js';
@@ -183,15 +184,24 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                 <button type="button" onClick={() => moveDecision(-1)} disabled={selectedDecisionIndex <= 0} aria-label="Previous decision"><ChevronLeft size={18} aria-hidden="true" /></button>
                 <span>Decision {selectedDecision.ordinal} of {orderedDecisions.length}</span>
                 <button type="button" onClick={() => moveDecision(1)} disabled={selectedDecisionIndex >= orderedDecisions.length - 1} aria-label="Next decision"><ChevronRight size={18} aria-hidden="true" /></button>
-                <button type="button" className="mobile-decision-detail-toggle" onClick={() => setMobileDecisionDetailOpen((open) => !open)} aria-expanded={mobileDecisionDetailOpen} aria-controls="mobile-decision-detail">{mobileDecisionDetailOpen ? 'Hide decision' : 'View decision'}</button>
+                <button type="button" className="mobile-decision-detail-toggle" onClick={() => setMobileDecisionDetailOpen(true)} aria-expanded={mobileDecisionDetailOpen} aria-controls="mobile-decision-detail">View decision</button>
               </div>
               <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} />
               <div className="diff-review-workbench">
                 {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={selectDecision} />}
-                {(!isPhoneReview || mobileDecisionDetailOpen) && <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent}>
+                {!isPhoneReview && <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent}>
                   <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
                 </DiffReviewDecisionDetailCard></div>}
               </div>
+              {isPhoneReview && mobileDecisionDetailOpen && <ModalDialog className="decision-detail-dialog" labelledBy="mobile-decision-detail-title" onClose={() => setMobileDecisionDetailOpen(false)}>
+                <div className="decision-detail-dialog-header">
+                  <span id="mobile-decision-detail-title">Decision details</span>
+                  <button type="button" onClick={() => setMobileDecisionDetailOpen(false)} aria-label="Close decision details"><X size={18} /></button>
+                </div>
+                <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent}>
+                  <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
+                </DiffReviewDecisionDetailCard></div>
+              </ModalDialog>}
             </>}
           </div>}
   </section>;

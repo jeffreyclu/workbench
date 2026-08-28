@@ -218,6 +218,10 @@ compact visual system: 44px targets, the same dark solid surface, 1px border,
 collapsed tray while the Conversation/Changes switch uses segmented square
 targets.
 
+*Correction from Jeffrey, 2026-08-28.* The independently fixed phone
+conversation close X is part of that same 44px control system. It remains
+fixed in the top-right but must not retain an undersized 32px exception.
+
 *Decision from Jeffrey, 2026-08-27.* The constrained one-line title in the
 expanded phone conversation tray scrolls horizontally on touch; it does not
 ellipsis. Keep the title bounded between the floating review switch and close

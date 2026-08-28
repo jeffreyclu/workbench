@@ -250,6 +250,10 @@ panel starts closed and opens only when the reviewer explicitly presses a
 dedicated control. Desktop keeps the existing queue and immediately visible
 detail card.
 
+*Correction from Jeffrey, 2026-08-28.* The phone decision detail is a modal,
+not an inline panel. It closes through its close control, Escape, or its
+backdrop; keep the selected patch and sequential navigator visible behind it.
+
 ### Mobile composer closes as a bottom sheet
 
 *Decision from Jeffrey, 2026-08-27.* When expanded on phones, the composer is

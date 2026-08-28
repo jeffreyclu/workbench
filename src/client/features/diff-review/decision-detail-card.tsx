@@ -1,7 +1,6 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sourceClient } from '../../data/source-client.js';
-import { boundConfidenceRequestBlocks, confidenceProminence, confidenceTone, type DiffConfidenceAssessment } from '../diff-confidence.js';
 import type { ReviewDecision } from './logic.js';
 import { reviewStateLabel, riskSignalLabel } from './logic.js';
 
@@ -83,32 +82,6 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
     return () => clearTimeout(timer);
   }, [prefetchKey, cachedExplanation, cachedAssistAnswers.isPending, queryClient]);
 
-  const riskScore = useMutation({
-    mutationFn: async (): Promise<DiffConfidenceAssessment> => {
-      const { requests, sourceKeyByRequestKey } = boundConfidenceRequestBlocks([
-        { key: decision.id, lines: decision.hunks.flatMap((hunk) => hunk.lines) },
-      ]);
-      const { assessments } = await sourceClient.assessDiffBlocks(requests);
-      const requestKey = Object.keys(sourceKeyByRequestKey).find((key) => sourceKeyByRequestKey[key] === decision.id) ?? decision.id;
-      const assessment = assessments[requestKey];
-      if (!assessment) throw new Error('AI risk score returned no assessment for this decision.');
-      return assessment;
-    },
-  });
-
-  const cachedRiskScore = useQuery({
-    queryKey: ['review-risk-score-cache', decision.id],
-    queryFn: async () => {
-      const { requests, sourceKeyByRequestKey } = boundConfidenceRequestBlocks([
-        { key: decision.id, lines: decision.hunks.flatMap((hunk) => hunk.lines) },
-      ]);
-      const { assessments } = await sourceClient.lookupDiffConfidenceBlocks(requests);
-      const requestKey = Object.keys(sourceKeyByRequestKey).find((key) => sourceKeyByRequestKey[key] === decision.id) ?? decision.id;
-      return assessments[requestKey] ?? null;
-    },
-  });
-  const displayedRiskScore = riskScore.data ?? (riskScore.isPending || riskScore.isError ? undefined : cachedRiskScore.data ?? undefined);
-
   return <article className="diff-review-decision-card" aria-labelledby="diff-review-decision-title">
     <header>
       <div>
@@ -130,34 +103,6 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
           ? <p>No elevated risk signals detected.</p>
           : decision.riskSignals.map((signal) => <span key={signal} className="diff-review-queue-risk-score">{riskSignalLabel(signal)}</span>)}
       </div>
-    </section>
-    <section className="diff-review-ai-risk-score" aria-labelledby="diff-review-risk-score-title">
-      <h4 id="diff-review-risk-score-title">AI risk score</h4>
-      {!displayedRiskScore && !riskScore.isPending && !riskScore.isError && <button type="button" onClick={() => riskScore.mutate()}>Score risk</button>}
-      {riskScore.isPending && <p className="diff-review-ai-status" role="status">Scoring…</p>}
-      {riskScore.isError && <div className="diff-review-ai-assist-error" role="alert">
-        <p>{riskScore.error instanceof Error ? riskScore.error.message : 'AI risk score failed.'}</p>
-        <button type="button" onClick={() => riskScore.mutate()}>Retry</button>
-      </div>}
-      {displayedRiskScore && !riskScore.isPending && !riskScore.isError && (() => {
-        const assessment = displayedRiskScore;
-        const unavailable = assessment.risk === null;
-        const tone = confidenceTone(assessment.risk);
-        const { opacity, fontWeight } = confidenceProminence(assessment.risk);
-        return <div className="diff-review-risk-score-result">
-          <div className="diff-review-risk-score-head">
-            <span
-              className="diff-review-risk-score-value"
-              style={{ color: tone, borderColor: tone, opacity, fontWeight }}
-              aria-label={unavailable ? 'AI risk assessment unavailable' : `AI risk assessment: ${assessment.risk} out of 100`}
-            >
-              {unavailable ? '--' : `${assessment.risk}/100`}
-            </span>
-            <button type="button" onClick={() => riskScore.mutate()}>Rescore</button>
-          </div>
-          <p className="diff-review-ai-assist-answer">{assessment.reasoning}</p>
-        </div>;
-      })()}
     </section>
     <section className="diff-review-ai-assist" aria-labelledby="diff-review-ai-assist-title">
       <h4 id="diff-review-ai-assist-title">AI assist</h4>

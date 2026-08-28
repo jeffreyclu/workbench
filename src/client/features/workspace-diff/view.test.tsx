@@ -36,7 +36,7 @@ afterEach(() => {
 });
 
 describe('WorkspaceDiffView decision queue', () => {
-  it('uses arrow navigation and keeps the decision panel closed on phones until requested', async () => {
+  it('uses arrow navigation and opens the decision panel in a modal on phones', async () => {
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     const file: WorkspaceDiffFile = {
       path: 'src/mobile-review.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
@@ -61,8 +61,13 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(screen.queryByRole('heading', { name: 'Changes behavior in src/mobile-review.ts.' })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'View decision' }));
-    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/mobile-review.ts.' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Hide decision' })).toHaveAttribute('aria-expanded', 'true');
+    const dialog = await screen.findByRole('dialog', { name: 'Decision details' });
+    expect(within(dialog).getByRole('heading', { name: 'Changes behavior in src/mobile-review.ts.' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View decision' })).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Decision details' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'View decision' })).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('renders the agent handoff before the review decision queue', async () => {

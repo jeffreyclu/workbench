@@ -735,6 +735,11 @@ nav { display: grid; gap: 3px; }
 .dialog-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 24px; }
 .dialog h2 { margin: 4px 0 0; font-size: 21px; }
 .dialog-description { margin: -8px 0 17px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.decision-detail-dialog { width: min(680px, 100%); padding: 0; }
+.decision-detail-dialog-header { display: flex; align-items: center; justify-content: space-between; min-height: 60px; padding: 8px 12px 8px 18px; border-bottom: 1px solid #353530; }
+.decision-detail-dialog-header > span { color: #d5d4cd; font: 700 10px 'DM Mono'; letter-spacing: .1em; text-transform: uppercase; }
+.decision-detail-dialog-header > button { display: grid; place-items: center; flex: 0 0 auto; width: 44px; height: 44px; padding: 0; color: #d5d4cd; background: #20201d; border: 1px solid #45443e; border-radius: 8px; }
+.decision-detail-dialog .diff-review-decision-card { padding: 16px 18px 18px; }
 .dialog label { display: grid; gap: 7px; margin-top: 15px; color: #8c8b84; font: 9px 'DM Mono'; letter-spacing: .06em; text-transform: uppercase; }
 .dialog input, .dialog textarea, .dialog select { width: 100%; padding: 11px; color: #e3e2db; background: #10100f; border: 1px solid #30302b; border-radius: 7px; font: 12px 'Manrope'; text-transform: none; }
 .dialog textarea { resize: vertical; line-height: 1.5; }.dialog .markdown-composer { font: 12px 'Manrope'; text-transform: none; }.dialog .markdown-contenteditable { min-height: 110px; padding: 11px; font: 12px/1.5 'Manrope'; }.dialog .markdown-placeholder { top: 11px; left: 11px; font: 12px/1.5 'Manrope'; }.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -1283,7 +1288,7 @@ nav { display: grid; gap: 3px; }
   .agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle span { width: 38px; height: 4px; background: #73736b; border-radius: 999px; }
   .agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle:active { cursor: grabbing; }
   .agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle:focus-visible { outline: 2px solid var(--acid); outline-offset: -5px; }
-  .mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }
+  .mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; color: #d9d8d0; background: #171715; border: 1px solid #373731; border-radius: 8px; box-shadow: 0 6px 16px #0009; }
   .agent-console-title { position: fixed; top: 57px; right: 16px; left: 16px; z-index: 6; display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; padding: 0; background: transparent; border: 0; }
   .agent-console-header.has-conversation-actions { min-height: 0; }
   .agent-console-header.has-conversation-actions .agent-console-title { max-width: none; padding-top: 0; }
@@ -1318,6 +1323,8 @@ nav { display: grid; gap: 3px; }
 @media (max-width: 640px) {
   .dialog-backdrop { align-items: start; overflow-y: auto; padding: 12px; }
   .dialog { max-height: calc(100dvh - 24px); margin-block: 0; }
+  .decision-detail-dialog { width: 100%; }
+  .decision-detail-dialog .diff-review-decision-card { padding: 14px 12px; }
   .add-task-dialog { min-height: 0; }
 }
 @media (max-width: 480px) {

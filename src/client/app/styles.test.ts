@@ -105,7 +105,7 @@ describe('conversation view controls', () => {
     const phoneRules = styles;
 
     expect(phoneRules).toContain('.agent-console-header { position: absolute; inset: 0; z-index: 6; flex: 0 0 0; min-height: 0; height: 0; padding: 0; overflow: visible; border: 0; }');
-    expect(phoneRules).toContain('.mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }');
+    expect(phoneRules).toContain('.mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; color: #d9d8d0; background: #171715; border: 1px solid #373731; border-radius: 8px; box-shadow: 0 6px 16px #0009; }');
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed .conversation-window-actions { display: none; }');
     expect(phoneRules).toContain('.thread-filter-bar { display: none; }');
     expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) + .mobile-chrome-controls .mobile-conversation-toggle { display: none; }');
@@ -133,7 +133,7 @@ describe('conversation view controls', () => {
     expect(reviewControl).toContain('z-index: 8');
     expect(reviewControl).toContain('background: transparent');
     expect(reviewControl).toContain('box-shadow: none');
-    expect(styles).toContain('.conversation-surface-tabs button { flex: 0 0 auto; justify-content: center; min-width: 36px; min-height: 36px; padding: 0 8px; font-size: 0; }');
+    expect(styles).toContain('.conversation-surface-tabs button { flex: 0 0 auto; justify-content: center; width: 44px; min-width: 44px; min-height: 44px; padding: 0; font-size: 0; }');
   });
 
   it('keeps Changes as the only review surface and gives it the composer on a phone', () => {
@@ -150,7 +150,7 @@ describe('conversation view controls', () => {
 
     expect(phoneRules).not.toContain('mobile-conversation-disclosure');
     expect(phoneRules).not.toContain('mobile-composer-disclosure');
-    expect(phoneRules).toContain('.mobile-chrome-toggle { width: 76px; height: 44px; background: #20211d; border-color: #55564d; border-radius: 999px;');
+    expect(phoneRules).toContain('.mobile-chrome-toggle { width: 44px; height: 44px; background: #171715; border-color: #373731; border-radius: 8px;');
     expect(phoneRules).toContain('.agent-console .shared-composer.is-mobile-composer-collapsed { display: none; }');
     expect(phoneRules).toContain('.mobile-composer-backdrop { position: fixed; inset: 0; z-index: 10;');
     expect(phoneRules).toContain('.agent-console .conversation-review-layout.layout-changes .shared-composer.mobile-composer-sheet,\n  .agent-console .shared-composer.mobile-composer-sheet {');
@@ -159,7 +159,7 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed { min-height: 0; padding: 0; border-bottom-color: transparent; }');
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed .agent-console-title { display: none; }');
     expect(phoneRules).toContain('.thread-filter-bar { display: none; }');
-    expect(phoneRules).toContain('.mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }');
+    expect(phoneRules).toContain('.mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; color: #d9d8d0; background: #171715; border: 1px solid #373731; border-radius: 8px; box-shadow: 0 6px 16px #0009; }');
     expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle { position: fixed; bottom: calc(100dvh - 138px);');
     expect(phoneRules).toContain('.agent-console-title { position: fixed; top: 57px; right: 16px; left: 16px;');
     expect(phoneRules).toContain('.conversation-window-actions { position: fixed; top: 91px;');
