@@ -81,6 +81,18 @@ describe('workspace diff parsing', () => {
     expect(diff.files[0].patch?.length).toBeGreaterThan(8 * 1024 * 1024);
   });
 
+  it('ignores an untracked nested repository instead of trying to diff it as a file', async () => {
+    const workspace = temporaryGitWorkspace();
+    writeFileSync(join(workspace, 'tracked.ts'), 'export {};\n');
+    execFileSync('git', ['add', 'tracked.ts'], { cwd: workspace });
+    execFileSync('git', ['commit', '--quiet', '-m', 'initial'], { cwd: workspace });
+    const nestedRepository = join(workspace, 'node_modules');
+    mkdirSync(nestedRepository);
+    execFileSync('git', ['init', '--quiet'], { cwd: nestedRepository });
+
+    await expect(getWorkspaceDiff(workspace)).resolves.toEqual(expect.objectContaining({ changedFiles: 0 }));
+  });
+
   it('rebuilds a reviewable snapshot from a recorded commit after the workspace is clean', async () => {
     const workspace = temporaryGitWorkspace();
     writeFileSync(join(workspace, 'file.ts'), 'export const version = 1;\n');
