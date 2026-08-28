@@ -1,8 +1,9 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { LexicalComposer } from '@lexical/react/LexicalComposer';
 import { ContentEditable } from '@lexical/react/LexicalContentEditable';
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary';
 import { HistoryPlugin } from '@lexical/react/LexicalHistoryPlugin';
+import { ListPlugin } from '@lexical/react/LexicalListPlugin';
 import { MarkdownShortcutPlugin } from '@lexical/react/LexicalMarkdownShortcutPlugin';
 import { OnChangePlugin } from '@lexical/react/LexicalOnChangePlugin';
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin';
@@ -14,7 +15,6 @@ import { $isCodeNode, CodeNode } from '@lexical/code-core';
 import { LinkNode } from '@lexical/link';
 import { $getRoot, $getSelection, $isRangeSelection, FORMAT_TEXT_COMMAND, KEY_ENTER_COMMAND, type EditorState, type LexicalNode, COMMAND_PRIORITY_HIGH } from 'lexical';
 import { Bold, Code2, Italic, List, ListOrdered, Quote } from 'lucide-react';
-import { copyText } from '../../lib/clipboard.js';
 
 type MarkdownComposerProps = {
   conversationId: string | null;
@@ -74,19 +74,29 @@ function MarkdownToolbar() {
   </div>;
 }
 
-function SyncMarkdownValue({ value }: { value: string }) {
+function SyncMarkdownValue({ value, onChange }: { value: string; onChange: (markdown: string) => void }) {
   const [editor] = useLexicalComposerContext();
+  const lastEmittedValue = useRef<string | null>(null);
   useEffect(() => {
     const current = editor.getEditorState().read(() => $convertToMarkdownString(TRANSFORMERS));
     // The markdown serializer can add a trailing newline for a final block.
     // Do not replace the editor while the user is typing just because of that.
     if (current === value || current.replace(/\n$/, '') === value.replace(/\n$/, '')) return;
+    // Parent state normally echoes this editor's own markdown back immediately.
+    // Never replace Lexical's tree for that echo: doing so breaks IME composition
+    // and throws away the current selection. A genuinely external value still
+    // replaces the document (conversation switch, draft restore, reset, etc.).
+    if (lastEmittedValue.current === value) return;
     editor.update(() => {
       $getRoot().clear();
       if (value) $convertFromMarkdownString(value, TRANSFORMERS);
     });
   }, [editor, value]);
-  return null;
+  return <OnChangePlugin onChange={(editorState: EditorState) => editorState.read(() => {
+    const markdown = $convertToMarkdownString(TRANSFORMERS);
+    lastEmittedValue.current = markdown;
+    onChange(markdown);
+  })} />;
 }
 
 function SyncEditorEditable({ disabled }: { disabled: boolean }) {
@@ -105,44 +115,12 @@ function FocusEditor({ autoFocus }: { autoFocus: boolean }) {
   return null;
 }
 
-/** Lexical owns code-block DOM nodes, so add a non-editable control after each reconciliation. */
-function CopyCodeBlocksPlugin() {
-  const [editor] = useLexicalComposerContext();
-  useEffect(() => editor.registerRootListener((root) => {
-    if (!root) return;
-    const addButtons = () => root.querySelectorAll('pre').forEach((pre) => {
-      if (pre.querySelector(':scope > .copy-code-button')) return;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'copy-code-button';
-      button.textContent = 'Copy';
-      button.title = 'Copy code';
-      button.setAttribute('aria-label', 'Copy code to clipboard');
-      button.setAttribute('contenteditable', 'false');
-      button.addEventListener('mousedown', (event) => event.preventDefault());
-      button.addEventListener('click', () => {
-        void copyText(pre.querySelector('code')?.textContent ?? '').then(() => {
-          button.textContent = 'Copied';
-          window.setTimeout(() => { button.textContent = 'Copy'; }, 1_200);
-        });
-      });
-      pre.prepend(button);
-    });
-    const observer = new MutationObserver(addButtons);
-    observer.observe(root, { childList: true, subtree: true });
-    addButtons();
-    return () => observer.disconnect();
-  }), [editor]);
-  return null;
-}
-
 function MarkdownEditor({ value, onChange, onSubmit, onFocus, onBlur, disabled, placeholder = 'Write in Markdown…', ariaLabel = 'Markdown editor', autoFocus = false, className }: Pick<MarkdownComposerProps, 'value' | 'onChange' | 'onSubmit' | 'onFocus' | 'onBlur' | 'disabled' | 'placeholder' | 'ariaLabel' | 'autoFocus' | 'className'>) {
   return <div className={['markdown-composer', className].filter(Boolean).join(' ')}>
     <RichTextPlugin
       contentEditable={<ContentEditable
         className="markdown-contenteditable"
         aria-label={ariaLabel}
-        autoFocus={autoFocus}
         onFocus={onFocus}
         onBlur={onBlur}
       />}
@@ -150,14 +128,13 @@ function MarkdownEditor({ value, onChange, onSubmit, onFocus, onBlur, disabled, 
       ErrorBoundary={LexicalErrorBoundary}
     />
     <HistoryPlugin />
+    <ListPlugin />
     <MarkdownShortcutPlugin transformers={TRANSFORMERS} />
-    <OnChangePlugin onChange={(editorState: EditorState) => editorState.read(() => onChange($convertToMarkdownString(TRANSFORMERS)))} />
-    <SyncMarkdownValue value={value} />
+    <SyncMarkdownValue value={value} onChange={onChange} />
     <SyncEditorEditable disabled={Boolean(disabled)} />
     <FocusEditor autoFocus={autoFocus} />
-    <CopyCodeBlocksPlugin />
     {!disabled && onSubmit && <SubmitOnEnter onSubmit={onSubmit} />}
-    <MarkdownToolbar />
+    {!disabled && <MarkdownToolbar />}
   </div>;
 }
 
