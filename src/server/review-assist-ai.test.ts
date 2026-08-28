@@ -82,6 +82,46 @@ describe('requestReviewAssist caching', () => {
     expect(lookupReviewAssist(database, 'compare_task_intent', decision, null)).toBeNull();
   });
 
+  it('keeps a persisted answer when the reviewer settles the decision', async () => {
+    vi.resetModules();
+    const spawn = mockStreamingWorker('SCORE: 12\nTest-only assertion update.');
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { lookupReviewAssist, requestReviewAssist } = await import('./review-assist-ai.js');
+    const database = openDatabase(':memory:');
+
+    await requestReviewAssist(database, 'score_risk', decision, null);
+    const spawnsAfterFirstTurn = spawn.mock.calls.length;
+
+    // Marking a decision Reviewed changes nothing about what the code does.
+    // Re-asking must be a cache hit, or every settled hunk would be rescored on
+    // the next visit to Changes.
+    const settled = { ...decision, state: 'Approved' };
+    expect(lookupReviewAssist(database, 'score_risk', settled, null)).toBe('SCORE: 12\nTest-only assertion update.');
+    expect(await requestReviewAssist(database, 'score_risk', settled, null)).toBe('SCORE: 12\nTest-only assertion update.');
+    expect(spawn.mock.calls.length).toBe(spawnsAfterFirstTurn);
+  });
+
+  it('tells the model that a file path decides blast radius, so test files are not scored as production risk', async () => {
+    vi.resetModules();
+    const spawn = mockStreamingWorker('SCORE: 8\nAssertion update in a test file.');
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { requestReviewAssist } = await import('./review-assist-ai.js');
+    const database = openDatabase(':memory:');
+
+    await requestReviewAssist(database, 'score_risk', {
+      behavior: 'Changes the range filter assertions.',
+      state: 'Pending',
+      hunks: [{ filePath: 'src/client/features/range-filter.test.tsx', location: 'Line 42', lines: ["+    expect(screen.getByRole('button', { name: '7 days' })).toBeTruthy();"] }],
+    }, null);
+
+    const systemPrompt = (spawn.mock.calls as unknown as unknown[][])
+      .map((call) => (Array.isArray(call[1]) ? call[1] as string[] : []))
+      .map((argv) => argv[argv.indexOf('--system-prompt') + 1])
+      .find((prompt) => typeof prompt === 'string');
+    expect(systemPrompt).toContain('*.test.*');
+    expect(systemPrompt).toContain('Read the path before judging the lines.');
+  });
+
   it('reports a failed turn instead of silently caching a neutral placeholder', async () => {
     vi.resetModules();
     vi.doMock('node:child_process', () => ({

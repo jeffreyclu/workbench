@@ -4,17 +4,19 @@ import { WorkItemRepository } from './repository.js';
 
 const getWorkspaceDiff = vi.fn();
 const requestReviewAssist = vi.fn();
+const lookupReviewAssist = vi.fn();
 const publishRealtimeReviewScore = vi.fn();
 
 vi.mock('./workspace-diff.js', () => ({ getWorkspaceDiff: (path: string) => getWorkspaceDiff(path) }));
 vi.mock('./review-assist-ai.js', () => ({
   requestReviewAssist: (...args: unknown[]) => requestReviewAssist(...args),
+  lookupReviewAssist: (...args: unknown[]) => lookupReviewAssist(...args),
 }));
 vi.mock('./realtime.js', () => ({
   publishRealtimeReviewScore: (score: unknown) => publishRealtimeReviewScore(score),
 }));
 
-const { resetReviewAutoScore, reviewAutoScoreSnapshot, scheduleReviewAutoScore } = await import('./review-auto-score.js');
+const { resetReviewAutoScore, reviewAutoScoreSnapshot, reviewAutoScoreView, scheduleReviewAutoScore } = await import('./review-auto-score.js');
 
 function diffWith(files: number) {
   return {
@@ -40,6 +42,8 @@ describe('background review scoring', () => {
     resetReviewAutoScore();
     getWorkspaceDiff.mockReset();
     requestReviewAssist.mockReset();
+    lookupReviewAssist.mockReset();
+    lookupReviewAssist.mockReturnValue(null);
     publishRealtimeReviewScore.mockReset();
   });
 
@@ -125,5 +129,36 @@ describe('background review scoring', () => {
 
     expect(requestReviewAssist).toHaveBeenCalledTimes(40);
     expect(reviewAutoScoreSnapshot({ workItemId: 'item-5' }, 'rev-1')).toMatchObject({ total: 40, skipped: 5 });
+  });
+
+  it('serves scores already persisted for the current diff without spending a model turn', async () => {
+    const repository = newRepository();
+    const item = repository.create({ title: 'Persisted scores', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: process.cwd(), dueDate: null });
+    repository.database.prepare('INSERT INTO work_item_workspace_selection (work_item_id, workspace_path, updated_at) VALUES (?, ?, ?)')
+      .run(item.id, process.cwd(), new Date().toISOString());
+    getWorkspaceDiff.mockResolvedValue(diffWith(2));
+    lookupReviewAssist.mockReturnValue('SCORE: 15\nPersisted answer.');
+
+    // No job has run in this process — the state a pane sees after a runtime
+    // restart, or on any later visit to Changes.
+    expect(reviewAutoScoreSnapshot({ workItemId: item.id }, 'rev-1')).toBeNull();
+
+    const view = await reviewAutoScoreView(repository, { workItemId: item.id }, 'rev-1');
+
+    expect(view).toMatchObject({ revision: 'rev-1', running: false });
+    expect(view?.entries).toHaveLength(2);
+    expect(view?.entries.every((entry) => entry.answer === 'SCORE: 15\nPersisted answer.')).toBe(true);
+    expect(requestReviewAssist).not.toHaveBeenCalled();
+  });
+
+  it('does not replay persisted scores against a diff that has moved on', async () => {
+    const repository = newRepository();
+    const item = repository.create({ title: 'Moved diff', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: process.cwd(), dueDate: null });
+    repository.database.prepare('INSERT INTO work_item_workspace_selection (work_item_id, workspace_path, updated_at) VALUES (?, ?, ?)')
+      .run(item.id, process.cwd(), new Date().toISOString());
+    getWorkspaceDiff.mockResolvedValue(diffWith(1));
+    lookupReviewAssist.mockReturnValue('SCORE: 15\nPersisted answer.');
+
+    expect(await reviewAutoScoreView(repository, { workItemId: item.id }, 'rev-2')).toBeNull();
   });
 });

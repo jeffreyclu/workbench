@@ -56,6 +56,37 @@ describe('diff review queue logic', () => {
     expect(decisions[0].riskSignals).toContain('cross_file');
   });
 
+  it('pairs a new import block with the code that started using it, and leaves an unrelated import alone', () => {
+    const consumerFile: WorkspaceDiffFile = {
+      path: 'src/server/notify.ts', status: 'modified', additions: 4, deletions: 0, previousPath: null,
+      patch: [
+        "@@ -1,2 +1,3 @@",
+        " import { existing } from './existing.js'",
+        "+import { publishAlert } from './alerts.js'",
+        " ",
+        "@@ -40,2 +41,4 @@ function notifyOwner()",
+        " function notifyOwner() {",
+        "+  publishAlert('owner')",
+        "@@ -80,1 +83,2 @@ unrelatedHelper",
+        "+import { neverUsedHere } from './orphan.js'",
+      ].join('\n'),
+      isBinary: false,
+    };
+
+    const decisions = buildReviewDecisions([consumerFile], []);
+
+    const paired = decisions.find((decision) => decision.hunks.some((hunk) => hunk.lines.some((line) => line.includes('publishAlert('))));
+    expect(paired?.hunks.map((hunk) => hunk.hunkRange)).toEqual([
+      '@@ -1,2 +1,3 @@',
+      '@@ -40,2 +41,4 @@ function notifyOwner()',
+    ]);
+    // The behavior sentence describes the code, not the import block it carries.
+    expect(paired?.subject).toBe('notifyOwner');
+    // An import nothing in this diff consumes stays its own decision rather
+    // than being attached to an unrelated change.
+    expect(decisions.some((decision) => decision.hunks.length === 1 && decision.hunks[0].hunkRange === '@@ -80,1 +83,2 @@ unrelatedHelper')).toBe(true);
+  });
+
   it('orders decisions deterministically by source order, ignoring static risk signals', () => {
     const decisions = buildReviewDecisions([localFile, authFile], []);
     const authDecision = decisions.find((decision) => decision.filePaths[0] === authFile.path)!;

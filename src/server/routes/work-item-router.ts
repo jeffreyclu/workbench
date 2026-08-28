@@ -33,7 +33,7 @@ import { resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { generateFastAiTaskDraft } from '../fast-task-draft-ai.js';
 import { assessDiffBlocks, lookupDiffConfidenceBlocks } from '../diff-confidence-ai.js';
 import { lookupReviewAssist, requestReviewAssist } from '../review-assist-ai.js';
-import { reviewAutoScoreSnapshot } from '../review-auto-score.js';
+import { reviewAutoScoreView } from '../review-auto-score.js';
 import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
@@ -125,10 +125,11 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     }
     response.end();
   });
-  // Replay for a Changes pane that opened after an agent came to rest. The
-  // scored answers themselves come from the assist cache; this carries the
-  // progress and the per-decision failures, which are not cacheable state.
-  router.get('/api/review-assist/auto-score', (request, response, next) => {
+  // What a Changes pane should show for one revision: every score already
+  // persisted in the assist cache, plus the live job's progress and failures.
+  // Reading the cache here is what stops a reopened tab, or a pane that
+  // outlived a runtime restart, from paying for answers it already has.
+  router.get('/api/review-assist/auto-score', async (request, response, next) => {
     try {
       const query = z.object({
         workItemId: z.string().trim().min(1).optional(),
@@ -137,7 +138,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       }).refine((value) => Boolean(value.workItemId) !== Boolean(value.conversationId), 'Provide exactly one of workItemId or conversationId.')
         .parse(request.query);
       const scope = query.workItemId ? { workItemId: query.workItemId } : { conversationId: query.conversationId! };
-      response.json({ snapshot: reviewAutoScoreSnapshot(scope, query.revision) });
+      response.json({ snapshot: await reviewAutoScoreView(repository, scope, query.revision) });
     } catch (error) { next(error); }
   });
   // Cache-only: never spawns a model turn. See /api/diff-confidence/lookup.

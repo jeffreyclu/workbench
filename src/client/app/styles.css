@@ -407,7 +407,13 @@ nav { display: grid; gap: 3px; }
 .diff-review-summary > div { display: grid; gap: 3px; min-width: 0; }
 .diff-review-summary strong { color: #deddd6; font-size: 13px; }
 .diff-review-summary span { color: #85847d; font: 10px 'DM Mono'; }
-.diff-review-summary progress { width: min(220px, 34%); height: 7px; accent-color: var(--acid); }
+.diff-review-summary progress { width: min(220px, 34%); height: 16px; border: 0; border-radius: 999px; background: #26261f; accent-color: var(--acid); }
+/* WebKit ignores accent-color's track colour at this height, leaving a flat
+ * light bar; both pseudo-elements are styled so the taller bar reads as filled
+ * versus remaining rather than as one solid block. */
+.diff-review-summary progress::-webkit-progress-bar { border-radius: 999px; background: #26261f; }
+.diff-review-summary progress::-webkit-progress-value { border-radius: 999px; background: var(--acid); }
+.diff-review-summary progress::-moz-progress-bar { border-radius: 999px; background: var(--acid); }
 .diff-review-queue-region { min-width: 0; }
 .workspace-diff .diff-review-decision-queue { background: #11110f; }
 .diff-review-decision-queue ol { display: flex; margin: 0; padding: 0; overflow-x: auto; overscroll-behavior-x: contain; list-style: none; }

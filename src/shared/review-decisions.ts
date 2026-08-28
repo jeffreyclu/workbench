@@ -44,6 +44,9 @@ interface DecisionCandidate {
   fileStatus: WorkspaceDiffFile['status'];
   hunk: ReviewDecisionHunk;
   riskSignals: ReviewRiskSignal[];
+  /** Changed nothing but import statements. Such a hunk is never a decision of
+   * its own — it exists because some other hunk started using the symbol. */
+  importOnly: boolean;
 }
 const NON_SUBJECTS = new Set([
   'async', 'await', 'catch', 'class', 'const', 'describe', 'else', 'export', 'false', 'function', 'if',
@@ -129,6 +132,45 @@ function staticRiskSignals(file: Pick<WorkspaceDiffFile, 'path'>, hunk: PatchHun
   return signals;
 }
 
+const IMPORT_KEYWORDS = new Set(['import', 'export', 'from', 'as', 'type', 'typeof', 'const', 'let', 'var', 'require', 'default', 'await', 'new', 'use', 'strict']);
+
+function changedCodeLines(lines: string[]): string[] {
+  return lines
+    .filter((line) => (line.startsWith('+') && !line.startsWith('+++')) || (line.startsWith('-') && !line.startsWith('---')))
+    .map((line) => line.slice(1).trim());
+}
+
+/** Import statements, including the continuation lines of a multi-line named
+ * import and the CSS/SCSS `@use`/`@import` forms. Kept deliberately narrow: a
+ * hunk misread as import-only would be folded into an unrelated decision. */
+const IMPORT_LINE = /^(?:import\b|export\s+(?:\*|\{)[^;]*\bfrom\b|(?:const|let|var)\s+[\w${},:\s*]+=\s*require\(|from\s+['"]|@(?:use|import|forward)\b|[{}]\s*,?$|[A-Za-z_$][\w$]*(?:\s+as\s+[A-Za-z_$][\w$]*)?\s*,?$|type\s+[A-Za-z_$][\w$]*\s*,?$|['"][^'"]*['"]\s*;?$)/;
+
+function isImportOnlyChange(lines: string[]): boolean {
+  const changed = changedCodeLines(lines).filter((line) => line.length > 0);
+  if (changed.length === 0) return false;
+  if (!changed.some((line) => /^(?:import\b|export\s+(?:\*|\{)[^;]*\bfrom\b|@(?:use|import|forward)\b)/.test(line) || /\brequire\(/.test(line) || /^from\s+['"]/.test(line))) return false;
+  return changed.every((line) => IMPORT_LINE.test(line));
+}
+
+/** The symbols an import hunk brings into the file, so the hunk that starts
+ * using one of them can be found. Module paths are stripped first: a path
+ * segment that happens to match an identifier elsewhere is not a binding. */
+function importedSymbols(lines: string[]): string[] {
+  const names = new Set<string>();
+  for (const line of changedCodeLines(lines)) {
+    const withoutPaths = line.replace(/['"][^'"]*['"]/g, ' ');
+    for (const match of withoutPaths.matchAll(/[A-Za-z_$][\w$]*/g)) {
+      if (!IMPORT_KEYWORDS.has(match[0])) names.add(match[0]);
+    }
+  }
+  return [...names];
+}
+
+function usesSymbol(lines: string[], symbols: string[]): boolean {
+  const body = changedCodeLines(lines).join('\n');
+  return symbols.some((symbol) => new RegExp(`\\b${symbol.replace(/\$/g, '\\$')}\\b`).test(body));
+}
+
 function aggregateState(hunks: ReviewDecisionHunk[]): DiffHunkReviewState | null {
   const states = hunks.map((hunk) => hunk.state);
   if (states.includes(null)) return null;
@@ -179,6 +221,7 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
           additions: counts.additions, deletions: counts.deletions, state: review?.state ?? null, note: review?.note ?? null,
         },
         riskSignals: staticRiskSignals(file, patchHunk),
+        importOnly: isImportOnlyChange(patchHunk.lines),
       });
     }
   }
@@ -190,23 +233,43 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
     paths.add(candidate.hunk.filePath);
     subjectFileCounts.set(candidate.subject, paths);
   }
-  const groups = new Map<string, DecisionCandidate[]>();
-  for (const candidate of candidates) {
+  const groupKeys = candidates.map((candidate) => {
     const spansFiles = candidate.subject && (subjectFileCounts.get(candidate.subject)?.size ?? 0) > 1;
-    const key = spansFiles ? `subject:${candidate.subject}` : `hunk:${candidate.hunk.id}`;
+    return spansFiles ? `subject:${candidate.subject}` : `hunk:${candidate.hunk.id}`;
+  });
+  // New imports travel with the code that needed them. Judging `import { x }`
+  // on its own tells a reviewer nothing — the question is always what x is now
+  // used for — and it cost a queue position and an AI answer per import block.
+  candidates.forEach((candidate, index) => {
+    if (!candidate.importOnly) return;
+    const symbols = importedSymbols(candidate.hunk.lines);
+    if (symbols.length === 0) return;
+    const consumer = candidates.findIndex((other, otherIndex) =>
+      otherIndex !== index
+      && !other.importOnly
+      && other.hunk.filePath === candidate.hunk.filePath
+      && usesSymbol(other.hunk.lines, symbols));
+    if (consumer >= 0) groupKeys[index] = groupKeys[consumer];
+  });
+  const groups = new Map<string, DecisionCandidate[]>();
+  candidates.forEach((candidate, index) => {
+    const key = groupKeys[index];
     groups.set(key, [...(groups.get(key) ?? []), candidate]);
-  }
+  });
 
   return [...groups.values()].map((group, index) => {
     const hunks = group.map((candidate) => candidate.hunk);
+    // An import block carries no subject and no behavior worth naming, so a
+    // group it merely accompanies is described by the code hunk instead.
+    const primary = group.find((candidate) => !candidate.importOnly) ?? group[0];
     const filePaths = [...new Set(hunks.map((hunk) => hunk.filePath))];
     const riskSignals = REVIEW_RISK_SIGNALS.filter((signal) => group.some((candidate) => candidate.riskSignals.includes(signal)));
     if (filePaths.length > 1) riskSignals.push('cross_file');
     return {
       ordinal: index + 1,
-      id: group.length > 1 ? `decision:${group[0].subject}:${hunks.map((hunk) => hunk.id).sort().join('|')}` : hunks[0].id,
-      subject: group[0].subject,
-      behavior: behaviorSummary(group[0].subject, hunks, group.map((candidate) => candidate.fileStatus), riskSignals),
+      id: group.length > 1 ? `decision:${primary.subject}:${hunks.map((hunk) => hunk.id).sort().join('|')}` : hunks[0].id,
+      subject: primary.subject,
+      behavior: behaviorSummary(primary.subject, hunks, group.map((candidate) => candidate.fileStatus), riskSignals),
       hunks, filePaths,
       additions: hunks.reduce((total, hunk) => total + hunk.additions, 0),
       deletions: hunks.reduce((total, hunk) => total + hunk.deletions, 0),

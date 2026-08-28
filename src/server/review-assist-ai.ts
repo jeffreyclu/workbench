@@ -6,6 +6,8 @@ export type ReviewAssistAction = 'explain' | 'what_could_break' | 'compare_task_
 
 export type ReviewAssistDecision = {
   behavior: string;
+  /** Still accepted on the wire — the queue sends one payload shape to every
+   * review surface — but deliberately ignored here: see `hashRequest`. */
   state: string;
   hunks: Array<{ filePath: string; location: string; lines: string[] }>;
 };
@@ -15,7 +17,23 @@ export type ReviewAssistTaskIntent = { title: string; description: string } | nu
 /** One warm agent serves every Changes question, so the action lives in the
  * turn rather than in a per-action process. Three specialised processes could
  * only ever keep one of them warm for the button a reviewer actually clicks. */
-const CHANGES_AGENT_SYSTEM_PROMPT = 'You assist a code reviewer reading one diff decision at a time in Workbench. Every user message is self-contained: answer only from that message and ignore anything earlier in this session. Follow the instruction at the top of the message exactly. No preamble, no markdown headings, no restating the diff back verbatim.';
+const CHANGES_AGENT_SYSTEM_PROMPT = [
+  'You assist a code reviewer reading one diff decision at a time in Workbench.',
+  'Every user message is self-contained: answer only from that message and ignore anything earlier in this session.',
+  // Judging a changed assertion as production risk was the single most common
+  // wrong answer this surface produced: the model read the lines and never the
+  // path they came from. Every hunk is labelled with its file path, so say
+  // outright what that path implies.
+  'Each hunk is labelled with the file path it came from. Read the path before judging the lines.',
+  'A path matching *.test.*, *.spec.*, __tests__/, /tests/, /e2e/, /__mocks__/, or /fixtures/ is test code. It ships to no user and cannot break production behavior on its own: changing, tightening, or updating assertions there is routine low-risk work. Judge a test change only on whether it weakens, deletes, or wrongly relaxes coverage — an assertion updated to match intended new behavior is expected, not a risk.',
+  'Documentation, comment, styling, fixture, and lockfile-free config changes likewise carry far less blast radius than production source under src/, lib/, app/, or server/.',
+  'Follow the instruction at the top of the message exactly. No preamble, no markdown headings, no restating the diff back verbatim.',
+].join(' ');
+
+/** Bumped whenever the system prompt or an action directive changes what a good
+ * answer looks like. It is part of the cache key, so a corrected rubric
+ * recomputes stale answers once instead of serving the old judgement forever. */
+const ASSIST_PROMPT_VERSION = 2;
 
 // Answer length is the dominant latency term once the session is primed:
 // measured on this machine a warm turn spends ~0.9s on session overhead and the
@@ -28,7 +46,7 @@ const ACTION_DIRECTIVES: Record<ReviewAssistAction, string> = {
   // The two-line shape is a contract with the client, which parses the first
   // line into the badge number. An answer that does not follow it is rendered
   // as plain text rather than being coerced into a fake score.
-  score_risk: 'Instruction: rate how risky this change is for a reviewer to approve, from 0 (trivially safe) to 100 (dangerous, easy to get wrong, wide blast radius). Reply with exactly two lines and nothing else. First line: "SCORE: <number>". Second line: at most fifteen words saying why.',
+  score_risk: 'Instruction: rate how risky this change is for a reviewer to approve, from 0 (trivially safe) to 100 (dangerous, easy to get wrong, wide blast radius). Blast radius is set by the file path as much as by the lines: a test, fixture, or documentation file scores under 20 unless it removes or weakens coverage. Reply with exactly two lines and nothing else. First line: "SCORE: <number>". Second line: at most fifteen words saying why.',
 };
 
 /** Cheapest possible turn whose only job is to pay the session's one-time
@@ -44,7 +62,16 @@ const PRIME_PROMPT = 'Instruction: reply with the single word ready.';
  * a background-computed score missed the moment the reviewer's window derived
  * intent even slightly differently. */
 function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent): string {
-  const keyed = action === 'compare_task_intent' ? { action, decision, taskIntent } : { action, decision };
+  // Review state is deliberately excluded from both the key and the prompt.
+  // Whether a human has already ticked "Reviewed" does not change what the code
+  // does, and folding it in threw the answer away the instant a reviewer
+  // settled the decision — every settled hunk then paid for a fresh model turn
+  // on the next visit, which is exactly the rescore loop this cache prevents.
+  // It would also bias the score: an already-approved change reads as safer.
+  const keyedDecision = { behavior: decision.behavior, hunks: decision.hunks };
+  const keyed = action === 'compare_task_intent'
+    ? { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, taskIntent }
+    : { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision };
   return createHash('sha256').update(JSON.stringify(keyed)).digest('hex');
 }
 
@@ -71,7 +98,6 @@ function buildPrompt(action: ReviewAssistAction, decision: ReviewAssistDecision,
   const parts = [
     ACTION_DIRECTIVES[action],
     `Decision: ${decision.behavior}`,
-    `Review state: ${decision.state}`,
     `Diff:\n${hunkText}`,
   ];
   if (action === 'compare_task_intent') {

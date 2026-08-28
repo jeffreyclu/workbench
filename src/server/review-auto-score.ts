@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { buildReviewDecisions, reviewAssistDecisionPayload } from '../shared/review-decisions.js';
 import { publishRealtimeReviewScore } from './realtime.js';
-import { requestReviewAssist } from './review-assist-ai.js';
+import { lookupReviewAssist, requestReviewAssist } from './review-assist-ai.js';
 import type { WorkItemRepository } from './repository.js';
 import { getWorkspaceDiff } from './workspace-diff.js';
 
@@ -147,6 +147,61 @@ export function reviewAutoScoreSnapshot(scope: ReviewScoreScope, revision: strin
     total: job.total,
     skipped: job.skipped,
     entries: [...job.entries.values()],
+  };
+}
+
+/**
+ * Everything already scored for a scope's current diff, read straight from the
+ * durable assist cache without spawning a single model turn.
+ *
+ * The in-memory job above is process-local: a runtime promotion, a server
+ * restart, or simply a pane opened long after a run came to rest leaves it
+ * empty, and the panel then reads as "nothing has been scored" for a diff whose
+ * every answer is already paid for and on disk. Rebuilding the decisions from
+ * the same shared derivation the client uses gives back exactly the answers the
+ * cache holds, so revisiting Changes shows existing data instead of buying it
+ * again.
+ */
+async function cachedScoreEntries(repository: WorkItemRepository, scope: ReviewScoreScope, revision: string): Promise<ReviewScoreEntry[]> {
+  const workspacePath = resolveScoreWorkspace(repository, scope, null);
+  if (!workspacePath) return [];
+  const diff = await getWorkspaceDiff(workspacePath);
+  // A moved diff is not this pane's diff: replaying answers keyed to other
+  // hunks would attach a score to a decision it was never about.
+  if (diff.revision !== revision || diff.changedFiles === 0) return [];
+  const decisions = buildReviewDecisions(diff.files, repository.listDiffHunkReviews(scope, diff.revision));
+  const entries: ReviewScoreEntry[] = [];
+  for (const decision of decisions) {
+    const answer = lookupReviewAssist(repository.database, 'score_risk', reviewAssistDecisionPayload(decision), null);
+    if (answer) entries.push({ decisionId: decision.id, ordinal: decision.ordinal, answer, error: null });
+  }
+  return entries;
+}
+
+/**
+ * What a Changes pane should show for one revision: every persisted score, plus
+ * the live job's progress and per-decision failures layered on top. Failures are
+ * not cacheable state, so they can only come from the running job — and a live
+ * result always wins over a cached one, being strictly newer.
+ */
+export async function reviewAutoScoreView(repository: WorkItemRepository, scope: ReviewScoreScope, revision: string): Promise<ReviewAutoScoreSnapshot | null> {
+  const live = reviewAutoScoreSnapshot(scope, revision);
+  let cached: ReviewScoreEntry[] = [];
+  try {
+    cached = await cachedScoreEntries(repository, scope, revision);
+  } catch {
+    // No repository, or git unavailable. The live job, if any, still replays.
+  }
+  if (!live && cached.length === 0) return null;
+  const entries = new Map(cached.map((entry) => [entry.decisionId, entry]));
+  for (const entry of live?.entries ?? []) entries.set(entry.decisionId, entry);
+  return {
+    revision,
+    running: live?.running ?? false,
+    completed: live?.completed ?? entries.size,
+    total: live?.total ?? entries.size,
+    skipped: live?.skipped ?? 0,
+    entries: [...entries.values()],
   };
 }
 
