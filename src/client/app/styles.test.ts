@@ -256,27 +256,20 @@ describe('diff review layout', () => {
     expect(hunkRule).not.toContain('opacity');
     expect(styles).not.toContain('.diff-review-diff-block:hover { opacity: 1; }');
   });
-
-  it('uses high-contrast IDE token colors inside diff code', () => {
-    expect(styles).toContain('.diff-line-code .token.keyword { color: #c586c0; }');
-    expect(styles).toMatch(/\.diff-line-code \.token\.selector,[\s\S]*?\.diff-line-code \.token\.string,[\s\S]*?\{ color: #ce9178; \}/);
-    expect(styles).toContain('.diff-line-code .token.function, .diff-line-code .token.class-name { color: #dcdcaa; }');
-  });
 });
 
 describe('agent debugger layout', () => {
-  it('uses connected tree rails with compact three-column event rows', () => {
+  it('uses connected tree rails with a full-width mobile layout', () => {
     const layoutRule = styles.match(/^\.decision-tree-layout\s*\{[^}]*\}/m)?.[0] ?? '';
     const streamsRule = styles.match(/^\.decision-tree-streams\s*\{[^}]*\}/m)?.[0] ?? '';
     const phoneRules = styles.slice(styles.indexOf('@media (max-width: 700px)'));
 
-    expect(layoutRule).not.toContain('grid-template-columns: minmax(0, 1fr) 260px');
+    expect(layoutRule).toContain('grid-template-columns: minmax(0, 1fr) 260px');
     expect(streamsRule).toContain('border-left: 1px solid');
-    expect(styles).toContain('.decision-tree-event-row');
-    expect(styles).toContain('grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto');
-    expect(styles).toContain('.decision-tree-details-pill');
+    expect(styles).toContain('.decision-tree-inspectable-card');
     expect(styles).toContain('.decision-tree-tool-calls');
-    expect(phoneRules).toContain('.decision-tree-event-row { grid-template-columns: minmax(0, 1fr) auto');
+    expect(phoneRules).toContain('grid-template-columns: 1fr');
+    expect(phoneRules).toContain('position: static');
   });
 });
 

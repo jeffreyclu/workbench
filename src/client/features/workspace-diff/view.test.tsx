@@ -128,6 +128,11 @@ describe('WorkspaceDiffView decision queue', () => {
     renderView(fetchMock);
 
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
+    const metadata = document.querySelector('.workspace-diff-record-metadata');
+    expect(metadata).toHaveTextContent('review');
+    expect(metadata).toHaveTextContent('Captured');
+    expect(metadata).toHaveTextContent('Agent run run-1 · Commit abcdef123456');
+    expect(metadata?.children).toHaveLength(3);
     expect(screen.getByLabelText('Full diff for src/recovered.ts')).toBeInTheDocument();
     expect(screen.queryByText('No uncommitted changes to review.')).toBeNull();
   });

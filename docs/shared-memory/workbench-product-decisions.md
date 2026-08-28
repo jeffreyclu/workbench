@@ -1008,6 +1008,12 @@ so the diff remains the dominant surface. Fetch the local diff only when
 Changes is opened; retain the GitHub diff's existing on-demand authenticated
 path. Do not hide this workflow in task detail.
 
+*Clarification from Jeffrey, 2026-08-28.* In a recorded **Workspace review
+record**, the metadata immediately beneath the title—branch, capture status,
+and run/commit provenance—is exactly one compact row. Do not confuse this
+with agent-branch decision rows or hide it behind a disclosure. On a narrow
+viewport it may wrap safely rather than overflow.
+
 Update 2026-08-26: Option 2 design resolved (Jeffrey delegated: "you decide
 what's best"). The pool serves ONLY the ephemeral/one-shot lane (research,
 reviews, short room answers, independent parallel work) — coding-conversation
