@@ -181,6 +181,20 @@ are lossy, and work built from them gets redone.
 The full rule — diagnosis, seat prerequisite, what to request — lives in `~/AGENTS.md` under
 **Design-access gate**. Refine it there, not here.
 
+#### Never claim a UI matches the design without comparing it to the design
+
+*Jeffrey rejected the same Manage Connectors V2 cards twice on 2026-08-27 — "actually we should make
+the cards look more like the figma", then "brah, these cards don't look like the figma" — because
+each restyle was reported as a match without being checked against the reference.*
+
+A restyle is not done when the code changes; it is done when the rendered result has been compared
+element-by-element against the design. Before reporting a UI change, enumerate the reference's
+concrete attributes — layout direction, which text lines exist, badges, controls, iconography,
+column count, heading case — and confirm each one in the implementation. When the design itself is
+unavailable and only a screenshot exists, say plainly that the layout was approximated from a
+screenshot and is unverified against Figma, instead of asserting parity. Asserting an unverified
+match costs Jeffrey a full review round trip every time.
+
 ### Never let a server test spawn the real codex/claude CLI
 
 `src/server/agent-runner.ts` really `spawn()`s the `codex`/`claude` binaries on `PATH` — there is no
