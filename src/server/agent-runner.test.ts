@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, autocompactCeilingTokens, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CLAUDE_EXECUTION_CONTRACT, autocompactCeilingTokens, cacheReadTokenLimitFor, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, toolCallLimitFor } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -230,7 +230,7 @@ describe('classifyExecution', () => {
     expect(result.output).toBe('Applied the interjection.');
     const lines = readFileSync(log, 'utf8').trim().split('\n').slice(1).map((line) => JSON.parse(line));
     expect(lines.map((line) => line.message.content)).toEqual([
-      `Start the task.\n\nAgent debugger:\n${AGENT_DEBUGGER_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\nClaude execution budget:\n${CLAUDE_EXECUTION_CONTRACT}`,
+      `Start the task.\n\nAgent debugger:\n${AGENT_DEBUGGER_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\nAgent execution budget:\n${AGENT_EXECUTION_CONTRACT}`,
       'Change direction now.',
     ]);
   });
@@ -269,6 +269,35 @@ describe('classifyExecution', () => {
   it('tells Claude not to open extra cached subagent contexts', () => {
     expect(CLAUDE_EXECUTION_CONTRACT).toContain('do not delegate to subagents');
     expect(CLAUDE_EXECUTION_CONTRACT).toContain('Report a command as passing only if it ran in this run');
+  });
+
+  it('gives Codex and Claude the same finite tool-call budget', () => {
+    expect(CLAUDE_EXECUTION_CONTRACT).toBe(AGENT_EXECUTION_CONTRACT);
+    expect(toolCallLimitFor('economy')).toBe(12);
+    expect(toolCallLimitFor('standard')).toBe(24);
+    expect(toolCallLimitFor('deep')).toBe(40);
+    expect(cacheReadTokenLimitFor('economy')).toBe(500_000);
+    expect(cacheReadTokenLimitFor('standard')).toBe(1_000_000);
+    expect(cacheReadTokenLimitFor('deep')).toBe(1_500_000);
+  });
+
+  it.each(['codex', 'claude'] as const)('stops %s after the same economy tool-call ceiling', async (agent) => {
+    const event = agent === 'codex'
+      ? { type: 'item.started', item: { type: 'command_execution', command: 'rg pattern src' } }
+      : { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'src/app.ts' } }] } };
+    const body = Array.from({ length: toolCallLimitFor('economy') + 1 }, () => `printf '%s\\n' '${JSON.stringify(event)}'`).join('\n');
+    const fixture = fakeAgentDirectory(agent === 'codex' ? body : 'exit 1', agent === 'claude' ? body : 'exit 1');
+
+    await expect(runAgentCommandWithFallback(agent, fixture.directory, 'Verify the change.', undefined, undefined, undefined, 'economy')).rejects.toThrow('tool-call limit (12)');
+  });
+
+  it.each(['codex', 'claude'] as const)('stops %s after the same economy cached-input ceiling', async (agent) => {
+    const event = agent === 'codex'
+      ? { type: 'token_count', info: { last_token_usage: { input_tokens: 600_010, cached_input_tokens: 600_000, output_tokens: 5 } } }
+      : { type: 'assistant', request_id: 'cache-limit-request', message: { usage: { input_tokens: 10, cache_read_input_tokens: 600_000, output_tokens: 5 } } };
+    const fixture = fakeAgentDirectory(agent === 'codex' ? `printf '%s\\n' '${JSON.stringify(event)}'` : 'exit 1', agent === 'claude' ? `printf '%s\\n' '${JSON.stringify(event)}'` : 'exit 1');
+
+    await expect(runAgentCommandWithFallback(agent, fixture.directory, 'Verify the change.', undefined, undefined, undefined, 'economy')).rejects.toThrow('cached-input limit (500,000 tokens)');
   });
 
   it('injects the explicit-order external-source guardrail into every work-item prompt', () => {
@@ -824,10 +853,10 @@ describe('classifyExecution', () => {
     expect(readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'reasoning', text: 'The failing test points to stale state.' } })).progress).toContain('Reasoning summary');
   });
 
-  it('requires a separate recorded Why for every tool call', () => {
-    expect(AGENT_DEBUGGER_CONTRACT).toContain('For every tool call');
-    expect(AGENT_DEBUGGER_CONTRACT).toContain('exactly that one tool call');
-    expect(AGENT_DEBUGGER_CONTRACT).toContain('Do not reuse a decision for later calls');
+  it('records a Why while allowing bounded related checks to share one tool call', () => {
+    expect(AGENT_DEBUGGER_CONTRACT).toContain('Before each tool call');
+    expect(AGENT_DEBUGGER_CONTRACT).toContain('bounded batch of directly related read-only checks');
+    expect(AGENT_DEBUGGER_CONTRACT).toContain('unrelated later call');
   });
 
   it('extracts audit candidates for file reads, writes, and tool use out of the same parsed events', () => {

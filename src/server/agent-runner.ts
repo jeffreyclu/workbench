@@ -38,9 +38,11 @@ export const CANCEL_FORCE_KILL_DELAY_MS = 3_000;
 /** One foreground agent owns each Workbench run. This keeps Claude's cache
  * footprint proportional to the actual task rather than multiplying it across
  * fresh subagent contexts. */
-export const CLAUDE_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Report a command as passing only if it ran in this run and its output was observed.`;
+export const AGENT_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Do not broaden a source-code verification into deployed-runtime, cache, database, process, or asset inspection unless the user explicitly asked for runtime diagnosis or the focused verification produced direct evidence of such a problem. Never install dependencies merely to verify a change; use dependencies already available to the workspace or report the exact verification gap. Workbench enforces a finite tool-call budget and will stop a run that does not conclude. Report a command as passing only if it ran in this run and its output was observed.`;
+// Kept as an exported alias for callers/tests that used the old provider-specific name.
+export const CLAUDE_EXECUTION_CONTRACT = AGENT_EXECUTION_CONTRACT;
 export const TOOL_OUTPUT_CONTRACT = `Tool-output discipline: keep every command and file read bounded to the lines needed for the decision. Never read an entire unknown-size file, directory, diff, log, or search result: start with at most 200 lines or 20 matches, then reopen an exact range if needed. Do not paste, summarize verbatim, or carry raw command output into later turns. Record only the command, relevant paths, and the decisive finding; reopen an exact path/range when needed.`;
-export const AGENT_DEBUGGER_CONTRACT = 'For every tool call, first emit one standalone text block exactly in the form `Decision: <why this tool is the next correct action>`, then make exactly that one tool call. Do not reuse a decision for later calls or batch multiple tool calls under one decision. This is recorded in the agent debugger, so use only an explicit, human-readable rationale; never expose or claim hidden reasoning.';
+export const AGENT_DEBUGGER_CONTRACT = 'Before each tool call, emit one standalone text block exactly in the form `Decision: <why this tool is the next correct action>`. One tool call may contain a bounded batch of directly related read-only checks; prefer that over splitting equivalent searches into repeated calls. Never reuse a decision for an unrelated later call. This is recorded in the agent debugger, so use only an explicit, human-readable rationale; never expose or claim hidden reasoning.';
 export const EXTERNAL_ACTION_CONTRACT = 'External-action guardrail: read-only research is allowed, including WebSearch, WebFetch, documentation, and inspection. Default deny only mutations to external websites, services, or networked CLIs, including posting, editing, deleting, publishing, deploying, or sending through GitHub, Slack, Confluence, Linear, and their APIs. An explicit order must be represented by a supervisor-issued capability; never infer authorization from task text. No external mutation capability is issued for this run, so report a blocked mutation without performing it.';
 export const RUNNER_SYSTEM_CONTRACT = `Non-interactive: use tools directly; no permission prompts or dialogs exist to approve. If access is missing, name the exact missing integration/credential and continue with what's possible.
 
@@ -681,6 +683,22 @@ export function effortFor(profile: ExecutionProfile): 'low' | 'medium' | 'high' 
   return profile === 'economy' ? 'low' : profile === 'standard' ? 'medium' : 'high';
 }
 
+/** Provider-neutral upper bound on tool calls in one foreground turn. */
+export function toolCallLimitFor(profile: ExecutionProfile): number {
+  return profile === 'economy' ? 12 : profile === 'standard' ? 24 : 40;
+}
+
+/**
+ * Maximum cached input traffic one foreground run may consume. Cache reads are
+ * cheap relative to fresh input, but they still represent repeated full-context
+ * inference and were able to grow into multi-million-token verification loops.
+ * The limit is deliberately provider-neutral and tiered so a deep coding run
+ * keeps more room than an economy turn without gaining an unbounded budget.
+ */
+export function cacheReadTokenLimitFor(profile: ExecutionProfile): number {
+  return profile === 'economy' ? 500_000 : profile === 'standard' ? 1_000_000 : 1_500_000;
+}
+
 /**
  * In-run context ceiling handed to `--autocompact`.
  *
@@ -1144,16 +1162,17 @@ Agent debugger:
 ${AGENT_DEBUGGER_CONTRACT}`;
     const efficientPrompt = `${instrumentedPrompt}
 
-${TOOL_OUTPUT_CONTRACT}${agent === 'claude' ? `
+${TOOL_OUTPUT_CONTRACT}
 
-Claude execution budget:
-${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
+Agent execution budget:
+${AGENT_EXECUTION_CONTRACT}`;
     let stdout = '';
     let stderr = '';
     let buffered = '';
     let progress = '';
     let finalOutput = '';
     let terminalError = '';
+    let toolCallCount = 0;
     let lastProgressEvent = '';
     // Codex emits an `item.completed` event for every visible agent message,
     // including its live status updates. The last non-debugger message is the
@@ -1212,6 +1231,12 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
         };
       }
       emitLiveUsage();
+      const cacheReadLimit = cacheReadTokenLimitFor(profile);
+      if ((reportedUsage.cacheReadInputTokens ?? 0) > cacheReadLimit && !stopping) {
+        terminationError = new Error(`Agent exceeded the ${profile} cached-input limit (${cacheReadLimit.toLocaleString()} tokens) without completing.`);
+        progress += `${progress ? '\n\n' : ''}● Stopped after ${cacheReadLimit.toLocaleString()} cached input tokens without a final answer.`;
+        stopProcessTree();
+      }
     };
     const timeout = setTimeout(() => {
       terminationError = new Error('Agent run timed out after 30 minutes.');
@@ -1276,6 +1301,16 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
         terminalError ||= terminalAgentError(agent, line) ?? '';
         try { const usage = usageFromEvent(agent, JSON.parse(line)); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
         const event = readableAgentEvent(agent, line, eventContext);
+        // Count tool starts, not their later completion/result events. Claude
+        // and Codex emit different wire formats, but both normalize to audit
+        // entries without `command` at the moment a tool begins.
+        toolCallCount += event.audit.filter((entry) => entry.streamKind !== 'decision' && entry.command === undefined).length;
+        const toolCallLimit = toolCallLimitFor(profile);
+        if (toolCallCount > toolCallLimit && !stopping) {
+          terminationError = new Error(`Agent exceeded the ${profile} tool-call limit (${toolCallLimit}) without completing. Verification must stay focused and terminate.`);
+          progress += `${progress ? '\n\n' : ''}● Stopped after ${toolCallLimit} tool calls without a final answer.`;
+          stopProcessTree();
+        }
         // A new text block starting mid-stream needs its own line — without
         // this, its first delta glues directly onto whatever progress line
         // (e.g. a tool-use marker) came right before it.
