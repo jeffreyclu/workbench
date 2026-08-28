@@ -646,6 +646,43 @@ export const createAgentRunSchema = z.object({
   accountProfile: accountProfileSchema.optional(),
 });
 
+export interface AgentRunReviewHandoffChange {
+  path: string;
+  summary: string;
+  rationale: string;
+}
+
+export interface AgentRunReviewHandoffCriterion {
+  criterion: string;
+  files: string[];
+  decisions: string[];
+}
+
+export interface AgentRunReviewHandoffContractChange {
+  kind: 'api' | 'schema' | 'behavior';
+  summary: string;
+}
+
+export interface AgentRunReviewHandoffVerification {
+  command: string;
+  exitCode: number | null;
+  result: 'passed' | 'failed';
+}
+
+/** Immutable reviewer map captured at terminal completion of a coding run. */
+export interface AgentRunReviewHandoff {
+  agentRunId: string;
+  formatVersion: 1;
+  summary: string;
+  changes: AgentRunReviewHandoffChange[];
+  acceptanceCriteria: AgentRunReviewHandoffCriterion[];
+  contractChanges: AgentRunReviewHandoffContractChange[];
+  verification: AgentRunReviewHandoffVerification[];
+  uncertainties: string[];
+  tradeoffs: Array<{ decision: string; rationale: string }>;
+  createdAt: string;
+}
+
 export interface AgentRun {
   id: string;
   workItemId: string;
@@ -679,6 +716,8 @@ export interface AgentRun {
   resolvedWorkspace: string | null;
   /** Historical dispatch origin. New runs are always manual. */
   origin: 'manual' | 'autonomous';
+  /** Present only after a completed coding run has persisted its immutable reviewer map. */
+  reviewHandoff: AgentRunReviewHandoff | null;
 }
 
 export interface LinearSyncResult {

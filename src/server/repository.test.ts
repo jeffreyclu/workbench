@@ -1590,6 +1590,37 @@ describe('WorkItemRepository', () => {
       expect(repository.getRun(run.id)?.status).toBe('running');
     });
 
+    it('finishRunWithReviewHandoff persists an immutable handoff alongside the completed run', () => {
+      const item = repository.create({ title: 'Coding task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const run = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Fix the bug.');
+      repository.claimRun(run.id, 'owner-a', 60_000);
+      const handoff = {
+        agentRunId: run.id, formatVersion: 1 as const, summary: 'Fixed the bug.',
+        changes: [{ path: 'src/app.ts', summary: 'Updated during this run.', rationale: 'Observed file-write event from the coding runner.' }],
+        acceptanceCriteria: [{ criterion: 'Fix the bug.', files: ['src/app.ts'], decisions: [] }],
+        contractChanges: [], verification: [{ command: 'npm test', exitCode: 0, result: 'passed' as const }],
+        uncertainties: [], tradeoffs: [], createdAt: '2026-08-27T01:00:00.000Z',
+      };
+
+      expect(repository.finishRunWithReviewHandoff(run.id, 'owner-a', { status: 'completed', completedAt: '2026-08-27T01:00:00.000Z' }, handoff)).toBe(true);
+
+      const persisted = repository.getRun(run.id);
+      expect(persisted?.status).toBe('completed');
+      expect(persisted?.reviewHandoff).toEqual(handoff);
+      expect(repository.listRuns(item.id)[0].reviewHandoff).toEqual(handoff);
+
+      // Immutable at the schema level: any UPDATE against a persisted handoff must abort.
+      expect(() => database.prepare('UPDATE agent_run_review_handoffs SET summary = ? WHERE agent_run_id = ?').run('A different summary entirely.', run.id)).toThrow();
+      expect(repository.getRun(run.id)?.reviewHandoff?.summary).toBe('Fixed the bug.');
+    });
+
+    it('a run with no persisted handoff reports reviewHandoff as null', () => {
+      const run = createQueuedRun();
+      repository.claimRun(run.id, 'owner-a', 60_000);
+      expect(repository.finishRun(run.id, 'owner-a', { status: 'completed' })).toBe(true);
+      expect(repository.getRun(run.id)?.reviewHandoff).toBeNull();
+    });
+
     it('clears durable cancellation when a canceled run is prepared for retry', () => {
       const run = createQueuedRun();
       repository.claimRun(run.id, 'owner-a', 60_000);

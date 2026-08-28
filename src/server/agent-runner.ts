@@ -13,6 +13,7 @@ import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
 import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
+import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
 
 const MAX_OUTPUT_BYTES = 1_000_000;
 /** How long a run may produce no stream event before its output gets a visible elapsed marker. */
@@ -778,6 +779,9 @@ export interface AgentAuditCandidate {
   category: 'agent_file_read' | 'agent_file_write' | 'agent_tool_use';
   detail: string;
   streamKind?: 'decision' | 'tool' | 'file_read' | 'file_write';
+  /** Set only for a completed shell command, so the review handoff can cite it as observed evidence. */
+  command?: string;
+  exitCode?: number | null;
 }
 
 /**
@@ -804,7 +808,7 @@ function terminateAgentProcessTree(child: ReturnType<typeof spawn>, signal: Node
  * traced back to the worker that produced it, so the runner keeps this for the
  * life of one invocation and hands it to each parsed event.
  */
-export interface AgentEventContext { subagents: Map<string, string>; sessionId?: string }
+export interface AgentEventContext { subagents: Map<string, string>; sessionId?: string; pendingBash: Map<string, string> }
 
 const activeAgentProcesses = new Set<ReturnType<typeof spawn>>();
 
@@ -873,7 +877,9 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
           : /(?:rg|grep|find) /.test(command) ? 'Searching the codebase'
           : /(?:cat|sed|head|tail) /.test(command) ? 'Reading project files'
           : `Running a workspace command: ${command.slice(0, 100)}`;
-        const audit: AgentAuditCandidate[] = event.type === 'item.started' ? [{ category: 'agent_tool_use', streamKind: 'tool', detail: `command_execution: ${command.slice(0, 500)}` }] : [];
+        const audit: AgentAuditCandidate[] = event.type === 'item.started' ? [{ category: 'agent_tool_use', streamKind: 'tool', detail: `command_execution: ${command.slice(0, 500)}` }]
+          : event.type === 'item.completed' && typeof item.exit_code === 'number' ? [{ category: 'agent_tool_use', streamKind: 'tool', detail: `command_execution: ${command.slice(0, 500)}`, command, exitCode: item.exit_code }]
+          : [];
         return { progress: event.type === 'item.started' ? `● ${label}` : '', final: null, audit };
       }
       if (item?.type === 'file_change') {
@@ -948,6 +954,12 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
           if (name === 'Read') audit.push({ category: 'agent_file_read', streamKind: 'file_read', detail: attribute(filePath || 'unknown file') });
           else if (name === 'Edit' || name === 'Write') audit.push({ category: 'agent_file_write', streamKind: 'file_write', detail: attribute(filePath || 'unknown file') });
           else audit.push({ category: 'agent_tool_use', streamKind: 'tool', detail: attribute(description ? `${name}: ${description}` : name) });
+          // Bash results arrive later as a separate `user`/tool_result event; remember
+          // the command here so that event can attach the exit code it alone carries.
+          if (name === 'Bash' && typeof content.id === 'string') {
+            const command = typeof input.command === 'string' ? input.command : '';
+            if (command) context?.pendingBash.set(content.id, command);
+          }
           if (description) return [attribute(`● ${description.charAt(0).toUpperCase()}${description.slice(1)}`)];
           if (name === 'Read') return [attribute(`● Reading ${String(input.file_path ?? input.file ?? 'a project file')}`)];
           if (name === 'Edit' || name === 'Write') return [attribute(`● Editing ${String(input.file_path ?? input.file ?? 'project files')}`)];
@@ -972,6 +984,18 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
     if (event.type === 'system') {
       if (typeof event.session_id === 'string' && context) context.sessionId = event.session_id;
       return { progress: '', final: null, audit: [] };
+    }
+    if (event.type === 'user' && context) {
+      const message = event.message as { content?: Array<Record<string, unknown>> } | undefined;
+      const audit: AgentAuditCandidate[] = [];
+      for (const content of message?.content ?? []) {
+        if (content.type !== 'tool_result' || typeof content.tool_use_id !== 'string') continue;
+        const command = context.pendingBash.get(content.tool_use_id);
+        if (!command) continue;
+        context.pendingBash.delete(content.tool_use_id);
+        audit.push({ category: 'agent_tool_use', streamKind: 'tool', detail: attribute(`command: ${command.slice(0, 500)}`), command, exitCode: content.is_error === true ? 1 : 0 });
+      }
+      return { progress: '', final: null, audit };
     }
     return { progress: '', final: null, audit: [] };
   } catch {
@@ -1065,7 +1089,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
     const setFinal = (text: string) => {
       if (text) finalOutput = text;
     };
-    const eventContext: AgentEventContext = { subagents: new Map() };
+    const eventContext: AgentEventContext = { subagents: new Map(), pendingBash: new Map() };
     let reportedUsage: { inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null } = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
     let estimatedOutputTokens = 0;
     let lastReportedUsage = '';
@@ -1456,6 +1480,10 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   // context and source systems, so without this the chat sits empty for the
   // first few seconds of every run and the run reads as hung.
   if (run.messageId) repository.updateSharedMessage(run.messageId, { body: `● Starting ${run.kind}…` });
+  // Accumulated across every provider turn (including a Claude→Codex scope
+  // recovery) so the terminal review handoff reflects everything this run
+  // actually observed, not just its final provider's output.
+  const observedRunEvents: ObservedRunEvent[] = [];
   try {
     const cwd = workspace ?? resolveWorkingDirectory(item);
     // Task executions reach this runner directly (including Retry), rather
@@ -1542,6 +1570,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     }, (entries, producingAgent) => {
       for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
       for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, producingAgent, 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
+      for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
       if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
       })));
@@ -1563,6 +1592,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       }, (entries, producingAgent) => {
         for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
         for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, producingAgent, 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
+        for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
         if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
         })));
@@ -1589,7 +1619,14 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       const integration = await integrateWorkbenchRunWorktree(sourceWorkspace, workspace, run.id);
       if (integration.integrated) repository.addActivity(item.id, 'system', 'progress', `Integrated Workbench agent changes into main at ${integration.commitHash?.slice(0, 12)}.`);
     }
-    if (!repository.finishRun(run.id, ownerId, { agent: result.agent, status: 'completed', output, completedAt: new Date().toISOString(), ...telemetry })) return;
+    const completedAt = new Date().toISOString();
+    const finishPatch = { agent: result.agent, status: 'completed' as const, output, completedAt, ...telemetry };
+    // Only a completed coding run leaves a reviewable diff behind; analysis
+    // and other non-mutating kinds have nothing for a review handoff to map.
+    const finished = MUTATING_RUN_KINDS.has(run.kind)
+      ? repository.finishRunWithReviewHandoff(run.id, ownerId, finishPatch, buildAgentRunReviewHandoff({ ...run, ...finishPatch }, output, observedRunEvents, completedAt))
+      : repository.finishRun(run.id, ownerId, finishPatch);
+    if (!finished) return;
     if (executionPlan) repository.createExecutionPlan(item.id, executionPlan.summary, executionPlan.tasks);
     if (run.messageId) {
       repository.updateSharedMessage(run.messageId, { body: output, status: 'completed', ...telemetry });
