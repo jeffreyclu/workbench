@@ -1,15 +1,35 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanupIntegratedRunWorktrees, integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
+import { cleanupIntegratedRunWorktrees, integrateWorkbenchRunWorktree, isolatedRunWorkspace, provisionRunWorktreeDependencies, shouldIsolateRunWorkspace } from './run-worktree.js';
 
 const directories: string[] = [];
 
 afterEach(() => {
   for (const directory of directories.splice(0)) {
-    try { execFileSync('git', ['worktree', 'remove', '--force', join(directory, '.worktree')], { cwd: directory, stdio: 'ignore' }); } catch { /* No worktree was created. */ }
+    try {
+      const registered = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: directory, encoding: 'utf8' })
+        .split('\n')
+        .filter((line) => line.startsWith('worktree '))
+        .map((line) => line.slice('worktree '.length));
+      // The first entry is the temporary primary checkout. Everything after it
+      // was created by the test and must be removed even when an assertion fails.
+      for (const worktree of registered.slice(1)) {
+        execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: directory, stdio: 'ignore' });
+        // isolatedRunWorkspace groups runs under a repository-key directory.
+        // Temporary repositories get a unique group, so remove that empty test
+        // container too instead of leaking one ~/.workbench directory per test.
+        rmSync(dirname(worktree), { recursive: true, force: true });
+      }
+    } catch { /* The assertion may have failed before Git/worktree setup. */ }
+    try {
+      const repository = realpathSync(directory);
+      const key = createHash('sha256').update(repository).digest('hex').slice(0, 12);
+      rmSync(join(homedir(), '.workbench', 'run-worktrees', `${basename(repository)}-${key}`), { recursive: true, force: true });
+    } catch { /* The temporary primary may already be gone. */ }
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -39,6 +59,41 @@ describe('isolatedRunWorkspace', () => {
       expect(execFileSync('git', ['branch', '--show-current'], { cwd: workspace, encoding: 'utf8' }).trim()).toBe('');
       expect(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' })).toBe('');
       execFileSync('git', ['worktree', 'remove', '--force', workspace], { cwd: directory });
+    } finally {
+      if (previous === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previous;
+    }
+  });
+
+  it('provisions the primary dependency tree without installing a second copy', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
+    directories.push(directory);
+    execFileSync('git', ['init', '-q'], { cwd: directory });
+    execFileSync('git', ['config', 'user.email', 'workbench@example.test'], { cwd: directory });
+    execFileSync('git', ['config', 'user.name', 'Workbench Test'], { cwd: directory });
+    writeFileSync(join(directory, 'seed.txt'), 'seed\n');
+    mkdirSync(join(directory, 'frontend'), { recursive: true });
+    writeFileSync(join(directory, 'frontend', 'package.json'), '{}\n');
+    execFileSync('git', ['add', 'seed.txt', 'frontend/package.json'], { cwd: directory });
+    execFileSync('git', ['commit', '-qm', 'seed'], { cwd: directory });
+    mkdirSync(join(directory, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(directory, 'node_modules', '.bin', 'vitest'), 'shared executable\n');
+    mkdirSync(join(directory, 'frontend', 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(directory, 'frontend', 'node_modules', '.bin', 'vite'), 'nested shared executable\n');
+
+    const previous = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      const workspace = await isolatedRunWorkspace(directory, 'provisioned-run', true, true);
+      expect(realpathSync(join(workspace, 'node_modules'))).toBe(realpathSync(join(directory, 'node_modules')));
+      expect(execFileSync('cat', ['node_modules/.bin/vitest'], { cwd: workspace, encoding: 'utf8' })).toBe('shared executable\n');
+      expect(realpathSync(join(workspace, 'frontend', 'node_modules'))).toBe(realpathSync(join(directory, 'frontend', 'node_modules')));
+      expect(execFileSync('cat', ['frontend/node_modules/.bin/vite'], { cwd: workspace, encoding: 'utf8' })).toBe('nested shared executable\n');
+      // Provisioning is idempotent for retries of the same run.
+      provisionRunWorktreeDependencies(directory, workspace);
+      expect(realpathSync(join(workspace, 'node_modules'))).toBe(realpathSync(join(directory, 'node_modules')));
+      execFileSync('git', ['worktree', 'remove', '--force', workspace], { cwd: directory });
+      expect(execFileSync('cat', ['node_modules/.bin/vitest'], { cwd: directory, encoding: 'utf8' })).toBe('shared executable\n');
     } finally {
       if (previous === undefined) delete process.env.VITEST;
       else process.env.VITEST = previous;
@@ -153,6 +208,7 @@ describe('isolatedRunWorkspace', () => {
     try {
       const workspace = await isolatedRunWorkspace(directory, 'dependency-safe-run', true, true);
       writeFileSync(join(workspace, 'created.ts'), 'export const created = true;\n');
+      rmSync(join(workspace, 'node_modules'), { recursive: true, force: true });
       mkdirSync(join(workspace, 'node_modules'), { recursive: true });
       execFileSync('git', ['init', '--quiet'], { cwd: join(workspace, 'node_modules') });
 

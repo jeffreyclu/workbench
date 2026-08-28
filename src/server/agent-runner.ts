@@ -38,7 +38,7 @@ export const CANCEL_FORCE_KILL_DELAY_MS = 3_000;
 /** One foreground agent owns each Workbench run. This keeps Claude's cache
  * footprint proportional to the actual task rather than multiplying it across
  * fresh subagent contexts. */
-export const AGENT_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Do not broaden a source-code verification into deployed-runtime, cache, database, process, or asset inspection unless the user explicitly asked for runtime diagnosis or the focused verification produced direct evidence of such a problem. Never install dependencies merely to verify a change; use dependencies already available to the workspace or report the exact verification gap. Workbench enforces a finite tool-call budget and will stop a run that does not conclude. Report a command as passing only if it ran in this run and its output was observed.`;
+export const AGENT_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Do not broaden a source-code verification into deployed-runtime, cache, database, process, or asset inspection unless the user explicitly asked for runtime diagnosis or the focused verification produced direct evidence of such a problem. Run worktrees already receive the primary checkout's dependencies: do not check for node_modules or bootstrap dependencies there. Never install dependencies merely to verify a change; use dependencies already available to the workspace or report the exact verification gap. Workbench enforces finite tool-call and cached-input budgets and will stop a run that does not conclude. Report a command as passing only if it ran in this run and its output was observed.`;
 // Kept as an exported alias for callers/tests that used the old provider-specific name.
 export const CLAUDE_EXECUTION_CONTRACT = AGENT_EXECUTION_CONTRACT;
 export const TOOL_OUTPUT_CONTRACT = `Tool-output discipline: keep every command and file read bounded to the lines needed for the decision. Never read an entire unknown-size file, directory, diff, log, or search result: start with at most 200 lines or 20 matches, then reopen an exact range if needed. Do not paste, summarize verbatim, or carry raw command output into later turns. Record only the command, relevant paths, and the decisive finding; reopen an exact path/range when needed.`;
@@ -165,6 +165,20 @@ export function blockedWorkbenchBranchCommand(command: string): boolean {
     if (match[1] !== 'branch') return true;
     const argumentsText = (match[2] ?? '').trim();
     return Boolean(argumentsText) && !/^(?:--show-current|--list|-l|-a|--all|-r|--remotes|-v|--verbose)(?:\s|$)/.test(argumentsText);
+  });
+}
+
+/** Worktree dependencies are runtime-provisioned; a bootstrap install is never an agent task. */
+export function blockedWorkbenchDependencyBootstrapCommand(command: string): boolean {
+  return command.split(/(?:&&|\|\||;|\n)/).some((segment) => {
+    const normalized = segment.trim();
+    if (/(?:^|\s)npm\s+(?:--\S+\s+)*ci(?:\s|$)/i.test(normalized)) return true;
+    const match = /(?:^|\s)(npm|pnpm|yarn|bun)\s+(?:(?:--\S+\s+)*)(?:install|i)(?:\s+(.*))?$/i.exec(normalized);
+    if (!match) return /(?:^|\s)yarn\s*$/i.test(normalized);
+    const trailing = (match[2] ?? '').trim();
+    if (!trailing) return true;
+    const positional = trailing.split(/\s+/).filter((argument) => !argument.startsWith('-'));
+    return positional.length === 0;
   });
 }
 
@@ -1289,9 +1303,14 @@ ${AGENT_EXECUTION_CONTRACT}`;
       for (const line of lines.filter(Boolean)) {
         lastEventAt = Date.now();
         const toolCommand = toolCommandFromAgentEvent(agent, line);
-        const blockedCommand = toolCommand && ((isWriterWorkspace(cwd) && blockedWriterTestSuiteCommand(toolCommand)) || (isWorkbenchWorkspace(cwd) && blockedWorkbenchBranchCommand(toolCommand)));
+        const blockedWriterSuite = Boolean(toolCommand && isWriterWorkspace(cwd) && blockedWriterTestSuiteCommand(toolCommand));
+        const blockedWorkbenchBranch = Boolean(toolCommand && isWorkbenchWorkspace(cwd) && blockedWorkbenchBranchCommand(toolCommand));
+        const blockedDependencyBootstrap = Boolean(toolCommand && cwd.includes('/.workbench/run-worktrees/') && blockedWorkbenchDependencyBootstrapCommand(toolCommand));
+        const blockedCommand = blockedWriterSuite || blockedWorkbenchBranch || blockedDependencyBootstrap;
         if (toolCommand && blockedCommand) {
-          const reason = isWriterWorkspace(cwd) ? 'a full Writer test-suite command' : 'a Workbench Git branch/worktree mutation';
+          const reason = blockedWriterSuite
+            ? 'a full Writer test-suite command'
+            : blockedWorkbenchBranch ? 'a Workbench Git branch/worktree mutation' : 'a dependency bootstrap inside a provisioned run worktree';
           terminationError = new Error(`Workbench blocked ${reason} before execution: ${toolCommand.slice(0, 500)}`);
           cancellationRequested = true;
           progress += `${progress ? '\n\n' : ''}● Blocked ${reason}.`;

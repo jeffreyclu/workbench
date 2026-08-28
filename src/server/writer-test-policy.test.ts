@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { blockedWorkbenchBranchCommand, blockedWriterTestSuiteCommand, isWorkbenchWorkspace, isWriterWorkspace } from './agent-runner.js';
+import { blockedWorkbenchBranchCommand, blockedWorkbenchDependencyBootstrapCommand, blockedWriterTestSuiteCommand, isWorkbenchWorkspace, isWriterWorkspace } from './agent-runner.js';
 
 const guard = fileURLToPath(new URL('../../scripts/writer-agent-bin/test-command-guard.mjs', import.meta.url));
 const bin = (name: string) => fileURLToPath(new URL(`../../scripts/writer-agent-bin/${name}`, import.meta.url));
@@ -28,6 +28,16 @@ describe('Writer agent test command guard', () => {
     expect(blockedWorkbenchBranchCommand('git branch fix/bad')).toBe(true);
     expect(blockedWorkbenchBranchCommand('git worktree add /tmp/bad')).toBe(true);
     expect(blockedWorkbenchBranchCommand('git status && git branch --show-current')).toBe(false);
+  });
+
+  it('blocks dependency bootstraps in provisioned run worktrees but allows explicit package changes', () => {
+    expect(blockedWorkbenchDependencyBootstrapCommand('npm ci')).toBe(true);
+    expect(blockedWorkbenchDependencyBootstrapCommand('npm install')).toBe(true);
+    expect(blockedWorkbenchDependencyBootstrapCommand('pnpm install --frozen-lockfile')).toBe(true);
+    expect(blockedWorkbenchDependencyBootstrapCommand('yarn')).toBe(true);
+    expect(blockedWorkbenchDependencyBootstrapCommand('npm install zod')).toBe(false);
+    expect(blockedWorkbenchDependencyBootstrapCommand('npm install --save-dev vitest')).toBe(false);
+    expect(blockedWorkbenchDependencyBootstrapCommand('npm run build')).toBe(false);
   });
   it.each([
     ['npm', ['test']], ['npm', ['run', 'test']], ['npm', ['--prefix', 'frontend', 'test']], ['pnpm', ['--filter', 'frontend', 'test:unit']], ['pnpm', ['test', '--', 'use-manage-connectors-view-model']], ['yarn', ['test']],

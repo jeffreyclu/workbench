@@ -1,8 +1,8 @@
 import { execFile as execFileCallback, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, symlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCallback);
@@ -35,6 +35,32 @@ export function shouldIsolateRunWorkspace(sourceWorkspace: string): boolean {
 }
 
 /**
+ * A Git worktree contains tracked source only. Reuse the primary checkout's
+ * installed dependency tree so an isolated agent can run focused checks without
+ * spending time and disk on a second install. The link is ignored source state,
+ * excluded from integration, and is removed with the worktree—not its target.
+ */
+export function provisionRunWorktreeDependencies(repository: string, worktree: string): void {
+  let manifests = ['package.json'];
+  try {
+    manifests = execFileSync('git', ['ls-files', '-z', '--', 'package.json', ':(glob)**/package.json'], { cwd: repository, encoding: 'utf8', timeout: 5_000, maxBuffer: 2_000_000 })
+      .split('\0')
+      .filter(Boolean);
+  } catch { /* Root dependency provisioning still works outside a healthy Git index. */ }
+  for (const relativeRoot of new Set(manifests.map((manifest) => dirname(manifest)).concat('.'))) {
+    const source = join(repository, relativeRoot, 'node_modules');
+    const destination = join(worktree, relativeRoot, 'node_modules');
+    if (!existsSync(source)) continue;
+    try {
+      lstatSync(destination);
+      continue;
+    } catch { /* This package root has no dependency entry yet. */ }
+    mkdirSync(dirname(destination), { recursive: true });
+    symlinkSync(source, destination, 'dir');
+  }
+}
+
+/**
  * Gives each mutating run its own detached worktree.  A detached worktree is
  * deliberately branchless: parallel agents never switch the user's checkout
  * or create a feature branch just to obtain filesystem isolation.
@@ -54,6 +80,9 @@ export async function isolatedRunWorkspace(sourceWorkspace: string, runId: strin
       mkdirSync(join(homedir(), '.workbench', 'run-worktrees', `${basename(repository)}-${key}`), { recursive: true });
       await execFile('git', ['worktree', 'add', '--detach', destination, 'HEAD'], { cwd: repository, timeout: 60_000, maxBuffer: 131_072 });
     }
+    // Also runs for an existing destination so retries repair worktrees created
+    // by older runtimes instead of asking the agent to install dependencies.
+    provisionRunWorktreeDependencies(repository, destination);
     return destination;
   } catch {
     // Scratch directories and a broken Git installation must not prevent a
