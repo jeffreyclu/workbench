@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
-import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions } from './logic.js';
+import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, reviewDecisionBlocks } from './logic.js';
 
 const localFile: WorkspaceDiffFile = {
   path: 'src/local.ts', status: 'modified', additions: 1, deletions: 1, previousPath: null,
@@ -56,12 +56,36 @@ describe('diff review queue logic', () => {
     expect(decisions[0].riskSignals).toContain('cross_file');
   });
 
-  it('orders pending high-risk decisions first', () => {
+  it('orders pending decisions by the AI risk score, not by static signals', () => {
     const decisions = buildReviewDecisions([localFile, authFile], []);
-    expect(orderReviewDecisions(decisions).map((decision) => decision.filePaths[0])).toEqual([
-      'src/server/auth/routes.ts',
-      'src/local.ts',
-    ]);
+    const authDecision = decisions.find((decision) => decision.filePaths[0] === authFile.path)!;
+    const localDecision = decisions.find((decision) => decision.filePaths[0] === localFile.path)!;
+
+    // The static signals all point at the auth file; the model does not.
+    expect(authDecision.riskSignals).toContain('auth');
+    const ordered = orderReviewDecisions(decisions, {
+      [authDecision.id]: { risk: 12, reasoning: 'Rename only.' },
+      [localDecision.id]: { risk: 88, reasoning: 'Silent data loss.' },
+    });
+    expect(ordered.map((decision) => decision.filePaths[0])).toEqual([localFile.path, authFile.path]);
+  });
+
+  it('sorts decisions the model has not scored yet below every scored decision', () => {
+    const decisions = buildReviewDecisions([localFile, authFile], []);
+    const authDecision = decisions.find((decision) => decision.filePaths[0] === authFile.path)!;
+
+    // A null risk is "the scorer failed", not a score of zero; both sink.
+    const ordered = orderReviewDecisions(decisions, { [authDecision.id]: { risk: 0, reasoning: 'Formatting only.' } });
+    expect(ordered[0].id).toBe(authDecision.id);
+    expect(orderReviewDecisions(decisions, { [authDecision.id]: { risk: null, reasoning: 'Unavailable.' } })[0].filePaths[0]).toBe(localFile.path);
+  });
+
+  it('builds one scorable block per decision carrying its file and hunk header', () => {
+    const decisions = buildReviewDecisions([localFile], []);
+    expect(reviewDecisionBlocks(decisions)).toEqual([{
+      key: decisions[0].id,
+      lines: ['--- src/local.ts @@ -2 +2 @@ localValue', '-before', '+after'],
+    }]);
   });
 
   it('advances to the next pending decision before cycling through completed decisions', () => {

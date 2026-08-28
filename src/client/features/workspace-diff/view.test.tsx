@@ -19,8 +19,18 @@ function workspaceDiff(files: WorkspaceDiffFile[], revision = 'review-revision')
   };
 }
 
-function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false) {
-  vi.stubGlobal('fetch', fetchMock);
+/** The queue scores every decision through the shared AI endpoint. Tests supply
+ * the scores by decision id; any decision without an explicit score is scored
+ * low so ordering assertions stay about the values under test. */
+function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, scores: Record<string, { risk: number | null; reasoning: string }> = {}) {
+  const withConfidence = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith('/api/diff-confidence')) {
+      const blocks = (JSON.parse(String(init?.body)) as { blocks: Array<{ key: string }> }).blocks;
+      return json({ assessments: Object.fromEntries(blocks.map((block) => [block.key, scores[block.key] ?? { risk: 5, reasoning: 'Low-risk change.' }])) });
+    }
+    return fetchMock(input, init);
+  });
+  vi.stubGlobal('fetch', withConfidence);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} /></QueryClientProvider>);
 }
@@ -52,7 +62,7 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(attempts).toBe(2);
   });
 
-  it('replaces raw diff and AI scores with a risk-ordered queue and exact decision details', async () => {
+  it('orders the queue by AI risk and shows each decision score with the model reasoning', async () => {
     const files: WorkspaceDiffFile[] = [
       { path: 'src/local.ts', editorUrl: 'vscode://file/tmp/workbench/src/local.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false, patch: '@@ -1 +1 @@ localOne\n-before\n+after\n@@ -10 +10 @@ localTwo\n-old\n+new' },
       { path: 'src/server/auth/routes.ts', previousPath: null, status: 'modified', additions: 3, deletions: 1, isBinary: false, patch: '@@ -20 +20,3 @@ authorizeRequest\n-export function authorizeRequest() {}\n+export async function authorizeRequest() {\n+  await repository.update(session)\n+  throw new Error("denied")' },
@@ -66,20 +76,29 @@ describe('WorkspaceDiffView decision queue', () => {
       if (url.includes('/workspace-diff/status?')) return json({ changed: true });
       throw new Error(`Unexpected request: ${url}`);
     });
-    renderView(fetchMock, true);
+    renderView(fetchMock, true, {
+      'src/server/auth/routes.ts::@@ -20 +20,3 @@ authorizeRequest': { risk: 91, reasoning: 'Auth bypass risk.' },
+      'src/local.ts::@@ -1 +1 @@ localOne': { risk: 40, reasoning: 'Local rename.' },
+      'src/local.ts::@@ -10 +10 @@ localTwo': { risk: 12, reasoning: 'Formatting only.' },
+    });
 
     expect(await screen.findByLabelText('3 decisions across 2 files, 0 completed')).toHaveTextContent('3 decisions across 2 files');
+    expect(await screen.findByText('1 AI high-risk', { exact: false })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Decision 1.*authorize request/ })).toHaveAttribute('aria-current', 'step');
     expect(screen.getByText('src/server/auth/routes.ts', { selector: 'code' })).toBeInTheDocument();
     expect(screen.getByText('@@ -20 +20,3 @@ authorizeRequest', { selector: 'code' })).toBeInTheDocument();
-    const riskSignals = within(screen.getByRole('region', { name: 'Risk signals' }));
-    expect(riskSignals.getByText('Public API')).toBeInTheDocument();
-    expect(riskSignals.getByText('Persistence')).toBeInTheDocument();
-    expect(riskSignals.getByText('Auth')).toBeInTheDocument();
-    expect(riskSignals.getByText('Error path')).toBeInTheDocument();
-    expect(within(screen.getByRole('button', { name: /Decision 1/ })).getByText('Public API')).toBeInTheDocument();
+    // Regex-derived signals no longer surface as risk anywhere; the model's score is the only risk shown.
+    expect(screen.queryByRole('region', { name: 'Risk signals' })).toBeNull();
+    expect(screen.queryByText('Public API')).toBeNull();
+    expect(within(screen.getByRole('button', { name: /Decision 1/ })).getByLabelText('AI risk 91 out of 100')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Refresh changes' })).toHaveClass('workspace-diff-refresh-pending');
-    expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain('/api/diff-confidence');
+
+    // The model's score drives both the badge on each queue row and the card.
+    const aiRisk = within(screen.getByRole('region', { name: 'AI risk' }));
+    expect(aiRisk.getByLabelText('AI risk assessment: 91 out of 100')).toBeInTheDocument();
+    expect(aiRisk.getByText('Auth bypass risk.')).toBeInTheDocument();
+    const queueScores = screen.getByRole('navigation', { name: 'Review decision queue' }).querySelectorAll('.diff-review-queue-risk-score');
+    expect([...queueScores].map((score) => score.textContent)).toEqual(['91', '40', '12']);
 
     const authDiff = screen.getByLabelText('Full diff for src/server/auth/routes.ts');
     expect(within(authDiff).getByText('-export function authorizeRequest() {}')).toBeInTheDocument();
@@ -91,6 +110,30 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(decisionButtons[0]).toHaveTextContent('authorize request');
     fireEvent.click(within(decisionQueue).getByRole('button', { name: /Decision 2/ }));
     expect(await screen.findByLabelText('Full diff for src/local.ts')).toBeInTheDocument();
+  });
+
+  it('keeps the queue usable and says so when the AI scorer cannot be reached', async () => {
+    const files: WorkspaceDiffFile[] = [
+      { path: 'src/local.ts', editorUrl: null, previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@ localOne\n-before\n+after' },
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/diff-confidence')) throw new Error('Scorer unavailable');
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff(files, 'scorer-down') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={false} /></QueryClientProvider>);
+
+    // A failed score degrades to an explicit "unavailable" marker; it never reads as a low score.
+    const row = await screen.findByRole('button', { name: /Decision 1/ });
+    expect(await within(row).findByLabelText('AI risk assessment unavailable')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'AI risk' })).getByText('AI assessment unavailable for this decision.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reviewed' })).toBeEnabled();
   });
 
   it('shows the whole file diff and highlights the block the selected decision changes', async () => {

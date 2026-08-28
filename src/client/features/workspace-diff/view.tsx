@@ -5,11 +5,13 @@ import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
-import type { DiffFollowUpReference } from '../diff-confidence.js';
+import type { DiffConfidenceAssessment, DiffFollowUpReference } from '../diff-confidence.js';
+import { useDiffBlockConfidence } from '../diff-confidence-hooks.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
-import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions } from '../diff-review/logic.js';
+import type { ReviewDecisionAssessments } from '../diff-review/logic.js';
+import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, reviewDecisionBlocks } from '../diff-review/logic.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
 import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
@@ -86,14 +88,27 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const hunkReviews = useDiffHunkReviews(scope, reviewRevision);
   const upsertHunkReview = useUpsertDiffHunkReview(scope, reviewRevision);
   const decisions = useMemo(() => buildReviewDecisions(displayedDiff?.files ?? [], hunkReviews.data?.reviews ?? []), [displayedDiff?.files, hunkReviews.data?.reviews]);
-  const orderedDecisions = useMemo(() => orderReviewDecisions(decisions), [decisions]);
+  // The model scores every decision; the queue's order, badges and card
+  // reasoning all read from these assessments rather than any static heuristic.
+  const decisionBlocks = useMemo(() => reviewDecisionBlocks(decisions), [decisions]);
+  const confidence = useDiffBlockConfidence(decisionBlocks);
+  const assessments: ReviewDecisionAssessments = {};
+  for (const decision of decisions) {
+    const assessment = confidence.data[decision.id] as DiffConfidenceAssessment | undefined;
+    if (assessment) assessments[decision.id] = assessment;
+    else if (confidence.failedKeys.has(decision.id)) assessments[decision.id] = { risk: null, reasoning: 'The AI scorer could not be reached for this decision.' };
+  }
+  // Re-sorting is keyed on the scores themselves so a streamed assessment
+  // reorders the queue, while an unrelated re-render leaves it stable.
+  const assessmentOrderKey = decisions.map((decision) => `${decision.id}:${assessments[decision.id]?.risk ?? ''}`).join('|');
+  const orderedDecisions = useMemo(() => orderReviewDecisions(decisions, assessments), [decisions, assessmentOrderKey]);
   const selectedDecision = orderedDecisions.find((decision) => decision.id === selectedDecisionId) ?? orderedDecisions[0] ?? null;
   const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
   const fileHunks = useMemo(() => (selectedFile ? buildFileDiffHunks(selectedFile) : []), [selectedFile]);
 
   const saveDecision = async (state: 'reviewed' | 'needs_changes' | 'commented', note: string | undefined) => {
     if (!selectedDecision) return;
-    const nextId = nextPendingDecisionId(orderedDecisions, selectedDecision.id);
+    const nextId = nextPendingDecisionId(orderedDecisions, selectedDecision.id, assessments);
     try {
       await upsertHunkReview.mutateAsync({
         hunks: selectedDecision.hunks.map((hunk) => ({ filePath: hunk.filePath, hunkRange: hunk.hunkRange })),
@@ -123,12 +138,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
       : hunkReviews.isLoading ? <DiffSkeleton />
         : hunkReviews.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load review decisions.</strong><p>{hunkReviews.error.message}</p><button type="button" className="button secondary compact" onClick={() => void hunkReviews.refetch()} disabled={hunkReviews.isFetching}>Retry</button></section>
           : <div className="workspace-diff-layout diff-review-layout">
-            <DiffReviewSummaryView decisions={decisions} />
+            <DiffReviewSummaryView decisions={decisions} assessments={assessments} />
             {selectedDecision && <>
-              <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={setSelectedDecisionId} />
+              <DiffReviewDecisionQueue decisions={orderedDecisions} assessments={assessments} selectedId={selectedDecision.id} onSelect={setSelectedDecisionId} />
               <div className="diff-review-workbench">
                 {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={setSelectedDecisionId} />}
-                <DiffReviewDecisionDetailCard decision={selectedDecision}>
+                <DiffReviewDecisionDetailCard decision={selectedDecision} assessment={assessments[selectedDecision.id]}>
                   <DiffReviewActions key={selectedDecision.id} initialNote={selectedDecision.note} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state, note) => void saveDecision(state, note)} />
                 </DiffReviewDecisionDetailCard>
               </div>

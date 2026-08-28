@@ -22,7 +22,7 @@ const decision: ReviewDecision = {
 
 describe('diff review decision detail', () => {
   it('identifies the highlighted hunk in the exact-change card', () => {
-    render(<DiffReviewDecisionDetailCard decision={decision}><div /></DiffReviewDecisionDetailCard>);
+    render(<DiffReviewDecisionDetailCard decision={decision} assessment={{ risk: 64, reasoning: 'Touches request handling.' }}><div /></DiffReviewDecisionDetailCard>);
 
     expect(screen.getByText(/Highlighted in the diff.*Line 2/)).toBeInTheDocument();
   });

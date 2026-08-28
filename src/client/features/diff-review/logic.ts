@@ -29,6 +29,11 @@ export interface ReviewDecision {
   note: string | null;
 }
 
+/** The model's assessment of one decision, keyed by decision id. A missing
+ * entry means "not scored yet"; an entry whose risk is null means the scorer
+ * ran and could not produce a score. The two are deliberately distinct. */
+export type ReviewDecisionAssessments = Record<string, { risk: number | null; reasoning: string } | undefined>;
+
 interface PatchHunk { range: string; lines: string[] }
 interface DecisionCandidate {
   subject: string | null;
@@ -37,7 +42,6 @@ interface DecisionCandidate {
   riskSignals: ReviewRiskSignal[];
 }
 
-const RISK_WEIGHTS: Record<ReviewRiskSignal, number> = { auth: 5, persistence: 4, public_api: 3, error_path: 2, cross_file: 1 };
 const STATE_ORDER: Record<DiffHunkReviewState, number> = { needs_changes: 1, commented: 2, reviewed: 3 };
 const NON_SUBJECTS = new Set([
   'async', 'await', 'catch', 'class', 'const', 'describe', 'else', 'export', 'false', 'function', 'if',
@@ -156,8 +160,25 @@ function behaviorSummary(subject: string | null, hunks: ReviewDecisionHunk[], st
   return `${verb} ${effect}${fileCount > 1 ? ` across ${fileCount} files` : ''}.`;
 }
 
-function decisionPriority(decision: ReviewDecision): number {
-  return decision.riskSignals.reduce((total, signal) => total + RISK_WEIGHTS[signal], 0);
+/** Risk of a decision the model has not returned a usable score for. Sorting
+ * it below every scored decision keeps an unscored item from claiming a
+ * priority the model never gave it; it rises as soon as its score arrives. */
+const UNSCORED_RISK = -1;
+
+function decisionRisk(decision: ReviewDecision, assessments: ReviewDecisionAssessments): number {
+  const risk = assessments[decision.id]?.risk;
+  return typeof risk === 'number' ? risk : UNSCORED_RISK;
+}
+
+/** One scorable block per decision, keyed by decision id so a streamed
+ * assessment maps straight back onto the queue. The file path and hunk header
+ * are part of the block body: the server caches by content hash, and the same
+ * added line in two different files is not the same change. */
+export function reviewDecisionBlocks(decisions: ReviewDecision[]): Array<{ key: string; lines: string[] }> {
+  return decisions.map((decision) => ({
+    key: decision.id,
+    lines: decision.hunks.flatMap((hunk) => [`--- ${hunk.filePath} ${hunk.hunkRange}`, ...hunk.lines]),
+  }));
 }
 
 export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHunkReview[]): ReviewDecision[] {
@@ -210,17 +231,20 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
   });
 }
 
-export function orderReviewDecisions(decisions: ReviewDecision[]): ReviewDecision[] {
+/** Priority order is the model's, not this module's: unreviewed first, then
+ * highest AI risk. Static signals stay as evidence on the card; they no longer
+ * decide what a reviewer sees first. */
+export function orderReviewDecisions(decisions: ReviewDecision[], assessments: ReviewDecisionAssessments = {}): ReviewDecision[] {
   return [...decisions].sort((left, right) => {
     const stateDifference = (left.state ? STATE_ORDER[left.state] : 0) - (right.state ? STATE_ORDER[right.state] : 0);
     if (stateDifference !== 0) return stateDifference;
-    const riskDifference = decisionPriority(right) - decisionPriority(left);
+    const riskDifference = decisionRisk(right, assessments) - decisionRisk(left, assessments);
     return riskDifference !== 0 ? riskDifference : left.id.localeCompare(right.id);
   });
 }
 
-export function nextPendingDecisionId(decisions: ReviewDecision[], currentId: string): string | null {
-  const ordered = orderReviewDecisions(decisions);
+export function nextPendingDecisionId(decisions: ReviewDecision[], currentId: string, assessments: ReviewDecisionAssessments = {}): string | null {
+  const ordered = orderReviewDecisions(decisions, assessments);
   const currentIndex = ordered.findIndex((decision) => decision.id === currentId);
   const after = ordered.slice(currentIndex + 1).find((decision) => decision.state === null);
   const before = ordered.slice(0, Math.max(currentIndex, 0)).find((decision) => decision.state === null);
