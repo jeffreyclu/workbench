@@ -20,6 +20,7 @@ interface Runtime { releasePath: string; port: number; child: ChildProcess }
 let active: Runtime | null = null;
 let deploying = false;
 let stopping = false;
+const GATEWAY_BACKEND_WAIT_MS = 25_000;
 
 function currentRelease(): string {
   if (!existsSync(currentLink)) throw new Error('No promoted runtime exists. Run npm run runtime:promote first.');
@@ -180,15 +181,19 @@ async function deploy(releasePath = currentRelease()): Promise<void> {
   }
 }
 
-const gateway = createServer((incoming, outgoing) => {
-  if (!active) {
-    outgoing.statusCode = 503;
-    outgoing.end('Workbench runtime is starting.');
-    return;
+async function waitForActiveRuntime(timeoutMs = GATEWAY_BACKEND_WAIT_MS): Promise<Runtime> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (active && active.child.exitCode === null) return active;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
   }
+  throw new Error('No healthy Workbench backend became available before the gateway deadline.');
+}
+
+function proxyHttp(incoming: import('node:http').IncomingMessage, outgoing: import('node:http').ServerResponse, runtime: Runtime, retried = false): void {
   const proxied = httpRequest({
     hostname: '127.0.0.1',
-    port: active.port,
+    port: runtime.port,
     method: incoming.method,
     path: incoming.url,
     headers: incoming.headers,
@@ -197,10 +202,34 @@ const gateway = createServer((incoming, outgoing) => {
     response.pipe(outgoing);
   });
   proxied.on('error', (error) => {
+    // A request can race the atomic active-pointer swap or a retiring backend's
+    // final listener close. Retry once against the current healthy runtime
+    // before exposing a gateway error to the browser.
+    if (!retried && !outgoing.headersSent) {
+      incoming.unpipe(proxied);
+      void waitForActiveRuntime().then((replacement) => proxyHttp(incoming, outgoing, replacement, true)).catch(() => {
+        if (!outgoing.headersSent) outgoing.statusCode = 503;
+        outgoing.end('Workbench runtime is temporarily unavailable.');
+      });
+      return;
+    }
     if (!outgoing.headersSent) outgoing.statusCode = 502;
     outgoing.end(`Workbench runtime unavailable: ${error.message}`);
   });
   incoming.pipe(proxied);
+}
+
+const gateway = createServer((incoming, outgoing) => {
+  // Never emit a handoff 503. Pause request flow while a healthy replacement
+  // starts, then proxy the original request intact.
+  incoming.pause();
+  void waitForActiveRuntime().then((runtime) => {
+    incoming.resume();
+    proxyHttp(incoming, outgoing, runtime);
+  }).catch(() => {
+    outgoing.statusCode = 503;
+    outgoing.end('Workbench runtime is temporarily unavailable.');
+  });
 });
 
 /**
