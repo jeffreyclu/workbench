@@ -28,8 +28,6 @@
     "e2e:web": "WORKBENCH_API_TARGET=http://127.0.0.1:45176 vite --port 5175 --host 127.0.0.1",
     "e2e:serve": "concurrently -k -n e2e-api,e2e-web -c cyan,magenta \"npm:e2e:api\" \"npm:e2e:web\"",
     "memory:index": "tsx scripts/index-memory.ts",
-    "process-mining:export": "tsx scripts/export-lifecycle.ts",
-    "process-mining:analyze": "tsx scripts/analyze-lifecycle.ts",
     "discovery:scan": "tsx scripts/discover.ts --force",
     "backup:run": "tsx scripts/backup.ts",
     "backup:install": "zsh scripts/install-backup-schedule.sh",

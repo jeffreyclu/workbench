@@ -1045,22 +1045,6 @@ export interface DiagnosticEvent {
   createdAt: string;
 }
 
-export interface LifecycleReportStatus {
-  minimumCompletedCases: number;
-  eligibleCompletedCases: number;
-  nextRunIntervalMs: number;
-  report: LifecycleAnalysisSummary | null;
-}
-
-export interface LifecycleAnalysisSummary {
-  modelVersion: string;
-  generatedAt: string;
-  caseCount: number;
-  eventCount: number;
-  deviations: Array<{ caseId: string; eventId: string | null; code: string; message: string }>;
-  dataQuality: { casesMissingInitial: number; casesWithMultipleInitials: number; sameTimestampPairs: number; invalidTimestampCount: number };
-}
-
 export interface RunInsights {
   /** Retry lifecycle events per terminal agent run. This may exceed 1 when a run is retried repeatedly. */
   retryRate: number | null;

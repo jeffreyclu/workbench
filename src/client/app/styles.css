@@ -431,14 +431,6 @@ nav { display: grid; gap: 3px; }
 .diff-review-exact-change, .diff-review-ai-risk { display: grid; align-content: start; gap: 8px; }
 .diff-review-ai-risk > div { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .diff-review-ai-risk p { margin: 0; color: #a9a89f; font-size: 11px; }
-.diff-review-ai-risk-score { display: grid; align-content: start; gap: 8px; padding-top: 14px; border-top: 1px solid #242421; }
-.diff-review-ai-risk-score > button { display: inline-flex; align-items: center; justify-content: center; align-self: start; min-height: 32px; padding: 0 11px; color: #c9c8c1; border: 1px solid #45443e; border-radius: 6px; background: #20201d; cursor: pointer; font: 700 10px 'DM Mono'; }
-.diff-review-ai-risk-score > button:hover, .diff-review-ai-risk-score > button:focus-visible { color: var(--acid); border-color: #596234; outline: 0; }
-.diff-review-ai-risk-score > p[role="status"] { margin: 0; color: #85847d; font: 10px 'DM Mono'; }
-.diff-review-risk-score-result { display: grid; align-content: start; gap: 6px; }
-.diff-review-risk-score-result p { margin: 0; color: #a9a89f; font-size: 11px; }
-.diff-review-risk-score-result button { align-self: start; min-height: 28px; padding: 0 10px; color: #c9c8c1; border: 1px solid #45443e; border-radius: 5px; background: transparent; cursor: pointer; font: 700 10px 'DM Mono'; }
-.diff-review-risk-score-value { display: inline-flex; align-items: center; justify-content: center; align-self: start; min-width: 40px; height: 22px; padding: 0 8px; border: 1px solid; border-radius: 999px; background: #10100f; font: 11px 'DM Mono'; }
 .diff-review-ai-assist { display: grid; align-content: start; gap: 8px; padding-top: 14px; border-top: 1px solid #242421; }
 .diff-review-ai-assist-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
 .diff-review-ai-assist-actions button { display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 11px; color: #c9c8c1; border: 1px solid #45443e; border-radius: 6px; background: #20201d; cursor: pointer; font: 700 10px 'DM Mono'; }
@@ -1395,14 +1387,6 @@ nav { display: grid; gap: 3px; }
 .insight-section { padding: 20px; background: var(--panel-raised); border: 1px solid var(--line); border-radius: 10px; }
 .insight-section > h3 { margin: 0 0 17px; color: #deddd6; font-size: 14px; letter-spacing: -.01em; }
 .insight-section-intro { margin: -10px 0 18px; color: var(--muted); font-size: 10px; line-height: 1.5; }
-.lifecycle-report-header { display: flex; align-items: start; justify-content: space-between; gap: 14px; }
-.lifecycle-report-header h3 { margin-bottom: 7px; }
-.lifecycle-report-header .insight-section-intro { margin: 0; }
-.lifecycle-report-header .button { flex: 0 0 auto; }
-.lifecycle-report-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 18px 0 12px; overflow: hidden; background: #2d2d29; border: 1px solid #2d2d29; border-radius: 8px; }
-.lifecycle-report-stats > div { display: grid; gap: 5px; padding: 12px 14px; background: #111110; }
-.lifecycle-report-stats span { color: #6f6e68; font: 8px 'DM Mono'; letter-spacing: .05em; text-transform: uppercase; }
-.lifecycle-report-stats strong { color: #d6dfb5; font: 500 20px 'DM Mono'; }
 .insight-agent-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .insight-agent-card { min-width: 0; padding: 16px; background: #111110; border: 1px solid #2d2d29; border-radius: 8px; }
 .insight-agent-card > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 16px; }
@@ -1495,7 +1479,6 @@ nav { display: grid; gap: 3px; }
   .insight-overall-stat { min-height: 104px; padding: 15px; }
   .insight-section { padding: 15px; }
   .cursing-insight-stats { grid-template-columns: 1fr; }
-  .lifecycle-report-stats { grid-template-columns: 1fr; }
   .insight-fit-row { grid-template-columns: 1fr; }
   .insight-fit-row > strong { padding: 10px 12px; background: #181816; }
   .insight-bar-row { grid-template-columns: 72px minmax(60px, 1fr) 38px; gap: 7px; }
