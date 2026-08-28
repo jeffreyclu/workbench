@@ -241,6 +241,15 @@ small header control only hides or shows the conversation title and metadata;
 it must not hide the action bar. Leave the Conversation/Changes toggle alone
 until it is separately decided.
 
+### Phone changes review uses sequential decision navigation
+
+*Decision from Jeffrey, 2026-08-28.* On phones, replace the horizontally
+scrollable review-decision queue with a compact top navigator: previous and
+next arrows move through decisions in their priority order. The decision detail
+panel starts closed and opens only when the reviewer explicitly presses a
+dedicated control. Desktop keeps the existing queue and immediately visible
+detail card.
+
 ### Mobile composer closes as a bottom sheet
 
 *Decision from Jeffrey, 2026-08-27.* When expanded on phones, the composer is

@@ -420,6 +420,7 @@ nav { display: grid; gap: 3px; }
 .diff-review-queue-risk-score { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; padding: 2px 5px; border: 1px solid; border-radius: 999px; background: #131311; font: 10px 'DM Mono'; font-style: normal; }
 .diff-review-decision-state { display: inline-flex; align-items: center; justify-content: center; color: #77766f; }
 .diff-review-decision-state.state-reviewed { color: #8bbd75; }
+.mobile-decision-navigator { display: none; }
 .diff-review-decision-card { display: grid; align-content: start; align-self: start; gap: 16px; min-width: 0; padding: 16px 18px 18px; background: var(--panel); }
 .diff-review-decision-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .diff-review-decision-eyebrow { color: #85847d; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
@@ -428,20 +429,8 @@ nav { display: grid; gap: 3px; }
 .diff-review-completion-state.state-reviewed { color: #8bbd75; border-color: #45603a; }
 .diff-review-decision-card h4 { margin: 0; color: #85847d; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
 .diff-review-exact-change, .diff-review-ai-risk { display: grid; align-content: start; gap: 8px; }
-.diff-review-ai-risk > div { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; min-width: 0; }
+.diff-review-ai-risk > div { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .diff-review-ai-risk p { margin: 0; color: #a9a89f; font-size: 11px; }
-.diff-review-ai-risk .diff-review-queue-risk-score { color: #d8c98a; border-color: #5c5330; }
-.diff-review-ai-assist { display: grid; align-content: start; gap: 8px; }
-.diff-review-ai-assist-actions { display: flex; flex-wrap: wrap; gap: 7px; }
-.diff-review-ai-assist-actions button { display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 11px; color: #c9c8c1; border: 1px solid #45443e; border-radius: 6px; background: #20201d; cursor: pointer; font: 700 10px 'DM Mono'; text-align: center; }
-.diff-review-ai-assist-actions button:hover:not(:disabled), .diff-review-ai-assist-actions button:focus-visible { color: #eee; border-color: #6c6b62; outline: 0; }
-.diff-review-ai-assist-actions button:disabled { opacity: .6; cursor: not-allowed; }
-.diff-review-ai-assist > p[role="status"] { margin: 0; color: #85847d; font: 10px 'DM Mono'; }
-.diff-review-ai-assist-answer { margin: 0; padding: 10px 12px; color: #c9c8c1; border: 1px solid #302f2b; border-radius: 6px; background: #171715; font-size: 11px; line-height: 1.6; white-space: pre-wrap; }
-.diff-review-ai-assist-error { display: grid; gap: 7px; padding: 10px 12px; border: 1px solid #5b3935; border-radius: 6px; background: #211716; }
-.diff-review-ai-assist-error p { margin: 0; color: #e1a68f; font-size: 11px; }
-.diff-review-ai-assist-error button { align-self: start; display: inline-flex; align-items: center; justify-content: center; min-height: 28px; padding: 0 10px; color: #e1a68f; border: 1px solid #5b3935; border-radius: 6px; background: #20201d; cursor: pointer; font: 700 10px 'DM Mono'; }
-.diff-review-ai-assist-error button:hover, .diff-review-ai-assist-error button:focus-visible { color: #eee; border-color: #6c6b62; outline: 0; }
 .diff-review-exact-change code { overflow-wrap: anywhere; color: #c9c8c1; font: 10px/1.5 'DM Mono'; }
 .diff-review-exact-change a { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; color: #aaa9a2; border: 1px solid #3c3c36; border-radius: 5px; }
 .diff-review-exact-change a:hover, .diff-review-exact-change a:focus-visible { color: var(--acid); border-color: #596234; outline: 0; }
@@ -545,8 +534,12 @@ nav { display: grid; gap: 3px; }
   .diff-line > span { padding-inline: 6px; }
   .diff-review-summary { align-items: stretch; flex-direction: column; gap: 9px; padding: 12px; }
   .diff-review-summary progress { width: 100%; }
-  .diff-review-decision-queue li { flex-basis: min(290px, 88vw); }
-  .workspace-diff .diff-review-decision-queue button { min-height: 72px; }
+  .mobile-decision-navigator { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 8px; padding: 8px 12px; background: #11110f; border-block: 1px solid #252522; }
+  .mobile-decision-navigator > button { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; color: #d5d4cd; border: 1px solid #45443e; border-radius: 8px; background: #20201d; }
+  .mobile-decision-navigator > button:disabled { opacity: .4; }
+  .mobile-decision-navigator > span { overflow: hidden; color: #d5d4cd; font: 700 11px 'DM Mono'; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-decision-navigator > .mobile-decision-detail-toggle { grid-column: 1 / -1; width: 100%; height: 44px; color: #c9c8a2; border-color: #605d3d; }
+  .diff-review-queue-region { display: none; }
   .diff-review-file-diff { border-right: 0; }
   .diff-review-file-diff-body { max-height: 58vh; }
   .diff-review-decision-card { gap: 16px; padding: 14px 12px; }

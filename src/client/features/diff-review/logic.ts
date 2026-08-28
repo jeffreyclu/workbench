@@ -46,6 +46,8 @@ const STATE_ORDER: Record<DiffHunkReviewState, number> = { needs_changes: 1, com
 const NON_SUBJECTS = new Set([
   'async', 'await', 'catch', 'class', 'const', 'describe', 'else', 'export', 'false', 'function', 'if',
   'import', 'interface', 'it', 'let', 'null', 'return', 'test', 'throw', 'true', 'type', 'undefined', 'var',
+  // CSS pseudo-classes (e.g. `button:not(.foo)`) match the generic `word(` scan but are not code identifiers.
+  'not', 'is', 'has', 'where', 'matches', 'dir', 'lang',
 ]);
 
 function splitPatchHunks(file: Pick<WorkspaceDiffFile, 'patch' | 'isBinary'>): PatchHunk[] {

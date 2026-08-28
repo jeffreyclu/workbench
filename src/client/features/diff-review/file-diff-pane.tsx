@@ -15,7 +15,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   onSelect: (decisionId: string) => void;
 }) {
   const activeBlock = useRef<HTMLElement | null>(null);
-  const stateByDecisionId = new Map(decisions.map((decision) => [decision.id, decision.state]));
+  const decisionByHunkId = new Map(decisions.flatMap((decision) => decision.hunks.map((hunk) => [hunk.id, decision] as const)));
 
   useEffect(() => {
     // jsdom and older browsers do not implement scrollIntoView; jumping is an
@@ -31,8 +31,9 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
     </header>
     <div className="diff-review-file-diff-body">
       {hunks.map((hunk) => {
-        const active = hunk.decisionId === activeDecisionId;
-        const state = stateByDecisionId.get(hunk.decisionId) ?? null;
+        const decision = decisionByHunkId.get(hunk.decisionId);
+        const active = decision?.id === activeDecisionId;
+        const state = decision?.state ?? null;
         return <section
           key={hunk.range}
           ref={active ? activeBlock : undefined}
@@ -40,7 +41,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
           aria-current={active ? 'location' : undefined}
           aria-label={`${hunk.location} · ${reviewStateLabel(state)}${active ? ' · selected decision' : ''}`}
         >
-          <button type="button" className="diff-review-diff-block-header" onClick={() => onSelect(hunk.decisionId)} aria-label={`Select the decision at ${hunk.location} in ${filePath}`}>
+          <button type="button" className="diff-review-diff-block-header" onClick={() => onSelect(decision?.id ?? hunk.decisionId)} aria-label={`Select the decision at ${hunk.location} in ${filePath}`}>
             <code>{hunk.range}</code>
             <small><b>+{hunk.additions}</b> <i>−{hunk.deletions}</i></small>
             <em className={`diff-review-decision-state state-${state ?? 'pending'}`}>{reviewStateLabel(state)}</em>

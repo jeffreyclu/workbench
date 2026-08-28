@@ -35,6 +35,35 @@ afterEach(() => {
 });
 
 describe('WorkspaceDiffView decision queue', () => {
+  it('uses arrow navigation and keeps the decision panel closed on phones until requested', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    const file: WorkspaceDiffFile = {
+      path: 'src/mobile-review.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
+      patch: '@@ -1 +1 @@ firstDecision\n-before\n+after\n@@ -10 +10 @@ secondDecision\n-old\n+new',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'mobile-review') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    expect(await screen.findByRole('button', { name: 'View decision' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('heading', { name: 'Changes behavior in src/mobile-review.ts.' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Previous decision' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next decision' }));
+    expect(screen.getByText('Decision 2 of 2')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Changes behavior in src/mobile-review.ts.' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'View decision' }));
+    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/mobile-review.ts.' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hide decision' })).toHaveAttribute('aria-expanded', 'true');
+  });
+
   it('renders the agent handoff before the review decision queue', async () => {
     const files: WorkspaceDiffFile[] = [{ path: 'src/app.ts', editorUrl: null, previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }];
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

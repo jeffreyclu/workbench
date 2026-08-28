@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { FileDiff, History, RefreshCw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileDiff, History, RefreshCw } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
 import type { AgentRunReviewHandoff, DiffHunkReviewState } from '../../../shared/contracts.js';
@@ -24,6 +24,20 @@ function DiffSkeleton() {
     <header><div><Skeleton width="132px" height="12px" /><Skeleton width="min(440px, 78%)" height="20px" /></div></header>
     <div className="workspace-diff-skeleton"><Skeleton width="30%" height="220px" radius="6px" /><SkeletonText lines={12} /></div>
   </section>;
+}
+
+function usePhoneReviewControls() {
+  const query = '(max-width: 640px) and (pointer: coarse)';
+  const [isPhone, setIsPhone] = useState(() => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const media = window.matchMedia(query);
+    const update = () => setIsPhone(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  return isPhone;
 }
 
 export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, reviewHandoff, onFollowUp, taskIntent = null }: {
@@ -75,6 +89,8 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     previousWorkspacePath.current = selectedWorkspacePath;
   }, [selectedWorkspacePath, query.refetch, snapshotsQuery.refetch]);
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
+  const [mobileDecisionDetailOpen, setMobileDecisionDetailOpen] = useState(false);
+  const isPhoneReview = usePhoneReviewControls();
   // null means "automatically show the latest record when Git is clean";
   // an empty string is the user's explicit choice to view current changes.
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
@@ -94,16 +110,9 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const decisions = useMemo(() => buildReviewDecisions(displayedDiff?.files ?? [], hunkReviews.data?.reviews ?? []), [displayedDiff?.files, hunkReviews.data?.reviews]);
   const orderedDecisions = useMemo(() => orderReviewDecisions(decisions), [decisions]);
   const selectedDecision = orderedDecisions.find((decision) => decision.id === selectedDecisionId) ?? orderedDecisions[0] ?? null;
+  const selectedDecisionIndex = selectedDecision ? orderedDecisions.findIndex((decision) => decision.id === selectedDecision.id) : -1;
   const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
-  const fileHunks = useMemo(() => {
-    if (!selectedFile) return [];
-    // buildFileDiffHunks assigns each patch hunk its own raw decision id; a
-    // decision that groups hunks across files (same subject, multiple paths)
-    // has a different aggregate id, so remap here or its hunks never match
-    // activeDecisionId and stay unhighlighted.
-    const decisionIdByHunkId = new Map(decisions.flatMap((decision) => decision.hunks.map((hunk) => [hunk.id, decision.id])));
-    return buildFileDiffHunks(selectedFile).map((hunk) => ({ ...hunk, decisionId: decisionIdByHunkId.get(hunk.decisionId) ?? hunk.decisionId }));
-  }, [selectedFile, decisions]);
+  const fileHunks = useMemo(() => (selectedFile ? buildFileDiffHunks(selectedFile) : []), [selectedFile]);
 
   const recordDecisionState = (decision: ReviewDecision, state: DiffHunkReviewState) =>
     upsertHunkReview.mutateAsync({
@@ -117,9 +126,20 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     try {
       await recordDecisionState(selectedDecision, state);
       setSelectedDecisionId(nextId);
+      if (isPhoneReview) setMobileDecisionDetailOpen(false);
     } catch {
       // The mutation exposes its stable request error beside the actions.
     }
+  };
+
+  const selectDecision = (decisionId: string) => {
+    setSelectedDecisionId(decisionId);
+    if (isPhoneReview) setMobileDecisionDetailOpen(false);
+  };
+
+  const moveDecision = (direction: -1 | 1) => {
+    const next = orderedDecisions[selectedDecisionIndex + direction];
+    if (next) selectDecision(next.id);
   };
 
   // Following up hands the decision to the agent, so it is recorded as
@@ -159,12 +179,18 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
             {reviewHandoff && <AgentRunReviewHandoffCard handoff={reviewHandoff} />}
             <DiffReviewSummaryView decisions={decisions} />
             {selectedDecision && <>
-              <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={setSelectedDecisionId} />
+              <div className="mobile-decision-navigator" aria-label="Decision navigation">
+                <button type="button" onClick={() => moveDecision(-1)} disabled={selectedDecisionIndex <= 0} aria-label="Previous decision"><ChevronLeft size={18} aria-hidden="true" /></button>
+                <span>Decision {selectedDecision.ordinal} of {orderedDecisions.length}</span>
+                <button type="button" onClick={() => moveDecision(1)} disabled={selectedDecisionIndex >= orderedDecisions.length - 1} aria-label="Next decision"><ChevronRight size={18} aria-hidden="true" /></button>
+                <button type="button" className="mobile-decision-detail-toggle" onClick={() => setMobileDecisionDetailOpen((open) => !open)} aria-expanded={mobileDecisionDetailOpen} aria-controls="mobile-decision-detail">{mobileDecisionDetailOpen ? 'Hide decision' : 'View decision'}</button>
+              </div>
+              <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} />
               <div className="diff-review-workbench">
-                {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={setSelectedDecisionId} />}
-                <DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent}>
+                {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={selectDecision} />}
+                {(!isPhoneReview || mobileDecisionDetailOpen) && <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent}>
                   <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
-                </DiffReviewDecisionDetailCard>
+                </DiffReviewDecisionDetailCard></div>}
               </div>
             </>}
           </div>}
