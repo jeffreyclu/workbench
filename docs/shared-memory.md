@@ -136,3 +136,13 @@ be able to see immediately that a newer feature altered its runtime behavior, in
 file is untouched. Choosing to share a fix with the legacy path (rather than gating it) is allowed —
 Jeffrey accepted that for `connect-connector-modal.tsx` — but only if the sharing is documented in
 place.
+
+## Jotai is for new components only (2026-08-28)
+
+Jeffrey's direction on the CON-194 branch: "jotai is strictly for NEW COMPONENTS. if there's any
+legacy functionality we're importing, do NOT convert those to jotai yet. but make a note of it so we
+can keep track." Introducing Jotai is an additive change scoped to code the Connectors rewrite newly
+owns. Shared modules that a new component imports keep their existing state mechanism, because
+converting them changes behavior for legacy surfaces still rendering them. Whenever a Jotai migration
+is blocked by that rule, write the blocked import down instead of converting it — the file-level
+carve-out list for Manage Connectors V2 lives in `~/notes/knowledge/writer-frontend-stack.md`.
