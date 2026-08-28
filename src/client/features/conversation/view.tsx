@@ -473,6 +473,17 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   // Changes belong to the conversation, not merely its linked task: Repo
   // Explorer can deliberately select any attached local repository.
   const workspaceDiffScope: WorkspaceDiffScope | null = conversationId ? { conversationId } : null;
+  const linkedWorkItemTitle = linkedWorkItem.data?.item?.title ?? null;
+  const linkedWorkItemDescription = linkedWorkItem.data?.item?.description ?? null;
+  // Memoized on title/description, not the whole query result: linkedWorkItem
+  // refetches every second, and an inline object literal here would defeat
+  // the decision card's memo and re-fire the assist cache query on each poll.
+  const diffTaskIntent = useMemo(
+    () => (linkedWorkItemTitle !== null && linkedWorkItemDescription !== null
+      ? { title: linkedWorkItemTitle, description: linkedWorkItemDescription }
+      : null),
+    [linkedWorkItemTitle, linkedWorkItemDescription],
+  );
   const conversationIsRunning = selectedConversation?.state === 'working';
   const changesAvailability = useConversationChangesAvailability(
     workspaceDiffScope,
@@ -1309,7 +1320,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           {send.error && <p className="error-message">{send.error.message}</p>}
         </form></>}
         </div>
-        {activePane === 'changes' && workspaceDiffScope && <div className="conversation-changes" aria-label="Conversation changes"><WorkspaceDiffView scope={workspaceDiffScope} activeWorkspacePaths={linkedWorkItem.data?.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : []) ?? []} reviewHandoff={linkedWorkItem.data?.runs.find((run) => run.reviewHandoff)?.reviewHandoff ?? null} onFollowUp={addDiffFollowUp} />{linkedWorkItem.data?.item && <GitHubDiffView sourceUrl={linkedWorkItem.data.item.sourceUrl} references={linkedWorkItem.data.references} onFollowUp={addDiffFollowUp} />}</div>}
+        {activePane === 'changes' && workspaceDiffScope && <div className="conversation-changes" aria-label="Conversation changes"><WorkspaceDiffView scope={workspaceDiffScope} activeWorkspacePaths={linkedWorkItem.data?.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : []) ?? []} reviewHandoff={linkedWorkItem.data?.runs.find((run) => run.reviewHandoff)?.reviewHandoff ?? null} onFollowUp={addDiffFollowUp} taskIntent={diffTaskIntent} />{linkedWorkItem.data?.item && <GitHubDiffView sourceUrl={linkedWorkItem.data.item.sourceUrl} references={linkedWorkItem.data.references} onFollowUp={addDiffFollowUp} />}</div>}
         </div>
       </section>
       {planArchivePromptOpen && <FollowUpArchiveDialog count={selectedPlanTaskIndexes.size} pending={resolvePlan.isPending} onClose={() => setPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolvePlan.mutate({ resolution: 'accepted', archiveParent })} />}
