@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 
@@ -56,6 +56,8 @@ Workspace isolation: the task workspace is a project workspace, not a place for 
 
 Repository residency: when the resolved workspace is the Workbench repository, stay on \`main\` and change only Workbench code, tests, or documentation. Writer or any other project work must run in that project's linked workspace, never in the Workbench checkout. Do not create or switch branches in the Workbench repository.
 
+Writer test-suite safety: in every Writer repository, full-suite commands are forbidden. Never run \`npm test\`, \`pnpm test\`, \`yarn test\`, unscoped \`vitest\`/\`jest\`, or \`vitest run -- <test-name>\` because that discovers the repository suite. Run only an explicit, directly relevant test-file path (for example \`vitest run src/path/feature.test.ts\`). If that is insufficient, report the verification gap instead of broadening the command.
+
 Emit brief progress updates before/after meaningful steps — what you're checking, why, what you learned, what's next — as concise decisions/summaries, not chain-of-thought.
 
 Complete the requested capability. Report decisions, evidence, risks, files changed, and verification. Do not change the Workbench database directly.`;
@@ -108,6 +110,31 @@ export function externalActionContractForAuthorization(decision: ExternalActionA
 
 const activeRunControllers = new Map<string, AbortController>();
 export const isAgentRunActive = (id: string) => activeRunControllers.has(id);
+
+const WRITER_REPOSITORY_NAMES = new Set([
+  'writer-monorepo',
+  'fe.web-app',
+  'be.mcp-gateway',
+  'connector-gateway',
+]);
+
+/** Writer agents get an executable guard, not merely an instruction, for tests. */
+export function isWriterWorkspace(cwd: string): boolean {
+  for (let current = resolve(cwd); ; current = dirname(current)) {
+    const name = basename(current);
+    if (WRITER_REPOSITORY_NAMES.has(name) || [...WRITER_REPOSITORY_NAMES].some((repository) => name.startsWith(`${repository}-`))) return true;
+    const parent = dirname(current);
+    if (parent === current) return false;
+  }
+}
+
+export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountProfile: string, cwd: string): NodeJS.ProcessEnv {
+  const env = agentAccountEnv(agent, accountProfile);
+  if (!isWriterWorkspace(cwd)) return env;
+  const guardPath = join(process.cwd(), 'scripts', 'writer-agent-bin');
+  env.PATH = [guardPath, env.PATH].filter(Boolean).join(delimiter);
+  return env;
+}
 
 const FRONTEND_REVIEWER_PERSONA = `
 Authoritative persona: frontend-reviewer
@@ -689,7 +716,7 @@ export function warmAgentCommand(
   startPoolSweep();
   const child = spawn(command, args, {
     cwd,
-    env: agentAccountEnv(agent, accountProfile),
+    env: agentEnvironmentForWorkspace(agent, accountProfile, cwd),
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
   });
@@ -920,7 +947,7 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
   const { command, args } = commandFor(agent, cwd, profile, modelOverride, resumeSessionId, kind);
   const spawnFresh = () => spawn(command, args, {
     cwd,
-    env: agentAccountEnv(agent, accountProfile),
+    env: agentEnvironmentForWorkspace(agent, accountProfile, cwd),
     stdio: ['pipe', 'pipe', 'pipe'],
     // On Unix this makes child.pid the process-group leader, allowing Stop
     // to kill Codex/Claude and every shell/tool process it created.
