@@ -169,6 +169,43 @@ describe('assessDiffBlocks worker recovery', () => {
     expect(writes).toBe(2);
   });
 
+  it('retries a malformed model result instead of stranding the block as unscored', async () => {
+    vi.resetModules();
+    let writes = 0;
+    vi.doMock('node:child_process', () => ({
+      spawn: () => {
+        const emitter = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: EventEmitter & { write: (prompt: string) => void }; kill: () => void };
+        emitter.stdout = new EventEmitter();
+        emitter.stderr = new EventEmitter();
+        emitter.kill = () => {};
+        emitter.stdin = Object.assign(new EventEmitter(), { write: (prompt: string) => {
+          writes += 1;
+          // Haiku's first turn answers with prose rather than the JSON array,
+          // which used to mark every block in the batch permanently unscored.
+          if (writes === 1) {
+            queueMicrotask(() => emitter.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'result', result: 'I cannot score this.' })}\n`)));
+            return;
+          }
+          queueMicrotask(() => {
+            const input = JSON.parse(prompt) as { message: { content: string } };
+            const text = input.message.content;
+            const blocks = JSON.parse(text.slice(text.indexOf('Blocks:\n') + 'Blocks:\n'.length)) as Array<{ key: string }>;
+            const assessments = blocks.map((block) => ({ key: block.key, risk: 55, reasoning: 'Scored on retry.' }));
+            emitter.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'result', result: JSON.stringify(assessments) })}\n`));
+          });
+        } });
+        return emitter;
+      },
+    }));
+    const { assessDiffBlocks } = await import('./diff-confidence-ai.js');
+    const database = openDatabase(':memory:');
+
+    await expect(assessDiffBlocks(database, [{ key: 'changed', lines: ['+const enabled = true;'] }])).resolves.toEqual({
+      changed: { risk: 55, reasoning: 'Scored on retry.' },
+    });
+    expect(writes).toBe(2);
+  });
+
   it('gives up after the bounded retry so a permanently dead scorer still answers the request', async () => {
     vi.resetModules();
     let writes = 0;

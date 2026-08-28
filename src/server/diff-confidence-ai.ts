@@ -95,6 +95,17 @@ const SCORER_IDLE_SHUTDOWN_MS = 30_000;
 // borrowing either of the foreground Codex/Claude task slots.
 const SCORER_POOL_SIZE = 4;
 
+/** Every failure mode that is a scorer problem rather than a verdict on the
+ * block — a dead worker, a turn that timed out, a malformed model result —
+ * funnels through here so one bad turn cannot permanently strand a block as
+ * unscored. Only an exhausted attempt budget reports the request as failed. */
+function failPending(pending: PendingAssessment, error: Error): void {
+  if (pending.timeout) clearTimeout(pending.timeout);
+  pending.timeout = null;
+  if (pending.attempts < MAX_ASSESSMENT_ATTEMPTS) queue.push(pending);
+  else pending.reject(error);
+}
+
 function recycleWorker(worker: ScorerWorker): void {
   if (!workers.delete(worker)) return;
   worker.outputBuffer = '';
@@ -108,7 +119,7 @@ function scheduleIdleShutdown(): void {
   idleShutdown.unref();
 }
 
-/** Two independent warm workers let separate diff blocks complete in parallel.
+/** A small pool of warm workers lets separate diff blocks complete in parallel.
  * Each is recycled after one turn so prior file text cannot accumulate in a
  * Claude session and slow later files. */
 function startWorker(): ScorerWorker {
@@ -132,14 +143,16 @@ function startWorker(): ScorerWorker {
         if (event.type !== 'result' || !worker.active) continue;
         const pending = worker.active; worker.active = null;
         if (pending.timeout) clearTimeout(pending.timeout);
-        if (event.is_error || typeof event.result !== 'string') pending.reject(new Error('AI diff assessment failed.'));
+        if (event.is_error || typeof event.result !== 'string') failPending(pending, new Error('AI diff assessment failed.'));
         else {
           try {
             const assessments = parseDiffConfidenceAssessment(event.result, pending.blocks.map((block) => block.key));
             publishRealtimeDiffConfidence(assessments);
             pending.resolve(assessments);
           }
-          catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); }
+          // Haiku occasionally answers with prose or drops one key of a batch.
+          // That is a bad turn, not an unscoreable block, so retry it.
+          catch (error) { failPending(pending, error instanceof Error ? error : new Error(String(error))); }
         }
         recycleWorker(worker);
         // Replace a retired worker immediately so the next visible file does
@@ -154,14 +167,9 @@ function startWorker(): ScorerWorker {
     recycleWorker(worker);
     const pending = worker.active;
     worker.active = null;
-    if (pending) {
-      if (pending.timeout) clearTimeout(pending.timeout);
-      pending.timeout = null;
-      // A dead worker is a scorer problem, not a verdict on this block. Give
-      // the request one fresh worker before declaring the change unscored.
-      if (pending.attempts < MAX_ASSESSMENT_ATTEMPTS) queue.push(pending);
-      else pending.reject(error);
-    }
+    // A dead worker is a scorer problem, not a verdict on this block. Give
+    // the request one fresh worker before declaring the change unscored.
+    if (pending) failPending(pending, error);
     dispatchNext();
   };
   scorer.once('exit', () => stopWorker(new Error('AI diff scorer stopped unexpectedly.')));
@@ -186,8 +194,10 @@ function dispatchNext(): void {
     pending.timeout = setTimeout(() => {
       if (worker.active !== pending) return;
       worker.active = null;
-      pending.reject(new Error(`AI diff scorer timed out after ${SCORER_TIMEOUT_MS / 1_000} seconds.`));
+      // A wedged turn used to strand its blocks permanently, which is why a
+      // large review stopped producing scores partway through its files.
       recycleWorker(worker);
+      failPending(pending, new Error(`AI diff scorer timed out after ${SCORER_TIMEOUT_MS / 1_000} seconds.`));
       dispatchNext();
     }, SCORER_TIMEOUT_MS);
     pending.timeout.unref();
