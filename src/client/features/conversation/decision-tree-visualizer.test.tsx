@@ -24,7 +24,7 @@ const messages: SharedMessage[] = [{
 describe('DecisionTreeVisualizer', () => {
   afterEach(cleanup);
 
-  it('renders a connected request, stream, decision, and tool-call hierarchy', () => {
+  it('starts with agent branches collapsed and expands their hierarchy when clicked', () => {
     render(<DecisionTreeVisualizer messages={messages} events={[
       { id: 'decision', messageId: 'stream', runId: null, kind: 'decision', detail: 'Check the existing tests before changing behavior.', createdAt: '2026-08-25T12:00:01.000Z' },
       { id: 'tool', messageId: 'stream', runId: null, kind: 'tool', detail: 'command_execution: npm test', createdAt: '2026-08-25T12:00:02.000Z' },
@@ -34,7 +34,14 @@ describe('DecisionTreeVisualizer', () => {
     expect(screen.getByText('Requested Codex')).toBeInTheDocument();
     expect(screen.getByText('Debug this')).toBeInTheDocument();
     expect(screen.getByText('Brief')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Codex agent stream' })).toBeInTheDocument();
+    const branches = screen.getByText('1 agent branch').closest('details')!;
+    expect(branches).not.toHaveAttribute('open');
+    expect(screen.getByRole('region', { name: 'Codex agent stream' })).not.toBeVisible();
+
+    fireEvent.click(screen.getByText('1 agent branch'));
+
+    expect(branches).toHaveAttribute('open');
+    expect(screen.getByRole('region', { name: 'Codex agent stream' })).toBeVisible();
     expect(screen.getAllByText('Check the existing tests before changing behavior.')).toHaveLength(1);
     expect(screen.getByText('Ran the test suite.')).toBeInTheDocument();
     expect(screen.getByText('Decision · Why')).toBeInTheDocument();

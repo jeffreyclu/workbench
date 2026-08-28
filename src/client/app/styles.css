@@ -1011,7 +1011,8 @@ nav { display: grid; gap: 3px; }
 .decision-tree-root-card { position: relative; display: grid; gap: 3px; padding: 13px 15px; color: #e3e4dd; background: linear-gradient(135deg, #24271c, #191a16 65%); border: 1px solid #596b35; border-radius: 11px; box-shadow: inset 0 1px #ffffff0a, 0 10px 28px #00000020; }
 .decision-tree-root-card > span, .decision-tree-event-type { display: flex; align-items: center; gap: 6px; color: #bfdf61; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
 .decision-tree-root-card strong { font-size: 13px; }.decision-tree-root-card small { display: grid; gap: 3px; color: #999b90; font: 10px/1.45 'DM Mono'; overflow-wrap: anywhere; }.decision-tree-root-card small b { color: #bfdf61; font-size: 8px; letter-spacing: .07em; text-transform: uppercase; }.decision-tree-root-card em { color: #b7b9af; font: 9px 'DM Mono'; font-style: normal; }
-.decision-tree-streams { position: relative; margin: 0 0 0 23px; padding: 16px 0 0 25px; border-left: 1px solid #4b513d; }
+.decision-tree-branches { margin: 12px 0 0 23px; }.decision-tree-branches > summary { display: inline-flex; align-items: center; gap: 6px; color: #bfdf61; cursor: pointer; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }.decision-tree-branches > summary::marker { color: #91ad50; }.decision-tree-branches > summary:focus-visible { outline: 2px solid #bfe367; outline-offset: 3px; border-radius: 2px; }
+.decision-tree-streams { position: relative; margin: 0; padding: 16px 0 0 25px; border-left: 1px solid #4b513d; }
 .decision-tree-stream { position: relative; }.decision-tree-stream + .decision-tree-stream { margin-top: 16px; }
 .decision-tree-stream-connector { position: absolute; top: 25px; left: -26px; width: 25px; border-top: 1px solid #4b513d; }
 .decision-tree-stream-card { min-width: 0; padding: 12px; background: #181916; border: 1px solid #373a31; border-radius: 10px; }
