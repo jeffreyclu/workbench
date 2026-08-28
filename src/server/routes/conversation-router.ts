@@ -35,13 +35,12 @@ export function createConversationRouter({ repository, database, capabilities, a
       try { return existsSync(path) && statSync(path).isDirectory() ? path : null; }
       catch { return null; } // The collector may remove a run worktree mid-request.
     };
+    const isRunWorktree = (workspacePath: string | null) => Boolean(workspacePath?.includes('/.workbench/run-worktrees/'));
     const conversationRuns = linkedItem
-      ? repository.listRuns(linkedItem.id).filter((run) => run.conversationId === conversationId && usableWorkspace(run.resolvedWorkspace))
+      ? repository.listRuns(linkedItem.id).filter((run) => run.conversationId === conversationId && (run.status === 'queued' || run.status === 'running') && usableWorkspace(run.resolvedWorkspace))
       : [];
     const activeRunWorkspace = conversationRuns
       .filter((run) => run.status === 'queued' || run.status === 'running')
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.resolvedWorkspace ?? null;
-    const runWorkspace = activeRunWorkspace ?? conversationRuns
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.resolvedWorkspace ?? null;
     const selected = database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversationId) as { workspace_path: string } | undefined;
     const root = dirname(process.cwd());
@@ -52,19 +51,19 @@ export function createConversationRouter({ repository, database, capabilities, a
       .map((path) => resolve(path));
     const sourcePath = usableWorkspace(linkedItem?.workspacePath);
     const activePath = usableWorkspace(activeRunWorkspace);
-    const linkedPath = activePath ?? usableWorkspace(runWorkspace) ?? sourcePath;
+    const linkedPath = activePath ?? sourcePath;
     if (linkedPath && !candidates.includes(linkedPath)) candidates.unshift(linkedPath);
     const defaultPath = linkedPath ?? (!linkedItem || linkedItem.projectName === 'Workbench' ? resolve(process.cwd()) : null);
     // An active run is authoritative: its uncommitted files live in a detached
     // worktree, so a prior source-checkout selection must not hide them.
-    // A detached run worktree is the only place its uncommitted edits exist.
-    // Keep it selected after the process finishes as well; otherwise a saved
-    // source-checkout selection makes completed work appear to vanish.
+    // Completed runs are integrated or recorded as snapshots. They must not
+    // keep an old worktree selected after the run exits.
     const savedPath = usableWorkspace(selected?.workspace_path);
-    const selectedPath = linkedPath ?? (savedPath && candidates.includes(savedPath) ? savedPath : defaultPath);
+    const savedPathIsUsable = Boolean(savedPath && candidates.includes(savedPath) && !isRunWorktree(savedPath));
+    const selectedPath = linkedPath ?? (savedPathIsUsable ? savedPath : defaultPath);
     // A stored choice may point to a garbage-collected run worktree. Repair
     // it server-side so every client converges on the usable checkout.
-    if (selected && !savedPath) {
+    if (selected && !savedPathIsUsable) {
       if (selectedPath) database.prepare(`INSERT INTO shared_conversation_workspace_selection (conversation_id, workspace_path, updated_at)
         VALUES (?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET workspace_path = excluded.workspace_path, updated_at = excluded.updated_at`)
         .run(conversationId, selectedPath, new Date().toISOString());

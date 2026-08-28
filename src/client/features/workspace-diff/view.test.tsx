@@ -105,6 +105,26 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(attempts).toBe(2);
   });
 
+  it('automatically renders the latest recorded changes when the current checkout is clean', async () => {
+    const recordedFile: WorkspaceDiffFile = {
+      path: 'src/recovered.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false,
+      patch: '@@ -1 +1 @@ recoveredBehavior\n-before\n+after',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench', selected: true }] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([], 'clean-main') });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [{ id: 'recorded-run', capturedAt: '2026-08-28T12:40:02.798Z', originatingAgentRunId: 'run-1', commitHash: 'abcdef123456', diff: workspaceDiff([recordedFile], 'recorded-run') }] });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Full diff for src/recovered.ts')).toBeInTheDocument();
+    expect(screen.queryByText('No uncommitted changes to review.')).toBeNull();
+  });
+
   it('orders the queue deterministically by source order, with no ambient AI scoring', async () => {
     const files: WorkspaceDiffFile[] = [
       { path: 'src/local.ts', editorUrl: 'vscode://file/tmp/workbench/src/local.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false, patch: '@@ -1 +1 @@ localOne\n-before\n+after\n@@ -10 +10 @@ localTwo\n-old\n+new' },
