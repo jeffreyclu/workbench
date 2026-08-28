@@ -24,6 +24,9 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   const diffBody = useRef<HTMLDivElement | null>(null);
   const language = languageFromPath(filePath);
   const decisionByHunkId = new Map(decisions.flatMap((decision) => decision.hunks.map((hunk) => [hunk.id, decision] as const)));
+  // Only spotlight when the selected decision actually lives in this file:
+  // dimming a file that has nothing selected would just make it unreadable.
+  const spotlight = hunks.some((hunk) => (decisionByHunkId.get(hunk.decisionId)?.id ?? null) === activeDecisionId);
 
   useEffect(() => {
     // IDE LEGACY-AFFECTING: `scrollIntoView` scrolls every ancestor, including
@@ -41,7 +44,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
       <small>{hunks.length} {hunks.length === 1 ? 'block' : 'blocks'} in this file</small>
       {editorUrl && <a href={editorUrl} aria-label={`Open ${filePath} in editor`} title="Open in editor"><ExternalLink size={13} aria-hidden="true" /></a>}
     </header>
-    <div className="diff-review-file-diff-body" ref={diffBody}>
+    <div className={`diff-review-file-diff-body${spotlight ? ' spotlight' : ''}`} ref={diffBody}>
       {hunks.map((hunk) => {
         const decision = decisionByHunkId.get(hunk.decisionId);
         const active = decision?.id === activeDecisionId;

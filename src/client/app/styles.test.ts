@@ -258,6 +258,35 @@ describe('diff review layout', () => {
     expect(hunkRule).not.toContain('opacity');
     expect(styles).not.toContain('.diff-review-diff-block:hover { opacity: 1; }');
   });
+
+  it('dims the rest of the file only while a decision block is spotlighted, and lifts the dim on hover', () => {
+    const dimRule = styles.match(/^\.diff-review-file-diff-body\.spotlight \.diff-review-diff-block:not\(\.active\)\s*\{[^}]*\}/m)?.[0] ?? '';
+    const hoverRule = styles.match(/^\.diff-review-file-diff-body\.spotlight \.diff-review-diff-block:not\(\.active\):hover[^{]*\{[^}]*\}/m)?.[0] ?? '';
+    const activeRule = styles.match(/^\.diff-review-diff-block\.active\s*\{[^}]*\}/m)?.[0] ?? '';
+
+    // The dim is scoped to `.spotlight`, so a file with nothing selected is
+    // never faded — that was the regression behind the earlier removal.
+    expect(dimRule).toContain('opacity: .38');
+    expect(hoverRule).toContain('opacity: 1');
+    expect(hoverRule).toContain('filter: none');
+    expect(activeRule).toContain('box-shadow: 0 0 0 1px #414a20, 0 0 30px -8px #c6f43266');
+    expect(styles).toContain('@media (prefers-reduced-motion: reduce) { .diff-review-diff-block, .diff-review-file-diff-body.spotlight .diff-review-diff-block:not(.active) { transition: none; }');
+  });
+
+  it('renders diff code as monospaced, tab-aware text with a hanging indent for wrapped lines', () => {
+    const lineRule = styles.match(/^\.diff-line\s*\{[^}]*\}/m)?.[0] ?? '';
+
+    expect(styles).toContain("--code-font: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;");
+    expect(lineRule).toContain('font-family: var(--code-font)');
+    expect(lineRule).toContain('tab-size: 2');
+    expect(lineRule).toContain('white-space: pre-wrap');
+    // A wrapped continuation must not fall back under the line-number gutter.
+    expect(styles).toContain('.diff-line > span:last-child { padding-left: calc(8px + 4ch); text-indent: -4ch; }');
+    // Every diff surface uses the same fallback-safe monospace stack.
+    for (const rule of ['.workspace-diff-file pre', '.github-diff-file pre', '.diff-review-file-diff-body']) {
+      expect(styles.match(new RegExp(`^\\${rule}\\s*\\{[^}]*\\}`, 'm'))?.[0] ?? '', `${rule} uses --code-font`).toContain('var(--code-font)');
+    }
+  });
 });
 
 describe('agent debugger layout', () => {

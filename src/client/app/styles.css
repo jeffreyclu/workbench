@@ -5,6 +5,9 @@
   color: #e9e8e3;
   background: #0d0d0c;
   font-synthesis: none;
+  /* Code surfaces must stay monospaced even before the webfont loads: a
+   * proportional fallback collapses indentation and breaks column alignment. */
+  --code-font: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --panel: #121211;
   --panel-raised: #181816;
   --line: #2a2a27;
@@ -395,10 +398,13 @@ nav { display: grid; gap: 3px; }
 .workspace-diff-file > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-diff-file > header span { flex: 0 0 auto; color: #898880; text-transform: capitalize; }
 .diff-file-info { display: flex; align-items: center; gap: 12px; min-width: 0; overflow: hidden; }
-.workspace-diff-file pre { min-width: 0; max-width: 100%; margin: 0; padding: 8px 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; background: #10100f; font: 11px/1.55 'DM Mono'; }
-.diff-line { display: grid; grid-template-columns: 42px 42px minmax(0, 1fr); min-height: 18px; color: #c9c8c1; white-space: pre-wrap; }
+.workspace-diff-file pre { min-width: 0; max-width: 100%; margin: 0; padding: 8px 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; background: #10100f; font: 11px/1.55 var(--code-font); tab-size: 2; }
+.diff-line { display: grid; grid-template-columns: 42px 42px minmax(0, 1fr); min-height: 18px; color: #c9c8c1; font-family: var(--code-font); font-variant-ligatures: none; tab-size: 2; white-space: pre-wrap; }
 .diff-line > span { padding: 0 8px; }
 .diff-line > span:last-child, .diff-line-code { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+/* A wrapped long line restarts at the code column, not under the gutter, and is
+ * pushed past its own indentation so nesting still reads at a glance. */
+.diff-line > span:last-child { padding-left: calc(8px + 4ch); text-indent: -4ch; }
 .diff-line > span:nth-child(-n + 2) { color: #77766f; text-align: right; user-select: none; border-right: 1px solid #242421; }
 .diff-line.addition { background: #12261e; }.diff-line.addition > span:nth-child(-n + 2) { color: #8fb59c; background: #1b3626; border-right-color: #1b3626; }
 .diff-line.deletion { background: #2d1f23; }.diff-line.deletion > span:nth-child(-n + 2) { color: #c9a3a7; background: #3b252b; border-right-color: #3b252b; }
@@ -517,7 +523,7 @@ nav { display: grid; gap: 3px; }
 .diff-review-file-diff > header small { margin-left: auto; flex: 0 0 auto; color: #77766f; font: 10px 'DM Mono'; }
 .diff-review-file-diff > header a { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: 0 0 auto; color: #aaa9a2; border: 1px solid #3c3c36; border-radius: 5px; }
 .diff-review-file-diff > header a:hover, .diff-review-file-diff > header a:focus-visible { color: var(--acid); border-color: #596234; outline: 0; }
-.diff-review-file-diff-body { max-height: min(72vh, 760px); overflow-y: auto; overscroll-behavior-y: contain; font: 11px/1.65 'DM Mono'; scroll-padding-block: 60px; }
+.diff-review-file-diff-body { max-height: min(72vh, 760px); overflow-y: auto; overscroll-behavior-y: contain; font: 11px/1.65 var(--code-font); scroll-padding-block: 60px; }
 .diff-review-diff-block { border-left: 2px solid transparent; transition: border-color .15s ease, background .15s ease; }
 .diff-review-diff-block { --state-tone: #6f6e68; }
 .diff-review-diff-block.state-reviewed { --state-tone: #8bbd75; }
@@ -525,7 +531,13 @@ nav { display: grid; gap: 3px; }
 .diff-review-diff-block.state-commented { --state-tone: #9ab6d8; }
 .diff-review-diff-block.settled { border-left-color: var(--state-tone); }
 .diff-review-diff-block.settled .diff-review-diff-block-header { background: color-mix(in srgb, var(--state-tone) 9%, #1b1b18); }
-.diff-review-diff-block.active { border-left-color: var(--acid); background: #14150e; scroll-margin-block: 48px; }
+.diff-review-diff-block.active { position: relative; z-index: 1; border-left-color: var(--acid); background: #16170e; box-shadow: 0 0 0 1px #414a20, 0 0 30px -8px #c6f43266; scroll-margin-block: 48px; }
+/* Spotlight: while a decision is selected its block stays lit and the rest of
+ * the file recedes, so a long diff reads as one focused block in context. The
+ * dimming only exists while something is selected, and lifts on hover, so no
+ * hunk is ever permanently hard to read. */
+.diff-review-file-diff-body.spotlight .diff-review-diff-block:not(.active) { opacity: .38; filter: saturate(.55); transition: opacity .18s ease, filter .18s ease; }
+.diff-review-file-diff-body.spotlight .diff-review-diff-block:not(.active):hover, .diff-review-file-diff-body.spotlight .diff-review-diff-block:not(.active):focus-within { opacity: 1; filter: none; }
 .diff-review-diff-block-header { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; color: inherit; border: 0; border-top: 1px solid #242421; background: #1b1b18; cursor: pointer; text-align: left; }
 .diff-review-diff-block:first-child .diff-review-diff-block-header { border-top: 0; }
 .diff-review-diff-block.active .diff-review-diff-block-header { background: #24270f; }
@@ -535,7 +547,7 @@ nav { display: grid; gap: 3px; }
 .diff-review-diff-block-header small b { color: #8bbd75; }.diff-review-diff-block-header small i { color: #d97b73; font-style: normal; }
 .diff-review-diff-block-header em { flex: 0 0 auto; font: 700 9px 'DM Mono'; font-style: normal; text-transform: uppercase; }
 .diff-review-diff-block > p { margin: 0; padding: 10px; }
-@media (prefers-reduced-motion: reduce) { .diff-review-diff-block { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .diff-review-diff-block, .diff-review-file-diff-body.spotlight .diff-review-diff-block:not(.active) { transition: none; } }
 @media (min-width: 1100px) { .diff-review-workbench { grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr); } }
 .token.comment, .token.prolog, .token.doctype, .token.cdata { color: #74736b; }
 .token.punctuation { color: #b3b2ab; }
@@ -580,7 +592,7 @@ nav { display: grid; gap: 3px; }
 .diff-file-copy-path:hover { color: var(--acid); background: #24241f; }
 .diff-file-open-editor { display: inline-flex; align-items: center; justify-content: center; color: #77766f; text-decoration: none; }
 .diff-file-open-editor:hover, .diff-file-open-editor:focus-visible { color: var(--acid); background: #24241f; outline: 0; }
-.github-diff-file pre { min-width: 0; max-width: 100%; margin: 0; padding: 8px 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; background: #10100f; font: 11px/1.55 'DM Mono'; }
+.github-diff-file pre { min-width: 0; max-width: 100%; margin: 0; padding: 8px 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; background: #10100f; font: 11px/1.55 var(--code-font); tab-size: 2; }
 .github-diff-load-more { width: 100%; min-height: 40px; color: #c4c3bc; border: 0; border-top: 1px solid #302f2b; background: #191916; cursor: pointer; font: 700 10px 'DM Mono'; }
 .github-diff-load-more:hover:not(:disabled) { color: var(--acid); background: #24241f; }.github-diff-load-more:disabled { color: #85847d; cursor: wait; }
 .github-diff-unrenderable { display: grid; gap: 10px; padding: 12px; }.github-diff-unrenderable p { margin: 0; }.github-diff-unrenderable img { display: block; max-width: min(100%, 900px); max-height: 620px; border: 1px solid #302f2b; border-radius: 6px; background: repeating-conic-gradient(#252522 0 25%, #171715 0 50%) 50% / 18px 18px; object-fit: contain; }.github-diff-unrenderable a { display: inline-flex; align-items: center; gap: 5px; width: fit-content; min-height: 34px; padding: 0 9px; color: #c4c3bc; border: 1px solid #4a4942; border-radius: 6px; font: 700 10px 'DM Mono'; text-decoration: none; }.github-diff-unrenderable a:hover { color: var(--acid); border-color: #596234; }
@@ -604,6 +616,7 @@ nav { display: grid; gap: 3px; }
   .diff-block-collapsed { margin-left: 68px; }
   .diff-block-disclosure { min-height: 44px; }
   .diff-line > span { padding-inline: 6px; }
+  .diff-line > span:last-child { padding-left: calc(6px + 4ch); }
   .diff-review-summary { align-items: stretch; flex-direction: column; gap: 9px; padding: 12px; }
   .diff-review-summary progress { width: 100%; }
   .mobile-decision-navigator { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 8px; padding: 8px 12px; background: #11110f; border-block: 1px solid #252522; }
