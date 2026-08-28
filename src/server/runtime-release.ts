@@ -1,5 +1,6 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { isDatabaseCompatible } from './runtime-compatibility.js';
 
 const CLIENT_ENTRY = 'client/index.html';
 const SERVER_ENTRY = 'src/server/index.ts';
@@ -75,7 +76,7 @@ export function assertUsableRuntimeRelease(releasePath: string): void {
   }
 }
 
-export function publishRuntimeRelease(root: string, releaseId: string, fingerprint: string): string {
+export function publishRuntimeRelease(root: string, releaseId: string, fingerprint: string, databasePath?: string): string {
   const runtimeRoot = join(root, '.workbench-runtime');
   const releasesRoot = join(runtimeRoot, 'releases');
   const releasePath = join(releasesRoot, releaseId);
@@ -92,6 +93,9 @@ export function publishRuntimeRelease(root: string, releaseId: string, fingerpri
     cpSync(join(root, 'src/server'), join(stagingPath, 'src/server'), { recursive: true, errorOnExist: true });
     cpSync(join(root, 'src/shared'), join(stagingPath, 'src/shared'), { recursive: true, errorOnExist: true });
     assertUsableRuntimeRelease(stagingPath);
+    if (databasePath && !isDatabaseCompatible(stagingPath, databasePath)) {
+      throw new Error('Candidate runtime does not support every migration recorded in the live database. Keep the migration forward-compatible when rolling back code.');
+    }
     renameSync(stagingPath, releasePath);
     // A rename of a symlink is atomic on the local filesystems we support.
     symlinkSync(relative(runtimeRoot, releasePath), nextLink, 'dir');
