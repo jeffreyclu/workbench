@@ -10,6 +10,8 @@ export type ReviewRiskSignal = typeof REVIEW_RISK_SIGNALS[number];
 
 export interface ReviewDecisionHunk {
   id: string;
+  /** Content identity of this hunk, stable across diff revisions. */
+  fingerprint: string;
   filePath: string;
   editorUrl: string | null;
   hunkRange: string;
@@ -76,6 +78,31 @@ export function countChangedLines(lines: string[]) {
     if (line.startsWith('-') && !line.startsWith('---')) deletions += 1;
   }
   return { additions, deletions };
+}
+
+/** Content identity of a hunk, independent of where it sits in the file.
+ * A diff revision is a hash of the entire patch, so while an agent is still
+ * writing, every keystroke anywhere in the repository produced a new revision
+ * and orphaned every review the reviewer had already recorded. Only the file
+ * and the changed lines are hashed: line numbers and surrounding context move
+ * without changing what was decided. Trailing whitespace is normalised for the
+ * same reason. */
+export function hunkFingerprint(filePath: string, lines: string[]): string {
+  const changed = changedCodeSignature(lines);
+  const text = `${filePath}\u0000${changed.length > 0 ? changed.join('\n') : lines.join('\n')}`;
+  // FNV-1a rather than node:crypto: the client records the fingerprint and the
+  // server matches on it, so both runtimes must produce the same string.
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = BigInt.asUintN(64, (hash ^ BigInt(text.charCodeAt(index))) * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, '0');
+}
+
+function changedCodeSignature(lines: string[]): string[] {
+  return lines
+    .filter((line) => (line.startsWith('+') && !line.startsWith('+++')) || (line.startsWith('-') && !line.startsWith('---')))
+    .map((line) => `${line[0]}${line.slice(1).trimEnd()}`);
 }
 
 export function hunkLocation(range: string): string {
@@ -206,24 +233,67 @@ function behaviorSummary(subject: string | null, hunks: ReviewDecisionHunk[], st
   return `${verb} ${effect}${fileCount > 1 ? ` across ${fileCount} files` : ''}.`;
 }
 
+interface ParsedHunk { file: WorkspaceDiffFile; patchHunk: PatchHunk; fingerprint: string }
+
+/** Reviews recorded against an earlier revision, indexed by the fingerprint of
+ * the hunk they were recorded on. A carried review is only offered when the
+ * pairing is unambiguous: exactly one hunk in the current diff carries that
+ * fingerprint. Two byte-identical hunks in one diff cannot be told apart, and
+ * silently marking the wrong one reviewed is worse than asking again. Among
+ * several past decisions on identical content, the most recent one stands. */
+function carriedReviewsByFingerprint(parsed: ParsedHunk[], reviews: DiffHunkReview[]): Map<string, DiffHunkReview> {
+  const currentFingerprintByKey = new Map(parsed.map((entry) => [`${entry.file.path}::${entry.patchHunk.range}`, entry.fingerprint]));
+  const currentCounts = new Map<string, number>();
+  for (const entry of parsed) currentCounts.set(entry.fingerprint, (currentCounts.get(entry.fingerprint) ?? 0) + 1);
+  const byFingerprint = new Map<string, DiffHunkReview>();
+  for (const review of reviews) {
+    if (!review.fingerprint) continue;
+    // A review whose code is still at the coordinates it was recorded against
+    // is applied there directly, so it is not a candidate for any other hunk.
+    // Matching on the fingerprint rather than the coordinates alone matters:
+    // an agent that replaced this hunk's lines while leaving the range intact
+    // leaves a review that belongs to whichever hunk the code moved to, if any.
+    if (currentFingerprintByKey.get(`${review.filePath}::${review.hunkRange}`) === review.fingerprint) continue;
+    if (currentCounts.get(review.fingerprint) !== 1) continue;
+    const existing = byFingerprint.get(review.fingerprint);
+    if (!existing || review.updatedAt > existing.updatedAt) byFingerprint.set(review.fingerprint, review);
+  }
+  return byFingerprint;
+}
+
+/** The review recorded at a hunk's own coordinates, if it is about this code.
+ * The reviews handed in span revisions, so coordinates alone no longer identify
+ * a hunk: a decision recorded against an earlier revision can name a range that
+ * now holds entirely different lines, and applying it there would mark unread
+ * code reviewed. A row with no fingerprint predates them and is only ever
+ * returned for the revision being read, so its coordinates still hold. */
+function coordinateReview(atKey: DiffHunkReview[] | undefined, fingerprint: string): DiffHunkReview | undefined {
+  return atKey?.find((review) => review.fingerprint === fingerprint) ?? atKey?.find((review) => !review.fingerprint);
+}
+
 export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHunkReview[]): ReviewDecision[] {
-  const reviewByKey = new Map(reviews.map((review) => [`${review.filePath}::${review.hunkRange}`, review]));
+  const reviewsByKey = new Map<string, DiffHunkReview[]>();
+  for (const review of reviews) {
+    const key = `${review.filePath}::${review.hunkRange}`;
+    reviewsByKey.set(key, [...(reviewsByKey.get(key) ?? []), review]);
+  }
+  const parsed: ParsedHunk[] = files.flatMap((file) => splitPatchHunks(file)
+    .map((patchHunk) => ({ file, patchHunk, fingerprint: hunkFingerprint(file.path, patchHunk.lines) })));
+  const carried = carriedReviewsByFingerprint(parsed, reviews);
   const candidates: DecisionCandidate[] = [];
-  for (const file of files) {
-    for (const patchHunk of splitPatchHunks(file)) {
-      const review = reviewByKey.get(`${file.path}::${patchHunk.range}`);
-      const counts = countChangedLines(patchHunk.lines);
-      candidates.push({
-        subject: hunkSubject(patchHunk), fileStatus: file.status,
-        hunk: {
-          id: `${file.path}::${patchHunk.range}`, filePath: file.path, editorUrl: file.editorUrl ?? null,
-          hunkRange: patchHunk.range, location: hunkLocation(patchHunk.range), lines: patchHunk.lines,
-          additions: counts.additions, deletions: counts.deletions, state: review?.state ?? null, note: review?.note ?? null,
-        },
-        riskSignals: staticRiskSignals(file, patchHunk),
-        importOnly: isImportOnlyChange(patchHunk.lines),
-      });
-    }
+  for (const { file, patchHunk, fingerprint } of parsed) {
+    const review = coordinateReview(reviewsByKey.get(`${file.path}::${patchHunk.range}`), fingerprint) ?? carried.get(fingerprint);
+    const counts = countChangedLines(patchHunk.lines);
+    candidates.push({
+      subject: hunkSubject(patchHunk), fileStatus: file.status,
+      hunk: {
+        id: `${file.path}::${patchHunk.range}`, fingerprint, filePath: file.path, editorUrl: file.editorUrl ?? null,
+        hunkRange: patchHunk.range, location: hunkLocation(patchHunk.range), lines: patchHunk.lines,
+        additions: counts.additions, deletions: counts.deletions, state: review?.state ?? null, note: review?.note ?? null,
+      },
+      riskSignals: staticRiskSignals(file, patchHunk),
+      importOnly: isImportOnlyChange(patchHunk.lines),
+    });
   }
 
   const subjectFileCounts = new Map<string, Set<string>>();

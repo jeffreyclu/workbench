@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
+import { hunkFingerprint } from '../shared/review-decisions.js';
 
 export type ReviewAssistAction = 'explain' | 'what_could_break' | 'compare_task_intent' | 'score_risk';
 
@@ -68,7 +69,16 @@ function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision,
   // settled the decision — every settled hunk then paid for a fresh model turn
   // on the next visit, which is exactly the rescore loop this cache prevents.
   // It would also bias the score: an already-approved change reads as safer.
-  const keyedDecision = { behavior: decision.behavior, hunks: decision.hunks };
+  // Hunks are keyed by content fingerprint, not by the payload the prompt was
+  // built from. A hunk's location and its surrounding context lines both move
+  // whenever an unrelated edit lands above it, and while an agent is writing
+  // that happens constantly — keying on them threw away a paid-for answer for
+  // code that had not changed at all. The fingerprint is the same one review
+  // decisions carry forward on, so "unchanged logic" means one thing here.
+  const keyedDecision = {
+    behavior: decision.behavior,
+    hunks: decision.hunks.map((hunk) => hunkFingerprint(hunk.filePath, hunk.lines)),
+  };
   const keyed = action === 'compare_task_intent'
     ? { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, taskIntent }
     : { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision };

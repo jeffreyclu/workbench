@@ -260,7 +260,7 @@ describe('WorkspaceDiffView decision queue', () => {
       path: 'src/reviewed.ts', previousPath: null, status: 'modified', additions: 3, deletions: 3, isBinary: false,
       patch: '@@ -1 +1 @@ firstBehavior\n-a\n+b\n@@ -10 +10 @@ secondBehavior\n-c\n+d\n@@ -20 +20 @@ thirdBehavior\n-e\n+f',
     };
-    let reviews: DiffHunkReview[] = [{ id: 'review-3', revision: 'hunk-revision', filePath: file.path, hunkRange: '@@ -20 +20 @@ thirdBehavior', state: 'commented', note: 'Existing context.', updatedAt: '2026-08-27T00:00:00.000Z' }];
+    let reviews: DiffHunkReview[] = [{ id: 'review-3', revision: 'hunk-revision', filePath: file.path, hunkRange: '@@ -20 +20 @@ thirdBehavior', fingerprint: null, state: 'commented', note: 'Existing context.', updatedAt: '2026-08-27T00:00:00.000Z' }];
     const putBodies: unknown[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -269,9 +269,9 @@ describe('WorkspaceDiffView decision queue', () => {
       if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'hunk-revision') });
       if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews });
       if (url.endsWith('/workspace-diff/hunk-reviews/batch') && init?.method === 'PUT') {
-        const body = JSON.parse(String(init.body)) as { revision: string; hunks: Array<{ filePath: string; hunkRange: string }>; state: DiffHunkReview['state']; note?: string };
+        const body = JSON.parse(String(init.body)) as { revision: string; hunks: Array<{ filePath: string; hunkRange: string; fingerprint?: string }>; state: DiffHunkReview['state']; note?: string };
         putBodies.push(body);
-        const saved = body.hunks.map((hunk, index): DiffHunkReview => ({ id: `review-${reviews.length + index + 1}`, revision: body.revision, ...hunk, state: body.state, note: body.note ?? null, updatedAt: '2026-08-27T00:00:00.000Z' }));
+        const saved = body.hunks.map((hunk, index): DiffHunkReview => ({ id: `review-${reviews.length + index + 1}`, revision: body.revision, fingerprint: hunk.fingerprint ?? null, ...hunk, state: body.state, note: body.note ?? null, updatedAt: '2026-08-27T00:00:00.000Z' }));
         reviews = [...reviews.filter((review) => !body.hunks.some((hunk) => hunk.filePath === review.filePath && hunk.hunkRange === review.hunkRange)), ...saved];
         return json({ reviews: saved });
       }
@@ -282,12 +282,12 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(await screen.findByRole('heading', { name: 'Changes behavior in src/reviewed.ts.' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
     expect(await screen.findByText('@@ -10 +10 @@ secondBehavior')).toBeInTheDocument();
-    expect(putBodies[0]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -1 +1 @@ firstBehavior' }], state: 'reviewed' });
+    expect(putBodies[0]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -1 +1 @@ firstBehavior', fingerprint: expect.any(String) }], state: 'reviewed' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
     expect(await screen.findByText('@@ -20 +20 @@ thirdBehavior')).toBeInTheDocument();
     expect(screen.getByText('Commented', { selector: '.diff-review-completion-state' })).toBeInTheDocument();
-    expect(putBodies[1]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -10 +10 @@ secondBehavior' }], state: 'reviewed' });
+    expect(putBodies[1]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -10 +10 @@ secondBehavior', fingerprint: expect.any(String) }], state: 'reviewed' });
     expect(await screen.findByLabelText('3 decisions across 1 file, 3 completed')).toHaveTextContent('3 completed');
   });
 
@@ -321,7 +321,7 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(text).toContain('src/follow-up.ts');
     expect(text).toContain('AI risk: not scored yet');
     expect(text).toContain('-before\n+after');
-    expect(putBodies[0]).toEqual({ revision: 'follow-up-revision', hunks: [{ filePath: 'src/follow-up.ts', hunkRange: '@@ -1 +1 @@ followUpBehavior' }], state: 'commented' });
+    expect(putBodies[0]).toEqual({ revision: 'follow-up-revision', hunks: [{ filePath: 'src/follow-up.ts', hunkRange: '@@ -1 +1 @@ followUpBehavior', fingerprint: expect.any(String) }], state: 'commented' });
   });
 
   it('keeps the active decision in place and shows an actionable error when persistence fails', async () => {

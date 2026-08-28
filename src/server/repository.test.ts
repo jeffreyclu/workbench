@@ -74,6 +74,29 @@ describe('WorkItemRepository', () => {
     ]);
   });
 
+  it('offers fingerprinted reviews from earlier revisions so decisions survive an agent still writing', () => {
+    const item = repository.create({ title: 'Live review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', fingerprint: 'fp-a', state: 'reviewed' });
+    // Recorded before fingerprints existed: it stays pinned to its own revision.
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/legacy.ts', hunkRange: '@@ -1 +1 @@', state: 'commented', note: 'legacy' });
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-2', filePath: 'src/b.ts', hunkRange: '@@ -9 +9 @@', fingerprint: 'fp-b', state: 'needs_changes' });
+
+    const reviews = repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-2');
+    expect(reviews).toEqual([
+      expect.objectContaining({ revision: 'rev-2', fingerprint: 'fp-b', state: 'needs_changes' }),
+      expect.objectContaining({ revision: 'rev-1', fingerprint: 'fp-a', state: 'reviewed' }),
+    ]);
+  });
+
+  it('prefers the review recorded at the current revision over an older one for the same content', () => {
+    const item = repository.create({ title: 'Superseded review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', fingerprint: 'fp-a', state: 'reviewed' });
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-2', filePath: 'src/a.ts', hunkRange: '@@ -4,3 +4,3 @@', fingerprint: 'fp-a', state: 'needs_changes' });
+
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-2'))
+      .toEqual([expect.objectContaining({ revision: 'rev-2', state: 'needs_changes' })]);
+  });
+
   it('rolls back every hunk when one write in a review decision fails', () => {
     const item = repository.create({ title: 'Atomic cross-file review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     database.exec(`CREATE TRIGGER fail_review_hunk BEFORE INSERT ON diff_hunk_reviews

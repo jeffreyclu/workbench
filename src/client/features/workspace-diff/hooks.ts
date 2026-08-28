@@ -61,7 +61,7 @@ export function useDiffHunkReviews(scope: WorkspaceDiffScope, revision: string |
 export function useUpsertDiffHunkReview(scope: WorkspaceDiffScope, revision: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { hunks: Array<{ filePath: string; hunkRange: string }>; state: DiffHunkReviewState; note?: string }) => workspaceDiffData.upsertHunkReviews(scope, { ...input, revision: revision! }),
+    mutationFn: (input: { hunks: Array<{ filePath: string; hunkRange: string; fingerprint?: string }>; state: DiffHunkReviewState; note?: string }) => workspaceDiffData.upsertHunkReviews(scope, { ...input, revision: revision! }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.hunkReviews(scope, revision) });
     },

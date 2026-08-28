@@ -101,6 +101,33 @@ describe('requestReviewAssist caching', () => {
     expect(spawn.mock.calls.length).toBe(spawnsAfterFirstTurn);
   });
 
+  it('reuses an answer when the same code moves, and asks again when a changed line differs', async () => {
+    vi.resetModules();
+    const spawn = mockStreamingWorker('SCORE: 20\nBounded retry.');
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { lookupReviewAssist, requestReviewAssist } = await import('./review-assist-ai.js');
+    const database = openDatabase(':memory:');
+
+    await requestReviewAssist(database, 'score_risk', {
+      ...decision,
+      hunks: [{ filePath: 'src/sync.ts', location: 'Line 10', lines: [' const client = sync();', '+retry(3);'] }],
+    }, null);
+
+    // An edit above this hunk shifts its line numbers and rewrites its context
+    // line. The reviewed logic is identical, so the answer must still be served
+    // from cache rather than rescored on the agent's next write.
+    expect(lookupReviewAssist(database, 'score_risk', {
+      ...decision,
+      hunks: [{ filePath: 'src/sync.ts', location: 'Line 84', lines: [' const client = sync({ trace });', '+retry(3);'] }],
+    }, null)).toBe('SCORE: 20\nBounded retry.');
+
+    // A changed line that actually differs is different code: no cache hit.
+    expect(lookupReviewAssist(database, 'score_risk', {
+      ...decision,
+      hunks: [{ filePath: 'src/sync.ts', location: 'Line 10', lines: [' const client = sync();', '+retry(5);'] }],
+    }, null)).toBeNull();
+  });
+
   it('tells the model that a file path decides blast radius, so test files are not scored as production risk', async () => {
     vi.resetModules();
     const spawn = mockStreamingWorker('SCORE: 8\nAssertion update in a test file.');

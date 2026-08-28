@@ -234,6 +234,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
         revision: z.string().trim().min(1),
         filePath: z.string().trim().min(1),
         hunkRange: z.string().trim().min(1),
+        fingerprint: z.string().trim().min(1).optional(),
         state: z.enum(['reviewed', 'needs_changes', 'commented']),
         note: z.string().trim().min(1).optional(),
       }).parse(request.body);

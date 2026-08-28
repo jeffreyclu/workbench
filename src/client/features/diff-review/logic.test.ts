@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
-import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions } from './logic.js';
+import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, hunkFingerprint, nextPendingDecisionId, orderReviewDecisions } from './logic.js';
 
 const localFile: WorkspaceDiffFile = {
   path: 'src/local.ts', status: 'modified', additions: 1, deletions: 1, previousPath: null,
@@ -16,6 +16,86 @@ const authTestFile: WorkspaceDiffFile = {
   path: 'src/server/auth/routes.test.ts', status: 'modified', additions: 1, deletions: 1, previousPath: null,
   patch: '@@ -30 +30 @@ describe("authorizeRequest")\n-expect(authorizeRequest()).toBe(false)\n+await expect(authorizeRequest()).rejects.toThrow()', isBinary: false,
 };
+
+describe('review decisions across diff revisions', () => {
+  // A revision is a hash of the whole patch, so an agent writing anywhere in
+  // the repository produces a new one. A decision must follow its code.
+  const movedAuthFile: WorkspaceDiffFile = {
+    ...authFile,
+    patch: authFile.patch!.replace('@@ -10 +10,3 @@', '@@ -42 +42,3 @@'),
+  };
+
+  const carriedReview = (filePath: string, lines: string[]): DiffHunkReview => ({
+    id: 'review-carried', revision: 'rev-1', filePath, hunkRange: '@@ -10 +10,3 @@ function authorizeRequest()',
+    fingerprint: hunkFingerprint(filePath, lines), state: 'reviewed', note: 'Checked once.',
+    updatedAt: '2026-08-27T00:00:00.000Z',
+  });
+
+  it('carries a review onto the same code after the hunk moves to a new revision', () => {
+    const original = buildReviewDecisions([authFile], [])[0];
+    const [decision] = buildReviewDecisions([movedAuthFile], [carriedReview(authFile.path, original.hunks[0].lines)]);
+
+    expect(decision.hunks[0].hunkRange).toBe('@@ -42 +42,3 @@ function authorizeRequest()');
+    expect(decision).toMatchObject({ state: 'reviewed', note: 'Checked once.' });
+  });
+
+  it('leaves a decision pending once its own lines change', () => {
+    const rewritten: WorkspaceDiffFile = { ...movedAuthFile, patch: movedAuthFile.patch!.replace('denied', 'forbidden') };
+    const original = buildReviewDecisions([authFile], [])[0];
+    const [decision] = buildReviewDecisions([rewritten], [carriedReview(authFile.path, original.hunks[0].lines)]);
+
+    expect(decision.state).toBeNull();
+  });
+
+  it('refuses to carry a review when two hunks in the diff are byte-identical', () => {
+    const duplicated: WorkspaceDiffFile = {
+      path: 'src/duplicate.ts', status: 'modified', additions: 2, deletions: 0, previousPath: null,
+      patch: '@@ -2 +2 @@ first\n+const flag = true;\n@@ -20 +20 @@ second\n+const flag = true;', isBinary: false,
+    };
+    const [first] = buildReviewDecisions([duplicated], []);
+    const review: DiffHunkReview = {
+      id: 'review-ambiguous', revision: 'rev-1', filePath: duplicated.path, hunkRange: '@@ -99 +99 @@ elsewhere',
+      fingerprint: hunkFingerprint(duplicated.path, first.hunks[0].lines), state: 'reviewed', note: null,
+      updatedAt: '2026-08-27T00:00:00.000Z',
+    };
+
+    expect(buildReviewDecisions([duplicated], [review]).every((decision) => decision.state === null)).toBe(true);
+  });
+
+  it('does not mark a hunk reviewed when an older review only shares its coordinates', () => {
+    // The reviewer approved these lines at rev-1. The agent then rewrote them
+    // in place, leaving the hunk range identical. Matching on coordinates alone
+    // would show the rewritten code as already reviewed.
+    const original = buildReviewDecisions([authFile], [])[0];
+    const rewritten: WorkspaceDiffFile = { ...authFile, patch: authFile.patch!.replace('denied', 'forbidden') };
+    const [decision] = buildReviewDecisions([rewritten], [carriedReview(authFile.path, original.hunks[0].lines)]);
+
+    expect(decision.state).toBeNull();
+  });
+
+  it('carries a review to the hunk holding its code even when its old range was reused', () => {
+    const original = buildReviewDecisions([authFile], [])[0];
+    // rev-2 rewrote the lines at @@ -10 and the reviewed code now sits at @@ -42.
+    const reshuffled: WorkspaceDiffFile = {
+      ...authFile,
+      patch: `${authFile.patch!.replace('denied', 'forbidden')}\n${authFile.patch!.replace('@@ -10 +10,3 @@', '@@ -42 +42,3 @@')}`,
+    };
+    const decisions = buildReviewDecisions([reshuffled], [carriedReview(authFile.path, original.hunks[0].lines)]);
+    const moved = decisions.flatMap((decision) => decision.hunks).find((hunk) => hunk.hunkRange.startsWith('@@ -42'));
+    const rewritten = decisions.flatMap((decision) => decision.hunks).find((hunk) => hunk.hunkRange.startsWith('@@ -10'));
+
+    expect(moved?.state).toBe('reviewed');
+    expect(rewritten?.state).toBeNull();
+  });
+
+  it('ignores a fingerprint recorded against a hunk that is still present at its own coordinates', () => {
+    const original = buildReviewDecisions([authFile], [])[0];
+    const review = carriedReview(authFile.path, original.hunks[0].lines);
+    const [decision] = buildReviewDecisions([authFile], [{ ...review, state: 'needs_changes' }]);
+
+    expect(decision.state).toBe('needs_changes');
+  });
+});
 
 describe('diff review queue logic', () => {
   it('derives plain-English behavior and retains exact reviewable hunk content', () => {
@@ -41,7 +121,7 @@ describe('diff review queue logic', () => {
   it('groups the same concrete symbol across files and keeps partial legacy state pending', () => {
     const review: DiffHunkReview = {
       id: 'review-1', revision: 'rev-1', filePath: authFile.path,
-      hunkRange: '@@ -10 +10,3 @@ function authorizeRequest()', state: 'reviewed', note: null,
+      hunkRange: '@@ -10 +10,3 @@ function authorizeRequest()', fingerprint: null, state: 'reviewed', note: null,
       updatedAt: '2026-08-27T00:00:00.000Z',
     };
     const decisions = buildReviewDecisions([authFile, authTestFile], [review]);
@@ -102,7 +182,7 @@ describe('diff review queue logic', () => {
     const authDecision = decisions.find((decision) => decision.filePaths[0] === authFile.path)!;
     const authReview: DiffHunkReview = {
       id: 'review-3', revision: 'rev-1', filePath: authFile.path,
-      hunkRange: authDecision.hunks[0].hunkRange, state: 'reviewed', note: null,
+      hunkRange: authDecision.hunks[0].hunkRange, fingerprint: null, state: 'reviewed', note: null,
       updatedAt: '2026-08-27T00:00:00.000Z',
     };
     const reviewed = buildReviewDecisions([localFile, authFile], [authReview]);
@@ -119,7 +199,7 @@ describe('diff review queue logic', () => {
     // Reviewing the first decision sinks it in the queue; its number goes with it.
     const authReview: DiffHunkReview = {
       id: 'review-2', revision: 'rev-1', filePath: authFile.path,
-      hunkRange: '@@ -10 +10,3 @@ function authorizeRequest()', state: 'reviewed', note: null,
+      hunkRange: '@@ -10 +10,3 @@ function authorizeRequest()', fingerprint: null, state: 'reviewed', note: null,
       updatedAt: '2026-08-27T00:00:00.000Z',
     };
     const reviewed = buildReviewDecisions([localFile, authFile], [authReview]);

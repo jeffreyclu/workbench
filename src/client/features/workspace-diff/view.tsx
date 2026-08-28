@@ -122,7 +122,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
 
   const recordDecisionState = (decision: ReviewDecision, state: DiffHunkReviewState) =>
     upsertHunkReview.mutateAsync({
-      hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, hunkRange: hunk.hunkRange })),
+      hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, hunkRange: hunk.hunkRange, fingerprint: hunk.fingerprint })),
       state,
     });
 
