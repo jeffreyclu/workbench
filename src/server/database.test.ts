@@ -75,6 +75,7 @@ const EXPECTED_MIGRATIONS = [
   '062_agent_run_review_handoffs_immutable',
   '063_shared_conversation_manual_position',
   '064_review_assist_cache',
+  '065_backfill_estimated_cost',
 ];
 
 describe('openDatabase', () => {
@@ -472,6 +473,33 @@ describe('openDatabase', () => {
     expect(upgraded.prepare("SELECT COUNT(*) AS count FROM work_items WHERE project_key = 'workbench'").get()).toEqual({ count: 4 });
     expect(upgraded.prepare("SELECT name, key FROM projects ORDER BY key").all())
       .toEqual([{ name: 'Connectors', key: 'connectors' }, { name: 'Workbench', key: 'workbench' }]);
+    upgraded.close();
+  });
+
+  it('prices recorded token telemetry when upgrading from migration 064', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.prepare(`INSERT INTO work_items (id, title, queue_position, created_at, updated_at) VALUES ('item-1', 'Cost backfill fixture', 0, '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z')`).run();
+    current.prepare(`INSERT INTO agent_runs (id, work_item_id, kind, requested_target, agent, status, created_at, model, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens)
+      VALUES ('run-priced', 'item-1', 'execute', 'claude', 'claude', 'completed', '2026-08-27T00:00:00.000Z', 'opus', 1000, 0, 0, 1000)`).run();
+    current.prepare(`INSERT INTO agent_runs (id, work_item_id, kind, requested_target, agent, status, created_at, model, input_tokens, output_tokens)
+      VALUES ('run-unknown-model', 'item-1', 'execute', 'claude', 'claude', 'completed', '2026-08-27T00:00:00.000Z', 'mystery-model', 1000, 1000)`).run();
+    // Reset to the state a database recorded through migration 064 would be
+    // in: cost columns present, never written.
+    current.prepare("UPDATE agent_runs SET estimated_cost_usd = NULL, cost_source = NULL").run();
+    current.prepare("DELETE FROM schema_migrations WHERE id = '065_backfill_estimated_cost'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const priced = upgraded.prepare("SELECT estimated_cost_usd AS cost, cost_source AS source FROM agent_runs WHERE id = 'run-priced'").get() as { cost: number; source: string };
+    // 1M-scaled: 1000 input at $15/MTok + 1000 output at $75/MTok.
+    expect(priced.cost).toBeCloseTo(0.09, 6);
+    expect(priced.source).toBe('estimated');
+    const unknown = upgraded.prepare("SELECT estimated_cost_usd AS cost, cost_source AS source FROM agent_runs WHERE id = 'run-unknown-model'").get() as { cost: number | null; source: string | null };
+    expect(unknown.cost).toBeNull();
+    expect(unknown.source).toBeNull();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '065_backfill_estimated_cost'").get()).toBeTruthy();
     upgraded.close();
   });
 

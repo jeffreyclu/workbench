@@ -10,6 +10,7 @@ const messages: SharedMessage[] = [{
   status: 'completed', error: '', createdAt: '2026-08-25T12:00:00.000Z', completedAt: null,
   attachments: [], model: null, accountProfile: null, executionProfile: null, inputTokens: null,
   cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null,
+  estimatedCostUsd: null, costSource: null,
   fallbackFrom: null, fallbackReason: null, dispatchTarget: 'codex', dispatchGroupId: null,
   attempt: 0, maxAttempts: 3, nextAttemptAt: null, queuePriority: 0, retrievedMemoryCount: null,
 }, {
@@ -17,6 +18,7 @@ const messages: SharedMessage[] = [{
   status: 'running', error: '', createdAt: '2026-08-25T12:00:01.000Z', completedAt: null,
   attachments: [], model: 'gpt-5.6', accountProfile: 'default', executionProfile: 'standard', inputTokens: null,
   cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null,
+  estimatedCostUsd: null, costSource: null,
   fallbackFrom: null, fallbackReason: null, dispatchTarget: 'none', dispatchGroupId: 'request',
   attempt: 0, maxAttempts: 3, nextAttemptAt: null, queuePriority: 0, retrievedMemoryCount: 2,
 }];

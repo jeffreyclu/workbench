@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { estimateCostUsd } from './model-pricing.js';
 
 const baseSchemaStatements = [
   `
@@ -1763,6 +1764,33 @@ const schemaMigrations: readonly Migration[] = [
           created_at TEXT NOT NULL
         );
       `);
+    },
+  },
+  {
+    // Cost columns existed since migration 028 but nothing ever wrote them, so
+    // every recorded run reads as $0. Now that Workbench has a meter
+    // (model-pricing.ts), price the history it already holds instead of
+    // leaving months of usage indistinguishable from free. Only rows with
+    // usable token telemetry on a known model are touched; the rest stay NULL,
+    // which reads as unknown. Backfilled rows are stamped 'estimated' -- never
+    // 'provider', because no provider amount was captured at the time.
+    id: '065_backfill_estimated_cost',
+    apply(database) {
+      for (const table of ['agent_runs', 'shared_messages']) {
+        const rows = database.prepare(`SELECT id, model, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens
+          FROM ${table}
+          WHERE estimated_cost_usd IS NULL AND model IS NOT NULL
+            AND (input_tokens IS NOT NULL OR cache_creation_input_tokens IS NOT NULL OR cache_read_input_tokens IS NOT NULL OR output_tokens IS NOT NULL)`)
+          .all() as Array<{ id: string; model: string | null; input_tokens: number | null; cache_creation_input_tokens: number | null; cache_read_input_tokens: number | null; output_tokens: number | null }>;
+        const update = database.prepare(`UPDATE ${table} SET estimated_cost_usd = ?, cost_source = 'estimated' WHERE id = ?`);
+        for (const row of rows) {
+          const cost = estimateCostUsd(row.model, {
+            inputTokens: row.input_tokens, cacheCreationInputTokens: row.cache_creation_input_tokens,
+            cacheReadInputTokens: row.cache_read_input_tokens, outputTokens: row.output_tokens,
+          });
+          if (cost !== null) update.run(cost, row.id);
+        }
+      }
     },
   },
 ];

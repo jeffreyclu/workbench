@@ -182,7 +182,7 @@ export class WorkItemRepository {
     const rows = this.database
       .prepare(`
         SELECT * FROM work_items
-        WHERE is_queued = 1 AND archived_at IS NULL AND deleted_at IS NULL AND status NOT IN ('done', 'canceled')
+        WHERE is_queued = 1 AND archived_at IS NULL AND deleted_at IS NULL AND status != 'done'
           ${focus}
         ORDER BY queue_position ASC, created_at ASC
       `)
@@ -202,8 +202,8 @@ export class WorkItemRepository {
 
   counts(): { active: number; workbench: number; archive: number; attentionArchive: number; workbenchArchive: number } {
     const row = this.database.prepare(`SELECT
-      SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled') AND ${nonWorkbenchProjectPredicate} THEN 1 ELSE 0 END) AS active,
-      SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status NOT IN ('done', 'canceled') AND ${workbenchProjectPredicate} THEN 1 ELSE 0 END) AS workbench,
+      SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status != 'done' AND ${nonWorkbenchProjectPredicate} THEN 1 ELSE 0 END) AS active,
+      SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status != 'done' AND ${workbenchProjectPredicate} THEN 1 ELSE 0 END) AS workbench,
       SUM(CASE WHEN archived_at IS NOT NULL THEN 1 ELSE 0 END) AS archive,
       SUM(CASE WHEN archived_at IS NOT NULL AND ${nonWorkbenchProjectPredicate} THEN 1 ELSE 0 END) AS attention_archive,
       SUM(CASE WHEN archived_at IS NOT NULL AND ${workbenchProjectPredicate} THEN 1 ELSE 0 END) AS workbench_archive

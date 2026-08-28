@@ -42,6 +42,8 @@ function message(index: number, body: string): SharedMessage {
     cacheCreationInputTokens: null,
     cacheReadInputTokens: null,
     outputTokens: null,
+    estimatedCostUsd: null,
+    costSource: null,
     fallbackFrom: null,
     fallbackReason: null,
     dispatchGroupId: null,

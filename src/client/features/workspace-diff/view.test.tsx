@@ -24,10 +24,10 @@ function workspaceDiff(files: WorkspaceDiffFile[], revision = 'review-revision')
 /** This surface never scores decisions ambiently; assistance is on demand from
  * the detail card instead. Tests only stub the requests this view actually
  * makes, so a stray `/api/diff-confidence` call would fail as unexpected. */
-function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, onFollowUp?: (reference: DiffFollowUpReference) => void, reviewHandoff?: AgentRunReviewHandoff | null) {
+function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, onFollowUp?: (reference: DiffFollowUpReference) => void, reviewHandoff?: AgentRunReviewHandoff | null, pullRequestUrlCandidates?: string[]) {
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} reviewHandoff={reviewHandoff} onFollowUp={onFollowUp} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} reviewHandoff={reviewHandoff} onFollowUp={onFollowUp} pullRequestUrlCandidates={pullRequestUrlCandidates} /></QueryClientProvider>);
 }
 
 afterEach(() => {
@@ -359,5 +359,68 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(screen.getByLabelText('Workspace diff history')).toHaveValue('recorded-version');
     expect(screen.getByText(/Agent run run-123/)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Adds behavior in src/preserved.ts.' })).toBeInTheDocument();
+  });
+});
+
+describe('WorkspaceDiffView pull-request source', () => {
+  const pullRequestUrl = 'https://github.com/acme/web/pull/42';
+  const pullRequestDiff = (page: number, nextPage: number | null) => ({
+    url: pullRequestUrl, repository: 'acme/web', number: 42, title: 'Selectable scopes',
+    baseRef: 'main', headRef: 'feature', headSha: 'sha-42', revision: 'sha-42',
+    files: [{ path: `src/page-${page}.ts`, previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@ scopeChange\n-before\n+after' }],
+    changedFiles: 1, additions: 1, deletions: 1, nextPage,
+  });
+
+  // The picker is the only entry point: a pull request must be reviewed in
+  // this viewer's decision queue, not a second viewer stacked beneath it.
+  it('offers a linked pull request in the repository picker and records decisions against its head commit', async () => {
+    const file: WorkspaceDiffFile = { path: 'src/local.ts', editorUrl: null, previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@ localChange\n-before\n+after' };
+    const requests: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push(`${init?.method ?? 'GET'} ${url}${init?.body ? ` ${String(init.body)}` : ''}`);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench' }] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'local-revision') });
+      if (url.includes('/hunk-reviews/batch')) return json({ reviews: [] });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      if (url.includes('/api/github/pull-request-diff')) return json({ diff: pullRequestDiff(1, null) });
+      if (url.includes('/api/review-auto-score')) return json({ scores: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock, false, undefined, null, [pullRequestUrl]);
+
+    const picker = await screen.findByLabelText('Repository');
+    expect(within(picker).getByRole('option', { name: 'acme/web #42' })).toBeInTheDocument();
+    // The local checkout has changes, so it stays selected until asked otherwise.
+    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/local.ts.' })).toBeInTheDocument();
+
+    fireEvent.change(picker, { target: { value: pullRequestUrl } });
+
+    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/page-1.ts.' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Selectable scopes' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Changes behavior in src/local.ts.' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
+
+    await waitFor(() => expect(requests.some((request) => request.startsWith('PUT') && request.includes('/hunk-reviews/batch') && request.includes('"revision":"sha-42"'))).toBe(true));
+  });
+
+  it('opens the linked pull request when the local checkout has nothing to review', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench' }] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([], 'clean-revision') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      if (url.includes('/api/github/pull-request-diff')) return json({ diff: pullRequestDiff(1, 2) });
+      if (url.includes('/api/review-auto-score')) return json({ scores: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock, false, undefined, null, [pullRequestUrl]);
+
+    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/page-1.ts.' })).toBeInTheDocument();
+    // Paged pull requests keep their explicit load-more control in the queue.
+    expect(screen.getByRole('button', { name: 'Load 100 more files' })).toBeInTheDocument();
   });
 });

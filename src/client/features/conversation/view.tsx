@@ -74,7 +74,6 @@ import { DecisionTreeVisualizer } from './decision-tree-visualizer';
 import { celebrate } from '../../components/celebrate';
 import { SessionFeedbackPrompt } from '../../components/dialogs/session-feedback-prompt';
 import { useConversationChangesAvailability, useDebouncedValue, useOpenChangesAfterCompletedRun } from './hooks';
-import { GitHubDiffView } from '../github-diff/view';
 import { pullRequestUrls, pullRequestUrlsInText } from '../github-diff/logic.js';
 import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { WorkspaceDiffScope } from '../../data/source-client';
@@ -411,13 +410,11 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
 
     const progress = rows.filter((row) => !row.conversation.pinned && !row.conversation.linkedWorkItemPinned && (row.state === 'working' || row.state === 'promoting' || row.state === 'waiting_promotion'));
     const pinned = rows.filter((row) => row.conversation.pinned || row.conversation.linkedWorkItemPinned);
-    const attention = rows.filter((row) => !row.conversation.pinned && !row.conversation.linkedWorkItemPinned && row.state !== 'working' && row.state !== 'promoting' && row.state !== 'waiting_promotion' && row.state !== 'canceled');
-    const inactive = rows.filter((row) => !row.conversation.pinned && !row.conversation.linkedWorkItemPinned && row.state === 'canceled');
+    const attention = rows.filter((row) => !row.conversation.pinned && !row.conversation.linkedWorkItemPinned && row.state !== 'working' && row.state !== 'promoting' && row.state !== 'waiting_promotion');
     const groups = [
       { id: 'conversation-in-progress-header', label: 'In progress', group: 'progress' as const, rows: progress },
       { id: 'conversation-attention-header', label: 'Attention stack', group: 'attention' as const, rows: attention },
       { id: 'conversation-pinned-header', label: 'Pinned for you', group: 'pinned' as const, rows: pinned },
-      { id: 'conversation-canceled-header', label: 'Canceled', group: 'attention' as const, rows: inactive },
     ];
     return groups.flatMap((group) => group.rows.length === 0 && group.group !== 'pinned' ? [] : [
       { type: 'header' as const, id: group.id, label: group.label, count: group.rows.length, group: group.group },
@@ -1312,7 +1309,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           {send.error && <p className="error-message">{send.error.message}</p>}
         </form></>}
         </div>
-        {activePane === 'changes' && workspaceDiffScope && <div className="conversation-changes" aria-label="Conversation changes"><WorkspaceDiffView scope={workspaceDiffScope} activeWorkspacePaths={linkedWorkItem.data?.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : []) ?? []} reviewHandoff={linkedWorkItem.data?.runs.find((run) => run.reviewHandoff)?.reviewHandoff ?? null} onFollowUp={addDiffFollowUp} taskIntent={linkedWorkItem.data?.item ? { title: linkedWorkItem.data.item.title, description: linkedWorkItem.data.item.description } : null} /><GitHubDiffView candidateUrls={githubCandidateUrls} onFollowUp={addDiffFollowUp} /></div>}
+        {activePane === 'changes' && workspaceDiffScope && <div className="conversation-changes" aria-label="Conversation changes"><WorkspaceDiffView scope={workspaceDiffScope} activeWorkspacePaths={linkedWorkItem.data?.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : []) ?? []} reviewHandoff={linkedWorkItem.data?.runs.find((run) => run.reviewHandoff)?.reviewHandoff ?? null} onFollowUp={addDiffFollowUp} taskIntent={linkedWorkItem.data?.item ? { title: linkedWorkItem.data.item.title, description: linkedWorkItem.data.item.description } : null} pullRequestUrlCandidates={githubCandidateUrls} /></div>}
         </div>
       </section>
       {planArchivePromptOpen && <FollowUpArchiveDialog count={selectedPlanTaskIndexes.size} pending={resolvePlan.isPending} onClose={() => setPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolvePlan.mutate({ resolution: 'accepted', archiveParent })} />}

@@ -1,9 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, FileDiff, History, RefreshCw, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, FileDiff, GitPullRequest, History, RefreshCw, X } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
 import { ModalDialog } from '../../components/dialogs/modal-dialog.js';
-import type { AgentRunReviewHandoff, DiffHunkReviewState } from '../../../shared/contracts.js';
+import type { AgentRunReviewHandoff, DiffHunkReviewState, WorkspaceDiffFile } from '../../../shared/contracts.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
@@ -18,8 +18,19 @@ import { useAutoReviewScores } from '../diff-review/auto-score.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
 import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js';
+import { useGitHubPullRequestDiff } from '../github-diff/hooks.js';
+import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
 import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
 import { workspaceDiffQueryKeys } from './data.js';
+
+/** The parts of a diff this review surface reads, whichever source produced
+ * it. A local workspace diff satisfies it directly; a pull request is adapted
+ * onto it so both are reviewed through one decision queue. */
+interface ReviewSourceDiff {
+  branch: string;
+  revision: string;
+  files: WorkspaceDiffFile[];
+}
 
 function DiffSkeleton() {
   return <section className="workspace-diff" aria-label="Workspace changes loading" aria-busy="true">
@@ -42,13 +53,16 @@ function usePhoneReviewControls() {
   return isPhone;
 }
 
-export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, reviewHandoff, onFollowUp, taskIntent = null }: {
+export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, reviewHandoff, onFollowUp, taskIntent = null, pullRequestUrlCandidates }: {
   scope: WorkspaceDiffScope;
   isRunning?: boolean;
   activeWorkspacePaths?: string[];
   reviewHandoff?: AgentRunReviewHandoff | null;
   onFollowUp?: (reference: DiffFollowUpReference) => void;
   taskIntent?: ReviewAssistTaskIntent;
+  /** Any URLs that may be pull requests. Recognised ones join the repository
+   * picker as review sources beside the local checkouts. */
+  pullRequestUrlCandidates?: string[];
 }) {
   const queryClient = useQueryClient();
   const conversationId = 'conversationId' in scope ? scope.conversationId : null;
@@ -101,11 +115,39 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const selectedSnapshot = selectedSnapshotId === null && diff?.changedFiles === 0
     ? snapshots.find((snapshot) => snapshot.diff.changedFiles > 0) ?? null
     : snapshots.find((snapshot) => snapshot.id === selectedSnapshotId) ?? null;
-  const displayedDiff = selectedSnapshot?.diff ?? diff;
+
+  // Pull requests are review sources in the same picker as the local
+  // checkouts: one selection, one viewer, one decision queue.
+  const availablePullRequests = useMemo(() => pullRequestUrls(pullRequestUrlCandidates ?? []), [pullRequestUrlCandidates]);
+  const [selectedPullRequestUrl, setSelectedPullRequestUrl] = useState<string | null>(null);
+  useEffect(() => {
+    // Drop a selection whose pull request is no longer referenced here.
+    setSelectedPullRequestUrl((current) => current && availablePullRequests.includes(current) ? current : null);
+  }, [availablePullRequests]);
+  const pullRequestQuery = useGitHubPullRequestDiff(selectedPullRequestUrl);
+  const isPullRequestSource = selectedPullRequestUrl !== null;
+  const pullRequest = pullRequestQuery.data?.pages[0]?.diff ?? null;
+  const pullRequestFiles = useMemo(() => pullRequestQuery.data?.pages.flatMap((page) => page.diff.files) ?? [], [pullRequestQuery.data]);
+  const pullRequestDiff: ReviewSourceDiff | null = pullRequest
+    ? { branch: `${pullRequest.baseRef} → ${pullRequest.headRef}`, revision: pullRequest.revision, files: pullRequestFiles }
+    : null;
+
+  const hasLocalReviewableChanges = (diff?.changedFiles ?? 0) > 0 || snapshots.some((snapshot) => snapshot.diff.changedFiles > 0);
+  const hasChosenSource = useRef(false);
+  useEffect(() => {
+    // Open on a linked pull request only when the local checkout has nothing
+    // to review. Decided once, so later local edits never yank the reviewer
+    // out of a pull request they are working through.
+    if (hasChosenSource.current || query.isLoading || snapshotsQuery.isLoading) return;
+    hasChosenSource.current = true;
+    if (!hasLocalReviewableChanges && availablePullRequests.length > 0) setSelectedPullRequestUrl(availablePullRequests[0]);
+  }, [query.isLoading, snapshotsQuery.isLoading, hasLocalReviewableChanges, availablePullRequests]);
+
+  const displayedDiff: ReviewSourceDiff | null | undefined = isPullRequestSource ? pullRequestDiff : selectedSnapshot?.diff ?? diff;
   const agentEditingWorkspace = activeWorkspacePaths
     ? activeWorkspacePaths.includes(diff?.workspacePath ?? '')
     : isRunning;
-  const hasChanges = useWorkspaceDiffChanges(scope, diff?.revision, agentEditingWorkspace && !selectedSnapshot);
+  const hasChanges = useWorkspaceDiffChanges(scope, diff?.revision, agentEditingWorkspace && !selectedSnapshot && !isPullRequestSource);
   const reviewRevision = displayedDiff?.files.length ? displayedDiff.revision : undefined;
   const hunkReviews = useDiffHunkReviews(scope, reviewRevision);
   const upsertHunkReview = useUpsertDiffHunkReview(scope, reviewRevision);
@@ -148,6 +190,19 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     if (next) selectDecision(next.id);
   };
 
+  // Switching source resets the queue: decision ids belong to one diff.
+  const selectSource = (value: string) => {
+    if (!value) return;
+    setSelectedDecisionId(null);
+    hasChosenSource.current = true;
+    if (availablePullRequests.includes(value)) {
+      setSelectedPullRequestUrl(value);
+      return;
+    }
+    setSelectedPullRequestUrl(null);
+    if (value !== explorer.data?.selectedPath) selectWorkspace.mutate(value);
+  };
+
   // Following up hands the decision to the agent, so it is recorded as
   // commented rather than left pending. Selection deliberately stays put: the
   // reviewer is about to type about this decision, not move past it. Attaching
@@ -165,51 +220,63 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     onFollowUp(reference);
   };
 
-  if (query.isLoading) return <DiffSkeleton />;
-  if (query.isError) return <section className="workspace-diff workspace-diff-error" aria-live="polite"><strong>Could not load local workspace changes.</strong><p>{query.error.message}</p><button type="button" className="button secondary compact" onClick={() => void query.refetch()} disabled={query.isFetching}>Retry</button></section>;
-  if (!diff) return null;
+  const workspaces = explorer.data?.workspaces ?? [];
+  if (!isPullRequestSource) {
+    if (query.isLoading) return <DiffSkeleton />;
+    if (query.isError) return <section className="workspace-diff workspace-diff-error" aria-live="polite"><strong>Could not load local workspace changes.</strong><p>{query.error.message}</p><button type="button" className="button secondary compact" onClick={() => void query.refetch()} disabled={query.isFetching}>Retry</button></section>;
+    // A pull request stays selectable even with no local checkout to fall back on.
+    if (!diff && availablePullRequests.length === 0) return null;
+  }
 
-  return <section className="workspace-diff" aria-label="Current workspace changes">
+  const refreshSource = () => void (isPullRequestSource ? pullRequestQuery.refetch() : query.refetch());
+  const isRefreshing = isPullRequestSource ? pullRequestQuery.isFetching : query.isFetching;
+
+  return <section className="workspace-diff" aria-label={isPullRequestSource ? 'Pull request changes' : 'Current workspace changes'}>
     <header>
-      <div><span className="workspace-diff-eyebrow"><FileDiff size={14} /> {selectedSnapshot ? 'Recorded version' : 'Workspace review'}</span><h2>{selectedSnapshot ? 'Workspace review record' : 'Review workspace decisions'}</h2><small>{displayedDiff?.branch}</small><p>{selectedSnapshot ? `Captured ${new Date(selectedSnapshot.capturedAt).toLocaleString()}. This record is preserved in the history.` : 'Review behavior decisions in priority order before publishing these workspace changes.'}</p>{selectedSnapshot && <small className="workspace-diff-provenance">{selectedSnapshot.originatingAgentRunId ? `Agent run ${selectedSnapshot.originatingAgentRunId}` : 'No originating agent run recorded'}{selectedSnapshot.commitHash ? ` · Commit ${selectedSnapshot.commitHash.slice(0, 12)}` : ' · No commit recorded'}</small>}</div>
+      {isPullRequestSource
+        ? <div><span className="workspace-diff-eyebrow"><GitPullRequest size={14} /> {pullRequest ? `${pullRequest.repository} #${pullRequest.number}` : pullRequestLabel(selectedPullRequestUrl)}</span><h2>{pullRequest?.title ?? 'Review pull-request decisions'}</h2><small>{displayedDiff?.branch}</small><p>Review behavior decisions in priority order for this pull-request revision. Decisions are recorded against its head commit, so new commits return their hunks to review.</p><small className="workspace-diff-provenance"><a href={selectedPullRequestUrl} target="_blank" rel="noreferrer">Open on GitHub <ExternalLink size={13} /></a></small></div>
+        : <div><span className="workspace-diff-eyebrow"><FileDiff size={14} /> {selectedSnapshot ? 'Recorded version' : 'Workspace review'}</span><h2>{selectedSnapshot ? 'Workspace review record' : 'Review workspace decisions'}</h2><small>{displayedDiff?.branch}</small><p>{selectedSnapshot ? `Captured ${new Date(selectedSnapshot.capturedAt).toLocaleString()}. This record is preserved in the history.` : 'Review behavior decisions in priority order before publishing these workspace changes.'}</p>{selectedSnapshot && <small className="workspace-diff-provenance">{selectedSnapshot.originatingAgentRunId ? `Agent run ${selectedSnapshot.originatingAgentRunId}` : 'No originating agent run recorded'}{selectedSnapshot.commitHash ? ` · Commit ${selectedSnapshot.commitHash.slice(0, 12)}` : ' · No commit recorded'}</small>}</div>}
       <div className="workspace-diff-actions">
-        {(conversationId || workItemId) && Array.isArray(explorer.data?.workspaces) && <label className="workspace-repository-picker"><span>Repository</span><select value={explorer.data.selectedPath ?? ''} onChange={(event) => selectWorkspace.mutate(event.target.value)} disabled={selectWorkspace.isPending}><option value="" disabled>Select repository</option>{explorer.data.workspaces.map((workspace) => <option key={workspace.path} value={workspace.path}>{workspace.label}</option>)}</select></label>}
-        {snapshots.length > 0 && <label className="workspace-diff-timeline"><History size={13} /><span className="visually-hidden">Workspace diff history</span><select value={selectedSnapshotId ?? selectedSnapshot?.id ?? ''} onChange={(event) => { setSelectedSnapshotId(event.target.value); setSelectedDecisionId(null); }}><option value="">Current changes</option>{snapshots.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{new Date(snapshot.capturedAt).toLocaleString()} · {snapshot.diff.changedFiles} files</option>)}</select></label>}
-        <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={() => void query.refetch()} disabled={query.isFetching}><RefreshCw size={13} className={query.isFetching ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>
+        {(conversationId || workItemId) && (workspaces.length > 0 || availablePullRequests.length > 0) && <label className="workspace-repository-picker"><span>Repository</span><select value={selectedPullRequestUrl ?? explorer.data?.selectedPath ?? ''} onChange={(event) => selectSource(event.target.value)} disabled={selectWorkspace.isPending}><option value="" disabled>Select repository</option>{workspaces.length > 0 && <optgroup label="Local repositories">{workspaces.map((workspace) => <option key={workspace.path} value={workspace.path}>{workspace.label}</option>)}</optgroup>}{availablePullRequests.length > 0 && <optgroup label="Pull requests">{availablePullRequests.map((url) => <option key={url} value={url}>{pullRequestLabel(url)}</option>)}</optgroup>}</select></label>}
+        {!isPullRequestSource && snapshots.length > 0 && <label className="workspace-diff-timeline"><History size={13} /><span className="visually-hidden">Workspace diff history</span><select value={selectedSnapshotId ?? selectedSnapshot?.id ?? ''} onChange={(event) => { setSelectedSnapshotId(event.target.value); setSelectedDecisionId(null); }}><option value="">Current changes</option>{snapshots.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{new Date(snapshot.capturedAt).toLocaleString()} · {snapshot.diff.changedFiles} files</option>)}</select></label>}
+        <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={refreshSource} disabled={isRefreshing}><RefreshCw size={13} className={isRefreshing ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>
       </div>
     </header>
-    {!displayedDiff || displayedDiff.files.length === 0 ? <p className="muted">No uncommitted changes to review.</p>
-      : hunkReviews.isLoading ? <DiffSkeleton />
-        : hunkReviews.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load review decisions.</strong><p>{hunkReviews.error.message}</p><button type="button" className="button secondary compact" onClick={() => void hunkReviews.refetch()} disabled={hunkReviews.isFetching}>Retry</button></section>
-          : <div className="workspace-diff-layout diff-review-layout">
-            {reviewHandoff && <AgentRunReviewHandoffCard handoff={reviewHandoff} />}
-            <DiffReviewSummaryView decisions={decisions} />
-            {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
-            {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
-            {selectedDecision && <>
-              <div className="mobile-decision-navigator" aria-label="Decision navigation">
-                <button type="button" onClick={() => moveDecision(-1)} disabled={selectedDecisionIndex <= 0} aria-label="Previous decision"><ChevronLeft size={18} aria-hidden="true" /></button>
-                <span>Decision {selectedDecision.ordinal} of {orderedDecisions.length}<em className={`diff-review-decision-state state-${selectedDecision.state ?? 'pending'}`}>{reviewStateShortLabel(selectedDecision.state)}</em></span>
-                <button type="button" onClick={() => moveDecision(1)} disabled={selectedDecisionIndex >= orderedDecisions.length - 1} aria-label="Next decision"><ChevronRight size={18} aria-hidden="true" /></button>
-                <button type="button" className="mobile-decision-detail-toggle" onClick={() => setMobileDecisionDetailOpen(true)} aria-expanded={mobileDecisionDetailOpen} aria-controls="mobile-decision-detail">View decision</button>
-              </div>
-              <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} />
-              <div className="diff-review-workbench">
-                {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={selectDecision} />}
-                {!isPhoneReview && <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
-                  <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
-                </DiffReviewDecisionDetailCard></div>}
-              </div>
-              {isPhoneReview && mobileDecisionDetailOpen && <ModalDialog className="decision-detail-dialog" labelledBy="mobile-decision-detail-title" onClose={() => setMobileDecisionDetailOpen(false)}>
-                <div className="decision-detail-dialog-header">
-                  <span id="mobile-decision-detail-title">Decision details</span>
-                  <button type="button" onClick={() => setMobileDecisionDetailOpen(false)} aria-label="Close decision details"><X size={18} /></button>
-                </div>
-                <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
-                  <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
-                </DiffReviewDecisionDetailCard></div>
-              </ModalDialog>}
-            </>}
-          </div>}
+    {isPullRequestSource && pullRequestQuery.isLoading ? <DiffSkeleton />
+      : isPullRequestSource && pullRequestQuery.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load this pull-request diff.</strong><p>{pullRequestQuery.error.message}</p><button type="button" className="button secondary compact" onClick={() => void pullRequestQuery.refetch()} disabled={pullRequestQuery.isFetching}>Retry</button></section>
+        : !displayedDiff || displayedDiff.files.length === 0 ? <p className="muted">{isPullRequestSource ? 'GitHub reports no changed files for this pull request.' : 'No uncommitted changes to review.'}</p>
+          : hunkReviews.isLoading ? <DiffSkeleton />
+            : hunkReviews.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load review decisions.</strong><p>{hunkReviews.error.message}</p><button type="button" className="button secondary compact" onClick={() => void hunkReviews.refetch()} disabled={hunkReviews.isFetching}>Retry</button></section>
+              : <div className="workspace-diff-layout diff-review-layout">
+                {!isPullRequestSource && reviewHandoff && <AgentRunReviewHandoffCard handoff={reviewHandoff} />}
+                <DiffReviewSummaryView decisions={decisions} />
+                {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
+                {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
+                {selectedDecision && <>
+                  <div className="mobile-decision-navigator" aria-label="Decision navigation">
+                    <button type="button" onClick={() => moveDecision(-1)} disabled={selectedDecisionIndex <= 0} aria-label="Previous decision"><ChevronLeft size={18} aria-hidden="true" /></button>
+                    <span>Decision {selectedDecision.ordinal} of {orderedDecisions.length}<em className={`diff-review-decision-state state-${selectedDecision.state ?? 'pending'}`}>{reviewStateShortLabel(selectedDecision.state)}</em></span>
+                    <button type="button" onClick={() => moveDecision(1)} disabled={selectedDecisionIndex >= orderedDecisions.length - 1} aria-label="Next decision"><ChevronRight size={18} aria-hidden="true" /></button>
+                    <button type="button" className="mobile-decision-detail-toggle" onClick={() => setMobileDecisionDetailOpen(true)} aria-expanded={mobileDecisionDetailOpen} aria-controls="mobile-decision-detail">View decision</button>
+                  </div>
+                  <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} />
+                  {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
+                  <div className="diff-review-workbench">
+                    {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={selectDecision} />}
+                    {!isPhoneReview && <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
+                      <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
+                    </DiffReviewDecisionDetailCard></div>}
+                  </div>
+                  {isPhoneReview && mobileDecisionDetailOpen && <ModalDialog className="decision-detail-dialog" labelledBy="mobile-decision-detail-title" onClose={() => setMobileDecisionDetailOpen(false)}>
+                    <div className="decision-detail-dialog-header">
+                      <span id="mobile-decision-detail-title">Decision details</span>
+                      <button type="button" onClick={() => setMobileDecisionDetailOpen(false)} aria-label="Close decision details"><X size={18} /></button>
+                    </div>
+                    <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
+                      <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
+                    </DiffReviewDecisionDetailCard></div>
+                  </ModalDialog>}
+                </>}
+              </div>}
   </section>;
 });

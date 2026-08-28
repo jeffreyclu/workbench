@@ -12,7 +12,7 @@ const item = (id: string, status: WorkItem['status']): WorkItem => ({
 
 describe('createTaskStackViewModel', () => {
   it('uses the same status sections and ordering for attention and Workbench scopes', () => {
-    const items = [item('pinned', 'pinned'), item('attention', 'ready'), item('progress', 'in_progress')];
+    const items = [item('pinned', 'pinned'), item('attention', 'ready'), item('canceled', 'canceled'), item('progress', 'in_progress')];
 
     const attention = createTaskStackViewModel(items, 'attention');
     const workbench = createTaskStackViewModel(items, 'workbench');
@@ -20,10 +20,10 @@ describe('createTaskStackViewModel', () => {
     expect(workbench).toEqual(attention);
     expect(attention.rows.filter((row) => row.type === 'header').map((row) => [row.label, row.count])).toEqual([
       ['In progress', 1],
-      ['Attention stack', 1],
+      ['Attention stack', 2],
       ['Pinned for you', 1],
     ]);
-    expect(attention.items.map((entry) => entry.id)).toEqual(['progress', 'attention', 'pinned']);
+    expect(attention.items.map((entry) => entry.id)).toEqual(['progress', 'attention', 'canceled', 'pinned']);
   });
 
   it('keeps the empty pinned section visible as a standing destination', () => {

@@ -15,6 +15,7 @@ import { TelemetryRepository } from './repositories/telemetry-repository.js';
 import { SourceConnectionRepository } from './repositories/source-connection-repository.js';
 import { DiscoveryRepository } from './repositories/discovery-repository.js';
 import { ConversationRepository } from './repositories/conversation-repository.js';
+import { resolveCost } from './model-pricing.js';
 import { RunRepository, type RunPatch } from './repositories/run-repository.js';
 import { QueueRepository } from './repositories/queue-repository.js';
 import { WorkItemRepository as WorkItemTableRepository, mapWorkItemRow, type WorkItemRow } from './repositories/work-item-repository.js';
@@ -472,6 +473,8 @@ export class WorkItemRepository {
       inputTokens: row.input_tokens === null ? null : Number(row.input_tokens),
       cacheCreationInputTokens: row.cache_creation_input_tokens === null ? null : Number(row.cache_creation_input_tokens),
       cacheReadInputTokens: row.cache_read_input_tokens === null ? null : Number(row.cache_read_input_tokens),
+      estimatedCostUsd: row.estimated_cost_usd === null || row.estimated_cost_usd === undefined ? null : Number(row.estimated_cost_usd),
+      costSource: (row.cost_source as SharedMessage['costSource']) ?? null,
       outputTokens: row.output_tokens === null ? null : Number(row.output_tokens),
       fallbackFrom: row.fallback_from as SharedMessage['fallbackFrom'] ?? null, fallbackReason: row.fallback_reason ? String(row.fallback_reason) : null,
       dispatchTarget: row.dispatch_target as SharedMessage['dispatchTarget'] ?? 'none',
@@ -666,7 +669,7 @@ export class WorkItemRepository {
     const conversation = conversationId ? this.listConversations('all').find((item) => item.id === conversationId) : this.ensureDefaultConversation();
     if (!conversation) throw new Error('Conversation not found.');
     const message: SharedMessage = {
-      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), completedAt: ['completed', 'failed', 'canceled'].includes(status) ? new Date().toISOString() : null, attachments, model: null, accountProfile, executionProfile, inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: dispatchTarget as SharedMessage['dispatchTarget'],
+      id: randomUUID(), conversationId: conversation.id, author, body, pinned: false, status, error: '', createdAt: new Date().toISOString(), completedAt: ['completed', 'failed', 'canceled'].includes(status) ? new Date().toISOString() : null, attachments, model: null, accountProfile, executionProfile, inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: dispatchTarget as SharedMessage['dispatchTarget'],
       attempt: 0, maxAttempts: 3, nextAttemptAt: null, queuePriority: 0, interjectionStreamOffset: null, retrievedMemoryCount: null, dispatchGroupId,
     };
     this.database.prepare(`
@@ -737,11 +740,33 @@ export class WorkItemRepository {
     return this.getSharedMessageById(id);
   }
 
-  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; accountProfile?: string | null; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null; interjectionStreamOffset?: number | null; retrievedMemoryCount?: number | null; retrievedMemoryDetail?: { query: string; items: Array<{ source: string; title: string; body: string; createdAt: string }> } | null }): SharedMessage | null {
+  private resolveSharedMessageCost(id: string, changes: { model?: string; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; costUsd?: number | null }): { costUsd: number; costSource: 'provider' | 'estimated' } | null {
+    const touchesCost = changes.inputTokens !== undefined || changes.cacheCreationInputTokens !== undefined
+      || changes.cacheReadInputTokens !== undefined || changes.outputTokens !== undefined
+      || changes.model !== undefined || changes.costUsd !== undefined;
+    if (!touchesCost) return null;
+    const row = this.database.prepare('SELECT model, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens FROM shared_messages WHERE id = ?')
+      .get(id) as { model: string | null; input_tokens: number | null; cache_creation_input_tokens: number | null; cache_read_input_tokens: number | null; output_tokens: number | null } | undefined;
+    if (!row) return null;
+    return resolveCost(changes.model ?? row.model, {
+      inputTokens: changes.inputTokens === undefined ? row.input_tokens : changes.inputTokens,
+      cacheCreationInputTokens: changes.cacheCreationInputTokens === undefined ? row.cache_creation_input_tokens : changes.cacheCreationInputTokens,
+      cacheReadInputTokens: changes.cacheReadInputTokens === undefined ? row.cache_read_input_tokens : changes.cacheReadInputTokens,
+      outputTokens: changes.outputTokens === undefined ? row.output_tokens : changes.outputTokens,
+    }, changes.costUsd);
+  }
+
+  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; accountProfile?: string | null; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null; interjectionStreamOffset?: number | null; retrievedMemoryCount?: number | null; retrievedMemoryDetail?: { query: string; items: Array<{ source: string; title: string; body: string; createdAt: string }> } | null; costUsd?: number | null }): SharedMessage | null {
     // A retry reuses the same message row. Never let the error from the prior
     // attempt survive a successful or user-canceled terminal transition.
     const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
+    // Same contract as agent_runs: dollars are derived from the merged usage
+    // (a telemetry patch carries tokens, the model landed in an earlier one)
+    // and stamped with their provenance, so a chat bubble never reports $0
+    // simply because nothing ever priced it.
+    const cost = this.resolveSharedMessageCost(id, changes);
     const entries = Object.entries({
+      estimated_cost_usd: cost?.costUsd, cost_source: cost?.costSource,
       pinned: changes.pinned === undefined ? undefined : Number(changes.pinned),
       body: changes.body, status: changes.status, error, author: changes.author, model: changes.model, account_profile: changes.accountProfile, execution_profile: changes.executionProfile,
       input_tokens: changes.inputTokens, cache_creation_input_tokens: changes.cacheCreationInputTokens, cache_read_input_tokens: changes.cacheReadInputTokens, output_tokens: changes.outputTokens, fallback_from: changes.fallbackFrom, fallback_reason: changes.fallbackReason, interjection_stream_offset: changes.interjectionStreamOffset, retrieved_memory_count: changes.retrievedMemoryCount,

@@ -7,7 +7,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     id: 'run-1', workItemId: 'item-1', kind: 'execute', requestedTarget: 'codex', requestedAgent: 'codex', agent: 'codex',
     instructions: 'Fix the flaky login test.', status: 'completed', output: '', error: '', createdAt: '2026-08-27T00:00:00.000Z',
     startedAt: null, completedAt: null, conversationId: null, messageId: null, model: null, executionProfile: null, accountProfile: 'default',
-    inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, fallbackFrom: null, fallbackReason: null,
+    inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null, fallbackFrom: null, fallbackReason: null,
     attempt: 0, maxAttempts: 3, nextAttemptAt: null, resolvedWorkspace: null, origin: 'manual', reviewHandoff: null,
     ...overrides,
   };

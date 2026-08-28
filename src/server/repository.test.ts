@@ -135,6 +135,40 @@ describe('WorkItemRepository', () => {
     });
   });
 
+  it('prices terminal runs and shared replies as they are written, with provenance', () => {
+    const item = repository.create({ title: 'Meter spend', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const run = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Do it.');
+    // The model lands in an earlier patch than the tokens, exactly as the
+    // runner writes them; the second patch must still price the run.
+    repository.updateRun(run.id, { model: 'opus' });
+    repository.updateRun(run.id, { status: 'completed', completedAt: new Date().toISOString(), inputTokens: 1_000_000, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 0 });
+    expect(repository.getRun(run.id)).toMatchObject({ estimatedCostUsd: 15, costSource: 'estimated' });
+
+    // A provider-reported amount supersedes the list-price estimate.
+    repository.updateRun(run.id, { costUsd: 2.5 });
+    expect(repository.getRun(run.id)).toMatchObject({ estimatedCostUsd: 2.5, costSource: 'provider' });
+
+    const conversation = repository.createConversation('Priced reply');
+    const reply = repository.createSharedMessage('claude', 'Working…', 'running', conversation.id);
+    repository.updateSharedMessage(reply.id, { status: 'completed', model: 'haiku', inputTokens: 1_000_000, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 1_000_000 });
+    expect(repository.getSharedMessageById(reply.id)).toMatchObject({ estimatedCostUsd: 6, costSource: 'estimated' });
+  });
+
+  it('reports window spend in insights instead of a permanent zero', () => {
+    const item = repository.create({ title: 'Spend rollup', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const opus = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Expensive.');
+    const unpriced = repository.createRun(item.id, 'analysis', 'claude', 'claude', 'Unknown model.');
+    const completedAt = new Date().toISOString();
+    repository.updateRun(opus.id, { status: 'completed', completedAt, model: 'opus', inputTokens: 1_000_000, cacheCreationInputTokens: 0, cacheReadInputTokens: 1_000_000, outputTokens: 0 });
+    repository.updateRun(unpriced.id, { status: 'completed', completedAt, model: 'not-a-known-model', inputTokens: 1_000, cacheReadInputTokens: 0, outputTokens: 1_000 });
+
+    const insights = repository.getRunInsights();
+    // 1M fresh input at $15/MTok + 1M cache reads at $1.50/MTok.
+    expect(insights.estimatedCostUsd).toBeCloseTo(16.5, 6);
+    expect(insights.unpricedTokenTelemetryRuns).toBe(1);
+    expect(insights.tokenUsageByModel.find((row) => row.model === 'opus')?.estimatedCostUsd).toBeCloseTo(16.5, 6);
+  });
+
   it('filters Insights to the requested rolling timeframe while All Time retains older records', () => {
     const item = repository.create({ title: 'Timeframe coverage', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const recentRun = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Recent run.');
@@ -2343,6 +2377,17 @@ describe('WorkItemRepository', () => {
       // Case-insensitively, matching the predicate this replaced.
       expect(make('Lowercase', 'workbench').stack).toBe('attention');
       expect(repository.listWorkbench().map((item) => item.title)).toEqual(['Lowercase', 'Build it']);
+    });
+
+    it('keeps canceled queued tasks in their stack attention list', () => {
+      const attention = make('Stopped Writer work', 'Writer');
+      const workbench = make('Stopped Workbench work', 'Workbench');
+      repository.update(attention.id, { status: 'canceled' });
+      repository.update(workbench.id, { status: 'canceled' });
+
+      expect(repository.list().map((item) => item.id)).toEqual(expect.arrayContaining([attention.id, workbench.id]));
+      expect(repository.listWorkbench().map((item) => item.id)).toEqual([workbench.id]);
+      expect(repository.getWorkItemCounts()).toEqual(expect.objectContaining({ active: 1, workbench: 1 }));
     });
 
     it('ignores legacy stack input when creating work', () => {

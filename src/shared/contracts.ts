@@ -731,6 +731,10 @@ export interface AgentRun {
   cacheCreationInputTokens: number | null;
   cacheReadInputTokens: number | null;
   outputTokens: number | null;
+  /** Dollars for this run: provider-billed when reported, else estimated from
+   * the recorded tokens. Null when the model has no known rate. */
+  estimatedCostUsd: number | null;
+  costSource: 'provider' | 'estimated' | null;
   fallbackFrom: 'codex' | 'claude' | null;
   fallbackReason: string | null;
   attempt: number;
@@ -864,6 +868,9 @@ export interface SharedMessage {
   /** Provider prompt-cache read tokens, when reported. */
   cacheReadInputTokens: number | null;
   outputTokens: number | null;
+  /** Dollars for this reply; see AgentRun.estimatedCostUsd. */
+  estimatedCostUsd: number | null;
+  costSource: 'provider' | 'estimated' | null;
   fallbackFrom: 'codex' | 'claude' | null;
   fallbackReason: string | null;
   dispatchTarget: 'auto' | 'both' | 'codex' | 'claude' | 'none';
@@ -1066,6 +1073,11 @@ export interface RunInsights {
   /** Tokens served from a provider prompt cache. */
   cacheReadInputTokens: number;
   outputTokens: number;
+  /** Dollars for the window: provider-billed where reported, else list-price
+   * estimate. Excludes runs on a model with no known rate. */
+  estimatedCostUsd: number;
+  /** Runs with usable token telemetry on a model Workbench cannot price. */
+  unpricedTokenTelemetryRuns: number;
   tokenUsageByModel: RunInsightsTokenUsage[];
   byAgent: RunInsightsByAgent[];
   byKind: RunInsightsByKind[];
@@ -1108,6 +1120,7 @@ export interface RunInsightsTokenUsage {
   cacheCreationInputTokens: number;
   cacheReadInputTokens: number;
   outputTokens: number;
+  estimatedCostUsd: number;
   runs: number;
 }
 

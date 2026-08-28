@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 
 import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type AgentRunReviewHandoff } from '../../shared/contracts.js';
+import { resolveCost } from '../model-pricing.js';
 import { WORKBENCH_PROJECT_KEY } from '../../shared/project-name.js';
 import type { UnitOfWork } from '../unit-of-work.js';
 
@@ -21,6 +22,8 @@ export interface RunPatch {
   outputTokens?: number | null;
   fallbackFrom?: AgentRun['agent'] | null;
   fallbackReason?: string | null;
+  /** Provider-reported dollars. Omit it and Workbench prices the run itself. */
+  costUsd?: number | null;
   ownerId?: string | null;
   leaseExpiresAt?: string | null;
   nextAttemptAt?: string | null;
@@ -55,6 +58,7 @@ function mapRunRow(row: Record<string, string | null>): AgentRun {
     model: row.model, executionProfile: row.execution_profile as AgentRun['executionProfile'],
     accountProfile: row.account_profile ?? 'default',
     inputTokens: row.input_tokens === null ? null : Number(row.input_tokens), cacheCreationInputTokens: row.cache_creation_input_tokens === null ? null : Number(row.cache_creation_input_tokens), cacheReadInputTokens: row.cache_read_input_tokens === null ? null : Number(row.cache_read_input_tokens), outputTokens: row.output_tokens === null ? null : Number(row.output_tokens),
+    estimatedCostUsd: row.estimated_cost_usd === null || row.estimated_cost_usd === undefined ? null : Number(row.estimated_cost_usd), costSource: (row.cost_source as AgentRun['costSource']) ?? null,
     fallbackFrom: row.fallback_from as AgentRun['fallbackFrom'] ?? null, fallbackReason: row.fallback_reason,
     attempt: Number(row.attempt ?? 0), maxAttempts: Number(row.max_attempts ?? 3),
     nextAttemptAt: row.next_attempt_at ?? null,
@@ -175,7 +179,31 @@ export class RunRepository {
     return load.codex < load.claude ? 'codex' : 'claude';
   }
 
-  private patchEntries(changes: RunPatch): Array<[string, string | number | null]> {
+  /**
+   * Cost is derived here, never supplied by a caller writing telemetry: a
+   * usage patch carries tokens while the model was recorded by an earlier
+   * patch, so the incoming usage is merged over the stored row before
+   * pricing. `cost_source` is stamped alongside the amount so an estimate is
+   * never read back as a billed figure.
+   */
+  private costEntries(id: string, changes: RunPatch): Array<[string, string | number | null]> {
+    const touchesCost = changes.inputTokens !== undefined || changes.cacheCreationInputTokens !== undefined
+      || changes.cacheReadInputTokens !== undefined || changes.outputTokens !== undefined
+      || changes.model !== undefined || changes.costUsd !== undefined;
+    if (!touchesCost) return [];
+    const row = this.database.prepare('SELECT model, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens FROM agent_runs WHERE id = ?')
+      .get(id) as { model: string | null; input_tokens: number | null; cache_creation_input_tokens: number | null; cache_read_input_tokens: number | null; output_tokens: number | null } | undefined;
+    if (!row) return [];
+    const cost = resolveCost(changes.model ?? row.model, {
+      inputTokens: changes.inputTokens === undefined ? row.input_tokens : changes.inputTokens,
+      cacheCreationInputTokens: changes.cacheCreationInputTokens === undefined ? row.cache_creation_input_tokens : changes.cacheCreationInputTokens,
+      cacheReadInputTokens: changes.cacheReadInputTokens === undefined ? row.cache_read_input_tokens : changes.cacheReadInputTokens,
+      outputTokens: changes.outputTokens === undefined ? row.output_tokens : changes.outputTokens,
+    }, changes.costUsd);
+    return cost ? [['estimated_cost_usd', cost.costUsd], ['cost_source', cost.costSource]] : [];
+  }
+
+  private patchEntries(id: string, changes: RunPatch): Array<[string, string | number | null]> {
     // Runs are retried in place, so clear any error left by the previous
     // attempt as soon as the reused run completes or is canceled.
     const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
@@ -185,11 +213,14 @@ export class RunRepository {
       ['started_at', changes.startedAt], ['completed_at', changes.completedAt], ['owner_id', changes.ownerId], ['lease_expires_at', changes.leaseExpiresAt],
       ['next_attempt_at', changes.nextAttemptAt], ['attempt', changes.attempt], ['resolved_workspace', changes.resolvedWorkspace],
     ]);
-    return [...columns].filter((entry): entry is [string, string | number | null] => entry[1] !== undefined);
+    return [
+      ...[...columns].filter((entry): entry is [string, string | number | null] => entry[1] !== undefined),
+      ...this.costEntries(id, changes),
+    ];
   }
 
   update(id: string, changes: RunPatch): void {
-    const entries = this.patchEntries(changes);
+    const entries = this.patchEntries(id, changes);
     if (!entries.length) return;
     this.database.prepare(`UPDATE agent_runs SET ${entries.map(([column]) => `${column} = ?`).join(', ')} WHERE id = ?`)
       .run(...entries.map(([, value]) => value), id);
@@ -314,7 +345,7 @@ export class RunRepository {
    * callers must suppress every downstream side effect when it returns false.
    */
   finish(id: string, ownerId: string, patch: RunPatch): boolean {
-    const entries = this.patchEntries(patch);
+    const entries = this.patchEntries(id, patch);
     if (!entries.length) return false;
     const changed = this.database.prepare(`
       UPDATE agent_runs SET ${entries.map(([column]) => `${column} = ?`).join(', ')}
@@ -325,7 +356,7 @@ export class RunRepository {
 
   /** Commit recovery only if the same interrupted owner still has an expired lease. */
   private finishExpired(id: string, ownerId: string, recoveryCutoff: string, patch: RunPatch): boolean {
-    const entries = this.patchEntries(patch);
+    const entries = this.patchEntries(id, patch);
     if (!entries.length) return false;
     const changed = this.database.prepare(`
       UPDATE agent_runs SET ${entries.map(([column]) => `${column} = ?`).join(', ')}

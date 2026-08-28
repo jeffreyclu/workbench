@@ -96,6 +96,17 @@ function AgentFitRows({ rows }: { rows: RunInsightsAgentFit[] }) {
   })}</div>;
 }
 
+/**
+ * Spend is small per run and large in aggregate, so a fixed 2-decimal format
+ * would render most rows as $0.00. Cents below a dollar keep a cheap model's
+ * traffic legible next to an expensive one's.
+ */
+function formatCostUsd(value: number): string {
+  if (value >= 100) return `$${Math.round(value).toLocaleString()}`;
+  if (value >= 1) return `$${value.toFixed(2)}`;
+  return `$${value.toFixed(4)}`;
+}
+
 function TokenUsageRows({ rows }: { rows: RunInsightsTokenUsage[] }) {
   return <div className="insight-token-list">
     {rows.map((row) => <div className="insight-token-row" key={`${row.provider}:${row.model ?? 'unspecified'}`}>
@@ -106,6 +117,7 @@ function TokenUsageRows({ rows }: { rows: RunInsightsTokenUsage[] }) {
         <div><dt>Cache read</dt><dd>{formatTokenCount(row.cacheReadInputTokens)}</dd></div>
         <div><dt>Output</dt><dd>{formatTokenCount(row.outputTokens)}</dd></div>
         <div><dt>Total traffic</dt><dd>{formatTokenCount(row.inputTokens + row.cacheCreationInputTokens + row.cacheReadInputTokens + row.outputTokens)}</dd></div>
+        <div><dt>Cost</dt><dd>{formatCostUsd(row.estimatedCostUsd ?? 0)}</dd></div>
       </dl>
     </div>)}
   </div>;
@@ -206,12 +218,13 @@ export function InsightsView() {
               </div>
 
               <div className="insight-section">
-                <h3>Token usage <InfoTooltip>Only runs with a provider-reported cache split are included. Fresh input, cache writes, cache reads, and output stay separate so the source of traffic remains visible. Rows group usage by provider and model.</InfoTooltip></h3>
+                <h3>Token usage <InfoTooltip>Cost is the provider's billed amount where it reports one, otherwise a list-price estimate from the recorded tokens. Only runs with a provider-reported cache split are included. Fresh input, cache writes, cache reads, and output stay separate so the source of traffic remains visible. Rows group usage by provider and model.</InfoTooltip></h3>
                 {data.tokenUsageByModel.length === 0 ? <>
                   <p className="insight-empty-note">No token usage with a complete provider cache split was reported in this window.</p>
                   {(data.incompleteTokenTelemetryRuns ?? 0) > 0 && <p className="insight-empty-note">{data.incompleteTokenTelemetryRuns} run{data.incompleteTokenTelemetryRuns === 1 ? '' : 's'} lacked a cache split and are excluded rather than guessed.</p>}
                 </> : <>
                   <div className="insight-token-summary">
+                    <div><span>Cost</span><strong>{formatCostUsd(data.estimatedCostUsd ?? 0)}</strong></div>
                     <div><span>Total traffic</span><strong>{formatTokenCount(data.inputTokens + data.cacheCreationInputTokens + data.cacheReadInputTokens + data.outputTokens)}</strong></div>
                     <div><span>Fresh input</span><strong>{formatTokenCount(data.inputTokens)}</strong></div>
                     <div><span>Cache read</span><strong>{formatTokenCount(data.cacheReadInputTokens)}</strong></div>
@@ -219,6 +232,7 @@ export function InsightsView() {
                     <div><span>Output</span><strong>{formatTokenCount(data.outputTokens)}</strong></div>
                   </div>
                   <TokenUsageRows rows={data.tokenUsageByModel} />
+                  {(data.unpricedTokenTelemetryRuns ?? 0) > 0 && <p className="insight-empty-note">{data.unpricedTokenTelemetryRuns} run{data.unpricedTokenTelemetryRuns === 1 ? '' : 's'} ran on a model with no known rate and contribute no dollars.</p>}
                   {(data.incompleteTokenTelemetryRuns ?? 0) > 0 && <p className="insight-empty-note">{data.incompleteTokenTelemetryRuns} run{data.incompleteTokenTelemetryRuns === 1 ? '' : 's'} lacked a cache split and are excluded from token totals rather than guessed.</p>}
                 </>}
               </div>
