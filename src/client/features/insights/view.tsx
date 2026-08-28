@@ -3,7 +3,7 @@ import { Info, LineChart } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '../../data/api';
 import { InsightsSkeleton } from '../../components/skeleton/skeleton';
-import type { RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsTokenUsage } from '../../../shared/contracts';
+import type { InsightsTimeframe, RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsTokenUsage } from '../../../shared/contracts';
 
 function InfoTooltip({ children }: { children: string }) {
   return (
@@ -137,8 +137,8 @@ function CursingInsight({ data }: { data: RunInsights['cursing'] }) {
 }
 
 export function InsightsView() {
-  const [days, setDays] = useState<7 | 30>(30);
-  const insights = useQuery({ queryKey: ['insights', days], queryFn: () => api.getInsights(days), refetchInterval: 10_000 });
+  const [timeframe, setTimeframe] = useState<InsightsTimeframe>('all');
+  const insights = useQuery({ queryKey: ['insights', timeframe], queryFn: () => api.getInsights(timeframe), refetchInterval: 10_000 });
   const data = insights.data;
 
   return (
@@ -150,8 +150,10 @@ export function InsightsView() {
           <p>How work moves through Workbench and which agent fits each task.</p>
         </div>
         <div className="insight-window-toggle" role="group" aria-label="Time window">
-          <button className={days === 7 ? 'active' : ''} onClick={() => setDays(7)}>7 days</button>
-          <button className={days === 30 ? 'active' : ''} onClick={() => setDays(30)}>30 days</button>
+          <button className={timeframe === '15m' ? 'active' : ''} onClick={() => setTimeframe('15m')}>Last 15 minutes</button>
+          <button className={timeframe === '1h' ? 'active' : ''} onClick={() => setTimeframe('1h')}>Last hour</button>
+          <button className={timeframe === '1d' ? 'active' : ''} onClick={() => setTimeframe('1d')}>Last day</button>
+          <button className={timeframe === 'all' ? 'active' : ''} onClick={() => setTimeframe('all')}>All Time</button>
         </div>
       </header>
 

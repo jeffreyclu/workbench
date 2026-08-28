@@ -135,6 +135,19 @@ describe('WorkItemRepository', () => {
     });
   });
 
+  it('filters Insights to the requested rolling timeframe while All Time retains older records', () => {
+    const item = repository.create({ title: 'Timeframe coverage', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const recentRun = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Recent run.');
+    const oldRun = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Old run.');
+    repository.updateRun(recentRun.id, { status: 'completed', completedAt: new Date().toISOString() });
+    repository.updateRun(oldRun.id, { status: 'completed', completedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() });
+
+    expect(repository.getRunInsights('15m').completedRuns).toBe(1);
+    expect(repository.getRunInsights('1h').completedRuns).toBe(1);
+    expect(repository.getRunInsights('1d').completedRuns).toBe(2);
+    expect(repository.getRunInsights('all').completedRuns).toBe(2);
+  });
+
   it('omits legacy token rows without a cache split instead of inventing fresh input', () => {
     const item = repository.create({ title: 'Legacy telemetry', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const legacy = repository.createRun(item.id, 'analysis', 'codex', 'codex', 'Legacy run.');

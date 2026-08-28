@@ -1,4 +1,4 @@
-import type { AgentRun, RunInsights, SharedMessage } from '../../shared/contracts.js';
+import type { AgentRun, InsightsTimeframe, RunInsights, SharedMessage } from '../../shared/contracts.js';
 import type { WorkbenchDatabase } from '../database.js';
 import type { UnitOfWork } from '../unit-of-work.js';
 import { RunRepository } from '../repositories/run-repository.js';
@@ -299,8 +299,13 @@ export class ExecutionService {
     return Number(changed);
   }
 
-  getRunInsights(days: 7 | 30 = 30): RunInsights {
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  getRunInsights(timeframe: InsightsTimeframe = 'all'): RunInsights {
+    const windowMs: Record<Exclude<InsightsTimeframe, 'all'>, number> = {
+      '15m': 15 * 60 * 1000,
+      '1h': 60 * 60 * 1000,
+      '1d': 24 * 60 * 60 * 1000,
+    };
+    const since = timeframe === 'all' ? new Date(0).toISOString() : new Date(Date.now() - windowMs[timeframe]).toISOString();
     const runs = this.database.prepare(`
       SELECT agent, kind, status, attempt, fallback_from, model, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, created_at, completed_at,
         CAST((julianday(completed_at) - julianday(started_at)) * 24 * 60 * 60 * 1000 AS INTEGER) as duration_ms

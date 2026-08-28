@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InsightsView } from './view';
@@ -13,6 +13,26 @@ function stubInsightsFetch(insightsPayload: unknown) {
 }
 
 describe('InsightsView', () => {
+  it('offers exactly the four approved timeframes and requests the selected one', async () => {
+    stubInsightsFetch({
+      retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
+      medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
+      cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
+
+    await screen.findByRole('heading', { name: /insights/i });
+    expect(screen.getAllByRole('button', { name: /last 15 minutes|last hour|last day|all time/i })).toHaveLength(4);
+    expect(screen.queryByRole('button', { name: '7 days' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '30 days' })).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/api/insights?timeframe=all'))).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Last 15 minutes' }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/api/insights?timeframe=15m'))).toBe(true));
+  });
+
   it('renders token totals grouped by provider and model', async () => {
     stubInsightsFetch({
       retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,

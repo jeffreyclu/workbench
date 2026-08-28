@@ -1495,6 +1495,8 @@ nav { display: grid; gap: 3px; }
   .artifact-event > div, .artifact-comment > div { min-width: 0; }
   .artifact-comment > div { flex-wrap: wrap; gap: 4px 8px; }
   .insight-sections { gap: 12px; padding-top: 14px; }
+  .insight-window-toggle { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .insight-window-toggle button { min-width: 0; min-height: 44px; padding-inline: 6px; }
   .insight-overall-row, .insight-agent-grid, .insight-reliability-grid, .insight-token-summary { grid-template-columns: 1fr; }
   .insight-overall-stat { min-height: 104px; padding: 15px; }
   .insight-section { padding: 15px; }
