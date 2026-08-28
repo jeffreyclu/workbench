@@ -134,6 +134,12 @@ describe('assessDiffBlocks caching', () => {
   });
 });
 
+/** The pool primes each session with an empty block list before it is eligible
+ * for real work, so a mock must answer that turn to become usable. */
+const isPrimingTurn = (prompt: string) => (JSON.parse(prompt) as { message: { content: string } }).message.content.trim().endsWith('Blocks:\n[]');
+const SCORER_POOL_SIZE = 4;
+const MAX_FAILED_STARTS = 2;
+
 describe('assessDiffBlocks worker recovery', () => {
   it('requeues a block whose worker dies mid-turn instead of reporting it unscored', async () => {
     vi.resetModules();
@@ -145,6 +151,7 @@ describe('assessDiffBlocks worker recovery', () => {
         emitter.stderr = new EventEmitter();
         emitter.kill = () => {};
         emitter.stdin = Object.assign(new EventEmitter(), { write: (prompt: string) => {
+          if (isPrimingTurn(prompt)) { queueMicrotask(() => emitter.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'result', result: '[]' })}\n`))); return; }
           writes += 1;
           // The first worker to receive a block dies holding it, exactly as a
           // recycled or rate-limited Claude CLI process does in production.
@@ -179,6 +186,7 @@ describe('assessDiffBlocks worker recovery', () => {
         emitter.stderr = new EventEmitter();
         emitter.kill = () => {};
         emitter.stdin = Object.assign(new EventEmitter(), { write: (prompt: string) => {
+          if (isPrimingTurn(prompt)) { queueMicrotask(() => emitter.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'result', result: '[]' })}\n`))); return; }
           writes += 1;
           // Haiku's first turn answers with prose rather than the JSON array,
           // which used to mark every block in the batch permanently unscored.
@@ -225,6 +233,9 @@ describe('assessDiffBlocks worker recovery', () => {
     await expect(assessDiffBlocks(database, [{ key: 'changed', lines: ['+const enabled = true;'] }])).resolves.toEqual({
       changed: { risk: null, reasoning: 'AI assessment unavailable; review this changed block.' },
     });
-    expect(writes).toBe(2);
+    // Sessions that die before they are warm must not consume the request's
+    // retry budget silently and respawn forever: the pool gives up quickly.
+    expect(writes).toBeGreaterThan(0);
+    expect(writes).toBeLessThanOrEqual(SCORER_POOL_SIZE + MAX_FAILED_STARTS);
   });
 });

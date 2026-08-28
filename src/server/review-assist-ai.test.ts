@@ -8,7 +8,10 @@ const decision = {
   hunks: [{ filePath: 'src/sync.ts', location: 'Line 10', lines: ['+retry(3);'] }],
 };
 
-function mockStreamingWorker() {
+/** The warm worker protocol is one result per message written to stdin: the
+ * first is the priming turn the pool pays before any reviewer clicks, the
+ * second is the real question. */
+function mockStreamingWorker(answer = 'This adds a bounded retry around the sync call.', deltas: string[] = []) {
   return vi.fn(() => {
     const emitter = new EventEmitter() as EventEmitter & {
       stdout: EventEmitter & { setEncoding?: (encoding: string) => void };
@@ -18,9 +21,23 @@ function mockStreamingWorker() {
     };
     emitter.stdout = Object.assign(new EventEmitter(), { setEncoding: () => {} });
     emitter.stderr = new EventEmitter();
-    emitter.stdin = Object.assign(new EventEmitter(), { write: () => {}, end: () => {} });
+    let turns = 0;
+    emitter.stdin = Object.assign(new EventEmitter(), {
+      write: () => {
+        const isPrimingTurn = turns++ === 0;
+        queueMicrotask(() => {
+          if (!isPrimingTurn) {
+            for (const text of deltas) {
+              emitter.stdout.emit('data', `${JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'ignored' } } })}\n`);
+              emitter.stdout.emit('data', `${JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } })}\n`);
+            }
+          }
+          emitter.stdout.emit('data', `${JSON.stringify({ type: 'result', is_error: false, result: isPrimingTurn ? 'ready' : answer })}\n`);
+        });
+      },
+      end: () => {},
+    });
     emitter.kill = () => {};
-    queueMicrotask(() => emitter.stdout.emit('data', `${JSON.stringify({ type: 'result', is_error: false, result: 'This adds a bounded retry around the sync call.' })}\n`));
     return emitter;
   });
 }
@@ -64,6 +81,41 @@ describe('requestReviewAssist caching', () => {
 
     await expect(requestReviewAssist(database, 'what_could_break', decision, null)).rejects.toThrow();
     expect(lookupReviewAssist(database, 'what_could_break', decision, null)).toBeNull();
+  });
+});
+
+describe('warm Changes agent', () => {
+  it('primes its sessions at warm-up so a reviewer click never pays session startup', async () => {
+    vi.resetModules();
+    const spawn = mockStreamingWorker();
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { requestReviewAssist, warmReviewAssist, shutdownReviewAssist } = await import('./review-assist-ai.js');
+    const database = openDatabase(':memory:');
+
+    warmReviewAssist();
+    const warmSpawns = spawn.mock.calls.length;
+    expect(warmSpawns).toBeGreaterThan(0);
+    // Every warmed session is primed immediately: its first (throwaway) turn is
+    // written at spawn, so the reviewer's turn is a later, fast one.
+    expect((spawn.mock.calls as unknown as unknown[][]).every((call) => (call[1] as string[]).includes('--include-partial-messages'))).toBe(true);
+
+    await expect(requestReviewAssist(database, 'explain', decision, null)).resolves.toBe('This adds a bounded retry around the sync call.');
+    // The click reused an already-warm session rather than starting one for itself.
+    expect(spawn.mock.calls.length).toBeGreaterThanOrEqual(warmSpawns);
+    shutdownReviewAssist();
+  });
+
+  it('streams answer text as it is generated and drops model thinking', async () => {
+    vi.resetModules();
+    const spawn = mockStreamingWorker('Bounded retry added.', ['Bounded ', 'retry ', 'added.']);
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { requestReviewAssist, shutdownReviewAssist } = await import('./review-assist-ai.js');
+    const database = openDatabase(':memory:');
+
+    const deltas: string[] = [];
+    await expect(requestReviewAssist(database, 'explain', decision, null, (text) => deltas.push(text))).resolves.toBe('Bounded retry added.');
+    expect(deltas).toEqual(['Bounded ', 'retry ', 'added.']);
+    shutdownReviewAssist();
   });
 });
 

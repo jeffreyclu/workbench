@@ -36,6 +36,54 @@ export const sourceClient = {
     decision: { behavior: string; state: string; hunks: Array<{ filePath: string; location: string; lines: string[] }> };
     taskIntent: { title: string; description: string } | null;
   }) => request<{ answer: string }>('/api/review-assist', { method: 'POST', body: JSON.stringify(input) }),
+  // Streams the answer as the model writes it. The reviewer sees the first
+  // words about a second after clicking instead of waiting for the whole turn;
+  // the resolved value is still the complete, server-persisted answer.
+  streamReviewAssist: async (input: {
+    action: 'explain' | 'what_could_break' | 'compare_task_intent';
+    decision: { behavior: string; state: string; hunks: Array<{ filePath: string; location: string; lines: string[] }> };
+    taskIntent: { title: string; description: string } | null;
+  }, onDelta: (text: string) => void): Promise<string> => {
+    const response = await fetch('/api/review-assist/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) throw new Error(`AI assist request failed (${response.status}).`);
+    let answer: string | null = null;
+    let failure: string | null = null;
+    let buffer = '';
+    const consume = (chunk: string) => {
+      buffer += chunk;
+      for (;;) {
+        const boundary = buffer.indexOf('\n\n');
+        if (boundary < 0) break;
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const line = frame.split('\n').find((candidate) => candidate.startsWith('data: '));
+        if (!line) continue;
+        let event: { type?: string; text?: string; answer?: string; message?: string };
+        try { event = JSON.parse(line.slice(6)); } catch { continue; }
+        if (event.type === 'delta' && typeof event.text === 'string') onDelta(event.text);
+        else if (event.type === 'done' && typeof event.answer === 'string') answer = event.answer;
+        else if (event.type === 'error') failure = event.message ?? 'AI assist failed.';
+      }
+    };
+    if (response.body) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        consume(decoder.decode(value, { stream: true }));
+      }
+    } else {
+      consume(await response.text());
+    }
+    if (failure) throw new Error(failure);
+    if (answer === null) throw new Error('AI assist ended without an answer.');
+    return answer;
+  },
   lookupReviewAssist: (input: {
     action: 'explain' | 'what_could_break' | 'compare_task_intent';
     decision: { behavior: string; state: string; hunks: Array<{ filePath: string; location: string; lines: string[] }> };

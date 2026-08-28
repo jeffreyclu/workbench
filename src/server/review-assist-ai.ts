@@ -12,11 +12,27 @@ export type ReviewAssistDecision = {
 
 export type ReviewAssistTaskIntent = { title: string; description: string } | null;
 
-const SYSTEM_PROMPTS: Record<ReviewAssistAction, string> = {
-  explain: 'You help a code reviewer understand one already-identified diff decision. Explain in plain English what this change does and why it plausibly exists. Be concise: at most six sentences. No preamble, no restating the diff back verbatim.',
-  what_could_break: 'You help a code reviewer stress-test one already-identified diff decision. List the concrete, plausible ways this change could break something — edge cases, missed call sites, race conditions, silent behavior changes. Be concise: at most six bullet points, one line each. If nothing plausible comes to mind, say so directly instead of inventing risk.',
-  compare_task_intent: 'You help a code reviewer judge whether one diff decision matches the task it was meant to accomplish. Compare the change against the stated task title and description, and say directly whether it looks aligned, partially aligned, or off-target, with a one-sentence reason. Be concise: at most six sentences.',
+/** One warm agent serves every Changes question, so the action lives in the
+ * turn rather than in a per-action process. Three specialised processes could
+ * only ever keep one of them warm for the button a reviewer actually clicks. */
+const CHANGES_AGENT_SYSTEM_PROMPT = 'You assist a code reviewer reading one diff decision at a time in Workbench. Every user message is self-contained: answer only from that message and ignore anything earlier in this session. Follow the instruction at the top of the message exactly. No preamble, no markdown headings, no restating the diff back verbatim.';
+
+// Answer length is the dominant latency term once the session is primed:
+// measured on this machine a warm turn spends ~0.9s on session overhead and the
+// rest generating tokens, so these caps are a deliberate speed/detail trade and
+// are the first knob to loosen if answers read as too terse.
+const ACTION_DIRECTIVES: Record<ReviewAssistAction, string> = {
+  explain: 'Instruction: explain in plain English what this change does and why it plausibly exists. At most three sentences, and stop as soon as the point is made.',
+  what_could_break: 'Instruction: list the concrete, plausible ways this change could break something — edge cases, missed call sites, race conditions, silent behavior changes. At most four bullet points, one short line each. If nothing plausible comes to mind, say so directly instead of inventing risk.',
+  compare_task_intent: 'Instruction: judge whether this change matches the task it was meant to accomplish. Say directly whether it looks aligned, partially aligned, or off-target, with a one-sentence reason. At most three sentences.',
 };
+
+/** Cheapest possible turn whose only job is to pay the session's one-time
+ * initialisation before a reviewer is waiting on it. Measured on this machine:
+ * a session's first turn costs ~2.0s, every later turn ~0.9s, and pre-spawning
+ * without priming saves nothing because the CLI initialises lazily on the
+ * first message. */
+const PRIME_PROMPT = 'Instruction: reply with the single word ready.';
 
 function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent): string {
   return createHash('sha256').update(JSON.stringify({ action, decision, taskIntent })).digest('hex');
@@ -43,6 +59,7 @@ export function lookupReviewAssist(database: WorkbenchDatabase, action: ReviewAs
 function buildPrompt(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent): string {
   const hunkText = decision.hunks.map((hunk) => `${hunk.filePath} (${hunk.location}):\n${hunk.lines.join('\n')}`).join('\n\n');
   const parts = [
+    ACTION_DIRECTIVES[action],
     `Decision: ${decision.behavior}`,
     `Review state: ${decision.state}`,
     `Diff:\n${hunkText}`,
@@ -53,45 +70,94 @@ function buildPrompt(action: ReviewAssistAction, decision: ReviewAssistDecision,
   return parts.join('\n\n');
 }
 
-type PendingTurn = { resolve: (answer: string) => void; reject: (error: Error) => void; timeout: ReturnType<typeof setTimeout> | null };
-type AssistWorker = { action: ReviewAssistAction; child: ChildProcessWithoutNullStreams; outputBuffer: string; active: PendingTurn | null };
+type PendingTurn = {
+  resolve: (answer: string) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout> | null;
+  onDelta?: (text: string) => void;
+};
+
+type PrimeWaiter = { resolve: () => void; reject: (error: Error) => void };
+
+type AssistWorker = {
+  child: ChildProcessWithoutNullStreams;
+  outputBuffer: string;
+  active: PendingTurn | null;
+  primed: boolean;
+  primeWaiters: PrimeWaiter[];
+};
 
 const TURN_TIMEOUT_MS = 30_000;
-const IDLE_SHUTDOWN_MS = 60_000;
+const PRIME_TIMEOUT_MS = 20_000;
+/** Primed sessions stay resident for the life of the runtime, because an
+ * idle-shutdown timer only guarantees that the next reviewer pays the cold
+ * start again. Two, not one: the dwell prefetch below fires automatically on
+ * every decision a reviewer lands on, and a replacement session is only
+ * *started* when one is handed out -- it needs its own ~2.0s prime turn before
+ * it is warm. With a single session, a click arriving while a background
+ * prefetch held it fell through to an unprimed worker and paid that cold start
+ * anyway, which is the case this pool exists to prevent. One spare keeps the
+ * interactive click warm while a prefetch is in flight; deeper is not free,
+ * since each idle primed Claude session holds roughly 230MB. */
+const POOL_TARGET = 2;
 
-/** One warm worker per action, kept alive so a reviewer's click pays only for
- * the model turn, not the ~1-3s Claude CLI cold start on top of it. Recycled
- * after each turn (no session reuse across decisions) and immediately
- * replaced so the next click still lands on a warm process. */
-const workers = new Map<ReviewAssistAction, AssistWorker>();
-const idleShutdowns = new Map<ReviewAssistAction, ReturnType<typeof setTimeout>>();
+const idlePool: AssistWorker[] = [];
+const liveWorkers = new Set<AssistWorker>();
 
-function scheduleIdleShutdown(action: ReviewAssistAction): void {
-  const existing = idleShutdowns.get(action);
-  if (existing) clearTimeout(existing);
-  const timeout = setTimeout(() => {
-    const worker = workers.get(action);
-    if (worker && !worker.active) recycleWorker(worker);
-  }, IDLE_SHUTDOWN_MS);
-  timeout.unref();
-  idleShutdowns.set(action, timeout);
+function writeTurn(worker: AssistWorker, prompt: string): void {
+  worker.child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } })}\n`);
 }
 
-function recycleWorker(worker: AssistWorker): void {
-  if (workers.get(worker.action) !== worker) return;
-  workers.delete(worker.action);
+function disposeWorker(worker: AssistWorker, error: Error): void {
+  if (!liveWorkers.delete(worker)) return;
+  const pooled = idlePool.indexOf(worker);
+  if (pooled >= 0) idlePool.splice(pooled, 1);
+  const pending = worker.active;
+  worker.active = null;
+  if (pending?.timeout) clearTimeout(pending.timeout);
+  pending?.reject(error);
+  for (const waiter of worker.primeWaiters.splice(0)) waiter.reject(error);
   try { worker.child.kill('SIGTERM'); } catch { /* already stopped */ }
 }
 
-function startWorker(action: ReviewAssistAction): AssistWorker {
+function handleWorkerLine(worker: AssistWorker, line: string): void {
+  let event: { type?: string; result?: unknown; is_error?: boolean; event?: { type?: string; delta?: { type?: string; text?: string } } };
+  try { event = JSON.parse(line); } catch { return; }
+  if (event.type === 'stream_event') {
+    // Thinking deltas are deliberately dropped: the reviewer asked a question,
+    // not for the model's scratchpad.
+    const delta = event.event?.type === 'content_block_delta' ? event.event.delta : undefined;
+    if (delta?.type === 'text_delta' && typeof delta.text === 'string') worker.active?.onDelta?.(delta.text);
+    return;
+  }
+  if (event.type !== 'result') return;
+  if (!worker.active) {
+    worker.primed = true;
+    for (const waiter of worker.primeWaiters.splice(0)) waiter.resolve();
+    return;
+  }
+  const pending = worker.active;
+  worker.active = null;
+  if (pending.timeout) clearTimeout(pending.timeout);
+  if (event.is_error || typeof event.result !== 'string' || !event.result.trim()) pending.reject(new Error('AI review assist returned no answer.'));
+  else pending.resolve(event.result.trim());
+  // Retire the session rather than reusing it, so no decision's diff leaks
+  // into the next reviewer question. The warm replacement was already started
+  // when this worker was taken out of the pool.
+  disposeWorker(worker, new Error('AI review assist worker retired after its turn.'));
+  ensureWarmPool();
+}
+
+function startWorker(): AssistWorker {
   const child = spawn('claude', [
     '-p', '--verbose', '--model', 'haiku', '--effort', 'low', '--tools', '',
     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '',
-    '--no-session-persistence', '--no-chrome', '--system-prompt', SYSTEM_PROMPTS[action],
+    '--no-session-persistence', '--no-chrome', '--include-partial-messages',
+    '--system-prompt', CHANGES_AGENT_SYSTEM_PROMPT,
     '--input-format', 'stream-json', '--output-format', 'stream-json',
   ], { cwd: '/tmp', env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
-  const worker: AssistWorker = { action, child, outputBuffer: '', active: null };
-  workers.set(action, worker);
+  const worker: AssistWorker = { child, outputBuffer: '', active: null, primed: false, primeWaiters: [] };
+  liveWorkers.add(worker);
   (child.stdout as unknown as { setEncoding?: (encoding: string) => void }).setEncoding?.('utf8');
   child.stdout.on('data', (chunk: string) => {
     worker.outputBuffer += chunk;
@@ -100,68 +166,76 @@ function startWorker(action: ReviewAssistAction): AssistWorker {
       if (newline < 0) break;
       const line = worker.outputBuffer.slice(0, newline);
       worker.outputBuffer = worker.outputBuffer.slice(newline + 1);
-      try {
-        const event = JSON.parse(line) as { type?: string; result?: string; is_error?: boolean };
-        if (event.type !== 'result' || !worker.active) continue;
-        const pending = worker.active;
-        worker.active = null;
-        if (pending.timeout) clearTimeout(pending.timeout);
-        if (event.is_error || typeof event.result !== 'string' || !event.result.trim()) pending.reject(new Error('AI review assist returned no answer.'));
-        else pending.resolve(event.result.trim());
-        recycleWorker(worker);
-        ensureWarmWorker(action);
-      } catch { /* Ignore non-result stream events. */ }
+      handleWorkerLine(worker, line);
     }
   });
-  const stopWorker = (error: Error) => {
-    if (workers.get(action) !== worker) return;
-    recycleWorker(worker);
-    const pending = worker.active;
-    worker.active = null;
-    if (pending) { if (pending.timeout) clearTimeout(pending.timeout); pending.reject(error); }
-  };
-  child.once('exit', () => stopWorker(new Error('AI review assist stopped unexpectedly.')));
-  child.once('error', stopWorker);
-  child.stdin.on('error', stopWorker);
+  const stop = (error: Error) => disposeWorker(worker, error);
+  child.once('exit', () => stop(new Error('AI review assist stopped unexpectedly.')));
+  child.once('error', stop);
+  child.stdin.on('error', stop);
+  writeTurn(worker, PRIME_PROMPT);
   return worker;
 }
 
-function ensureWarmWorker(action: ReviewAssistAction): AssistWorker {
-  return workers.get(action) ?? startWorker(action);
+function ensureWarmPool(): void {
+  while (idlePool.length < POOL_TARGET) idlePool.push(startWorker());
 }
 
-function runTurn(action: ReviewAssistAction, prompt: string): Promise<string> {
+/** Hands out an exclusive session and immediately starts its replacement, so
+ * the pool is refilled while this turn is still running rather than after it. */
+function takeWorker(): AssistWorker {
+  const primed = idlePool.findIndex((worker) => worker.primed);
+  const worker = primed >= 0 ? idlePool.splice(primed, 1)[0] : idlePool.shift() ?? startWorker();
+  ensureWarmPool();
+  return worker;
+}
+
+function whenPrimed(worker: AssistWorker): Promise<void> {
+  if (worker.primed) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('AI review assist worker never became ready.')), PRIME_TIMEOUT_MS);
+    timeout.unref();
+    worker.primeWaiters.push({
+      resolve: () => { clearTimeout(timeout); resolve(); },
+      reject: (error) => { clearTimeout(timeout); reject(error); },
+    });
+  });
+}
+
+function dispatchTurn(worker: AssistWorker, prompt: string, onDelta?: (text: string) => void): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const worker = ensureWarmWorker(action);
-    const idleShutdown = idleShutdowns.get(action);
-    if (idleShutdown) clearTimeout(idleShutdown);
-    if (worker.active) {
-      // The warm worker is mid-turn (a second click landed before the first
-      // resolved); fall back to a fresh one-off process rather than queueing
-      // the reviewer behind an unrelated question.
-      runOneOffTurn(action, prompt).then(resolve, reject);
-      return;
-    }
-    const pending: PendingTurn = { resolve, reject, timeout: null };
+    const pending: PendingTurn = { resolve, reject, timeout: null, onDelta };
     pending.timeout = setTimeout(() => {
       if (worker.active !== pending) return;
       worker.active = null;
-      recycleWorker(worker);
       reject(new Error(`AI review assist timed out after ${TURN_TIMEOUT_MS / 1_000} seconds.`));
-      ensureWarmWorker(action);
+      disposeWorker(worker, new Error('AI review assist worker retired after a timeout.'));
+      ensureWarmPool();
     }, TURN_TIMEOUT_MS);
     pending.timeout.unref();
     worker.active = pending;
-    worker.child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } })}\n`);
-  }).finally(() => scheduleIdleShutdown(action));
+    writeTurn(worker, prompt);
+  });
 }
 
-function runOneOffTurn(action: ReviewAssistAction, prompt: string): Promise<string> {
+async function runTurn(prompt: string, onDelta?: (text: string) => void): Promise<string> {
+  const worker = takeWorker();
+  try {
+    await whenPrimed(worker);
+  } catch {
+    // The warm session died or never came up. A one-off process is slower but
+    // still answers, and a genuine model failure still surfaces to the client.
+    return runOneOffTurn(prompt);
+  }
+  return dispatchTurn(worker, prompt, onDelta);
+}
+
+function runOneOffTurn(prompt: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn('claude', [
       '-p', '--model', 'haiku', '--effort', 'low', '--tools', '',
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '',
-      '--no-session-persistence', '--no-chrome', '--system-prompt', SYSTEM_PROMPTS[action],
+      '--no-session-persistence', '--no-chrome', '--system-prompt', CHANGES_AGENT_SYSTEM_PROMPT,
       '--output-format', 'json',
     ], { cwd: '/tmp', env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
 
@@ -198,36 +272,34 @@ function runOneOffTurn(action: ReviewAssistAction, prompt: string): Promise<stri
 
 /** Reads the cache first; only an uncached question pays for a model turn,
  * and its answer is persisted so no reviewer — in this window, another
- * window, or after a restart — pays for it twice. */
-export async function requestReviewAssist(database: WorkbenchDatabase, action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent): Promise<string> {
+ * window, or after a restart — pays for it twice. `onDelta` streams the answer
+ * as it is generated so the reviewer reads the first sentence about a second
+ * in, instead of staring at a spinner until the whole turn completes. */
+export async function requestReviewAssist(
+  database: WorkbenchDatabase,
+  action: ReviewAssistAction,
+  decision: ReviewAssistDecision,
+  taskIntent: ReviewAssistTaskIntent,
+  onDelta?: (text: string) => void,
+): Promise<string> {
   const hash = hashRequest(action, decision, taskIntent);
   const cached = readCached(database, hash);
   if (cached) return cached;
-  const answer = await runTurn(action, buildPrompt(action, decision, taskIntent));
+  const answer = await runTurn(buildPrompt(action, decision, taskIntent), onDelta);
   writeCached(database, hash, answer);
   return answer;
 }
 
-/** Start one warm worker per action during server boot, before a reviewer
- * clicks anything, so the first real click of each kind is not the one that
- * pays for CLI startup. */
+/** Start and prime the warm Changes agents during server boot, before a
+ * reviewer clicks anything, so no real click ever pays session startup. */
 export function warmReviewAssist(): void {
-  for (const action of Object.keys(SYSTEM_PROMPTS) as ReviewAssistAction[]) {
-    ensureWarmWorker(action);
-    scheduleIdleShutdown(action);
-  }
+  ensureWarmPool();
 }
 
 /** Runtime promotion must reap these processes; otherwise an old release can
  * retain a Claude session and contend with a real agent turn indefinitely. */
 export function shutdownReviewAssist(): void {
-  for (const timeout of idleShutdowns.values()) clearTimeout(timeout);
-  idleShutdowns.clear();
   const error = new Error('AI review assist stopped during runtime shutdown.');
-  for (const worker of [...workers.values()]) {
-    if (worker.active?.timeout) clearTimeout(worker.active.timeout);
-    worker.active?.reject(error);
-    worker.active = null;
-    recycleWorker(worker);
-  }
+  for (const worker of [...liveWorkers]) disposeWorker(worker, error);
+  idlePool.length = 0;
 }

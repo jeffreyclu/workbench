@@ -8,6 +8,7 @@ import { formatDiffFollowUpReference, type DiffFollowUpReference } from '../diff
 import { WorkspaceDiffView } from './view.js';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+const sse = (events: unknown[]) => new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
 const publish = { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: true, reason: null };
 
 function workspaceDiff(files: WorkspaceDiffFile[], revision = 'review-revision') {
@@ -231,7 +232,12 @@ describe('WorkspaceDiffView decision queue', () => {
       if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
       if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'jump-revision') });
       if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
-      if (url.endsWith('/api/review-assist')) return json({ answer: 'This decision only touches local formatting.' });
+      if (url.endsWith('/api/review-assist/lookup')) return json({ answer: null });
+      if (url.endsWith('/api/review-assist/stream')) return sse([
+        { type: 'delta', text: 'This decision only touches ' },
+        { type: 'delta', text: 'local formatting.' },
+        { type: 'done', answer: 'This decision only touches local formatting.' },
+      ]);
       throw new Error(`Unexpected request: ${url} ${init?.method ?? ''}`);
     });
     renderView(fetchMock);

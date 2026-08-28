@@ -1,5 +1,5 @@
-import { memo, type ReactNode } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sourceClient } from '../../data/source-client.js';
 import { boundConfidenceRequestBlocks, confidenceProminence, confidenceTone, type DiffConfidenceAssessment } from '../diff-confidence.js';
 import type { ReviewDecision } from './logic.js';
@@ -7,6 +7,11 @@ import { reviewStateLabel, riskSignalLabel } from './logic.js';
 
 export type ReviewAssistAction = 'explain' | 'what_could_break' | 'compare_task_intent';
 export type ReviewAssistTaskIntent = { title: string; description: string } | null;
+
+/** Long enough that arrowing through a queue of decisions costs nothing, short
+ * enough that the answer is usually ready by the time a reviewer has read the
+ * hunk and reached for the button. */
+const PREFETCH_DWELL_MS = 1_200;
 
 const ACTION_LABELS: Record<ReviewAssistAction, string> = {
   explain: 'Explain this decision',
@@ -28,8 +33,16 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
     hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines })),
   };
 
+  // Streamed text is held separately from the mutation result so a turn in
+  // flight is readable as it arrives; the mutation still owns the final,
+  // persisted answer and the error state.
+  const [streamedAnswer, setStreamedAnswer] = useState('');
+  const queryClient = useQueryClient();
   const assist = useMutation({
-    mutationFn: (action: ReviewAssistAction) => sourceClient.requestReviewAssist({ action, decision: decisionPayload, taskIntent }).then((response) => response.answer),
+    mutationFn: (action: ReviewAssistAction) => {
+      setStreamedAnswer('');
+      return sourceClient.streamReviewAssist({ action, decision: decisionPayload, taskIntent }, (text) => setStreamedAnswer((previous) => previous + text));
+    },
   });
 
   // Cache-only reads on mount: a reviewer (or another window) who already
@@ -44,6 +57,31 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
       return Object.fromEntries(results.filter(([, answer]) => answer !== null)) as Partial<Record<ReviewAssistAction, string>>;
     },
   });
+
+  // Warming the one question reviewers ask most, for the one decision they are
+  // actually reading. A warm model session still needs a few seconds to write
+  // an explanation, so the only way a click can be instant is for the answer to
+  // already exist. This stays deliberately narrow: one action, one focused
+  // decision, after a dwell — not a score bubble on every hunk in the diff.
+  const cachedExplanation = cachedAssistAnswers.data?.explain;
+  // The decision and task intent fully determine the request, so the payload
+  // travels by ref and the effect keys off their identity instead of re-firing
+  // on every parent render.
+  const prefetchInput = useRef({ decisionPayload, taskIntent });
+  prefetchInput.current = { decisionPayload, taskIntent };
+  const prefetchKey = `${decision.id}|${taskIntent?.title ?? ''}|${taskIntent?.description ?? ''}`;
+  useEffect(() => {
+    if (cachedAssistAnswers.isPending || cachedExplanation) return;
+    const timer = setTimeout(() => {
+      const { decisionPayload: payload, taskIntent: intent } = prefetchInput.current;
+      sourceClient.streamReviewAssist({ action: 'explain', decision: payload, taskIntent: intent }, () => {})
+        .then(() => queryClient.invalidateQueries({ queryKey: ['review-assist-cache', prefetchKey.split('|')[0]] }))
+        // A failed prefetch stays silent: the reviewer never asked for it, and
+        // clicking the button still surfaces the failure with its own retry.
+        .catch(() => {});
+    }, PREFETCH_DWELL_MS);
+    return () => clearTimeout(timer);
+  }, [prefetchKey, cachedExplanation, cachedAssistAnswers.isPending, queryClient]);
 
   const riskScore = useMutation({
     mutationFn: async (): Promise<DiffConfidenceAssessment> => {
@@ -133,7 +171,9 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
           >{ACTION_LABELS[action]}{hasCachedAnswer ? ' ✓' : ''}</button>;
         })}
       </div>
-      {assist.isPending && <p role="status">Asking the model…</p>}
+      {assist.isPending && (streamedAnswer
+        ? <p className="diff-review-ai-assist-answer" role="status">{streamedAnswer}</p>
+        : <p role="status">Asking the model…</p>)}
       {assist.isError && <div className="diff-review-ai-assist-error" role="alert">
         <p>{assist.error instanceof Error ? assist.error.message : 'AI assist failed.'}</p>
         <button type="button" onClick={() => assist.variables && assist.mutate(assist.variables)}>Retry</button>

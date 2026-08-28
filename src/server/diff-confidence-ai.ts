@@ -92,6 +92,11 @@ type ScorerWorker = {
   scorer: ChildProcessWithoutNullStreams;
   outputBuffer: string;
   active: PendingAssessment | null;
+  /** A Claude session initialises lazily on its first message, so a spawned
+   * but unused worker is not actually warm. Each worker pays that cost on a
+   * throwaway turn before any reviewer can be waiting on it. */
+  primed: boolean;
+  primeTimeout: ReturnType<typeof setTimeout> | null;
 };
 
 const workers = new Set<ScorerWorker>();
@@ -104,6 +109,17 @@ let idleShutdown: ReturnType<typeof setTimeout> | null = null;
 // bounded assessment turn to complete before declaring the scorer unavailable.
 const SCORER_TIMEOUT_MS = 25_000;
 const SCORER_IDLE_SHUTDOWN_MS = 30_000;
+/** An idle primed Claude session holds roughly 230MB, so the burst pool is
+ * retired when a review goes quiet — but never below one primed worker, or the
+ * next "Score risk" click pays session startup all over again. */
+const SCORER_WARM_FLOOR = 1;
+const PRIME_PROMPT = 'Blocks:\n[]';
+const PRIME_TIMEOUT_MS = 20_000;
+/** A session that dies or wedges before it primes has not consumed one of a
+ * request's assessment attempts, so without this bound the pool would respawn
+ * forever against a broken CLI and no queued block would ever be answered. */
+const MAX_FAILED_STARTS = 2;
+let failedStarts = 0;
 // Four bounded Haiku workers keep a multi-file review responsive without
 // borrowing either of the foreground Codex/Claude task slots.
 const SCORER_POOL_SIZE = 4;
@@ -121,14 +137,37 @@ function failPending(pending: PendingAssessment, error: Error): void {
 
 function recycleWorker(worker: ScorerWorker): void {
   if (!workers.delete(worker)) return;
+  if (worker.primeTimeout) clearTimeout(worker.primeTimeout);
+  worker.primeTimeout = null;
   worker.outputBuffer = '';
   try { worker.scorer.kill('SIGTERM'); } catch { /* already stopped */ }
+}
+
+/** A worker that never reached a usable state. Once the pool has failed to
+ * start this many times in a row, every waiting block is answered with the
+ * visible unavailable marker instead of hanging on a pool that is not coming
+ * back. */
+function failStart(worker: ScorerWorker, error: Error): void {
+  if (!workers.has(worker)) return;
+  recycleWorker(worker);
+  failedStarts += 1;
+  if (failedStarts >= MAX_FAILED_STARTS) {
+    while (queue.length) {
+      const pending = queue.shift()!;
+      pending.attempts = MAX_ASSESSMENT_ATTEMPTS;
+      failPending(pending, error);
+    }
+    return;
+  }
+  dispatchNext();
 }
 
 function scheduleIdleShutdown(): void {
   if (queue.length || [...workers].some((worker) => worker.active)) return;
   if (idleShutdown) clearTimeout(idleShutdown);
-  idleShutdown = setTimeout(() => { for (const worker of [...workers]) recycleWorker(worker); }, SCORER_IDLE_SHUTDOWN_MS);
+  idleShutdown = setTimeout(() => {
+    for (const worker of [...workers].slice(SCORER_WARM_FLOOR)) recycleWorker(worker);
+  }, SCORER_IDLE_SHUTDOWN_MS);
   idleShutdown.unref();
 }
 
@@ -142,8 +181,10 @@ function startWorker(): ScorerWorker {
     '--no-session-persistence', '--no-chrome', '--system-prompt', SYSTEM_PROMPT,
     '--input-format', 'stream-json', '--output-format', 'stream-json',
   ], { cwd: '/tmp', env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
-  const worker: ScorerWorker = { scorer, outputBuffer: '', active: null };
+  const worker: ScorerWorker = { scorer, outputBuffer: '', active: null, primed: false, primeTimeout: null };
   workers.add(worker);
+  worker.primeTimeout = setTimeout(() => failStart(worker, new Error('AI diff scorer never became ready.')), PRIME_TIMEOUT_MS);
+  worker.primeTimeout.unref();
   (scorer.stdout as unknown as { setEncoding?: (encoding: string) => void }).setEncoding?.('utf8');
   scorer.stdout.on('data', (chunk: string) => {
     worker.outputBuffer += chunk;
@@ -153,7 +194,17 @@ function startWorker(): ScorerWorker {
       const line = worker.outputBuffer.slice(0, newline); worker.outputBuffer = worker.outputBuffer.slice(newline + 1);
       try {
         const event = JSON.parse(line) as { type?: string; result?: string; is_error?: boolean };
-        if (event.type !== 'result' || !worker.active) continue;
+        if (event.type !== 'result') continue;
+        if (!worker.active) {
+          // The priming turn came back: this session is now warm and eligible
+          // for real work.
+          worker.primed = true;
+          if (worker.primeTimeout) clearTimeout(worker.primeTimeout);
+          worker.primeTimeout = null;
+          failedStarts = 0;
+          dispatchNext();
+          continue;
+        }
         const pending = worker.active; worker.active = null;
         if (pending.timeout) clearTimeout(pending.timeout);
         if (event.is_error || typeof event.result !== 'string') failPending(pending, new Error('AI diff assessment failed.'));
@@ -177,6 +228,7 @@ function startWorker(): ScorerWorker {
   });
   const stopWorker = (error: Error) => {
     if (!workers.has(worker)) return;
+    if (!worker.primed) { failStart(worker, error); return; }
     recycleWorker(worker);
     const pending = worker.active;
     worker.active = null;
@@ -188,10 +240,12 @@ function startWorker(): ScorerWorker {
   scorer.once('exit', () => stopWorker(new Error('AI diff scorer stopped unexpectedly.')));
   scorer.once('error', stopWorker);
   scorer.stdin.on('error', stopWorker);
+  scorer.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: PRIME_PROMPT } })}\n`);
   return worker;
 }
 
 function ensureWarmWorkers(): void {
+  if (failedStarts >= MAX_FAILED_STARTS) return;
   while (workers.size < SCORER_POOL_SIZE) startWorker();
 }
 
@@ -201,7 +255,9 @@ function dispatchNext(): void {
   idleShutdown = null;
   ensureWarmWorkers();
   for (const worker of workers) {
-    if (worker.active || queue.length === 0) continue;
+    // An unprimed worker would mistake its own priming result for this
+    // assessment, so it waits until that turn lands.
+    if (worker.active || !worker.primed || queue.length === 0) continue;
     const pending = worker.active = queue.shift()!;
     pending.attempts += 1;
     pending.timeout = setTimeout(() => {
@@ -221,6 +277,9 @@ function dispatchNext(): void {
 }
 
 function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, DiffConfidenceAssessment>> {
+  // A new request is a fresh chance for the pool: a scorer that was broken
+  // minutes ago may well be healthy now.
+  failedStarts = 0;
   ensureWarmWorkers();
   return new Promise((resolve, reject) => {
     queue.push({ blocks, resolve, reject, timeout: null, attempts: 0 });
@@ -288,10 +347,13 @@ export function assessDiffBlocks(database: WorkbenchDatabase, blocks: DiffConfid
     .then((pairs) => Object.fromEntries(pairs));
 }
 
-/** Start the dedicated scorer during server boot, before a reviewer opens a
- * diff. It remains idle and does no scoring until the first real request. */
+/** Start and prime the resident scorer during server boot, before a reviewer
+ * opens a diff, so the first "Score risk" click pays only for its model turn.
+ * Only the warm floor is started here: the rest of the burst pool spins up on
+ * demand, because idle sessions are expensive and boot-time parallelism buys a
+ * reviewer nothing. */
 export function warmDiffConfidenceModel(): void {
-  ensureWarmWorkers();
+  while (workers.size < SCORER_WARM_FLOOR) startWorker();
   scheduleIdleShutdown();
 }
 

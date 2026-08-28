@@ -98,6 +98,32 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       response.json({ answer: await requestReviewAssist(database, action, decision, taskIntent) });
     } catch (error) { next(error); }
   });
+  // Streams the answer token by token over SSE. The full turn still takes a
+  // couple of seconds, but the reviewer starts reading after the first one
+  // instead of watching a spinner; the completed answer is persisted by
+  // requestReviewAssist exactly as the non-streaming route does.
+  router.post('/api/review-assist/stream', async (request, response, next) => {
+    let parsed;
+    try {
+      parsed = reviewAssistRequestSchema.parse(request.body);
+    } catch (error) { next(error); return; }
+    response.setHeader('Content-Type', 'text/event-stream');
+    response.setHeader('Cache-Control', 'no-cache, no-transform');
+    response.setHeader('Connection', 'keep-alive');
+    response.flushHeaders?.();
+    const send = (event: { type: 'delta'; text: string } | { type: 'done'; answer: string } | { type: 'error'; message: string }) => {
+      response.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+    try {
+      const answer = await requestReviewAssist(database, parsed.action, parsed.decision, parsed.taskIntent, (text) => send({ type: 'delta', text }));
+      send({ type: 'done', answer });
+    } catch (error) {
+      // A failed turn must stay a visible failure the reviewer can retry, not
+      // an empty answer that reads like the model had nothing to say.
+      send({ type: 'error', message: error instanceof Error ? error.message : 'AI review assist failed.' });
+    }
+    response.end();
+  });
   // Cache-only: never spawns a model turn. See /api/diff-confidence/lookup.
   router.post('/api/review-assist/lookup', (request, response, next) => {
     try {
