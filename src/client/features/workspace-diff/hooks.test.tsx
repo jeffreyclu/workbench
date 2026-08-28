@@ -9,7 +9,7 @@ afterEach(() => {
 });
 
 describe('useWorkspaceDiff', () => {
-  it('does not refetch a running workspace while the diff is being reviewed', async () => {
+  it('refreshes when the review surface is reopened so it cannot retain a clean prior worktree', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       diff: { workspacePath: '/tmp/workbench', branch: 'review', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] },
     }), { headers: { 'Content-Type': 'application/json' } }));
@@ -17,11 +17,13 @@ describe('useWorkspaceDiff', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 
-    const { result } = renderHook(() => useWorkspaceDiff({ workItemId: 'work-item-1' }), { wrapper });
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const first = renderHook(() => useWorkspaceDiff({ workItemId: 'work-item-1' }), { wrapper });
+    await waitFor(() => expect(first.result.current.isSuccess).toBe(true));
+    first.unmount();
 
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const second = renderHook(() => useWorkspaceDiff({ workItemId: 'work-item-1' }), { wrapper });
+    await waitFor(() => expect(second.result.current.isSuccess).toBe(true));
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

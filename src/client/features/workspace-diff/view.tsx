@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { FileDiff, History, RefreshCw } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
@@ -31,7 +31,18 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const conversationId = 'conversationId' in scope ? scope.conversationId : null;
   const workItemId = 'workItemId' in scope ? scope.workItemId : null;
   const explorerKey = conversationId ? ['conversation-workspaces', conversationId] : ['work-item-workspaces', workItemId];
-  const explorer = useQuery({ queryKey: explorerKey, queryFn: () => conversationId ? conversationClient.getConversationWorkspaces(conversationId) : sourceClient.getWorkItemWorkspaces(workItemId!), enabled: Boolean(conversationId || workItemId) });
+  const explorer = useQuery({
+    queryKey: explorerKey,
+    queryFn: () => conversationId ? conversationClient.getConversationWorkspaces(conversationId) : sourceClient.getWorkItemWorkspaces(workItemId!),
+    enabled: Boolean(conversationId || workItemId),
+    // A run can receive its detached worktree after this panel is mounted.
+    // Refresh only the tiny explorer payload while it is active; the full diff
+    // remains explicit unless its selected workspace actually changes.
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+    refetchInterval: isRunning ? 2_000 : false,
+  });
   const selectWorkspace = useMutation({
     mutationFn: (workspacePath: string) => conversationId ? conversationClient.selectConversationWorkspace(conversationId, workspacePath) : sourceClient.selectWorkItemWorkspace(workItemId!, workspacePath),
     onSuccess: async () => {
@@ -42,6 +53,20 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   });
   const query = useWorkspaceDiff(scope);
   const snapshotsQuery = useWorkspaceDiffSnapshots(scope, query.data?.diff?.revision);
+  const selectedWorkspacePath = explorer.data?.selectedPath ?? undefined;
+  const previousWorkspacePath = useRef<string | undefined>(undefined);
+  const hasObservedWorkspace = useRef(false);
+  useEffect(() => {
+    // The first explorer response and the initial diff request both ask the
+    // server for its current selection. Subsequent changes mean the agent was
+    // assigned a different detached worktree, so replace the old diff now.
+    if (hasObservedWorkspace.current && previousWorkspacePath.current !== selectedWorkspacePath) {
+      void query.refetch();
+      void snapshotsQuery.refetch();
+    }
+    hasObservedWorkspace.current = true;
+    previousWorkspacePath.current = selectedWorkspacePath;
+  }, [selectedWorkspacePath, query.refetch, snapshotsQuery.refetch]);
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
   // null means "automatically show the latest record when Git is clean";
   // an empty string is the user's explicit choice to view current changes.

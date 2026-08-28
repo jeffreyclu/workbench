@@ -7,6 +7,12 @@ import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCallback);
 
+/** Workbench is the only repository whose parallel mutating runs are isolated.
+ * Other project repositories remain in their selected primary checkout. */
+export function shouldIsolateRunWorkspace(sourceWorkspace: string): boolean {
+  return resolve(sourceWorkspace) === resolve(process.cwd());
+}
+
 /**
  * Gives each mutating run its own detached worktree.  A detached worktree is
  * deliberately branchless: parallel agents never switch the user's checkout
@@ -15,9 +21,9 @@ const execFile = promisify(execFileCallback);
  * Worktrees are retained after a run so Changes can inspect the exact files it
  * produced. The garbage collector owns eventual removal of terminal run trees.
  */
-export async function isolatedRunWorkspace(sourceWorkspace: string, runId: string, mutates: boolean): Promise<string> {
+export async function isolatedRunWorkspace(sourceWorkspace: string, runId: string, mutates: boolean, isolate = true): Promise<string> {
   const source = resolve(sourceWorkspace);
-  if (!mutates || process.env.VITEST) return source;
+  if (!mutates || !isolate || process.env.VITEST) return source;
   try {
     const { stdout } = await execFile('git', ['rev-parse', '--show-toplevel'], { cwd: source, timeout: 5_000, maxBuffer: 32_768 });
     const repository = resolve(stdout.trim());

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanupIntegratedRunWorktrees, isolatedRunWorkspace } from './run-worktree.js';
+import { cleanupIntegratedRunWorktrees, isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
 
 const directories: string[] = [];
 
@@ -15,6 +15,11 @@ afterEach(() => {
 });
 
 describe('isolatedRunWorkspace', () => {
+  it('does not isolate a non-Workbench project workspace', () => {
+    expect(shouldIsolateRunWorkspace('/Users/jeffrey.lu/dev/writer-monorepo')).toBe(false);
+    expect(shouldIsolateRunWorkspace(process.cwd())).toBe(true);
+  });
+
   it('uses a detached worktree for a mutating production run without creating a branch', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
     directories.push(directory);

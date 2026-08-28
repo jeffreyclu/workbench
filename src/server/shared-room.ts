@@ -12,7 +12,7 @@ import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js
 import { humanizeRunOutputBlocks } from '../shared/run-output.js';
 import { agentAccountEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
-import { isolatedRunWorkspace } from './run-worktree.js';
+import { isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
 
 const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
@@ -737,7 +737,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     const selectedWorkspace = repository.database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(target.conversationId) as { workspace_path: string } | undefined;
     const sourceCwd = resolveSharedReplyWorkingDirectory(linkedItem, selectedWorkspace?.workspace_path);
     const cwd = linkedRun
-      ? await isolatedRunWorkspace(sourceCwd, linkedRun.id, MUTATING_RUN_KINDS.has(linkedRun.kind))
+      ? await isolatedRunWorkspace(sourceCwd, linkedRun.id, MUTATING_RUN_KINDS.has(linkedRun.kind), shouldIsolateRunWorkspace(sourceCwd))
       : sourceCwd;
     // The Changes pane must inspect the detached worktree actually handed to
     // this run, not the source checkout selected before isolation.

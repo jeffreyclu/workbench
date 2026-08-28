@@ -9,9 +9,13 @@ export function useWorkspaceDiff(scope: WorkspaceDiffScope | null) {
     queryKey: workspaceDiffQueryKeys.detail(scope ?? { workItemId: '' }),
     queryFn: () => workspaceDiffData.get(scope!),
     enabled: Boolean(scope),
-    // A diff is a review surface, not a live log. Background refetches replace
-    // the rendered patch while someone is reading it, so updates are explicit.
-    staleTime: Infinity,
+    // Never reuse a clean diff from a previous visit: the server may have
+    // selected a detached agent worktree since this panel was last visible.
+    // We still do not poll the full patch while it is being read; the status
+    // endpoint handles that separately.
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
   });
 }
 
@@ -31,7 +35,9 @@ export function useWorkspaceDiffSnapshots(scope: WorkspaceDiffScope | null, revi
     queryKey: workspaceDiffQueryKeys.snapshots(scope ?? { workItemId: '' }),
     queryFn: () => workspaceDiffData.getSnapshots(scope!),
     enabled: Boolean(scope),
-    staleTime: Infinity,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
   });
   // The current-diff route writes its immutable record before replying. Fetch
   // again when that revision arrives so a racing initial timeline request does

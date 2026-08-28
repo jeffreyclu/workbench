@@ -12,7 +12,7 @@ import { classifyExternalActionWithHaiku } from './external-action-ai.js';
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
-import { isolatedRunWorkspace } from './run-worktree.js';
+import { isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
 
 const MAX_OUTPUT_BYTES = 1_000_000;
 /** How long a run may produce no stream event before its output gets a visible elapsed marker. */
@@ -1307,7 +1307,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // coverage intentionally observes the registered process immediately.
     workspace = process.env.VITEST
       ? sourceWorkspace
-      : await isolatedRunWorkspace(sourceWorkspace, run.id, MUTATING_RUN_KINDS.has(run.kind));
+      : await isolatedRunWorkspace(sourceWorkspace, run.id, MUTATING_RUN_KINDS.has(run.kind), shouldIsolateRunWorkspace(sourceWorkspace));
   } catch { workspace = null; }
   if (repository.isCancellationRequested(run.id)) {
     repository.finishRunCancellation(run.id, ownerId);
