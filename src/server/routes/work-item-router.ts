@@ -14,6 +14,7 @@ import {
   generateTaskDraftSchema,
   providerSyncConflictResolutionSchema,
   providerSyncFieldSchema,
+  reviewAssistRequestSchema,
   runKindSchema,
   savedWorkItemFilterViewSchema,
   unblockWorkItemSchema,
@@ -31,6 +32,7 @@ import { summarizeWorkItemChanges } from '../activity-log.js';
 import { resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { generateFastAiTaskDraft } from '../fast-task-draft-ai.js';
 import { assessDiffBlocks } from '../diff-confidence-ai.js';
+import { requestReviewAssist } from '../review-assist-ai.js';
 import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
@@ -62,6 +64,12 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     try {
       const { blocks } = diffConfidenceRequestSchema.parse(request.body);
       response.json({ assessments: await assessDiffBlocks(database, blocks) });
+    } catch (error) { next(error); }
+  });
+  router.post('/api/review-assist', async (request, response, next) => {
+    try {
+      const { action, decision, taskIntent } = reviewAssistRequestSchema.parse(request.body);
+      response.json({ answer: await requestReviewAssist(action, decision, taskIntent) });
     } catch (error) { next(error); }
   });
   const persistAttachments = (attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }>) => {

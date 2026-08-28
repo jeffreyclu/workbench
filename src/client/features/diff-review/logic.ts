@@ -1,5 +1,5 @@
 import type { DiffHunkReview, DiffHunkReviewState, WorkspaceDiffFile } from '../../../shared/contracts.js';
-import type { DiffConfidenceAssessment, DiffDecisionFollowUpReference } from '../diff-confidence.js';
+import type { DiffDecisionFollowUpReference } from '../diff-confidence.js';
 
 export const REVIEW_RISK_SIGNALS = ['public_api', 'persistence', 'auth', 'cross_file', 'error_path'] as const;
 export type ReviewRiskSignal = typeof REVIEW_RISK_SIGNALS[number];
@@ -33,11 +33,6 @@ export interface ReviewDecision {
   state: DiffHunkReviewState | null;
   note: string | null;
 }
-
-/** The model's assessment of one decision, keyed by decision id. A missing
- * entry means "not scored yet"; an entry whose risk is null means the scorer
- * ran and could not produce a score. The two are deliberately distinct. */
-export type ReviewDecisionAssessments = Record<string, { risk: number | null; reasoning: string } | undefined>;
 
 interface PatchHunk { range: string; lines: string[] }
 interface DecisionCandidate {
@@ -165,27 +160,6 @@ function behaviorSummary(subject: string | null, hunks: ReviewDecisionHunk[], st
   return `${verb} ${effect}${fileCount > 1 ? ` across ${fileCount} files` : ''}.`;
 }
 
-/** Risk of a decision the model has not returned a usable score for. Sorting
- * it below every scored decision keeps an unscored item from claiming a
- * priority the model never gave it; it rises as soon as its score arrives. */
-const UNSCORED_RISK = -1;
-
-function decisionRisk(decision: ReviewDecision, assessments: ReviewDecisionAssessments): number {
-  const risk = assessments[decision.id]?.risk;
-  return typeof risk === 'number' ? risk : UNSCORED_RISK;
-}
-
-/** One scorable block per decision, keyed by decision id so a streamed
- * assessment maps straight back onto the queue. The file path and hunk header
- * are part of the block body: the server caches by content hash, and the same
- * added line in two different files is not the same change. */
-export function reviewDecisionBlocks(decisions: ReviewDecision[]): Array<{ key: string; lines: string[] }> {
-  return decisions.map((decision) => ({
-    key: decision.id,
-    lines: decision.hunks.flatMap((hunk) => [`--- ${hunk.filePath} ${hunk.hunkRange}`, ...hunk.lines]),
-  }));
-}
-
 export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHunkReview[]): ReviewDecision[] {
   const reviewByKey = new Map(reviews.map((review) => [`${review.filePath}::${review.hunkRange}`, review]));
   const candidates: DecisionCandidate[] = [];
@@ -237,20 +211,18 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
   });
 }
 
-/** Priority order is the model's, not this module's: unreviewed first, then
- * highest AI risk. Static signals stay as evidence on the card; they no longer
- * decide what a reviewer sees first. */
-export function orderReviewDecisions(decisions: ReviewDecision[], assessments: ReviewDecisionAssessments = {}): ReviewDecision[] {
+/** Priority order is purely deterministic: unreviewed decisions first, then in
+ * stable source order (ordinal). No AI signal ever reorders or gates the
+ * queue — assistance is available on demand from the detail card instead. */
+export function orderReviewDecisions(decisions: ReviewDecision[]): ReviewDecision[] {
   return [...decisions].sort((left, right) => {
     const stateDifference = (left.state ? STATE_ORDER[left.state] : 0) - (right.state ? STATE_ORDER[right.state] : 0);
-    if (stateDifference !== 0) return stateDifference;
-    const riskDifference = decisionRisk(right, assessments) - decisionRisk(left, assessments);
-    return riskDifference !== 0 ? riskDifference : left.id.localeCompare(right.id);
+    return stateDifference !== 0 ? stateDifference : left.ordinal - right.ordinal;
   });
 }
 
-export function nextPendingDecisionId(decisions: ReviewDecision[], currentId: string, assessments: ReviewDecisionAssessments = {}): string | null {
-  const ordered = orderReviewDecisions(decisions, assessments);
+export function nextPendingDecisionId(decisions: ReviewDecision[], currentId: string): string | null {
+  const ordered = orderReviewDecisions(decisions);
   const currentIndex = ordered.findIndex((decision) => decision.id === currentId);
   const after = ordered.slice(currentIndex + 1).find((decision) => decision.state === null);
   const before = ordered.slice(0, Math.max(currentIndex, 0)).find((decision) => decision.state === null);
@@ -272,15 +244,16 @@ export function riskSignalLabel(signal: ReviewRiskSignal): string {
 }
 
 /** Turns one queue decision into the context the agent receives in the
- * composer. The reviewer discusses the decision, not a detached line range, so
- * every hunk it spans travels with the behaviour and the model's assessment.
- * Static signals are deliberately absent: the model's score is the only risk
- * this surface reports. */
-export function reviewDecisionFollowUpReference(decision: ReviewDecision, assessment: DiffConfidenceAssessment | undefined): DiffDecisionFollowUpReference {
+ * composer for "Request fix": the reviewer discusses the decision, not a
+ * detached line range, so every hunk it spans travels with the behaviour and
+ * review state. This surface no longer computes an ambient AI score, so
+ * `assessment` is always null here — the reviewer's own on-demand AI answers,
+ * if any, are theirs to paste in separately. */
+export function reviewDecisionFollowUpReference(decision: ReviewDecision): DiffDecisionFollowUpReference {
   return {
     ordinal: decision.ordinal,
     behavior: decision.behavior,
-    assessment: assessment ?? null,
+    assessment: null,
     state: reviewStateLabel(decision.state),
     hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines })),
   };

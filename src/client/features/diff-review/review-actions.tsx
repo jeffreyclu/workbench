@@ -15,8 +15,8 @@ export const DiffReviewActions = memo(function DiffReviewActions({ saving, error
     {error && <p role="alert">Could not save this decision. {error}</p>}
     <div>
       <button type="button" className="review-approve" disabled={saving} onClick={() => onSave('reviewed')}><Check size={15} aria-hidden="true" />Reviewed</button>
-      {onFollowUp && <button type="button" className="review-follow-up" disabled={saving} onClick={onFollowUp} title="Attach this decision, its hunks and its risk to the composer">
-        <MessageSquarePlus size={15} aria-hidden="true" />Follow up
+      {onFollowUp && <button type="button" className="review-follow-up" disabled={saving} onClick={onFollowUp} title="Send this decision and its hunks back to the conversation">
+        <MessageSquarePlus size={15} aria-hidden="true" />Request fix
       </button>}
     </div>
     {saving && <span className="diff-review-saving" role="status">Saving decision…</span>}

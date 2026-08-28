@@ -308,6 +308,27 @@ export const diffConfidenceRequestSchema = z.object({
   })).min(1).max(120),
 });
 
+/** A reviewer-initiated question about one review-queue decision. Each action
+ * spawns a fresh single-shot AI turn on click — there is no ambient scoring on
+ * this surface, so every request here is explicit and its failure is reported
+ * to the reviewer rather than silently downgraded. */
+export const reviewAssistRequestSchema = z.object({
+  action: z.enum(['explain', 'what_could_break', 'compare_task_intent']),
+  decision: z.object({
+    behavior: z.string().min(1).max(2_000),
+    state: z.string().min(1).max(100),
+    hunks: z.array(z.object({
+      filePath: z.string().min(1).max(2_000),
+      location: z.string().min(1).max(200),
+      lines: z.array(z.string().max(4_000)).max(200),
+    })).min(1).max(50),
+  }),
+  taskIntent: z.object({
+    title: z.string().max(2_000),
+    description: z.string().max(50_000),
+  }).nullable().default(null),
+});
+
 /** A read-only snapshot of the uncommitted changes in a task's local workspace. */
 export interface WorkspaceDiffFile {
   path: string;
