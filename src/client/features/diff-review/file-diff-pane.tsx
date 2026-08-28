@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef } from 'react';
 import { ExternalLink, FileDiff } from 'lucide-react';
+import { languageFromPath, SyntaxHighlight } from '../../components/markdown/syntax-highlight.js';
 import type { ReviewDecision, ReviewDiffHunk } from './logic.js';
 import { reviewStateLabel } from './logic.js';
 
@@ -21,6 +22,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
 }) {
   const activeBlock = useRef<HTMLElement | null>(null);
   const diffBody = useRef<HTMLDivElement | null>(null);
+  const language = languageFromPath(filePath);
   const decisionByHunkId = new Map(decisions.flatMap((decision) => decision.hunks.map((hunk) => [hunk.id, decision] as const)));
 
   useEffect(() => {
@@ -61,7 +63,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
             : hunk.lines.map((line) => <div key={line.key} className={`diff-line ${line.kind}`}>
               <span>{line.oldLine ?? ''}</span>
               <span>{line.newLine ?? ''}</span>
-              <span className="diff-line-code">{line.text}</span>
+              <span><span className="diff-line-marker">{line.text.slice(0, 1) || ' '}</span><SyntaxHighlight code={line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
             </div>)}
         </section>;
       })}

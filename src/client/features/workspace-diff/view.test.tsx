@@ -198,6 +198,26 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(await screen.findByLabelText('Full diff for src/server/auth/routes.ts')).toBeInTheDocument();
   });
 
+  it('uses the selected file extension to syntax-highlight review diff lines', async () => {
+    const file: WorkspaceDiffFile = {
+      path: 'src/theme.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false,
+      patch: '@@ -1 +1 @@ theme\n-const color = "old";\n+const color = "new";',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'syntax-highlight') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    const pane = await screen.findByLabelText('Full diff for src/theme.ts');
+    expect(within(pane).getAllByText('const', { selector: '.token.keyword' })).toHaveLength(2);
+    expect(within(pane).getByText('"new"', { selector: '.token.string' })).toBeInTheDocument();
+  });
+
   it('shows the whole file diff and highlights the block the selected decision changes', async () => {
     const file: WorkspaceDiffFile = {
       path: 'src/local.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
@@ -216,13 +236,13 @@ describe('WorkspaceDiffView decision queue', () => {
     const diffPane = await screen.findByLabelText('Full diff for src/local.ts');
     // Every hunk of the file is on screen, not only the selected decision's lines.
     for (const line of ['context-one', '-before', '+after', 'context-two', '-old', '+new']) {
-      expect(within(diffPane).getByText(line)).toBeInTheDocument();
+      expect(diffPane).toHaveTextContent(line);
     }
     expect(diffPane.querySelectorAll('.diff-review-diff-block')).toHaveLength(2);
     expect(diffPane.querySelector('.diff-review-diff-block.active')).toHaveTextContent('@@ -1,3 +1,3 @@ firstBehavior');
 
     // Old and new line numbers are carried through, so the highlighted block is locatable in the file.
-    const deletedLine = within(diffPane).getByText('-before').closest('.diff-line');
+    const deletedLine = within(diffPane).getByText('before', { selector: '.diff-line-code' }).closest('.diff-line');
     expect(deletedLine).toHaveTextContent('2-before');
 
     fireEvent.click(screen.getByRole('button', { name: /Decision 2.*behavior/ }));
