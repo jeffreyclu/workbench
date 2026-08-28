@@ -17,6 +17,7 @@ import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderR
 import { useAutoReviewScores } from '../diff-review/auto-score.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
+import { DiffReviewChangeMap } from '../diff-review/change-map.js';
 import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js';
 import { useGitHubPullRequestDiff } from '../github-diff/hooks.js';
 import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
@@ -345,6 +346,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
               : <div className="workspace-diff-layout diff-review-layout">
                 {!isPullRequestSource && reviewHandoff && <AgentRunReviewHandoffCard handoff={reviewHandoff} />}
                 <DiffReviewSummaryView decisions={decisions} />
+                <DiffReviewChangeMap decisions={decisions} selectedId={selectedDecision?.id ?? null} onSelect={selectDecision} />
                 {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
                 {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
                 {selectedDecision && <>

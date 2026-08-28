@@ -436,6 +436,45 @@ nav { display: grid; gap: 3px; }
 .diff-review-summary progress::-webkit-progress-bar { border-radius: 999px; background: #26261f; }
 .diff-review-summary progress::-webkit-progress-value { border-radius: 999px; background: var(--acid); }
 .diff-review-summary progress::-moz-progress-bar { border-radius: 999px; background: var(--acid); }
+.diff-review-change-map { min-width: 0; border-bottom: 1px solid #302f2b; background: #131311; }
+.change-map-toggle { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 10px 14px; border: 0; background: none; color: #deddd6; font-size: 12px; text-align: left; }
+.change-map-toggle small { overflow: hidden; color: #85847d; font: 10px 'DM Mono'; text-overflow: ellipsis; white-space: nowrap; }
+.change-map-canvas { overflow: auto; overscroll-behavior-x: contain; max-height: 340px; padding: 0 14px 8px; }
+.change-map-canvas:focus-visible { outline: 1px solid var(--acid); outline-offset: -3px; }
+.change-map-node { --state-tone: #56554e; cursor: pointer; }
+.change-map-node.state-reviewed { --state-tone: #8bbd75; }
+.change-map-node.state-needs_changes { --state-tone: #e1a68f; }
+.change-map-node.state-commented { --state-tone: #9ab6d8; }
+.change-map-node-body { fill: #1b1b18; stroke: #302f2b; }
+.change-map-node:hover .change-map-node-body { stroke: #4b4a44; }
+.change-map-node.selected .change-map-node-body { fill: #22221c; stroke: var(--acid); }
+.change-map-node:focus-visible { outline: none; }
+.change-map-node:focus-visible .change-map-node-body { stroke: var(--acid); stroke-width: 2; }
+.change-map-node.dimmed { opacity: 0.38; }
+.change-map-node.isolated .change-map-node-body { stroke-dasharray: 3 3; }
+.change-map-node-rail { fill: var(--state-tone); }
+.change-map-node-title { fill: #deddd6; font: 12px 'DM Mono'; }
+.change-map-node-file { fill: #85847d; font: 10px 'DM Mono'; }
+.change-map-node-counts { fill: #77766f; font: 9px 'DM Mono'; }
+.change-map-edge, .change-map-arrow, .change-map-legend li { --relation-tone: #56554e; }
+.change-map-edge.relation-passes-parameter, .change-map-arrow.relation-passes-parameter, .change-map-legend li.relation-passes-parameter { --relation-tone: #e5b769; }
+.change-map-edge.relation-implements, .change-map-arrow.relation-implements, .change-map-legend li.relation-implements { --relation-tone: #c69bd8; }
+.change-map-edge.relation-references-type, .change-map-arrow.relation-references-type, .change-map-legend li.relation-references-type { --relation-tone: #9ab6d8; }
+.change-map-edge.relation-imports, .change-map-arrow.relation-imports, .change-map-legend li.relation-imports { --relation-tone: #6f9f8c; }
+.change-map-edge.relation-calls, .change-map-arrow.relation-calls, .change-map-legend li.relation-calls { --relation-tone: #8bbd75; }
+.change-map-edge.relation-uses, .change-map-arrow.relation-uses, .change-map-legend li.relation-uses { --relation-tone: #77766f; }
+.change-map-arrow path { fill: var(--relation-tone); }
+.change-map-edge-line { fill: none; stroke: var(--relation-tone); stroke-width: 1.4; opacity: 0.7; }
+.change-map-edge.backward .change-map-edge-line { stroke-dasharray: 4 3; }
+.change-map-edge.active .change-map-edge-line, .change-map-edge.touches-selection .change-map-edge-line { opacity: 1; stroke-width: 2.2; }
+.change-map-edge-target { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
+.change-map-edge-target:focus-visible { outline: none; stroke: var(--acid); stroke-opacity: 0.3; }
+.change-map-edge-label { fill: #a9a89f; font: 9px 'DM Mono'; paint-order: stroke; stroke: #131311; stroke-width: 3px; }
+.change-map-explanation { margin: 0; padding: 0 14px 8px; color: #a9a89f; font: 10px 'DM Mono'; }
+.change-map-omitted { margin: 0; padding: 0 14px 10px; font: 9px 'DM Mono'; }
+.change-map-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 12px; list-style: none; }
+.change-map-legend li { display: inline-flex; align-items: center; gap: 6px; color: #85847d; font: 9px 'DM Mono'; }
+.change-map-legend li span { width: 14px; height: 2px; border-radius: 2px; background: var(--relation-tone); }
 .diff-review-queue-region { min-width: 0; }
 .workspace-diff .diff-review-decision-queue { background: #11110f; }
 .diff-review-decision-queue ol { display: flex; margin: 0; padding: 0; overflow-x: auto; overscroll-behavior-x: contain; list-style: none; }
