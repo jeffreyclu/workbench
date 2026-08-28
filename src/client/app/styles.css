@@ -888,7 +888,7 @@ nav { display: grid; gap: 3px; }
 .agent-console-header { display: flex; align-items: center; justify-content: space-between; min-height: 80px; padding: 17px 28px; border-bottom: 1px solid var(--line); }
 .agent-console-title { flex: 1; min-width: 0; }
 .conversation-window-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; margin-left: 16px; }
-.conversation-window-actions .mobile-detail-close, .conversation-window-actions .mobile-related-task-link { display: none; }
+.conversation-window-actions .mobile-detail-close { display: none; }
 .conversation-task-picker { position: relative; display: inline-flex; flex: 0 0 auto; }
 .conversation-task-picker > .icon-button { color: var(--soft); }
 .conversation-task-picker > .icon-button:hover:not(:disabled), .conversation-task-picker > .icon-button[aria-expanded="true"] { color: #fff; background: #20201d; }
@@ -914,8 +914,8 @@ nav { display: grid; gap: 3px; }
 .conversation-delete-control .action-tooltip { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: max-content; max-width: 240px; padding: 7px 9px; color: #deddd7; background: #232320; border: 1px solid #45443f; border-radius: 6px; box-shadow: 0 8px 24px #000a; opacity: 0; pointer-events: none; transform: translateY(-3px); transition: opacity 120ms ease, transform 120ms ease; font: 10px/1.4 'DM Mono'; text-align: left; }
 .conversation-delete-control.is-disabled:hover .action-tooltip, .conversation-delete-control.is-disabled:focus-visible .action-tooltip { opacity: 1; transform: translateY(0); }
 .agent-console-header h2 { margin: 4px 0 0; font-size: 19px; }.agent-presence { display: flex; align-items: center; gap: 6px; color: #77766f; font: 9px 'DM Mono'; }
-.related-task-link { display: inline-flex; align-items: center; gap: 5px; margin-top: 7px; padding: 0; color: #9eae68; background: transparent; border: 0; font: 9px 'DM Mono'; }
-.related-task-link:hover { color: var(--acid); }
+.conversation-window-actions .related-task-link { color: #9eae68; }
+.conversation-window-actions .related-task-link:hover { color: var(--acid); }
 .codex-dot, .claude-dot { width: 6px; height: 6px; border-radius: 50%; }.codex-dot { background: var(--acid); }.claude-dot { margin-left: 6px; background: #efad79; }
 .agent-console .shared-thread { width: min(900px, 100%); margin: 0 auto; padding: 25px 28px 36px; }
 .agent-console .shared-composer { position: relative; width: min(900px, calc(100% - 56px)); margin: 0 auto 24px; padding: 0; overflow: hidden; background: #181816; border: 1px solid #373731; border-radius: 14px; box-shadow: 0 16px 50px #0008, 0 0 0 1px #ffffff05; transition: border-color .15s, box-shadow .15s; }
@@ -1270,13 +1270,10 @@ nav { display: grid; gap: 3px; }
   .agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle:active { cursor: grabbing; }
   .agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle:focus-visible { outline: 2px solid var(--acid); outline-offset: -5px; }
   .mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }
-  .conversation-window-actions .mobile-related-task-link { display: grid; }
   .agent-console-title { position: fixed; top: 15px; right: 58px; left: 104px; z-index: 6; display: flex; align-items: center; gap: 7px; min-width: 0; padding: 0; background: transparent; border: 0; }
   .agent-console-header.has-conversation-actions { min-height: 0; }
   .agent-console-header.has-conversation-actions .agent-console-title { max-width: none; padding-top: 0; }
   .agent-console-header h2 { flex: 1; width: auto; min-width: 0; margin: 0; overflow-x: auto; overflow-y: hidden; font-size: 18px; line-height: 1.15; text-overflow: clip; white-space: nowrap; -webkit-overflow-scrolling: touch; touch-action: pan-x; }
-  .related-task-link { display: none; }
-  .related-task-link span { display: none; }
   /* Details lead the tray. Review and action controls share the row below it
      without introducing a second chrome panel. */
   .conversation-window-actions { position: fixed; top: 56px; right: 10px; left: auto; z-index: 7; display: flex; flex-wrap: nowrap; justify-content: flex-end; width: max-content; min-width: 0; max-width: none; gap: 2px; margin: 0; padding: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; transform: none; }

@@ -129,9 +129,12 @@ describe('WorkspaceDiffView decision queue', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={false} /></QueryClientProvider>);
 
-    // A failed score degrades to an explicit "unavailable" marker; it never reads as a low score.
+    // A failed score is retried before it degrades to an explicit "unavailable"
+    // marker, so one dead scorer worker cannot leave a decision unscored for
+    // the rest of the review. It never reads as a low score.
     const row = await screen.findByRole('button', { name: /Decision 1/ });
-    expect(await within(row).findByLabelText('AI risk assessment unavailable')).toBeInTheDocument();
+    expect(await within(row).findByLabelText('AI risk assessment unavailable', {}, { timeout: 5_000 })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/api/diff-confidence'))).toHaveLength(3);
     expect(within(screen.getByRole('region', { name: 'AI risk' })).getByText('AI assessment unavailable for this decision.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reviewed' })).toBeEnabled();
   });

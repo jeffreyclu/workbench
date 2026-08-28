@@ -8,6 +8,16 @@ import { promisify } from 'node:util';
 const execFile = promisify(execFileCallback);
 let integrationTail: Promise<void> = Promise.resolve();
 
+function changedPaths(cwd: string, range: string[]): Set<string> {
+  const output = execFileSync('git', ['diff', '--name-only', '-z', ...range], { cwd, encoding: 'utf8', timeout: 5_000, maxBuffer: 1_000_000 });
+  return new Set(output.split('\0').filter(Boolean));
+}
+
+function untrackedPaths(cwd: string): string[] {
+  const output = execFileSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd, encoding: 'utf8', timeout: 5_000, maxBuffer: 1_000_000 });
+  return output.split('\0').filter(Boolean);
+}
+
 /** Workbench is the only repository whose parallel mutating runs are isolated.
  * Other project repositories remain in their selected primary checkout. */
 export function shouldIsolateRunWorkspace(sourceWorkspace: string): boolean {
@@ -45,8 +55,9 @@ export async function isolatedRunWorkspace(sourceWorkspace: string, runId: strin
 /**
  * The only valid exit path for a dirty Workbench run worktree. Its patch is
  * applied to the primary main checkout under one in-process FIFO, committed on
- * main, and left available for the normal explicit promotion flow. A conflict
- * is an integration failure, never an invisible orphaned worktree.
+ * main, and left available for the normal explicit promotion flow. Integration
+ * is index-only so an unrelated, uncommitted edit in the primary checkout is
+ * preserved rather than stranding a completed run.
  */
 export function integrateWorkbenchRunWorktree(sourceWorkspace: string, worktree: string, runId: string, isolate = shouldIsolateRunWorkspace(sourceWorkspace)): Promise<{ integrated: boolean; commitHash: string | null }> {
   const source = resolve(sourceWorkspace);
@@ -55,25 +66,41 @@ export function integrateWorkbenchRunWorktree(sourceWorkspace: string, worktree:
   const task = integrationTail.then(() => {
     const branch = execFileSync('git', ['branch', '--show-current'], { cwd: source, encoding: 'utf8', timeout: 5_000 }).trim();
     if (branch !== 'main') throw new Error(`Workbench worktree integration requires main; found ${branch || 'detached HEAD'}.`);
-    if (execFileSync('git', ['status', '--porcelain'], { cwd: source, encoding: 'utf8', timeout: 5_000 }).trim()) {
-      throw new Error('Workbench main has uncommitted changes; cannot safely integrate this run worktree.');
-    }
+    // Remember every tracked file the primary checkout had already changed.
+    // Those paths are user/WIP territory and must not be refreshed below.
+    const primaryDirtyPaths = changedPaths(source, ['HEAD']);
+    // `git diff HEAD` omits untracked files. Mark them intent-to-add in the
+    // detached tree so its binary patch includes newly created source files;
+    // the detached tree is reset after successful integration.
+    const untracked = untrackedPaths(detached);
+    if (untracked.length) execFileSync('git', ['add', '--intent-to-add', '--', ...untracked], { cwd: detached, stdio: 'ignore', timeout: 15_000 });
     const patch = execFileSync('git', ['diff', '--binary', 'HEAD'], { cwd: detached, encoding: 'utf8', timeout: 15_000, maxBuffer: 4_000_000 });
     if (!patch.trim()) return { integrated: false, commitHash: null };
     try {
-      execFileSync('git', ['apply', '--3way', '--index', '-'], { cwd: source, input: patch, encoding: 'utf8', timeout: 30_000, maxBuffer: 4_000_000 });
+      // Do not use `git apply --index` here: it insists that the primary
+      // working tree is clean. `--cached` applies the completed run's patch
+      // against HEAD in the index only, so local edits remain exactly as they
+      // were while the integration commit contains only this run.
+      execFileSync('git', ['apply', '--3way', '--cached', '-'], { cwd: source, input: patch, encoding: 'utf8', timeout: 30_000, maxBuffer: 4_000_000 });
       execFileSync('git', ['commit', '-m', `feat: integrate Workbench agent run ${runId}`], { cwd: source, encoding: 'utf8', timeout: 30_000, maxBuffer: 4_000_000 });
       const commitHash = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8', timeout: 5_000 }).trim();
+      // `--cached` intentionally leaves the working tree alone. Refresh only
+      // files created by this commit that were clean before integration;
+      // otherwise a clean primary would appear dirty after every handoff.
+      const integratedPaths = [...changedPaths(source, ['HEAD^', 'HEAD'])].filter((path) => !primaryDirtyPaths.has(path));
+      if (integratedPaths.length) {
+        execFileSync('git', ['checkout', '--quiet', 'HEAD', '--', ...integratedPaths], { cwd: source, stdio: 'ignore', timeout: 15_000 });
+      }
       // The exact patch now exists in main. Clear the detached copy so the
       // post-promotion collector can remove this worktree without retaining
       // duplicate staged edits.
       execFileSync('git', ['reset', '--hard', 'HEAD'], { cwd: detached, stdio: 'ignore', timeout: 15_000 });
       return { integrated: true, commitHash };
     } catch (error) {
-      // `git apply --index` may leave conflict entries. Restore only the
-      // primary index/worktree to its pre-integration HEAD; the detached run
-      // worktree remains intact for recovery and inspection.
-      try { execFileSync('git', ['reset', '--merge', 'HEAD'], { cwd: source, stdio: 'ignore', timeout: 15_000 }); } catch { /* Preserve the original integration error. */ }
+      // `git apply --cached` may leave conflict entries. Reset only the index;
+      // never reset the primary working tree, which may contain a user's
+      // unrelated work. The detached run tree remains intact for recovery.
+      try { execFileSync('git', ['reset', '--mixed', 'HEAD'], { cwd: source, stdio: 'ignore', timeout: 15_000 }); } catch { /* Preserve the original integration error. */ }
       throw error;
     }
   });

@@ -75,6 +75,66 @@ describe('isolatedRunWorkspace', () => {
     }
   });
 
+  it('integrates through unrelated primary working-tree edits without committing or discarding them', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
+    directories.push(directory);
+    execFileSync('git', ['init', '-q'], { cwd: directory });
+    execFileSync('git', ['config', 'user.email', 'workbench@example.test'], { cwd: directory });
+    execFileSync('git', ['config', 'user.name', 'Workbench Test'], { cwd: directory });
+    writeFileSync(join(directory, 'seed.txt'), 'seed\n');
+    writeFileSync(join(directory, 'draft.txt'), 'draft\n');
+    execFileSync('git', ['add', 'seed.txt', 'draft.txt'], { cwd: directory });
+    execFileSync('git', ['commit', '-qm', 'seed'], { cwd: directory });
+    execFileSync('git', ['branch', '-M', 'main'], { cwd: directory });
+
+    const previous = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      const workspace = await isolatedRunWorkspace(directory, 'dirty-primary-run', true, true);
+      writeFileSync(join(workspace, 'seed.txt'), 'integrated\n');
+      writeFileSync(join(directory, 'draft.txt'), 'local work\n');
+
+      const result = await integrateWorkbenchRunWorktree(directory, workspace, 'dirty-primary-run', true);
+
+      expect(result.integrated).toBe(true);
+      expect(execFileSync('git', ['show', 'HEAD:seed.txt'], { cwd: directory, encoding: 'utf8' })).toBe('integrated\n');
+      expect(execFileSync('git', ['show', 'HEAD:draft.txt'], { cwd: directory, encoding: 'utf8' })).toBe('draft\n');
+      expect(execFileSync('git', ['diff', '--', 'draft.txt'], { cwd: directory, encoding: 'utf8' })).toContain('+local work');
+      expect(execFileSync('git', ['diff', '--cached'], { cwd: directory, encoding: 'utf8' })).toBe('');
+    } finally {
+      if (previous === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previous;
+    }
+  });
+
+  it('integrates newly created files from the detached run worktree', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
+    directories.push(directory);
+    execFileSync('git', ['init', '-q'], { cwd: directory });
+    execFileSync('git', ['config', 'user.email', 'workbench@example.test'], { cwd: directory });
+    execFileSync('git', ['config', 'user.name', 'Workbench Test'], { cwd: directory });
+    writeFileSync(join(directory, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', 'seed.txt'], { cwd: directory });
+    execFileSync('git', ['commit', '-qm', 'seed'], { cwd: directory });
+    execFileSync('git', ['branch', '-M', 'main'], { cwd: directory });
+
+    const previous = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      const workspace = await isolatedRunWorkspace(directory, 'new-file-run', true, true);
+      writeFileSync(join(workspace, 'created.ts'), 'export const created = true;\n');
+
+      const result = await integrateWorkbenchRunWorktree(directory, workspace, 'new-file-run', true);
+
+      expect(result.integrated).toBe(true);
+      expect(execFileSync('git', ['show', 'HEAD:created.ts'], { cwd: directory, encoding: 'utf8' })).toBe('export const created = true;\n');
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: directory, encoding: 'utf8' })).toBe('');
+    } finally {
+      if (previous === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previous;
+    }
+  });
+
   it('removes only a clean worktree whose commit is already integrated into main', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
     directories.push(directory);

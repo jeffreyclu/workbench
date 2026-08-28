@@ -73,3 +73,43 @@ export function confidenceProminence(risk: number | null): { opacity: number; fo
   const t = Math.max(0, Math.min(1, risk / 100));
   return { opacity: Math.round((0.55 + t * 0.45) * 100) / 100, fontWeight: t > 0.3 ? 700 : 500 };
 }
+
+// `diffConfidenceRequestSchema` caps a scoring request at 200 lines of 4,000
+// characters per block under a 2,000-character key. A new file, a large
+// refactor hunk, or a cross-file decision that groups dozens of hunks exceeds
+// those limits and the server rejects that request outright — which is why
+// whole files stayed unscored while their smaller siblings got a score.
+const MAX_BLOCK_LINES = 200;
+const MAX_LINE_LENGTH = 4_000;
+const MAX_KEY_LENGTH = 2_000;
+const TAIL_LINES = 60;
+
+function clampLine(line: string): string {
+  return line.length > MAX_LINE_LENGTH ? `${line.slice(0, MAX_LINE_LENGTH - 1)}…` : line;
+}
+
+/** Keeps the head and tail of an oversized block and says what was dropped, so
+ * the model still scores the change instead of the request failing. */
+function condenseLines(lines: string[]): string[] {
+  if (!lines.length) return ['(no changed lines)'];
+  if (lines.length <= MAX_BLOCK_LINES) return lines.map(clampLine);
+  const head = lines.slice(0, MAX_BLOCK_LINES - TAIL_LINES - 1).map(clampLine);
+  const tail = lines.slice(-TAIL_LINES).map(clampLine);
+  return [...head, `… ${lines.length - head.length - tail.length} more lines omitted …`, ...tail];
+}
+
+/** Rewrites blocks into a shape the request contract always accepts. An
+ * over-long key is replaced by a positional stand-in, so callers map the
+ * response back through `sourceKeyByRequestKey` instead of the sent key. */
+export function boundConfidenceRequestBlocks(blocks: Array<{ key: string; lines: string[] }>): {
+  requests: Array<{ key: string; lines: string[] }>;
+  sourceKeyByRequestKey: Record<string, string>;
+} {
+  const sourceKeyByRequestKey: Record<string, string> = {};
+  const requests = blocks.map((block, index) => {
+    const key = block.key.length <= MAX_KEY_LENGTH ? block.key : `block:${index}`;
+    sourceKeyByRequestKey[key] = block.key;
+    return { key, lines: condenseLines(block.lines) };
+  });
+  return { requests, sourceKeyByRequestKey };
+}

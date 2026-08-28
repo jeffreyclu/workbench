@@ -133,3 +133,61 @@ describe('assessDiffBlocks caching', () => {
     expect(result.a).toEqual({ risk: 42, reasoning: 'Persisted.' });
   });
 });
+
+describe('assessDiffBlocks worker recovery', () => {
+  it('requeues a block whose worker dies mid-turn instead of reporting it unscored', async () => {
+    vi.resetModules();
+    let writes = 0;
+    vi.doMock('node:child_process', () => ({
+      spawn: () => {
+        const emitter = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: EventEmitter & { write: (prompt: string) => void }; kill: () => void };
+        emitter.stdout = new EventEmitter();
+        emitter.stderr = new EventEmitter();
+        emitter.kill = () => {};
+        emitter.stdin = Object.assign(new EventEmitter(), { write: (prompt: string) => {
+          writes += 1;
+          // The first worker to receive a block dies holding it, exactly as a
+          // recycled or rate-limited Claude CLI process does in production.
+          if (writes === 1) { queueMicrotask(() => emitter.emit('exit')); return; }
+          queueMicrotask(() => {
+            const input = JSON.parse(prompt) as { message: { content: string } };
+            const text = input.message.content;
+            const blocks = JSON.parse(text.slice(text.indexOf('Blocks:\n') + 'Blocks:\n'.length)) as Array<{ key: string }>;
+            const assessments = blocks.map((block) => ({ key: block.key, risk: 64, reasoning: 'Scored after recovery.' }));
+            emitter.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'result', result: JSON.stringify(assessments) })}\n`));
+          });
+        } });
+        return emitter;
+      },
+    }));
+    const { assessDiffBlocks } = await import('./diff-confidence-ai.js');
+    const database = openDatabase(':memory:');
+
+    await expect(assessDiffBlocks(database, [{ key: 'changed', lines: ['+const enabled = true;'] }])).resolves.toEqual({
+      changed: { risk: 64, reasoning: 'Scored after recovery.' },
+    });
+    expect(writes).toBe(2);
+  });
+
+  it('gives up after the bounded retry so a permanently dead scorer still answers the request', async () => {
+    vi.resetModules();
+    let writes = 0;
+    vi.doMock('node:child_process', () => ({
+      spawn: () => {
+        const emitter = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: EventEmitter & { write: () => void }; kill: () => void };
+        emitter.stdout = new EventEmitter();
+        emitter.stderr = new EventEmitter();
+        emitter.kill = () => {};
+        emitter.stdin = Object.assign(new EventEmitter(), { write: () => { writes += 1; queueMicrotask(() => emitter.emit('exit')); } });
+        return emitter;
+      },
+    }));
+    const { assessDiffBlocks } = await import('./diff-confidence-ai.js');
+    const database = openDatabase(':memory:');
+
+    await expect(assessDiffBlocks(database, [{ key: 'changed', lines: ['+const enabled = true;'] }])).resolves.toEqual({
+      changed: { risk: null, reasoning: 'AI assessment unavailable; review this changed block.' },
+    });
+    expect(writes).toBe(2);
+  });
+});

@@ -236,14 +236,10 @@ const gateway = createServer((incoming, outgoing) => {
  * HTTP requests and WebSocket upgrades share the public gateway. Keep the
  * upgrade connection byte-for-byte intact after the backend accepts it.
  */
-gateway.on('upgrade', (incoming: IncomingMessage, socket: Socket, head: Buffer) => {
-  if (!active) {
-    socket.destroy();
-    return;
-  }
+function proxyWebSocket(incoming: IncomingMessage, socket: Socket, head: Buffer, runtime: Runtime, retried = false): void {
   const proxied = httpRequest({
     hostname: '127.0.0.1',
-    port: active.port,
+    port: runtime.port,
     method: incoming.method,
     path: incoming.url,
     headers: incoming.headers,
@@ -259,13 +255,38 @@ gateway.on('upgrade', (incoming: IncomingMessage, socket: Socket, head: Buffer) 
     if (backendHead.length) backendSocket.unshift(backendHead);
     backendSocket.pipe(socket);
     socket.pipe(backendSocket);
+    socket.resume();
   });
   proxied.once('response', (response) => {
     response.resume();
+    if (!retried && !socket.destroyed) {
+      void waitForActiveRuntime().then((replacement) => proxyWebSocket(incoming, socket, head, replacement, true)).catch(() => socket.destroy());
+      return;
+    }
     socket.destroy();
   });
-  proxied.once('error', () => socket.destroy());
+  proxied.once('error', () => {
+    // An upgrade can race a retiring backend's final listener close. Like
+    // normal HTTP, retry it once against the active healthy runtime instead
+    // of presenting an unexplained websocket disconnect to the client.
+    if (!retried && !socket.destroyed) {
+      void waitForActiveRuntime().then((replacement) => proxyWebSocket(incoming, socket, head, replacement, true)).catch(() => socket.destroy());
+      return;
+    }
+    socket.destroy();
+  });
   proxied.end();
+}
+
+gateway.on('upgrade', (incoming: IncomingMessage, socket: Socket, head: Buffer) => {
+  // An upgrade can arrive during the narrow initial-start/switchover window.
+  // Hold its bytes until a healthy backend exists rather than destroying the
+  // connection and forcing live-stream consumers into a reconnect loop.
+  socket.pause();
+  void waitForActiveRuntime().then((runtime) => {
+    if (socket.destroyed) return;
+    proxyWebSocket(incoming, socket, head, runtime);
+  }).catch(() => socket.destroy());
 });
 
 await deploy();

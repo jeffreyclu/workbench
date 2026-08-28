@@ -67,7 +67,13 @@ type PendingAssessment = {
   resolve: (value: Record<string, DiffConfidenceAssessment>) => void;
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout> | null;
+  /** Dispatch attempts already spent on this request. A worker that dies
+   * mid-turn says nothing about the block it was holding, so the request is
+   * requeued rather than reported as unscored. */
+  attempts: number;
 };
+
+const MAX_ASSESSMENT_ATTEMPTS = 2;
 
 type ScorerWorker = {
   scorer: ChildProcessWithoutNullStreams;
@@ -146,7 +152,16 @@ function startWorker(): ScorerWorker {
   const stopWorker = (error: Error) => {
     if (!workers.has(worker)) return;
     recycleWorker(worker);
-    if (worker.active) { if (worker.active.timeout) clearTimeout(worker.active.timeout); worker.active.reject(error); worker.active = null; }
+    const pending = worker.active;
+    worker.active = null;
+    if (pending) {
+      if (pending.timeout) clearTimeout(pending.timeout);
+      pending.timeout = null;
+      // A dead worker is a scorer problem, not a verdict on this block. Give
+      // the request one fresh worker before declaring the change unscored.
+      if (pending.attempts < MAX_ASSESSMENT_ATTEMPTS) queue.push(pending);
+      else pending.reject(error);
+    }
     dispatchNext();
   };
   scorer.once('exit', () => stopWorker(new Error('AI diff scorer stopped unexpectedly.')));
@@ -167,6 +182,7 @@ function dispatchNext(): void {
   for (const worker of workers) {
     if (worker.active || queue.length === 0) continue;
     const pending = worker.active = queue.shift()!;
+    pending.attempts += 1;
     pending.timeout = setTimeout(() => {
       if (worker.active !== pending) return;
       worker.active = null;
@@ -184,7 +200,7 @@ function dispatchNext(): void {
 function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, DiffConfidenceAssessment>> {
   ensureWarmWorkers();
   return new Promise((resolve, reject) => {
-    queue.push({ blocks, resolve, reject, timeout: null });
+    queue.push({ blocks, resolve, reject, timeout: null, attempts: 0 });
     dispatchNext();
   });
 }
@@ -240,7 +256,12 @@ export function assessDiffBlocks(database: WorkbenchDatabase, blocks: DiffConfid
   }
   return Promise.all([...entries].map(([blockKey, assessment]) => assessment
     .then((value) => [blockKey, value] as const)
-    .catch(() => [blockKey, unavailableAssessment()] as const)))
+    // An unavailable score used to be silent, so a scorer that quietly stopped
+    // answering looked identical to a diff nobody had opened yet.
+    .catch((error: unknown) => {
+      console.warn(`[diff-confidence] block ${blockKey} unscored:`, error instanceof Error ? error.message : error);
+      return [blockKey, unavailableAssessment()] as const;
+    })))
     .then((pairs) => Object.fromEntries(pairs));
 }
 
