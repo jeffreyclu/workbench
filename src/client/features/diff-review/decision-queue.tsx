@@ -32,10 +32,10 @@ export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ d
   return <div className="diff-review-queue-region">
     <nav className="diff-review-decision-queue" aria-label="Review decision queue">
       <span>Decision queue · AI risk order</span>
-      <ol>{decisions.map((decision, index) => <li key={decision.id}>
+      <ol>{decisions.map((decision) => <li key={decision.id}>
         <button type="button" className={decision.id === selectedId ? 'selected' : ''} aria-current={decision.id === selectedId ? 'step' : undefined} onClick={() => onSelect(decision.id)}>
           <span className={`diff-review-decision-state state-${decision.state ?? 'pending'}`}><StateIcon state={decision.state} /><span className="visually-hidden">{reviewStateLabel(decision.state)}</span></span>
-          <span><b>Decision {index + 1}</b><small>{decision.behavior}</small></span>
+          <span><b>Decision {decision.ordinal}</b><small>{decision.behavior}</small></span>
           <em><QueueRiskScore assessment={assessments[decision.id]} />{decision.hunks.length === 1 ? decision.hunks[0].location : `${decision.hunks.length} hunks`}</em>
         </button>
       </li>)}</ol>

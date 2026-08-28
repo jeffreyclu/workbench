@@ -18,6 +18,10 @@ export interface ReviewDecisionHunk {
 
 export interface ReviewDecision {
   id: string;
+  /** Stable label for this decision, assigned once in source order. It is not
+   * the queue position: a reviewed decision keeps its number when priority
+   * order moves it, so "decision 3" means the same change all session. */
+  ordinal: number;
   subject: string | null;
   behavior: string;
   hunks: ReviewDecisionHunk[];
@@ -214,12 +218,13 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
     groups.set(key, [...(groups.get(key) ?? []), candidate]);
   }
 
-  return [...groups.values()].map((group) => {
+  return [...groups.values()].map((group, index) => {
     const hunks = group.map((candidate) => candidate.hunk);
     const filePaths = [...new Set(hunks.map((hunk) => hunk.filePath))];
     const riskSignals = REVIEW_RISK_SIGNALS.filter((signal) => group.some((candidate) => candidate.riskSignals.includes(signal)));
     if (filePaths.length > 1) riskSignals.push('cross_file');
     return {
+      ordinal: index + 1,
       id: group.length > 1 ? `decision:${group[0].subject}:${hunks.map((hunk) => hunk.id).sort().join('|')}` : hunks[0].id,
       subject: group[0].subject,
       behavior: behaviorSummary(group[0].subject, hunks, group.map((candidate) => candidate.fileStatus), riskSignals),

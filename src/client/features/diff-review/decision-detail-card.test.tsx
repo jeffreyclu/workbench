@@ -9,6 +9,7 @@ afterEach(cleanup);
 
 const decision: ReviewDecision = {
   id: 'src/example.ts::@@ -2 +2 @@ example',
+  ordinal: 1,
   subject: 'example',
   behavior: 'Changes example in src/example.ts.',
   hunks: [{ id: 'src/example.ts::@@ -2 +2 @@ example', filePath: 'src/example.ts', editorUrl: null, hunkRange: '@@ -2 +2 @@ example', location: 'Line 2', lines: [' const retained = true;', '-const before = false;', '+const after = true;'], additions: 1, deletions: 1, state: null, note: null }],

@@ -80,6 +80,24 @@ describe('diff review queue logic', () => {
     expect(orderReviewDecisions(decisions, { [authDecision.id]: { risk: null, reasoning: 'Unavailable.' } })[0].filePaths[0]).toBe(localFile.path);
   });
 
+  it('keeps each decision number attached to its own decision when review reorders the queue', () => {
+    const decisions = buildReviewDecisions([localFile, authFile], []);
+    const ordinalById = new Map(decisions.map((decision) => [decision.id, decision.ordinal]));
+    expect([...ordinalById.values()]).toEqual([1, 2]);
+
+    // Reviewing the first decision sinks it in the queue; its number goes with it.
+    const authReview: DiffHunkReview = {
+      id: 'review-2', revision: 'rev-1', filePath: authFile.path,
+      hunkRange: '@@ -10 +10,3 @@ function authorizeRequest()', state: 'reviewed', note: null,
+      updatedAt: '2026-08-27T00:00:00.000Z',
+    };
+    const reviewed = buildReviewDecisions([localFile, authFile], [authReview]);
+    const ordered = orderReviewDecisions(reviewed);
+
+    expect(ordered[ordered.length - 1].state).toBe('reviewed');
+    for (const decision of ordered) expect(decision.ordinal).toBe(ordinalById.get(decision.id));
+  });
+
   it('builds one scorable block per decision carrying its file and hunk header', () => {
     const decisions = buildReviewDecisions([localFile], []);
     expect(reviewDecisionBlocks(decisions)).toEqual([{
