@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CLAUDE_EXECUTION_CONTRACT, autocompactCeilingTokens, cacheReadTokenLimitFor, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, toolCallLimitFor } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CLAUDE_EXECUTION_CONTRACT, autocompactCeilingTokens, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, toolCallLimitFor } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -271,14 +271,12 @@ describe('classifyExecution', () => {
     expect(CLAUDE_EXECUTION_CONTRACT).toContain('Report a command as passing only if it ran in this run');
   });
 
-  it('gives Codex and Claude the same finite tool-call budget', () => {
+  it('gives Codex and Claude the same finite tool-call budget without a cached-input kill switch', () => {
     expect(CLAUDE_EXECUTION_CONTRACT).toBe(AGENT_EXECUTION_CONTRACT);
     expect(toolCallLimitFor('economy')).toBe(12);
     expect(toolCallLimitFor('standard')).toBe(24);
     expect(toolCallLimitFor('deep')).toBe(40);
-    expect(cacheReadTokenLimitFor('economy')).toBe(500_000);
-    expect(cacheReadTokenLimitFor('standard')).toBe(1_000_000);
-    expect(cacheReadTokenLimitFor('deep')).toBe(1_500_000);
+    expect(AGENT_EXECUTION_CONTRACT).not.toContain('cached-input budgets');
   });
 
   it.each(['codex', 'claude'] as const)('stops %s after the same economy tool-call ceiling', async (agent) => {
@@ -291,13 +289,20 @@ describe('classifyExecution', () => {
     await expect(runAgentCommandWithFallback(agent, fixture.directory, 'Verify the change.', undefined, undefined, undefined, 'economy')).rejects.toThrow('tool-call limit (12)');
   });
 
-  it.each(['codex', 'claude'] as const)('stops %s after the same economy cached-input ceiling', async (agent) => {
-    const event = agent === 'codex'
-      ? { type: 'token_count', info: { last_token_usage: { input_tokens: 600_010, cached_input_tokens: 600_000, output_tokens: 5 } } }
-      : { type: 'assistant', request_id: 'cache-limit-request', message: { usage: { input_tokens: 10, cache_read_input_tokens: 600_000, output_tokens: 5 } } };
-    const fixture = fakeAgentDirectory(agent === 'codex' ? `printf '%s\\n' '${JSON.stringify(event)}'` : 'exit 1', agent === 'claude' ? `printf '%s\\n' '${JSON.stringify(event)}'` : 'exit 1');
+  it.each(['codex', 'claude'] as const)('lets %s finish after reporting more than the former deep cached-input ceiling', async (agent) => {
+    const usageEvent = agent === 'codex'
+      ? { type: 'token_count', info: { last_token_usage: { input_tokens: 1_600_010, cached_input_tokens: 1_600_000, output_tokens: 5 } } }
+      : { type: 'assistant', request_id: 'large-cache-request', message: { usage: { input_tokens: 10, cache_read_input_tokens: 1_600_000, output_tokens: 5 } } };
+    const finalEvent = agent === 'codex'
+      ? { type: 'item.completed', item: { type: 'agent_message', text: 'Finished after the large cache read.' } }
+      : { type: 'result', result: 'Finished after the large cache read.' };
+    const body = [usageEvent, finalEvent].map((event) => `printf '%s\\n' '${JSON.stringify(event)}'`).join('\n');
+    const fixture = fakeAgentDirectory(agent === 'codex' ? body : 'exit 1', agent === 'claude' ? body : 'exit 1');
 
-    await expect(runAgentCommandWithFallback(agent, fixture.directory, 'Verify the change.', undefined, undefined, undefined, 'economy')).rejects.toThrow('cached-input limit (500,000 tokens)');
+    const result = await runAgentCommandWithFallback(agent, fixture.directory, 'Verify the change.', undefined, undefined, undefined, 'economy');
+
+    expect(result.output).toBe('Finished after the large cache read.');
+    expect(result.usage.cacheReadInputTokens).toBe(1_600_000);
   });
 
   it('injects the explicit-order external-source guardrail into every work-item prompt', () => {

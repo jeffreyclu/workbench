@@ -38,7 +38,7 @@ export const CANCEL_FORCE_KILL_DELAY_MS = 3_000;
 /** One foreground agent owns each Workbench run. This keeps Claude's cache
  * footprint proportional to the actual task rather than multiplying it across
  * fresh subagent contexts. */
-export const AGENT_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Do not broaden a source-code verification into deployed-runtime, cache, database, process, or asset inspection unless the user explicitly asked for runtime diagnosis or the focused verification produced direct evidence of such a problem. Run worktrees already receive the primary checkout's dependencies: do not check for node_modules or bootstrap dependencies there. Never install dependencies merely to verify a change; use dependencies already available to the workspace or report the exact verification gap. Workbench enforces finite tool-call and cached-input budgets and will stop a run that does not conclude. Report a command as passing only if it ran in this run and its output was observed.`;
+export const AGENT_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Do not broaden a source-code verification into deployed-runtime, cache, database, process, or asset inspection unless the user explicitly asked for runtime diagnosis or the focused verification produced direct evidence of such a problem. Run worktrees already receive the primary checkout's dependencies: do not check for node_modules or bootstrap dependencies there. Never install dependencies merely to verify a change; use dependencies already available to the workspace or report the exact verification gap. Workbench enforces finite tool-call and elapsed-time budgets and will stop a run that does not conclude. Report a command as passing only if it ran in this run and its output was observed.`;
 // Kept as an exported alias for callers/tests that used the old provider-specific name.
 export const CLAUDE_EXECUTION_CONTRACT = AGENT_EXECUTION_CONTRACT;
 export const TOOL_OUTPUT_CONTRACT = `Tool-output discipline: keep every command and file read bounded to the lines needed for the decision. Never read an entire unknown-size file, directory, diff, log, or search result: start with at most 200 lines or 20 matches, then reopen an exact range if needed. Do not paste, summarize verbatim, or carry raw command output into later turns. Record only the command, relevant paths, and the decisive finding; reopen an exact path/range when needed.`;
@@ -703,17 +703,6 @@ export function toolCallLimitFor(profile: ExecutionProfile): number {
 }
 
 /**
- * Maximum cached input traffic one foreground run may consume. Cache reads are
- * cheap relative to fresh input, but they still represent repeated full-context
- * inference and were able to grow into multi-million-token verification loops.
- * The limit is deliberately provider-neutral and tiered so a deep coding run
- * keeps more room than an economy turn without gaining an unbounded budget.
- */
-export function cacheReadTokenLimitFor(profile: ExecutionProfile): number {
-  return profile === 'economy' ? 500_000 : profile === 'standard' ? 1_000_000 : 1_500_000;
-}
-
-/**
  * In-run context ceiling handed to `--autocompact`.
  *
  * The previous flat 180k was inert: the worst measured run (124 provider
@@ -1245,12 +1234,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
         };
       }
       emitLiveUsage();
-      const cacheReadLimit = cacheReadTokenLimitFor(profile);
-      if ((reportedUsage.cacheReadInputTokens ?? 0) > cacheReadLimit && !stopping) {
-        terminationError = new Error(`Agent exceeded the ${profile} cached-input limit (${cacheReadLimit.toLocaleString()} tokens) without completing.`);
-        progress += `${progress ? '\n\n' : ''}● Stopped after ${cacheReadLimit.toLocaleString()} cached input tokens without a final answer.`;
-        stopProcessTree();
-      }
     };
     const timeout = setTimeout(() => {
       terminationError = new Error('Agent run timed out after 30 minutes.');

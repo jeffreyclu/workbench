@@ -317,7 +317,7 @@ manufactured 1M-token run failures from about 155K tokens of final observed traf
 budget/cost circuit breaker must run after this deduplication, or it will terminate healthy work based
 on presentation duplication instead of provider consumption.
 
-### Claude Workbench runs use one context, not a token kill switch
+### Workbench runs use one context, not a token kill switch
 
 On 2026-08-24, Jeffrey rejected the per-run Claude token/cost cap after it
 terminated useful work in seconds. Do not reintroduce it as a default safety
@@ -327,6 +327,13 @@ bounded task context, shared brief, retrieval, and conversation history. The
 observed failure had roughly 1.0M cache-read tokens in under a minute for about
 100 visible output tokens, so minimizing fan-out and repeated context is the
 primary invariant; usage telemetry remains for diagnosis, not termination.
+
+On 2026-08-28, after economy, standard, and deep runs repeatedly hit the
+500k/1M/1.5M cached-input ceilings, Jeffrey explicitly removed the cached-input
+kill switch for both Codex and Claude. Cached-input totals remain visible as
+telemetry. Autocompaction, per-profile tool-call limits, and the 30-minute run
+timeout remain the controls for runaway turns; do not restore a cache-token
+termination threshold.
 
 ### Cache-read reduction: dual-agent dispatch stays, other levers are the approved path
 
