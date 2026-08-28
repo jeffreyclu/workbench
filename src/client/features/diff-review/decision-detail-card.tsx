@@ -1,5 +1,5 @@
 import { memo, type ReactNode } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { sourceClient } from '../../data/source-client.js';
 import { boundConfidenceRequestBlocks, confidenceProminence, confidenceTone, type DiffConfidenceAssessment } from '../diff-confidence.js';
 import type { ReviewDecision } from './logic.js';
@@ -22,16 +22,27 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
   taskIntent: ReviewAssistTaskIntent;
   children: ReactNode;
 }) {
+  const decisionPayload = {
+    behavior: decision.behavior,
+    state: reviewStateLabel(decision.state),
+    hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines })),
+  };
+
   const assist = useMutation({
-    mutationFn: (action: ReviewAssistAction) => sourceClient.requestReviewAssist({
-      action,
-      decision: {
-        behavior: decision.behavior,
-        state: reviewStateLabel(decision.state),
-        hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines })),
-      },
-      taskIntent,
-    }).then((response) => response.answer),
+    mutationFn: (action: ReviewAssistAction) => sourceClient.requestReviewAssist({ action, decision: decisionPayload, taskIntent }).then((response) => response.answer),
+  });
+
+  // Cache-only reads on mount: a reviewer (or another window) who already
+  // asked this exact question about this exact decision sees the answer the
+  // instant the hunk opens, with no model spend and no click required. A
+  // question nobody has asked yet still needs the on-demand button below.
+  const cachedAssistAnswers = useQuery({
+    queryKey: ['review-assist-cache', decision.id, taskIntent?.title, taskIntent?.description],
+    queryFn: async () => {
+      const actions: ReviewAssistAction[] = ['explain', 'what_could_break', 'compare_task_intent'];
+      const results = await Promise.all(actions.map((action) => sourceClient.lookupReviewAssist({ action, decision: decisionPayload, taskIntent }).then((response) => [action, response.answer] as const)));
+      return Object.fromEntries(results.filter(([, answer]) => answer !== null)) as Partial<Record<ReviewAssistAction, string>>;
+    },
   });
 
   const riskScore = useMutation({
@@ -46,6 +57,19 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
       return assessment;
     },
   });
+
+  const cachedRiskScore = useQuery({
+    queryKey: ['review-risk-score-cache', decision.id],
+    queryFn: async () => {
+      const { requests, sourceKeyByRequestKey } = boundConfidenceRequestBlocks([
+        { key: decision.id, lines: decision.hunks.flatMap((hunk) => hunk.lines) },
+      ]);
+      const { assessments } = await sourceClient.lookupDiffConfidenceBlocks(requests);
+      const requestKey = Object.keys(sourceKeyByRequestKey).find((key) => sourceKeyByRequestKey[key] === decision.id) ?? decision.id;
+      return assessments[requestKey] ?? null;
+    },
+  });
+  const displayedRiskScore = riskScore.data ?? (riskScore.isPending || riskScore.isError ? undefined : cachedRiskScore.data ?? undefined);
 
   return <article className="diff-review-decision-card" aria-labelledby="diff-review-decision-title">
     <header>
@@ -71,14 +95,14 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
     </section>
     <section className="diff-review-ai-risk-score" aria-labelledby="diff-review-risk-score-title">
       <h4 id="diff-review-risk-score-title">AI risk score</h4>
-      {!riskScore.isPending && !riskScore.isSuccess && !riskScore.isError && <button type="button" onClick={() => riskScore.mutate()}>Score risk (AI)</button>}
+      {!displayedRiskScore && !riskScore.isPending && !riskScore.isError && <button type="button" onClick={() => riskScore.mutate()}>Score risk (AI)</button>}
       {riskScore.isPending && <p role="status">Scoring…</p>}
       {riskScore.isError && <div className="diff-review-ai-assist-error" role="alert">
         <p>{riskScore.error instanceof Error ? riskScore.error.message : 'AI risk score failed.'}</p>
         <button type="button" onClick={() => riskScore.mutate()}>Retry</button>
       </div>}
-      {riskScore.isSuccess && (() => {
-        const assessment = riskScore.data;
+      {displayedRiskScore && !riskScore.isPending && !riskScore.isError && (() => {
+        const assessment = displayedRiskScore;
         const unavailable = assessment.risk === null;
         const tone = confidenceTone(assessment.risk);
         const { opacity, fontWeight } = confidenceProminence(assessment.risk);
@@ -98,13 +122,16 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
     <section className="diff-review-ai-assist" aria-labelledby="diff-review-ai-assist-title">
       <h4 id="diff-review-ai-assist-title">AI assist</h4>
       <div className="diff-review-ai-assist-actions">
-        {(Object.keys(ACTION_LABELS) as ReviewAssistAction[]).map((action) => <button
-          key={action}
-          type="button"
-          disabled={assist.isPending || (action === 'compare_task_intent' && !taskIntent)}
-          title={action === 'compare_task_intent' && !taskIntent ? 'No task is linked to this review.' : undefined}
-          onClick={() => assist.mutate(action)}
-        >{ACTION_LABELS[action]}</button>)}
+        {(Object.keys(ACTION_LABELS) as ReviewAssistAction[]).map((action) => {
+          const hasCachedAnswer = Boolean(cachedAssistAnswers.data?.[action]);
+          return <button
+            key={action}
+            type="button"
+            disabled={assist.isPending || (action === 'compare_task_intent' && !taskIntent)}
+            title={action === 'compare_task_intent' && !taskIntent ? 'No task is linked to this review.' : hasCachedAnswer ? 'Already answered — click to view.' : undefined}
+            onClick={() => assist.mutate(action)}
+          >{ACTION_LABELS[action]}{hasCachedAnswer ? ' ✓' : ''}</button>;
+        })}
       </div>
       {assist.isPending && <p role="status">Asking the model…</p>}
       {assist.isError && <div className="diff-review-ai-assist-error" role="alert">

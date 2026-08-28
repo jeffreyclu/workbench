@@ -32,6 +32,19 @@ function writeCached(database: WorkbenchDatabase, hash: string, assessment: Diff
     .run(hash, assessment.risk, assessment.reasoning, new Date().toISOString());
 }
 
+/** Cache-only read: never spawns a model turn. Lets a reviewer who already
+ * scored this exact block (in this window, another window, or before a
+ * restart) see the score immediately on opening the hunk, without spending a
+ * new AI turn on blocks nobody has asked to score. */
+export function lookupDiffConfidenceBlocks(database: WorkbenchDatabase, blocks: DiffConfidenceBlock[]): Record<string, DiffConfidenceAssessment> {
+  const result: Record<string, DiffConfidenceAssessment> = {};
+  for (const block of blocks) {
+    const cached = readCached(database, hashBlock(block)) ?? trivialAssessment(block);
+    if (cached) result[block.key] = cached;
+  }
+  return result;
+}
+
 export function parseDiffConfidenceAssessment(output: string, keys: string[]): Record<string, DiffConfidenceAssessment> {
   let candidate = output;
   try {

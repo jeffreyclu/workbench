@@ -6,6 +6,7 @@ import { OWNER_ID, startScheduler } from './scheduler.js';
 import { startRuntimePromotionWorker } from './runtime-promotion-worker.js';
 import { shutdownFastTaskDraftModel } from './fast-task-draft-ai.js';
 import { shutdownDiffConfidenceModel, warmDiffConfidenceModel } from './diff-confidence-ai.js';
+import { shutdownReviewAssist, warmReviewAssist } from './review-assist-ai.js';
 import { liveRuntimeCapabilities } from './runtime-capabilities.js';
 import { createServer } from 'node:http';
 import { attachRealtimeServer, retireRealtimeClients } from './realtime.js';
@@ -30,6 +31,7 @@ configureRuntimeRetirement(() => {
   retireRealtimeClients();
 });
 warmDiffConfidenceModel();
+warmReviewAssist();
 
 // Keeps the vectorized memory index (memory-index.ts) warm so the very first
 // /api/activity-memory or /api/memory/search call after a restart does not
@@ -65,6 +67,7 @@ const shutdown = () => {
   shutdownActiveAgentProcesses();
   shutdownExternalActionClassifier();
   shutdownDiffConfidenceModel();
+  shutdownReviewAssist();
   shutdownFastTaskDraftModel();
   // Do not exit immediately after the graceful signal: provider CLIs create
   // detached process groups, so the owning runtime must remain alive long

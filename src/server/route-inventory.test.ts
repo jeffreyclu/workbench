@@ -19,7 +19,9 @@ const baselineInventory = [
   'GET /api/github/pull-request-diff',
   'GET /api/github/pull-request-image',
   'POST /api/diff-confidence',
+  'POST /api/diff-confidence/lookup',
   'POST /api/review-assist',
+  'POST /api/review-assist/lookup',
   'GET /api/insights',
   'GET /api/audit-log',
   'POST /api/discovery/scan',
@@ -176,7 +178,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(144);
+    expect(baselineInventory).toHaveLength(146);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

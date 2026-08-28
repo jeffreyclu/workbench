@@ -74,6 +74,7 @@ const EXPECTED_MIGRATIONS = [
   '061_agent_run_review_handoffs',
   '062_agent_run_review_handoffs_immutable',
   '063_shared_conversation_manual_position',
+  '064_review_assist_cache',
 ];
 
 describe('openDatabase', () => {
@@ -566,6 +567,21 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(diff_confidence_cache)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toEqual(expect.arrayContaining(['hash', 'risk', 'reasoning', 'created_at']));
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '056_diff_confidence_cache'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds the review assist cache table on upgrade from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE review_assist_cache;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '064_review_assist_cache'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(review_assist_cache)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['hash', 'answer', 'created_at']));
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '064_review_assist_cache'").get()).toBeTruthy();
     upgraded.close();
   });
 

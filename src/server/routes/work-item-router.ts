@@ -31,8 +31,8 @@ import { resolveWorkingDirectory } from '../agent-runner.js';
 import { summarizeWorkItemChanges } from '../activity-log.js';
 import { resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { generateFastAiTaskDraft } from '../fast-task-draft-ai.js';
-import { assessDiffBlocks } from '../diff-confidence-ai.js';
-import { requestReviewAssist } from '../review-assist-ai.js';
+import { assessDiffBlocks, lookupDiffConfidenceBlocks } from '../diff-confidence-ai.js';
+import { lookupReviewAssist, requestReviewAssist } from '../review-assist-ai.js';
 import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
@@ -83,10 +83,26 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       response.json({ assessments: await assessDiffBlocks(database, blocks) });
     } catch (error) { next(error); }
   });
+  // Cache-only: never spawns a model turn. Lets the client show an
+  // already-computed score the instant a hunk is opened, without the on-demand
+  // "Score risk (AI)" flow turning ambient just because a cache exists.
+  router.post('/api/diff-confidence/lookup', (request, response, next) => {
+    try {
+      const { blocks } = diffConfidenceRequestSchema.parse(request.body);
+      response.json({ assessments: lookupDiffConfidenceBlocks(database, blocks) });
+    } catch (error) { next(error); }
+  });
   router.post('/api/review-assist', async (request, response, next) => {
     try {
       const { action, decision, taskIntent } = reviewAssistRequestSchema.parse(request.body);
-      response.json({ answer: await requestReviewAssist(action, decision, taskIntent) });
+      response.json({ answer: await requestReviewAssist(database, action, decision, taskIntent) });
+    } catch (error) { next(error); }
+  });
+  // Cache-only: never spawns a model turn. See /api/diff-confidence/lookup.
+  router.post('/api/review-assist/lookup', (request, response, next) => {
+    try {
+      const { action, decision, taskIntent } = reviewAssistRequestSchema.parse(request.body);
+      response.json({ answer: lookupReviewAssist(database, action, decision, taskIntent) });
     } catch (error) { next(error); }
   });
   const persistAttachments = (attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }>) => {

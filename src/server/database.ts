@@ -1748,6 +1748,23 @@ const schemaMigrations: readonly Migration[] = [
       database.exec('CREATE INDEX idx_shared_conversations_manual_position ON shared_conversations(manual_position, updated_at DESC);');
     },
   },
+  {
+    // On-demand AI assist (explain / what-could-break / compare-to-task) was
+    // re-asked from scratch every time a reviewer revisited a hunk, which read
+    // as both slow (a fresh CLI turn) and forgetful (no record it was ever
+    // answered). Keyed on request content hash, like diff_confidence_cache, so
+    // the same question against the same decision reuses its answer.
+    id: '064_review_assist_cache',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS review_assist_cache (
+          hash TEXT PRIMARY KEY,
+          answer TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {
