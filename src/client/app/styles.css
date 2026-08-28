@@ -1230,7 +1230,6 @@ nav { display: grid; gap: 3px; }
   .agent-console-header.is-mobile-header-collapsed { min-height: 0; padding: 0; border-bottom-color: transparent; }
   .agent-console-header.is-mobile-header-collapsed .agent-console-title { display: none; }
   .agent-console-header.is-mobile-header-collapsed .conversation-window-actions { display: none; }
-  .agent-console-header.is-mobile-header-collapsed ~ .thread-filter-bar { display: none; }
   .mobile-header-handle { display: none; }
   .agent-console-header:not(.is-mobile-header-collapsed) { position: fixed; inset: 0 0 auto; z-index: 6; height: 112px; background: #11120ff5; border-bottom: 1px solid var(--line); box-shadow: 0 10px 26px #0007; }
   .agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle { position: fixed; bottom: calc(100dvh - 108px); left: 50%; z-index: 8; display: grid; place-items: center; width: 76px; height: 25px; padding: 0; background: transparent; border: 0; cursor: grab; touch-action: pan-y; transform: translateX(-50%); }
@@ -1239,22 +1238,22 @@ nav { display: grid; gap: 3px; }
   .agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle:focus-visible { outline: 2px solid var(--acid); outline-offset: -5px; }
   .mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }
   .conversation-window-actions .mobile-related-task-link { display: grid; }
-  .agent-console-title { position: fixed; top: 15px; right: 58px; left: 14px; z-index: 6; display: flex; align-items: center; gap: 7px; min-width: 0; padding: 0; background: transparent; border: 0; }
+  .agent-console-title { position: fixed; top: 15px; right: 58px; left: 104px; z-index: 6; display: flex; align-items: center; gap: 7px; min-width: 0; padding: 0; background: transparent; border: 0; }
   .agent-console-header.has-conversation-actions { min-height: 0; }
   .agent-console-header.has-conversation-actions .agent-console-title { max-width: none; padding-top: 0; }
   .agent-console-title .conversation-origin { flex: 0 0 auto; margin: 0; padding: 3px 6px; font-size: 8px; }
-  .agent-console-header h2 { flex: 1; width: auto; margin: 0; overflow: hidden; font-size: 18px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-console-header h2 { flex: 1; width: auto; min-width: 0; margin: 0; overflow-x: auto; overflow-y: hidden; font-size: 18px; line-height: 1.15; text-overflow: clip; white-space: nowrap; -webkit-overflow-scrolling: touch; touch-action: pan-x; }
   .related-task-link { display: none; }
   .related-task-link span { display: none; }
   /* Details lead the tray. Review and action controls share the row below it
      without introducing a second chrome panel. */
-  .conversation-window-actions { position: fixed; top: 60px; right: 10px; left: auto; z-index: 7; display: flex; flex-wrap: nowrap; justify-content: flex-end; width: max-content; min-width: 0; max-width: none; gap: 2px; margin: 0; padding: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; transform: none; }
-  .conversation-window-actions .icon-button { flex: 0 0 auto; width: 28px; height: 28px; }
-  .conversation-window-actions .conversation-task-picker { flex: 0 0 auto; min-height: 28px; }
+  .conversation-window-actions { position: fixed; top: 56px; right: 10px; left: auto; z-index: 7; display: flex; flex-wrap: nowrap; justify-content: flex-end; width: max-content; min-width: 0; max-width: none; gap: 3px; margin: 0; padding: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; transform: none; }
+  .conversation-window-actions .icon-button { flex: 0 0 auto; width: 36px; height: 36px; }
+  .conversation-window-actions .conversation-task-picker { flex: 0 0 auto; min-height: 36px; }
   .conversation-window-actions .conversation-delete-control { flex: 0 0 auto; }
-  .thread-filter-bar { position: fixed; top: 58px; right: auto; left: 10px; z-index: 7; width: auto; align-items: center; flex-wrap: nowrap; gap: 3px; padding: 0; background: transparent; border: 0; box-shadow: none; }
-  .conversation-surface-tabs { flex: 0 0 auto; margin-right: 0; border: 1px solid #373731; background: #171715; }
-  .conversation-surface-tabs button { flex: 0 0 auto; justify-content: center; min-width: 28px; min-height: 28px; padding: 0 7px; font-size: 0; }
+  .thread-filter-bar { position: fixed; top: 12px; right: auto; left: 12px; z-index: 8; width: auto; align-items: center; flex-wrap: nowrap; gap: 3px; padding: 3px; background: #171715; border: 1px solid #373731; border-radius: 8px; box-shadow: 0 6px 16px #0009; }
+  .conversation-surface-tabs { flex: 0 0 auto; margin-right: 0; border: 0; background: transparent; box-shadow: none; }
+  .conversation-surface-tabs button { flex: 0 0 auto; justify-content: center; min-width: 36px; min-height: 36px; padding: 0 8px; font-size: 0; }
   .conversation-surface-tabs button span { display: none; }
   .conversation-review-layout { border-top: 0; }
   .conversation-review-layout.layout-changes .conversation-thread-pane { display: contents; }

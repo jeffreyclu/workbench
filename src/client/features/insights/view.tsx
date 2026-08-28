@@ -138,11 +138,16 @@ function CursingInsight({ data }: { data: RunInsights['cursing'] }) {
 
 function LifecycleReportInsight({ status }: { status: LifecycleReportStatus }) {
   const report = status.report;
-  if (!report) return <div className="insight-section lifecycle-report">
-    <h3>Process discovery</h3>
-    <p className="insight-section-intro">Runs automatically each week. It only analyzes complete traces collected by the new lifecycle ledger, so historical partial data cannot produce a misleading report.</p>
-    <p className="insight-empty-note">Waiting for {status.minimumCompletedCases - status.eligibleCompletedCases} more fully observed completed task trace{status.minimumCompletedCases - status.eligibleCompletedCases === 1 ? '' : 's'} ({status.eligibleCompletedCases}/{status.minimumCompletedCases}).</p>
-  </div>;
+  if (!report) {
+    const remaining = status.minimumCompletedCases - status.eligibleCompletedCases;
+    return <div className="insight-section lifecycle-report">
+      <h3>Process discovery</h3>
+      <p className="insight-section-intro">Runs automatically each week. It only analyzes complete traces collected by the new lifecycle ledger, so historical partial data cannot produce a misleading report.</p>
+      <p className="insight-empty-note">{remaining > 0
+        ? `Waiting for ${remaining} more fully observed completed task trace${remaining === 1 ? '' : 's'} (${status.eligibleCompletedCases}/${status.minimumCompletedCases}).`
+        : `Threshold met (${status.eligibleCompletedCases}/${status.minimumCompletedCases}). Report generates on the next scheduled run.`}</p>
+    </div>;
+  }
   return <div className="insight-section lifecycle-report">
     <div className="lifecycle-report-header"><div><h3>Process discovery</h3><p className="insight-section-intro">Latest scheduled conformance report. It uses completed traces only; deviations are checks against the current Workbench lifecycle contract, not automatic errors.</p></div><a className="button secondary compact" href="/api/process-mining/report.html" target="_blank" rel="noreferrer">Open report</a></div>
     <div className="lifecycle-report-stats"><div><span>Completed traces</span><strong>{report.caseCount}</strong></div><div><span>Lifecycle events</span><strong>{report.eventCount}</strong></div><div><span>Deviations</span><strong>{report.deviations.length}</strong></div></div>

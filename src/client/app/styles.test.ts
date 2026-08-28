@@ -108,28 +108,32 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }');
     expect(phoneRules).toContain('.conversation-window-actions .mobile-related-task-link { display: grid; }');
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed .conversation-window-actions { display: none; }');
-    expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed ~ .thread-filter-bar { display: none; }');
+    expect(phoneRules).not.toContain('.agent-console-header.is-mobile-header-collapsed ~ .thread-filter-bar { display: none; }');
     expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) + .mobile-chrome-controls .mobile-conversation-toggle { display: none; }');
     expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) { position: fixed; inset: 0 0 auto; z-index: 6; height: 112px;');
     expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle { position: fixed; bottom: calc(100dvh - 108px); left: 50%;');
-    expect(phoneRules).toContain('.agent-console-title { position: fixed; top: 15px; right: 58px; left: 14px; z-index: 6; display: flex; align-items: center; gap: 7px;');
-    expect(phoneRules).toContain('.conversation-window-actions { position: fixed; top: 60px; right: 10px; left: auto; z-index: 7;');
-    expect(phoneRules).toContain('.thread-filter-bar { position: fixed; top: 58px; right: auto; left: 10px; z-index: 7;');
+    expect(phoneRules).toContain('.agent-console-title { position: fixed; top: 15px; right: 58px; left: 104px; z-index: 6; display: flex; align-items: center; gap: 7px;');
+    expect(phoneRules).toContain('.conversation-window-actions { position: fixed; top: 56px; right: 10px; left: auto; z-index: 7;');
+    expect(phoneRules).toContain('.thread-filter-bar { position: fixed; top: 12px; right: auto; left: 12px; z-index: 8;');
     expect(phoneRules).toContain('.agent-console-header.has-conversation-actions { min-height: 0; }');
     expect(phoneRules).toContain('.agent-console-header.has-conversation-actions .agent-console-title { max-width: none; padding-top: 0; }');
-    expect(phoneRules).toContain('.agent-console-header h2 { flex: 1; width: auto; margin: 0; overflow: hidden; font-size: 18px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }');
+    expect(phoneRules).toContain('.agent-console-header h2 { flex: 1; width: auto; min-width: 0; margin: 0; overflow-x: auto; overflow-y: hidden; font-size: 18px; line-height: 1.15; text-overflow: clip; white-space: nowrap; -webkit-overflow-scrolling: touch; touch-action: pan-x; }');
   });
 
-  it('keeps mobile task-linked conversation controls compact beside the review toggle', () => {
-    const rule = styles.match(/\.conversation-window-actions \{ position: fixed; top: 60px; right: 10px; left: auto;[^}]*\}/)?.[0] ?? '';
+  it('keeps mobile actions usable while the review toggle is its own top-left block', () => {
+    const rule = styles.match(/\.conversation-window-actions \{ position: fixed; top: 56px; right: 10px; left: auto;[^}]*\}/)?.[0] ?? '';
+    const reviewControl = styles.match(/\.thread-filter-bar \{ position: fixed; top: 12px; right: auto; left: 12px;[^}]*\}/)?.[0] ?? '';
 
     expect(rule).toContain('z-index: 7');
     expect(rule).toContain('flex-wrap: nowrap');
     expect(rule).toContain('width: max-content');
     expect(rule).toContain('max-width: none;');
     expect(rule).toContain('background: transparent');
-    expect(styles).toContain('.conversation-window-actions .icon-button { flex: 0 0 auto; width: 28px; height: 28px; }');
-    expect(styles).toContain('.conversation-surface-tabs button { flex: 0 0 auto; justify-content: center; min-width: 28px; min-height: 28px; padding: 0 7px; font-size: 0; }');
+    expect(styles).toContain('.conversation-window-actions .icon-button { flex: 0 0 auto; width: 36px; height: 36px; }');
+    expect(reviewControl).toContain('z-index: 8');
+    expect(reviewControl).toContain('background: #171715');
+    expect(reviewControl).toContain('box-shadow: 0 6px 16px #0009');
+    expect(styles).toContain('.conversation-surface-tabs button { flex: 0 0 auto; justify-content: center; min-width: 36px; min-height: 36px; padding: 0 8px; font-size: 0; }');
   });
 
   it('keeps Changes as the only review surface and gives it the composer on a phone', () => {
@@ -154,11 +158,12 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.mobile-composer-handle { display: grid; place-items: center;');
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed { min-height: 0; padding: 0; border-bottom-color: transparent; }');
     expect(phoneRules).toContain('.agent-console-header.is-mobile-header-collapsed .agent-console-title { display: none; }');
+    expect(phoneRules).not.toContain('.agent-console-header.is-mobile-header-collapsed ~ .thread-filter-bar { display: none; }');
     expect(phoneRules).toContain('.mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }');
     expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle { position: fixed; bottom: calc(100dvh - 108px);');
-    expect(phoneRules).toContain('.agent-console-title { position: fixed; top: 15px;');
-    expect(phoneRules).toContain('.conversation-window-actions { position: fixed; top: 60px;');
-    expect(phoneRules).toContain('.thread-filter-bar { position: fixed; top: 58px;');
+    expect(phoneRules).toContain('.agent-console-title { position: fixed; top: 15px; right: 58px; left: 104px;');
+    expect(phoneRules).toContain('.conversation-window-actions { position: fixed; top: 56px;');
+    expect(phoneRules).toContain('.thread-filter-bar { position: fixed; top: 12px; right: auto; left: 12px; z-index: 8;');
   });
 
   it('gives floating desktop review controls solid surfaces', () => {

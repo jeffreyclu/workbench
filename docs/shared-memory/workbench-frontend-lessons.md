@@ -201,6 +201,17 @@ controls form the middle row, and the handle closes the surface at its boundary.
 and pin control each need a solid, elevated surface. Keep them z-layered over
 the conversation; do not turn the whole desktop control row into a panel.
 
+*Correction from Jeffrey, 2026-08-27.* On phone, the Conversation/Changes
+switch is not part of the expandable details tray. Keep it as an independently
+available opaque floating block at the top-left, including while the tray is
+collapsed. Give tray action icons a usable 36px target; do not shrink them to
+28px just to share a row with the review switch.
+
+*Decision from Jeffrey, 2026-08-27.* The constrained one-line title in the
+expanded phone conversation tray scrolls horizontally on touch; it does not
+ellipsis. Keep the title bounded between the floating review switch and close
+control, with no wrapping or horizontal page scroll.
+
 ### Phone composer controls must have an intentional complete layout
 
 *Correction from Jeffrey, 2026-08-27.* The phone composer sheet must be the
