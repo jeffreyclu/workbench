@@ -46,13 +46,15 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       .filter((entry) => entry.isDirectory())
       .map((entry) => resolve(join(root, entry.name)))
       .filter((path) => existsSync(join(path, '.git')) || existsSync(join(path, 'package.json')));
-    const activeRunWorkspace = repository.listRuns(item.id)
-      .filter((run) => (run.status === 'queued' || run.status === 'running') && Boolean(run.resolvedWorkspace))
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.resolvedWorkspace ?? null;
-    const defaultPath = activeRunWorkspace ? resolve(activeRunWorkspace) : resolveWorkingDirectory(item);
+    const runWorkspaces = repository.listRuns(item.id)
+      .filter((run) => Boolean(run.resolvedWorkspace))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    const activeRunWorkspace = runWorkspaces.find((run) => run.status === 'queued' || run.status === 'running')?.resolvedWorkspace ?? null;
+    const latestRunWorkspace = activeRunWorkspace ?? runWorkspaces[0]?.resolvedWorkspace ?? null;
+    const defaultPath = latestRunWorkspace ? resolve(latestRunWorkspace) : resolveWorkingDirectory(item);
     if (existsSync(defaultPath) && !candidates.includes(defaultPath)) candidates.unshift(defaultPath);
-    const selectedPath = activeRunWorkspace ? defaultPath : (selected && candidates.includes(resolve(selected.workspace_path)) ? resolve(selected.workspace_path) : defaultPath);
-    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: path === defaultPath && activeRunWorkspace ? `${basename(resolveWorkingDirectory(item))} · active agent` : basename(path), selected: path === selectedPath })) };
+    const selectedPath = latestRunWorkspace ? defaultPath : (selected && candidates.includes(resolve(selected.workspace_path)) ? resolve(selected.workspace_path) : defaultPath);
+    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: path === defaultPath && latestRunWorkspace ? `${basename(resolveWorkingDirectory(item))} · agent worktree` : basename(path), selected: path === selectedPath })) };
   };
   const taskWorkingDirectory = (workItemId: string) => taskWorkspaces(workItemId)?.selectedPath ?? null;
   router.post('/api/diff-confidence', async (request, response, next) => {

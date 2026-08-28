@@ -48,8 +48,11 @@ export function createConversationRouter({ repository, database, capabilities, a
     const defaultPath = linkedPath ?? (!linkedItem || linkedItem.projectName === 'Workbench' ? resolve(process.cwd()) : null);
     // An active run is authoritative: its uncommitted files live in a detached
     // worktree, so a prior source-checkout selection must not hide them.
-    const selectedPath = activePath ?? (selected && candidates.includes(resolve(selected.workspace_path)) ? resolve(selected.workspace_path) : defaultPath);
-    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: path === activePath ? `${basename(sourcePath ?? path)} · active agent` : basename(path), selected: path === selectedPath })) };
+    // A detached run worktree is the only place its uncommitted edits exist.
+    // Keep it selected after the process finishes as well; otherwise a saved
+    // source-checkout selection makes completed work appear to vanish.
+    const selectedPath = linkedPath ?? (selected && candidates.includes(resolve(selected.workspace_path)) ? resolve(selected.workspace_path) : defaultPath);
+    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: path === linkedPath ? `${basename(sourcePath ?? path)} · agent worktree` : basename(path), selected: path === selectedPath })) };
   };
   router.get('/api/shared/conversations', (request, response) => {
     repository.ensureDefaultConversation();
