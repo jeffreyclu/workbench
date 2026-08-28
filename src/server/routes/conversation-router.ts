@@ -26,8 +26,17 @@ export function createConversationRouter({ repository, database, capabilities, a
     // task itself has a workspacePath. Its completed or active agent run has
     // already resolved the repository it actually used; Changes must follow
     // that real workspace instead of incorrectly demanding a manual picker.
+    // Run worktrees are deliberately short-lived. Never let a completed run
+    // whose worktree has already been integrated and collected become the
+    // selected repository for Changes.
+    const usableWorkspace = (workspacePath: string | null | undefined) => {
+      if (!workspacePath) return null;
+      const path = resolve(workspacePath);
+      try { return existsSync(path) && statSync(path).isDirectory() ? path : null; }
+      catch { return null; } // The collector may remove a run worktree mid-request.
+    };
     const conversationRuns = linkedItem
-      ? repository.listRuns(linkedItem.id).filter((run) => run.conversationId === conversationId && Boolean(run.resolvedWorkspace))
+      ? repository.listRuns(linkedItem.id).filter((run) => run.conversationId === conversationId && usableWorkspace(run.resolvedWorkspace))
       : [];
     const activeRunWorkspace = conversationRuns
       .filter((run) => run.status === 'queued' || run.status === 'running')
@@ -41,17 +50,26 @@ export function createConversationRouter({ repository, database, capabilities, a
       .map((entry) => join(root, entry.name))
       .filter((path) => existsSync(join(path, '.git')) || existsSync(join(path, 'package.json')))
       .map((path) => resolve(path));
-    const sourcePath = linkedItem?.workspacePath ? resolve(linkedItem.workspacePath) : null;
-    const activePath = activeRunWorkspace ? resolve(activeRunWorkspace) : null;
-    const linkedPath = activePath ?? (runWorkspace ? resolve(runWorkspace) : sourcePath);
-    if (linkedPath && existsSync(linkedPath) && !candidates.includes(linkedPath)) candidates.unshift(linkedPath);
+    const sourcePath = usableWorkspace(linkedItem?.workspacePath);
+    const activePath = usableWorkspace(activeRunWorkspace);
+    const linkedPath = activePath ?? usableWorkspace(runWorkspace) ?? sourcePath;
+    if (linkedPath && !candidates.includes(linkedPath)) candidates.unshift(linkedPath);
     const defaultPath = linkedPath ?? (!linkedItem || linkedItem.projectName === 'Workbench' ? resolve(process.cwd()) : null);
     // An active run is authoritative: its uncommitted files live in a detached
     // worktree, so a prior source-checkout selection must not hide them.
     // A detached run worktree is the only place its uncommitted edits exist.
     // Keep it selected after the process finishes as well; otherwise a saved
     // source-checkout selection makes completed work appear to vanish.
-    const selectedPath = linkedPath ?? (selected && candidates.includes(resolve(selected.workspace_path)) ? resolve(selected.workspace_path) : defaultPath);
+    const savedPath = usableWorkspace(selected?.workspace_path);
+    const selectedPath = linkedPath ?? (savedPath && candidates.includes(savedPath) ? savedPath : defaultPath);
+    // A stored choice may point to a garbage-collected run worktree. Repair
+    // it server-side so every client converges on the usable checkout.
+    if (selected && !savedPath) {
+      if (selectedPath) database.prepare(`INSERT INTO shared_conversation_workspace_selection (conversation_id, workspace_path, updated_at)
+        VALUES (?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET workspace_path = excluded.workspace_path, updated_at = excluded.updated_at`)
+        .run(conversationId, selectedPath, new Date().toISOString());
+      else database.prepare('DELETE FROM shared_conversation_workspace_selection WHERE conversation_id = ?').run(conversationId);
+    }
     return { selectedPath, workspaces: candidates.map((path) => ({ path, label: path === linkedPath ? `${basename(sourcePath ?? path)} · agent worktree` : basename(path), selected: path === selectedPath })) };
   };
   router.get('/api/shared/conversations', (request, response) => {

@@ -78,6 +78,35 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     await expect(response.json()).resolves.toEqual({ snapshots: [expect.objectContaining({ revision: 'preserved-revision', diff })] });
   });
 
+  it('recovers task Changes from a garbage-collected run worktree and repairs the saved choice', async () => {
+    const item = repository.create({ title: 'Collected worktree', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const stalePath = '/tmp/workbench-collected-run-worktree';
+    const run = repository.createRun(item.id, 'execute', 'codex', 'codex', '');
+    repository.updateRun(run.id, { status: 'completed', resolvedWorkspace: stalePath, completedAt: new Date().toISOString() });
+    database.prepare('INSERT INTO work_item_workspace_selection (work_item_id, workspace_path, updated_at) VALUES (?, ?, ?)').run(item.id, stalePath, new Date().toISOString());
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}/workspace-diff`);
+
+    expect(response.status).toBe(200);
+    expect((await response.json() as { diff: WorkspaceDiff }).diff.workspacePath).toBe(process.cwd());
+    expect(database.prepare('SELECT workspace_path FROM work_item_workspace_selection WHERE work_item_id = ?').get(item.id)).toEqual({ workspace_path: process.cwd() });
+  });
+
+  it('recovers conversation Changes from a garbage-collected run worktree and repairs the saved choice', async () => {
+    const item = repository.create({ title: 'Collected conversation worktree', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Collected worktree conversation', item.id);
+    const stalePath = '/tmp/workbench-collected-conversation-worktree';
+    const run = repository.createRun(item.id, 'execute', 'codex', 'codex', '', conversation.id);
+    repository.updateRun(run.id, { status: 'completed', resolvedWorkspace: stalePath, completedAt: new Date().toISOString() });
+    database.prepare('INSERT INTO shared_conversation_workspace_selection (conversation_id, workspace_path, updated_at) VALUES (?, ?, ?)').run(conversation.id, stalePath, new Date().toISOString());
+
+    const response = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/workspace-diff`);
+
+    expect(response.status).toBe(200);
+    expect((await response.json() as { diff: WorkspaceDiff }).diff.workspacePath).toBe(process.cwd());
+    expect(database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversation.id)).toEqual({ workspace_path: process.cwd() });
+  });
+
   it('reports only work owned by this backend in its runtime drain health', async () => {
     const idle = await fetch(`${baseUrl}/api/health`);
     expect(await idle.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: false, ownedAgentWorkActive: false, buildId: expect.any(String) });
