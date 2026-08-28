@@ -129,6 +129,10 @@ agent execution prompt. This is distinct from conversation-message attachments.
 
 On 2026-08-25, Jeffrey first asked for a rolling-24-hour reading, then corrected that on the same day: **Angriest day must show the calendar day with the highest curse count**, not a 24-hour rolling window and not a "last 24h" label. `summarizeCursing` computes `angriestDay: { day, count } | null` as the max entry of `byDay` (ties broken by earliest day); the Insights card renders it as `YYYY-MM-DD · count`. Do not reintroduce a rolling-window interpretation for this metric.
 
+### Insights needs four time-frame options
+
+*Decision from Jeffrey, 2026-08-28.* Insights must offer exactly: **Last 15 minutes**, **Last hour**, **Last day**, and **All Time**. Keep these as the available time-frame choices when adding or revising Insights filters and calculations.
+
 ### Awaiting status and new-conversation account default
 
 *Decision from Jeffrey, 2026-08-24.*

@@ -84,3 +84,19 @@ whether it goes to the remote.
 
 Learned when an audit-only request for PR #14774 was answered with an unrequested push of
 `2b60429647` to `feat/con-connectors-v2-projection`.
+
+## Name code with mainstream industry vocabulary, not architectural jargon (2026-08-28)
+
+Jeffrey rejects imported architectural nouns in Writer code and prose when a plainer, more widely
+recognized term exists. Specifically he ruled out "projection" and "view model" as names for files,
+types, or comments, because they come from MVVM/CQRS vocabulary that neither React nor this codebase
+uses, so a reader has to learn a private dialect before reading the code.
+
+Prefer names an ordinary React/TypeScript reader already knows: `selectors.ts` for pure derivation
+functions, `useThing` for the hook, and repo-native type suffixes such as `UseThingOptions` and
+`UseThingResult` (both already used across `frontend/src`). Name a module after what it produces or
+the standard role it plays, and check the surrounding directory for a near-collision before settling
+on a filename.
+
+Learned on the Manage Connectors V2 card page, where `projection.ts` and
+`useManageConnectorsViewModel` were renamed to `selectors.ts` and `useManageConnectors`.
