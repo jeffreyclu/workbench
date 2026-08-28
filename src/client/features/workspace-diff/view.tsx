@@ -2,13 +2,11 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { FileDiff, History, RefreshCw } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
-import type { AgentRunReviewHandoff } from '../../../shared/contracts.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
 import type { DiffConfidenceAssessment, DiffFollowUpReference } from '../diff-confidence.js';
 import { useDiffBlockConfidence } from '../diff-confidence-hooks.js';
-import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
@@ -26,12 +24,11 @@ function DiffSkeleton() {
   </section>;
 }
 
-export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, reviewHandoff }: {
+export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths }: {
   scope: WorkspaceDiffScope;
   isRunning?: boolean;
   activeWorkspacePaths?: string[];
   onFollowUp?: (reference: DiffFollowUpReference) => void;
-  reviewHandoff?: AgentRunReviewHandoff | null;
 }) {
   const queryClient = useQueryClient();
   const conversationId = 'conversationId' in scope ? scope.conversationId : null;
@@ -137,7 +134,6 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
         <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={() => void query.refetch()} disabled={query.isFetching}><RefreshCw size={13} className={query.isFetching ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>
       </div>
     </header>
-    {!selectedSnapshot && reviewHandoff && <AgentRunReviewHandoffCard handoff={reviewHandoff} />}
     {!displayedDiff || displayedDiff.files.length === 0 ? <p className="muted">No uncommitted changes to review.</p>
       : hunkReviews.isLoading ? <DiffSkeleton />
         : hunkReviews.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load review decisions.</strong><p>{hunkReviews.error.message}</p><button type="button" className="button secondary compact" onClick={() => void hunkReviews.refetch()} disabled={hunkReviews.isFetching}>Retry</button></section>
