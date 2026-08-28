@@ -9,7 +9,7 @@ import type { DiffFollowUpReference } from '../diff-confidence.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
-import { buildFileDiffHunks, buildReviewDecisions, buildReviewFileQueue, nextPendingDecisionId, orderReviewDecisions } from '../diff-review/logic.js';
+import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions } from '../diff-review/logic.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
 import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
@@ -87,7 +87,6 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const upsertHunkReview = useUpsertDiffHunkReview(scope, reviewRevision);
   const decisions = useMemo(() => buildReviewDecisions(displayedDiff?.files ?? [], hunkReviews.data?.reviews ?? []), [displayedDiff?.files, hunkReviews.data?.reviews]);
   const orderedDecisions = useMemo(() => orderReviewDecisions(decisions), [decisions]);
-  const fileQueue = useMemo(() => buildReviewFileQueue(decisions), [decisions]);
   const selectedDecision = orderedDecisions.find((decision) => decision.id === selectedDecisionId) ?? orderedDecisions[0] ?? null;
   const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
   const fileHunks = useMemo(() => (selectedFile ? buildFileDiffHunks(selectedFile) : []), [selectedFile]);
@@ -126,7 +125,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
           : <div className="workspace-diff-layout diff-review-layout">
             <DiffReviewSummaryView decisions={decisions} />
             {selectedDecision && <>
-              <DiffReviewDecisionQueue decisions={orderedDecisions} files={fileQueue} selectedId={selectedDecision.id} onSelect={setSelectedDecisionId} />
+              <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={setSelectedDecisionId} />
               <div className="diff-review-workbench">
                 {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={setSelectedDecisionId} />}
                 <DiffReviewDecisionDetailCard decision={selectedDecision}>

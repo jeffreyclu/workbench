@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
-import { buildFileDiffHunks, buildReviewDecisions, buildReviewFileQueue, nextPendingDecisionId, orderReviewDecisions } from './logic.js';
+import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions } from './logic.js';
 
 const localFile: WorkspaceDiffFile = {
   path: 'src/local.ts', status: 'modified', additions: 1, deletions: 1, previousPath: null,
@@ -56,22 +56,11 @@ describe('diff review queue logic', () => {
     expect(decisions[0].riskSignals).toContain('cross_file');
   });
 
-  it('orders pending high-risk decisions first and builds the file rail from decision priority', () => {
+  it('orders pending high-risk decisions first', () => {
     const decisions = buildReviewDecisions([localFile, authFile], []);
     expect(orderReviewDecisions(decisions).map((decision) => decision.filePaths[0])).toEqual([
       'src/server/auth/routes.ts',
       'src/local.ts',
-    ]);
-
-    const reviewed: DiffHunkReview = {
-      id: 'review-1', revision: 'rev-1', filePath: authFile.path,
-      hunkRange: '@@ -10 +10,3 @@ function authorizeRequest()', state: 'needs_changes', note: 'Guard the failure.',
-      updatedAt: '2026-08-27T00:00:00.000Z',
-    };
-    const withReview = buildReviewDecisions([localFile, authFile], [reviewed]);
-    expect(buildReviewFileQueue(withReview).map((file) => [file.path, file.state])).toEqual([
-      ['src/local.ts', 'pending'],
-      ['src/server/auth/routes.ts', 'needs_changes'],
     ]);
   });
 

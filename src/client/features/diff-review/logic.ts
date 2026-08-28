@@ -29,15 +29,6 @@ export interface ReviewDecision {
   note: string | null;
 }
 
-export interface ReviewFileQueueItem {
-  path: string;
-  editorUrl: string | null;
-  decisions: number;
-  completed: number;
-  state: 'pending' | 'needs_changes' | 'commented' | 'approved';
-  riskSignals: ReviewRiskSignal[];
-}
-
 interface PatchHunk { range: string; lines: string[] }
 interface DecisionCandidate {
   subject: string | null;
@@ -225,25 +216,6 @@ export function orderReviewDecisions(decisions: ReviewDecision[]): ReviewDecisio
     if (stateDifference !== 0) return stateDifference;
     const riskDifference = decisionPriority(right) - decisionPriority(left);
     return riskDifference !== 0 ? riskDifference : left.id.localeCompare(right.id);
-  });
-}
-
-export function buildReviewFileQueue(decisions: ReviewDecision[]): ReviewFileQueueItem[] {
-  const files = new Map<string, ReviewDecision[]>();
-  for (const decision of orderReviewDecisions(decisions)) {
-    for (const path of decision.filePaths) files.set(path, [...(files.get(path) ?? []), decision]);
-  }
-  return [...files.entries()].map(([path, entries]) => {
-    const states = entries.map((entry) => entry.state);
-    const state = states.includes('needs_changes') ? 'needs_changes'
-      : states.includes(null) ? 'pending'
-        : states.includes('commented') ? 'commented' : 'approved';
-    const matchingHunk = entries.flatMap((entry) => entry.hunks).find((hunk) => hunk.filePath === path);
-    return {
-      path, editorUrl: matchingHunk?.editorUrl ?? null, decisions: entries.length,
-      completed: states.filter((entry) => entry !== null).length, state,
-      riskSignals: REVIEW_RISK_SIGNALS.filter((signal) => entries.some((entry) => entry.riskSignals.includes(signal))),
-    };
   });
 }
 

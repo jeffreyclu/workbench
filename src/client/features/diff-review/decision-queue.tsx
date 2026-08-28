@@ -1,32 +1,18 @@
 import { memo } from 'react';
-import { Check, Circle, FileDiff } from 'lucide-react';
-import type { ReviewDecision, ReviewFileQueueItem } from './logic.js';
+import { Check, Circle } from 'lucide-react';
+import type { ReviewDecision } from './logic.js';
 import { reviewStateLabel } from './logic.js';
 
 function StateIcon({ state }: { state: ReviewDecision['state'] }) {
   return state === null ? <Circle size={11} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />;
 }
 
-export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ decisions, files, selectedId, onSelect }: {
+export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ decisions, selectedId, onSelect }: {
   decisions: ReviewDecision[];
-  files: ReviewFileQueueItem[];
   selectedId: string;
   onSelect: (decisionId: string) => void;
 }) {
-  const selectedFiles = decisions.find((decision) => decision.id === selectedId)?.filePaths ?? [];
   return <div className="diff-review-queue-region">
-    <nav className="diff-review-file-rail" aria-label="Review files by queue priority">
-      <span>Files by priority</span>
-      <div>{files.map((file) => {
-        const firstDecision = decisions.find((decision) => decision.filePaths.includes(file.path));
-        return <button key={file.path} type="button" className={selectedFiles.includes(file.path) ? 'selected' : ''} onClick={() => firstDecision && onSelect(firstDecision.id)}>
-          <FileDiff size={13} aria-hidden="true" />
-          <span>{file.path}</span>
-          <small className={`diff-review-file-state state-${file.state}`}>{file.state === 'approved' ? 'Approved' : `${file.completed}/${file.decisions}`}</small>
-          {file.riskSignals.length > 0 && <b aria-label={`${file.riskSignals.length} risk signals`}>{file.riskSignals.length}</b>}
-        </button>;
-      })}</div>
-    </nav>
     <nav className="diff-review-decision-queue" aria-label="Review decision queue">
       <span>Decision queue</span>
       <ol>{decisions.map((decision, index) => <li key={decision.id}>

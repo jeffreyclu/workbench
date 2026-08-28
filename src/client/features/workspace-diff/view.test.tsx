@@ -84,10 +84,10 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(within(authDiff).getByText('+ await repository.update(session)')).toBeInTheDocument();
     expect(authDiff.querySelector('.diff-review-diff-block.active')).toHaveTextContent('@@ -20 +20,3 @@ authorizeRequest');
 
-    const fileRail = screen.getByRole('navigation', { name: 'Review files by queue priority' });
-    const fileButtons = within(fileRail).getAllByRole('button');
-    expect(fileButtons[0]).toHaveTextContent('src/server/auth/routes.ts');
-    fireEvent.click(within(fileRail).getByRole('button', { name: /src\/local\.ts/ }));
+    const decisionQueue = screen.getByRole('navigation', { name: 'Review decision queue' });
+    const decisionButtons = within(decisionQueue).getAllByRole('button');
+    expect(decisionButtons[0]).toHaveTextContent('authorize request');
+    fireEvent.click(within(decisionQueue).getByRole('button', { name: /Decision 2/ }));
     expect(await screen.findByLabelText('Full diff for src/local.ts')).toBeInTheDocument();
   });
 
