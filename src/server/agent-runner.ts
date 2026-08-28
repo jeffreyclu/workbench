@@ -808,6 +808,12 @@ export interface AgentEventContext { subagents: Map<string, string>; sessionId?:
 
 const activeAgentProcesses = new Set<ReturnType<typeof spawn>>();
 
+/** Process-level truth for runtime retirement. Database leases can be stale. */
+export function activeAgentProcessCount(): number {
+  for (const child of activeAgentProcesses) if (child.exitCode !== null) activeAgentProcesses.delete(child);
+  return activeAgentProcesses.size;
+}
+
 /** Registers a provider process with the runtime-wide lifecycle owner. */
 export function registerActiveAgentProcess(child: ReturnType<typeof spawn>): () => void {
   activeAgentProcesses.add(child);

@@ -78,6 +78,22 @@ function ownedAgentWorkActive(port: number): Promise<boolean | null> {
   });
 }
 
+function liveAgentProcessCount(port: number): Promise<number | null> {
+  return new Promise((resolveStatus) => {
+    const request = httpGet({ hostname: '127.0.0.1', port, path: '/api/health', timeout: 750 }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => { body = `${body}${chunk}`.slice(-4_000); });
+      response.on('end', () => {
+        try { const status = JSON.parse(body) as { liveAgentProcessCount?: unknown }; resolveStatus(typeof status.liveAgentProcessCount === 'number' ? status.liveAgentProcessCount : null); }
+        catch { resolveStatus(null); }
+      });
+    });
+    request.on('timeout', () => request.destroy());
+    request.on('error', () => resolveStatus(null));
+  });
+}
+
 function retireRuntime(port: number): void {
   const request = httpRequest({ hostname: '127.0.0.1', port, path: '/api/runtime/retire', method: 'POST', timeout: 750 }, (response) => response.resume());
   request.on('error', () => undefined);
@@ -92,21 +108,18 @@ async function stopAfterDrain(runtime: Runtime): Promise<void> {
   const deadline = Date.now() + 31 * 60_000;
   let reported = false;
   while (runtime.child.exitCode === null && Date.now() < deadline) {
-    const [activeWork, activeAgents] = await Promise.all([runtimeWorkActive(runtime.port), ownedAgentWorkActive(runtime.port)]);
-    if (activeWork === false && activeAgents === false) {
+    const [activeWork, activeAgents, liveProcesses] = await Promise.all([runtimeWorkActive(runtime.port), ownedAgentWorkActive(runtime.port), liveAgentProcessCount(runtime.port)]);
+    if (activeWork === false && activeAgents === false && liveProcesses === 0) {
       runtime.child.kill('SIGTERM');
       return;
     }
-    if ((activeWork || activeAgents) && !reported) {
+    if ((activeWork || activeAgents || (liveProcesses ?? 1) > 0) && !reported) {
       reported = true;
       console.log(`Workbench backend on port ${runtime.port} is retaining in-flight agent work before shutdown.`);
     }
     await new Promise((resolveWait) => setTimeout(resolveWait, 250));
   }
-  if (runtime.child.exitCode === null) {
-    console.warn(`Workbench backend on port ${runtime.port} exceeded its external-agent drain window; terminating the retired runtime.`);
-    runtime.child.kill('SIGTERM');
-  }
+  if (runtime.child.exitCode === null) console.warn(`Workbench backend on port ${runtime.port} is retained because agent ownership did not drain; it will never be force-killed by a promotion.`);
 }
 
 async function waitForHealth(port: number, child: ChildProcess): Promise<void> {
