@@ -533,14 +533,16 @@ nav { display: grid; gap: 3px; }
 .diff-review-diff-block > p { margin: 0; padding: 10px; }
 @media (prefers-reduced-motion: reduce) { .diff-review-diff-block { transition: none; } }
 @media (min-width: 1100px) { .diff-review-workbench { grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr); } }
-.token.comment, .token.prolog, .token.doctype, .token.cdata { color: #74736b; }
-.token.punctuation { color: #b3b2ab; }
-.token.property, .token.tag, .token.boolean, .token.number, .token.constant, .token.symbol, .token.deleted { color: #e2a06f; }
-.token.selector, .token.attr-name, .token.string, .token.char, .token.builtin, .token.inserted { color: #9fca7a; }
-.token.operator, .token.entity, .token.url, .language-css .token.string, .style .token.string { color: #d7d6cd; }
-.token.atrule, .token.attr-value, .token.keyword { color: #7fb0e0; }
-.token.function, .token.class-name { color: #e0c56f; }
-.token.regex, .token.important, .token.variable { color: #d98b8b; }
+/* Keep syntax distinct from the green/red diff-row treatment. These are the
+   high-contrast VS Code Dark token colors, scoped to source code in reviews. */
+.diff-line-code .token.comment, .diff-line-code .token.prolog, .diff-line-code .token.doctype, .diff-line-code .token.cdata { color: #6a9955; }
+.diff-line-code .token.punctuation { color: #d4d4d4; }
+.diff-line-code .token.property, .diff-line-code .token.tag, .diff-line-code .token.boolean, .diff-line-code .token.number, .diff-line-code .token.constant, .diff-line-code .token.symbol, .diff-line-code .token.deleted { color: #b5cea8; }
+.diff-line-code .token.selector, .diff-line-code .token.attr-name, .diff-line-code .token.string, .diff-line-code .token.char, .diff-line-code .token.builtin, .diff-line-code .token.inserted { color: #ce9178; }
+.diff-line-code .token.operator, .diff-line-code .token.entity, .diff-line-code .token.url, .diff-line-code .language-css .token.string, .diff-line-code .style .token.string { color: #d4d4d4; }
+.diff-line-code .token.atrule, .diff-line-code .token.attr-value, .diff-line-code .token.keyword { color: #c586c0; }
+.diff-line-code .token.function, .diff-line-code .token.class-name { color: #dcdcaa; }
+.diff-line-code .token.regex, .diff-line-code .token.important, .diff-line-code .token.variable { color: #9cdcfe; }
 .diff-confidence-control { position: relative; display: block; width: max-content; margin: 1px 0 1px 84px; }
 .diff-confidence-bubble { display: inline-flex; align-items: center; justify-content: center; min-width: 21px; height: 15px; margin: 0; padding: 0 4px; border: 1px solid; border-radius: 999px; background: #10100f; font: 9px 'DM Mono'; line-height: 1; cursor: pointer; }
 .diff-confidence-bubble:focus-visible { outline: 2px solid #e5e4dc; outline-offset: 2px; }

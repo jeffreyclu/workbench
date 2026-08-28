@@ -256,6 +256,12 @@ describe('diff review layout', () => {
     expect(hunkRule).not.toContain('opacity');
     expect(styles).not.toContain('.diff-review-diff-block:hover { opacity: 1; }');
   });
+
+  it('uses high-contrast IDE token colors inside diff code', () => {
+    expect(styles).toContain('.diff-line-code .token.keyword { color: #c586c0; }');
+    expect(styles).toMatch(/\.diff-line-code \.token\.selector,[\s\S]*?\.diff-line-code \.token\.string,[\s\S]*?\{ color: #ce9178; \}/);
+    expect(styles).toContain('.diff-line-code .token.function, .diff-line-code .token.class-name { color: #dcdcaa; }');
+  });
 });
 
 describe('agent debugger layout', () => {
