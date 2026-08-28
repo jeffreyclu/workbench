@@ -1738,6 +1738,16 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // Kept as a forward-only compatibility migration after the conversation
+    // reorder UI was rolled back. Existing databases have already recorded it;
+    // new databases must still receive the same schema before any later build.
+    id: '063_shared_conversation_manual_position',
+    apply(database) {
+      database.exec('ALTER TABLE shared_conversations ADD COLUMN manual_position REAL NOT NULL DEFAULT 0;');
+      database.exec('CREATE INDEX idx_shared_conversations_manual_position ON shared_conversations(manual_position, updated_at DESC);');
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {
