@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'nod
 import { basename, dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { createSessionFeedbackSchema, createSharedConversationSchema, createSharedMessageSchema, reorderConversationSchema, setConversationPinnedSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema, upsertDiffHunkReviewsSchema } from '../../shared/contracts.js';
+import { createSessionFeedbackSchema, createSharedConversationSchema, createSharedMessageSchema, setConversationPinnedSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema, upsertDiffHunkReviewsSchema } from '../../shared/contracts.js';
 import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
 import { runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
@@ -261,13 +261,6 @@ export function createConversationRouter({ repository, database, capabilities, a
     const { pinned } = setConversationPinnedSchema.parse(request.body);
     const conversation = repository.setConversationPinned(request.params.id, pinned);
     if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
-    response.json({ conversation });
-  });
-
-  router.put('/api/shared/conversations/:id/order', (request, response) => {
-    const { beforeId, afterId } = reorderConversationSchema.parse(request.body);
-    const conversation = repository.moveConversation(request.params.id, beforeId, afterId);
-    if (!conversation) return response.status(409).json({ error: 'Conversations can only be reordered within the same stack.' });
     response.json({ conversation });
   });
 

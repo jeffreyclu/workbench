@@ -258,7 +258,7 @@ export class WorkItemRepository {
     const { conversations: rawConversations, hasMore, totalCount } = this.conversations.listPage(limit, cursor, view);
     const conversations = rawConversations.map((conversation) => this.withConversationState(conversation));
     const last = conversations.at(-1);
-    return { conversations, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ isPinned: Boolean(last.pinned || last.linkedWorkItemPinned), isWorking: last.state === 'working', manualPosition: last.manualPosition ?? 0, updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null,
+    return { conversations, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ isPinned: Boolean(last.pinned || last.linkedWorkItemPinned), isWorking: last.state === 'working', updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null,
       totalCount };
   }
 
@@ -280,18 +280,6 @@ export class WorkItemRepository {
 
   setConversationPinned(id: string, pinned: boolean): SharedConversation | null {
     return this.conversations.setPinned(id, pinned) ? this.getConversation(id) : null;
-  }
-
-  moveConversation(id: string, beforeId?: string, afterId?: string): SharedConversation | null {
-    const conversations = this.listConversations('all');
-    const target = conversations.find((conversation) => conversation.id === id);
-    const neighbor = conversations.find((conversation) => conversation.id === (beforeId ?? afterId));
-    const group = (conversation: SharedConversation) => conversation.archivedAt ? 'archive'
-      : conversation.pinned || conversation.linkedWorkItemPinned ? 'pinned'
-        : conversation.state === 'working' || conversation.state === 'promoting' || conversation.state === 'waiting_promotion' ? 'progress'
-          : conversation.state === 'canceled' ? 'canceled' : 'attention';
-    if (!target || !neighbor || group(target) !== group(neighbor)) return null;
-    return this.conversations.move(id, beforeId, afterId) ? this.getConversation(id) : null;
   }
 
   // Handing a conversation to an agent is the signal that it's back in active

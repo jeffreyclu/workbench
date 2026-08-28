@@ -68,7 +68,6 @@ const baselineInventory = [
   'PATCH /api/shared/conversations/:id/brief',
   'PATCH /api/shared/conversations/:id/draft',
   'PATCH /api/shared/conversations/:id/pin',
-  'PUT /api/shared/conversations/:id/order',
   'PATCH /api/shared/conversations/:id/task',
   'POST /api/shared/conversations/:id/read',
   'POST /api/shared/conversations/:id/fork',
@@ -178,7 +177,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(146);
+    expect(baselineInventory).toHaveLength(145);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

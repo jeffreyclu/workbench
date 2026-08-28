@@ -73,7 +73,6 @@ const EXPECTED_MIGRATIONS = [
   '060_workspace_diff_snapshot_provenance',
   '061_agent_run_review_handoffs',
   '062_agent_run_review_handoffs_immutable',
-  '063_shared_conversation_manual_position',
 ];
 
 describe('openDatabase', () => {
@@ -164,21 +163,6 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toEqual(expect.arrayContaining(['preferred_execution_profile', 'preferred_account_profile', 'preferred_dispatch_target']));
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '044_shared_conversation_composer_preferences'").get()).toBeTruthy();
-    upgraded.close();
-  });
-
-  it('adds persisted conversation ordering on upgrade', () => {
-    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
-    const path = join(directory, 'workbench.db');
-    const current = openDatabase(path);
-    current.exec('DROP INDEX idx_shared_conversations_manual_position; ALTER TABLE shared_conversations DROP COLUMN manual_position;');
-    current.prepare("DELETE FROM schema_migrations WHERE id = '063_shared_conversation_manual_position'").run();
-    current.close();
-
-    const upgraded = openDatabase(path);
-    const columns = (upgraded.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>).map((column) => column.name);
-    expect(columns).toContain('manual_position');
-    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_shared_conversations_manual_position'").get()).toBeTruthy();
     upgraded.close();
   });
 

@@ -128,17 +128,11 @@ export function isWriterWorkspace(cwd: string): boolean {
   }
 }
 
-export function isWorkbenchWorkspace(cwd: string): boolean {
-  const resolved = resolve(cwd);
-  return resolved === resolve(process.cwd()) || resolved.includes('/.workbench/run-worktrees/workbench-');
-}
-
 export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountProfile: string, cwd: string): NodeJS.ProcessEnv {
   const env = agentAccountEnv(agent, accountProfile);
-  const guardPaths: string[] = [];
-  if (isWorkbenchWorkspace(cwd)) guardPaths.push(join(process.cwd(), 'scripts', 'workbench-agent-bin'));
-  if (isWriterWorkspace(cwd)) guardPaths.push(join(process.cwd(), 'scripts', 'writer-agent-bin'));
-  if (guardPaths.length) env.PATH = [...guardPaths, env.PATH].filter(Boolean).join(delimiter);
+  if (!isWriterWorkspace(cwd)) return env;
+  const guardPath = join(process.cwd(), 'scripts', 'writer-agent-bin');
+  env.PATH = [guardPath, env.PATH].filter(Boolean).join(delimiter);
   return env;
 }
 
@@ -151,17 +145,6 @@ export function blockedWriterTestSuiteCommand(command: string): boolean {
   const runsPackageSuite = /\b(?:npm|pnpm|yarn)\b[^\n;&|]*(?:\btest(?:\:[\w-]+)?\b|\brun\s+test(?:\:[\w-]+)?\b)/i.test(normalized);
   const runsTestRunner = /(?:^|[\s;&|])(?:npx\s+(?:--\S+\s+)*(?:vitest|jest)|(?:\S*\/)?(?:vitest|jest)(?:\.m?js)?)(?:\s|$)/i.test(normalized);
   return runsPackageSuite || runsTestRunner;
-}
-
-/** Branch state is runtime-owned. Workbench agents may inspect Git but cannot mutate refs/worktrees. */
-export function blockedWorkbenchBranchCommand(command: string): boolean {
-  return command.split(/(?:&&|\|\||;|\n)/).some((segment) => {
-    const match = segment.match(/(?:^|\s)git\s+(?:-C\s+\S+\s+)?(checkout|switch|worktree|branch)(?:\s+([^;&|]+))?/i);
-    if (!match) return false;
-    if (match[1] !== 'branch') return true;
-    const argumentsText = (match[2] ?? '').trim();
-    return Boolean(argumentsText) && !/^(?:--show-current|--list|-l|-a|--all|-r|--remotes|-v|--verbose)(?:\s|$)/.test(argumentsText);
-  });
 }
 
 function toolCommandFromAgentEvent(agent: AgentRun['agent'], line: string): string | null {
@@ -1151,13 +1134,11 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
       buffered = lines.pop() ?? '';
       for (const line of lines.filter(Boolean)) {
         lastEventAt = Date.now();
-        const toolCommand = toolCommandFromAgentEvent(agent, line);
-        const blockedCommand = toolCommand && ((isWriterWorkspace(cwd) && blockedWriterTestSuiteCommand(toolCommand)) || (isWorkbenchWorkspace(cwd) && blockedWorkbenchBranchCommand(toolCommand)));
-        if (toolCommand && blockedCommand) {
-          const reason = isWriterWorkspace(cwd) ? 'a full Writer test-suite command' : 'a Workbench Git branch/worktree mutation';
-          terminationError = new Error(`Workbench blocked ${reason} before execution: ${toolCommand.slice(0, 500)}`);
+        const toolCommand = isWriterWorkspace(cwd) ? toolCommandFromAgentEvent(agent, line) : null;
+        if (toolCommand && blockedWriterTestSuiteCommand(toolCommand)) {
+          terminationError = new Error(`Workbench blocked a full Writer test-suite command before execution: ${toolCommand.slice(0, 500)}`);
           cancellationRequested = true;
-          progress += `${progress ? '\n\n' : ''}● Blocked ${reason}.`;
+          progress += `${progress ? '\n\n' : ''}● Blocked a full Writer test-suite command. Run one directly relevant test file instead.`;
           stopProcessTree();
           continue;
         }

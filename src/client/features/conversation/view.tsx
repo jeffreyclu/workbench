@@ -2,8 +2,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
-import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import {
   ArrowUpRight,
   ArrowDown,
@@ -18,7 +17,6 @@ import {
   FileText,
   FileDiff,
   GitBranch,
-  GripVertical,
   LoaderCircle,
   MessageSquare,
   MessageSquarePlus,
@@ -86,14 +84,6 @@ const CONVERSATION_ROW_GAP = 6;
 // virtualizer's initial estimate in sync prevents a newly rendered group
 // header from being positioned over a card before ResizeObserver measures it.
 const CONVERSATION_CARD_ESTIMATE = 88;
-
-function SortableConversationCard({ id, title, draggable, children }: { id: string; title: string; draggable: boolean; children: React.ReactNode }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id, disabled: !draggable, transition: null });
-  return <div ref={setNodeRef} className={`conversation-sortable ${isDragging ? 'dragging' : ''}`} style={{ transform: CSS.Translate.toString(transform), transition: transform || transition || isDragging ? 'none' : undefined }}>
-    {draggable && <button type="button" className="conversation-drag-handle" aria-label="Reorder conversation" title={`Reorder ${title}`} onClick={(event) => event.stopPropagation()} {...attributes} {...listeners}><GripVertical size={15} /></button>}
-    {children}
-  </div>;
-}
 
 type ConversationDispatchTarget = 'both' | 'codex' | 'claude';
 type ComposerSelection = {
@@ -370,8 +360,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     queryKey: conversationQueryKeys.rail(conversationView), queryFn: ({ pageParam }) => conversationData.list(conversationView, pageParam),
     initialPageParam: undefined as string | undefined, getNextPageParam: (page) => page.nextCursor ?? undefined, refetchInterval: 1_000,
   });
-  const conversationSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
-  const [isConversationDragging, setIsConversationDragging] = useState(false);
   const selectConversationView = (view: 'active' | 'archive') => {
     if (view === conversationView) {
       // Keep the open conversation intact. A repeat tap is a refresh, not a
@@ -435,29 +423,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       ...group.rows,
     ]);
   }, [activeConversationIds, conversationList, conversationView, fallbackConversationStates]);
-  const conversationGroup = (row: Extract<(typeof conversationStackRows)[number], { type: 'conversation' }>) => conversationView === 'archive' ? 'archive'
-    : row.conversation.pinned || row.conversation.linkedWorkItemPinned ? 'pinned'
-      : row.state === 'working' || row.state === 'promoting' || row.state === 'waiting_promotion' ? 'progress'
-        : row.state === 'canceled' ? 'canceled' : 'attention';
-  const reorderConversation = useMutation({
-    mutationFn: ({ id, beforeId, afterId }: { id: string; beforeId?: string; afterId?: string }) => api.reorderSharedConversation(id, beforeId ? { beforeId } : { afterId: afterId! }),
-    onError: (error) => toastError('Could not save the conversation order. The stack will reset.', error),
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
-  });
-  function handleConversationDragEnd(event: DragEndEvent) {
-    setIsConversationDragging(false);
-    const { active, over } = event;
-    if (!over || active.id === over.id || conversations.isFetchingNextPage) return;
-    const activeRow = conversationStackRows.find((row): row is Extract<(typeof conversationStackRows)[number], { type: 'conversation' }> => row.type === 'conversation' && row.id === active.id);
-    const overRow = conversationStackRows.find((row): row is Extract<(typeof conversationStackRows)[number], { type: 'conversation' }> => row.type === 'conversation' && row.id === over.id);
-    if (!activeRow || !overRow || conversationGroup(activeRow) !== conversationGroup(overRow)) return;
-    const group = conversationStackRows.filter((row): row is Extract<(typeof conversationStackRows)[number], { type: 'conversation' }> => row.type === 'conversation' && conversationGroup(row) === conversationGroup(activeRow));
-    const moved = arrayMove(group, group.findIndex((row) => row.id === active.id), group.findIndex((row) => row.id === over.id));
-    const index = moved.findIndex((row) => row.id === active.id);
-    const beforeId = moved[index + 1]?.id;
-    const afterId = moved[index - 1]?.id;
-    if (beforeId || afterId) reorderConversation.mutate({ id: activeRow.id, beforeId, afterId });
-  }
   const conversationVirtualizer = useVirtualizer({ count: conversationStackRows.length, getScrollElement: () => conversationScrollRef.current, estimateSize: (index) => (conversationStackRows[index]?.type === 'header' ? 38 : CONVERSATION_CARD_ESTIMATE) + CONVERSATION_ROW_GAP, overscan: 5, initialRect: { width: 250, height: 600 } });
   const conversationRows = conversationVirtualizer.getVirtualItems();
   const displayedConversationRows = conversationRows.length ? conversationRows : conversationStackRows.map((row, index) => ({ index, start: conversationStackRows.slice(0, index).reduce((total, item) => total + (item.type === 'header' ? 38 : CONVERSATION_CARD_ESTIMATE) + CONVERSATION_ROW_GAP, 0) }));
@@ -1132,10 +1097,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
               { value: 'active', label: 'Active' },
               { value: 'archive', label: 'Archive' },
             ]}>
-            <DndContext sensors={conversationSensors} collisionDetection={closestCenter} onDragStart={() => setIsConversationDragging(true)} onDragCancel={() => setIsConversationDragging(false)} onDragEnd={handleConversationDragEnd}>
-            <div ref={conversationScrollRef} className={`conversation-tabs ${isConversationDragging ? 'is-dragging' : ''}`}>
+            <div ref={conversationScrollRef} className="conversation-tabs">
               <div className="virtual-list" style={{ height: conversationVirtualizer.getTotalSize() }}>
-                <SortableContext items={conversationStackRows.flatMap((row) => row.type === 'conversation' ? [row.id] : [])} strategy={verticalListSortingStrategy}>
                 {displayedConversationRows.map((virtualRow) => {
                   const row = conversationStackRows[virtualRow.index];
                   if (!row) return null;
@@ -1147,9 +1110,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                   const stateClass = state;
                   const color = conversation.linkedProjectName ? projectTheme(conversation.linkedProjectName) : null;
                   const cardStyle = color ? { '--task-accent': color.accent, '--task-tint': color.tint, '--task-border': color.border } as CSSProperties : undefined;
-                  return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><SortableConversationCard id={conversation.id} title={conversation.title} draggable={!isPhoneChrome && !conversations.isFetchingNextPage}><button style={cardStyle} className={`stack-card ${conversation.id === conversationId ? 'active' : ''} ${isUnread ? 'conversation-unread' : 'conversation-read'} ${conversation.linkedProjectName ? 'project-colored' : ''} ${stateClass ? `conversation-${stateClass}` : ''} ${conversationView === 'active' && exitingConversationIds.has(conversation.id) ? 'conversation-exiting' : ''}`} onClick={() => { setShowingConversationStackOnly(false); openConversation(conversation.id, conversation); setRailOpen(false); }}><span className="conversation-tab-title">{conversation.linkedProjectName && <ProjectColorDot projectName={conversation.linkedProjectName} labelled />}<strong>{conversation.title}</strong>{(conversation.pinned || conversation.linkedWorkItemPinned) && <span className="conversation-pinned-marker" aria-label={conversation.pinned ? 'Pinned conversation' : 'Pinned task'} title={conversation.pinned ? 'Pinned conversation' : 'Pinned task'}><Pin size={10} fill="currentColor" aria-hidden="true" /></span>}{isUnread && <span className="conversation-unread-marker">New</span>}{stateLabel && <span className={`conversation-state conversation-state-${state}`}>{(state === 'working' || state === 'promoting') && <LoaderCircle className="spin" size={10} />}{state === 'waiting_promotion' && <Clock size={10} />}{stateLabel}</span>}</span><small className="conversation-tab-meta"><ConversationOriginBadge workItemId={conversation.workItemId} /><span>{state === 'working' ? 'Agent working…' : state === 'promoting' ? 'Promoting preview…' : state === 'waiting_promotion' ? 'Waiting to promote…' : new Date(conversation.updatedAt).toLocaleDateString()}</span></small></button></SortableConversationCard></div>;
+                  return <div key={conversation.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><button style={cardStyle} className={`stack-card ${conversation.id === conversationId ? 'active' : ''} ${isUnread ? 'conversation-unread' : 'conversation-read'} ${conversation.linkedProjectName ? 'project-colored' : ''} ${stateClass ? `conversation-${stateClass}` : ''} ${conversationView === 'active' && exitingConversationIds.has(conversation.id) ? 'conversation-exiting' : ''}`} onClick={() => { setShowingConversationStackOnly(false); openConversation(conversation.id, conversation); setRailOpen(false); }}><span className="conversation-tab-title">{conversation.linkedProjectName && <ProjectColorDot projectName={conversation.linkedProjectName} labelled />}<strong>{conversation.title}</strong>{(conversation.pinned || conversation.linkedWorkItemPinned) && <span className="conversation-pinned-marker" aria-label={conversation.pinned ? 'Pinned conversation' : 'Pinned task'} title={conversation.pinned ? 'Pinned conversation' : 'Pinned task'}><Pin size={10} fill="currentColor" aria-hidden="true" /></span>}{isUnread && <span className="conversation-unread-marker">New</span>}{stateLabel && <span className={`conversation-state conversation-state-${state}`}>{(state === 'working' || state === 'promoting') && <LoaderCircle className="spin" size={10} />}{state === 'waiting_promotion' && <Clock size={10} />}{stateLabel}</span>}</span><small className="conversation-tab-meta"><ConversationOriginBadge workItemId={conversation.workItemId} /><span>{state === 'working' ? 'Agent working…' : state === 'promoting' ? 'Promoting preview…' : state === 'waiting_promotion' ? 'Waiting to promote…' : new Date(conversation.updatedAt).toLocaleDateString()}</span></small></button></div>;
                 })}
-                </SortableContext>
               </div>
               {conversations.isLoading && <ConversationRailSkeleton count={6} />}
               {conversations.isError && conversationList.length === 0 && (
@@ -1158,7 +1120,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
               {!conversations.isLoading && !conversations.isError && conversationList.length === 0 && <div className="page-state">No {conversationView} conversations.</div>}
               {conversations.isFetchingNextPage && <ConversationRailSkeleton count={2} />}
             </div>
-            </DndContext>
             </Tabs>
           </>
         )}

@@ -6,7 +6,7 @@ import type { UnitOfWork } from '../unit-of-work.js';
 function mapConversationRow(row: Record<string, string | number | null>): SharedConversation {
   return {
     id: String(row.id), title: String(row.title), workItemId: row.work_item_id ? String(row.work_item_id) : null,
-    pinned: Boolean(row.pinned), manualPosition: Number(row.manual_position ?? 0), linkedProjectName: row.linked_project_name ? String(row.linked_project_name) : null, forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, draftBody: String(row.draft_body ?? ''), preferredAccountProfile: row.preferred_account_profile ? String(row.preferred_account_profile) : null, preferredDispatchTarget: row.preferred_dispatch_target as SharedConversation['preferredDispatchTarget'] ?? null, claudeSessionId: row.claude_session_id ? String(row.claude_session_id) : null, codexThreadId: row.codex_thread_id ? String(row.codex_thread_id) : null, isUnread: Boolean(row.is_unread), linkedWorkItemPinned: Boolean(row.linked_work_item_pinned), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
+    pinned: Boolean(row.pinned), linkedProjectName: row.linked_project_name ? String(row.linked_project_name) : null, forkedFromConversationId: row.forked_from_conversation_id ? String(row.forked_from_conversation_id) : null, archivedAt: row.archived_at ? String(row.archived_at) : null, sharedBrief: String(row.shared_brief ?? ''), preferredExecutionProfile: row.preferred_execution_profile as SharedConversation['preferredExecutionProfile'] ?? null, draftBody: String(row.draft_body ?? ''), preferredAccountProfile: row.preferred_account_profile ? String(row.preferred_account_profile) : null, preferredDispatchTarget: row.preferred_dispatch_target as SharedConversation['preferredDispatchTarget'] ?? null, claudeSessionId: row.claude_session_id ? String(row.claude_session_id) : null, codexThreadId: row.codex_thread_id ? String(row.codex_thread_id) : null, isUnread: Boolean(row.is_unread), linkedWorkItemPinned: Boolean(row.linked_work_item_pinned), createdAt: String(row.created_at), updatedAt: String(row.updated_at), isActive: Boolean(row.is_active),
   };
 }
 
@@ -52,7 +52,7 @@ export class ConversationRepository {
         (SELECT project_name FROM work_items WHERE work_items.id = shared_conversations.work_item_id) AS linked_project_name
       FROM shared_conversations
       WHERE deleted_at IS NULL AND (? = 'all' OR (? = 'active' AND archived_at IS NULL) OR (? = 'archive' AND archived_at IS NOT NULL))
-      ORDER BY (pinned OR linked_work_item_pinned) DESC, is_working DESC, manual_position ASC, updated_at DESC
+      ORDER BY (pinned OR linked_work_item_pinned) DESC, is_working DESC, updated_at DESC
     `).all(view, view, view) as Array<Record<string, string | number | null>>).map(mapConversationRow);
   }
 
@@ -64,11 +64,11 @@ export class ConversationRepository {
    */
   listPage(limit: number, cursor: string | null, view: 'active' | 'archive' = 'active'): { conversations: SharedConversation[]; hasMore: boolean; totalCount: number } {
     const safeLimit = Math.max(1, Math.min(100, limit));
-    let cursorValues: { isPinned: boolean; isWorking: boolean; manualPosition: number; updatedAt: string; id: string } | null = null;
+    let cursorValues: { isPinned: boolean; isWorking: boolean; updatedAt: string; id: string } | null = null;
     if (cursor) {
-      try { cursorValues = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { isPinned: boolean; isWorking: boolean; manualPosition: number; updatedAt: string; id: string }; }
+      try { cursorValues = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { isPinned: boolean; isWorking: boolean; updatedAt: string; id: string }; }
       catch { throw new Error('Invalid conversation cursor.'); }
-      if (!cursorValues?.updatedAt || !cursorValues.id || typeof cursorValues.isPinned !== 'boolean' || typeof cursorValues.isWorking !== 'boolean' || typeof cursorValues.manualPosition !== 'number') throw new Error('Invalid conversation cursor.');
+      if (!cursorValues?.updatedAt || !cursorValues.id || typeof cursorValues.isPinned !== 'boolean' || typeof cursorValues.isWorking !== 'boolean') throw new Error('Invalid conversation cursor.');
     }
     const rows = this.database.prepare(`
       WITH conversations AS (
@@ -82,9 +82,9 @@ export class ConversationRepository {
       )
       SELECT * FROM conversations
       WHERE deleted_at IS NULL AND ((? = 'active' AND archived_at IS NULL) OR (? = 'archive' AND archived_at IS NOT NULL))
-        AND (? IS NULL OR (pinned OR linked_work_item_pinned) < ? OR ((pinned OR linked_work_item_pinned) = ? AND (is_working < ? OR (is_working = ? AND (manual_position > ? OR (manual_position = ? AND (updated_at < ? OR (updated_at = ? AND id < ?))))))))
-      ORDER BY (pinned OR linked_work_item_pinned) DESC, is_working DESC, manual_position ASC, updated_at DESC, id DESC LIMIT ?
-    `).all(view, view, cursorValues?.id ?? null, Number(cursorValues?.isPinned ?? false), Number(cursorValues?.isPinned ?? false), Number(cursorValues?.isWorking ?? false), Number(cursorValues?.isWorking ?? false), cursorValues?.manualPosition ?? null, cursorValues?.manualPosition ?? null, cursorValues?.updatedAt ?? null, cursorValues?.updatedAt ?? null, cursorValues?.id ?? null, safeLimit + 1) as Array<Record<string, string | number | null>>;
+        AND (? IS NULL OR (pinned OR linked_work_item_pinned) < ? OR ((pinned OR linked_work_item_pinned) = ? AND (is_working < ? OR (is_working = ? AND (updated_at < ? OR (updated_at = ? AND id < ?))))))
+      ORDER BY (pinned OR linked_work_item_pinned) DESC, is_working DESC, updated_at DESC, id DESC LIMIT ?
+    `).all(view, view, cursorValues?.id ?? null, Number(cursorValues?.isPinned ?? false), Number(cursorValues?.isPinned ?? false), Number(cursorValues?.isWorking ?? false), Number(cursorValues?.isWorking ?? false), cursorValues?.updatedAt ?? null, cursorValues?.updatedAt ?? null, cursorValues?.id ?? null, safeLimit + 1) as Array<Record<string, string | number | null>>;
     const hasMore = rows.length > safeLimit;
     const conversations = rows.slice(0, safeLimit).map(mapConversationRow);
     const totalCount = Number((this.database.prepare(`SELECT COUNT(*) AS count FROM shared_conversations WHERE deleted_at IS NULL AND (${view === 'active' ? 'archived_at IS NULL' : 'archived_at IS NOT NULL'})`).get() as { count: number }).count);
@@ -111,21 +111,6 @@ export class ConversationRepository {
 
   setPinned(id: string, pinned: boolean): boolean {
     return Number(this.database.prepare('UPDATE shared_conversations SET pinned = ?, updated_at = ? WHERE id = ?').run(Number(pinned), new Date().toISOString(), id).changes) > 0;
-  }
-
-  move(id: string, beforeId?: string, afterId?: string): boolean {
-    const neighborId = beforeId ?? afterId;
-    if (!neighborId) return false;
-    const target = this.database.prepare('SELECT manual_position FROM shared_conversations WHERE id = ? AND deleted_at IS NULL').get(id) as { manual_position: number } | undefined;
-    const neighbor = this.database.prepare('SELECT manual_position FROM shared_conversations WHERE id = ? AND deleted_at IS NULL').get(neighborId) as { manual_position: number } | undefined;
-    if (!target || !neighbor) return false;
-    const adjacent = this.database.prepare(`SELECT manual_position FROM shared_conversations
-      WHERE deleted_at IS NULL AND id != ? AND manual_position ${beforeId ? '<' : '>'} ?
-      ORDER BY manual_position ${beforeId ? 'DESC' : 'ASC'} LIMIT 1`).get(neighborId, neighbor.manual_position) as { manual_position: number } | undefined;
-    const position = beforeId
-      ? (adjacent ? (adjacent.manual_position + neighbor.manual_position) / 2 : neighbor.manual_position - 1)
-      : (adjacent ? (adjacent.manual_position + neighbor.manual_position) / 2 : neighbor.manual_position + 1);
-    return Number(this.database.prepare('UPDATE shared_conversations SET manual_position = ? WHERE id = ?').run(position, id).changes) > 0;
   }
 
   countActive(): number {
