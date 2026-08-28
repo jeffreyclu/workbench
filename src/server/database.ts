@@ -1765,26 +1765,6 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
-  {
-    // A revision is a hash of the whole patch, so an agent still writing to the
-    // workspace invalidated every review a reviewer had recorded seconds
-    // earlier. Record the content identity of each reviewed hunk so a decision
-    // re-attaches to the same code at the next revision. Existing rows keep a
-    // null fingerprint and stay pinned to the revision they were made against.
-    id: '065_diff_hunk_review_fingerprint',
-    apply(database) {
-      const columns = database.prepare('PRAGMA table_info(diff_hunk_reviews)').all() as Array<{ name: string }>;
-      if (!columns.some((column) => column.name === 'hunk_fingerprint')) {
-        database.exec('ALTER TABLE diff_hunk_reviews ADD COLUMN hunk_fingerprint TEXT;');
-      }
-      database.exec(`
-        CREATE INDEX IF NOT EXISTS idx_diff_hunk_reviews_work_item_fingerprint
-          ON diff_hunk_reviews(work_item_id, hunk_fingerprint) WHERE work_item_id IS NOT NULL AND hunk_fingerprint IS NOT NULL;
-        CREATE INDEX IF NOT EXISTS idx_diff_hunk_reviews_conversation_fingerprint
-          ON diff_hunk_reviews(conversation_id, hunk_fingerprint) WHERE conversation_id IS NOT NULL AND hunk_fingerprint IS NOT NULL;
-      `);
-    },
-  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

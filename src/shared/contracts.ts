@@ -376,10 +376,6 @@ export interface DiffHunkReview {
   revision: string;
   filePath: string;
   hunkRange: string;
-  /** Content identity of the reviewed hunk, so the decision can be re-attached
-   * after an unrelated edit changes the revision. Null on rows recorded before
-   * fingerprints existed; those stay pinned to their revision. */
-  fingerprint: string | null;
   state: DiffHunkReviewState;
   note: string | null;
   updatedAt: string;
@@ -390,7 +386,6 @@ export const upsertDiffHunkReviewsSchema = z.object({
   hunks: z.array(z.object({
     filePath: z.string().trim().min(1),
     hunkRange: z.string().trim().min(1),
-    fingerprint: z.string().trim().min(1).optional(),
   })).min(1).max(500),
   state: z.enum(['reviewed', 'needs_changes', 'commented']),
   note: z.string().trim().min(1).optional(),

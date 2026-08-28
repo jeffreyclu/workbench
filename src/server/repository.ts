@@ -64,20 +64,13 @@ interface DiffHunkReviewRow {
   revision: string;
   file_path: string;
   hunk_range: string;
-  hunk_fingerprint: string | null;
   state: DiffHunkReviewState;
   note: string | null;
   updated_at: string;
 }
 
-/** How far back a scope's review history is scanned for decisions to carry
- * into the current revision. Reviews are recorded per hunk per revision, so a
- * long session accumulates rows quickly; the newest rows are the ones whose
- * code is still present, and the cap keeps the read bounded. */
-const CARRIED_REVIEW_SCAN_LIMIT = 2000;
-
 function mapDiffHunkReview(row: DiffHunkReviewRow): DiffHunkReview {
-  return { id: row.id, revision: row.revision, filePath: row.file_path, hunkRange: row.hunk_range, fingerprint: row.hunk_fingerprint ?? null, state: row.state, note: row.note, updatedAt: row.updated_at };
+  return { id: row.id, revision: row.revision, filePath: row.file_path, hunkRange: row.hunk_range, state: row.state, note: row.note, updatedAt: row.updated_at };
 }
 
 function mapSavedWorkItemFilter(row: SavedWorkItemFilterRow): SavedWorkItemFilter {
@@ -817,13 +810,13 @@ export class WorkItemRepository {
     return row ? this.getRun(row.id) : null;
   }
 
-  upsertDiffHunkReview(scope: { workItemId: string } | { conversationId: string }, input: { revision: string; filePath: string; hunkRange: string; fingerprint?: string | null; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {
+  upsertDiffHunkReview(scope: { workItemId: string } | { conversationId: string }, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
     const now = new Date().toISOString();
-    this.database.prepare(`INSERT INTO diff_hunk_reviews (id, ${column}, revision, file_path, hunk_range, hunk_fingerprint, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(${column}, revision, file_path, hunk_range) WHERE ${column} IS NOT NULL DO UPDATE SET hunk_fingerprint = excluded.hunk_fingerprint, state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
-      .run(randomUUID(), id, input.revision, input.filePath, input.hunkRange, input.fingerprint ?? null, input.state, input.note ?? null, now);
-    return mapDiffHunkReview(this.database.prepare(`SELECT id, revision, file_path, hunk_range, hunk_fingerprint, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? AND file_path = ? AND hunk_range = ?`)
+    this.database.prepare(`INSERT INTO diff_hunk_reviews (id, ${column}, revision, file_path, hunk_range, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(${column}, revision, file_path, hunk_range) WHERE ${column} IS NOT NULL DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
+      .run(randomUUID(), id, input.revision, input.filePath, input.hunkRange, input.state, input.note ?? null, now);
+    return mapDiffHunkReview(this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? AND file_path = ? AND hunk_range = ?`)
       .get(id, input.revision, input.filePath, input.hunkRange) as unknown as DiffHunkReviewRow);
   }
 
@@ -832,32 +825,15 @@ export class WorkItemRepository {
       revision: input.revision,
       filePath: hunk.filePath,
       hunkRange: hunk.hunkRange,
-      fingerprint: hunk.fingerprint ?? null,
       state: input.state,
       note: input.note,
     })));
   }
 
-  /** Reviews that apply to `revision`, plus the reviews recorded against other
-   * revisions of the same scope that still carry a content fingerprint. The
-   * caller re-attaches those by fingerprint: without them a reviewer working
-   * alongside a running agent loses every decision the moment the agent writes
-   * a file. Deduped to the newest row per fingerprint so the payload stays
-   * proportional to the code under review rather than to the session's length. */
   listDiffHunkReviews(scope: { workItemId: string } | { conversationId: string }, revision: string): DiffHunkReview[] {
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
-    const current = (this.database.prepare(`SELECT id, revision, file_path, hunk_range, hunk_fingerprint, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? ORDER BY file_path ASC, hunk_range ASC`)
+    return (this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? ORDER BY file_path ASC, hunk_range ASC`)
       .all(id, revision) as unknown as DiffHunkReviewRow[]).map(mapDiffHunkReview);
-    const decided = new Set(current.map((review) => review.fingerprint).filter((fingerprint): fingerprint is string => Boolean(fingerprint)));
-    const carried = new Map<string, DiffHunkReview>();
-    for (const row of this.database.prepare(`SELECT id, revision, file_path, hunk_range, hunk_fingerprint, state, note, updated_at FROM diff_hunk_reviews
-      WHERE ${column} = ? AND revision <> ? AND hunk_fingerprint IS NOT NULL ORDER BY updated_at DESC, rowid DESC LIMIT ?`)
-      .all(id, revision, CARRIED_REVIEW_SCAN_LIMIT) as unknown as DiffHunkReviewRow[]) {
-      const review = mapDiffHunkReview(row);
-      if (!review.fingerprint || decided.has(review.fingerprint) || carried.has(review.fingerprint)) continue;
-      carried.set(review.fingerprint, review);
-    }
-    return [...current, ...carried.values()];
   }
 
   createSessionFeedback(input: { conversationId?: string | null; workItemId?: string | null; rating: SessionFeedbackRating }): SessionFeedback | null {

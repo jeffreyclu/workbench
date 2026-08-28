@@ -14,7 +14,7 @@ function decision(ordinal: number, state: ReviewDecision['state']): ReviewDecisi
     ordinal,
     subject: 'example',
     behavior: `Changes example ${ordinal} in src/example.ts.`,
-    hunks: [{ id, fingerprint: `fingerprint-${ordinal}`, filePath: 'src/example.ts', editorUrl: null, hunkRange: `@@ -${ordinal} +${ordinal} @@ example`, location: `Line ${ordinal}`, lines: ['+const after = true;'], additions: 1, deletions: 0, state, note: null }],
+    hunks: [{ id, filePath: 'src/example.ts', editorUrl: null, hunkRange: `@@ -${ordinal} +${ordinal} @@ example`, location: `Line ${ordinal}`, lines: ['+const after = true;'], additions: 1, deletions: 0, state, note: null }],
     filePaths: ['src/example.ts'],
     additions: 1,
     deletions: 0,

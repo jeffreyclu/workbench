@@ -75,7 +75,6 @@ const EXPECTED_MIGRATIONS = [
   '062_agent_run_review_handoffs_immutable',
   '063_shared_conversation_manual_position',
   '064_review_assist_cache',
-  '065_diff_hunk_review_fingerprint',
 ];
 
 describe('openDatabase', () => {
@@ -583,26 +582,6 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(review_assist_cache)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toEqual(expect.arrayContaining(['hash', 'answer', 'created_at']));
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '064_review_assist_cache'").get()).toBeTruthy();
-    upgraded.close();
-  });
-
-  it('adds the hunk review fingerprint column on upgrade from the preceding migration set', () => {
-    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
-    const path = join(directory, 'workbench.db');
-    const current = openDatabase(path);
-    current.exec(`
-      DROP INDEX idx_diff_hunk_reviews_work_item_fingerprint;
-      DROP INDEX idx_diff_hunk_reviews_conversation_fingerprint;
-      ALTER TABLE diff_hunk_reviews DROP COLUMN hunk_fingerprint;
-    `);
-    current.prepare("DELETE FROM schema_migrations WHERE id = '065_diff_hunk_review_fingerprint'").run();
-    current.close();
-
-    const upgraded = openDatabase(path);
-    const columns = (upgraded.prepare('PRAGMA table_info(diff_hunk_reviews)').all() as Array<{ name: string }>).map((column) => column.name);
-    expect(columns).toContain('hunk_fingerprint');
-    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_diff_hunk_reviews_work_item_fingerprint'").get()).toBeTruthy();
-    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '065_diff_hunk_review_fingerprint'").get()).toBeTruthy();
     upgraded.close();
   });
 
