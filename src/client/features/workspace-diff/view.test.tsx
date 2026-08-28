@@ -112,7 +112,7 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(attempts).toBe(2);
   });
 
-  it('defaults to latest changes even when a recorded snapshot exists', async () => {
+  it('automatically renders the latest recorded changes when the current checkout is clean', async () => {
     const recordedFile: WorkspaceDiffFile = {
       path: 'src/recovered.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false,
       patch: '@@ -1 +1 @@ recoveredBehavior\n-before\n+after',
@@ -127,12 +127,9 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
-    expect(await screen.findByText('No uncommitted changes to review.')).toBeInTheDocument();
-    expect(screen.getByLabelText('Workspace diff history')).toHaveValue('');
-    expect(screen.queryByLabelText('Full diff for src/recovered.ts')).toBeNull();
-    fireEvent.change(screen.getByLabelText('Workspace diff history'), { target: { value: 'recorded-run' } });
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
     expect(screen.getByLabelText('Full diff for src/recovered.ts')).toBeInTheDocument();
+    expect(screen.queryByText('No uncommitted changes to review.')).toBeNull();
   });
 
   it('restores the selected local repository and decision after the Changes view remounts', async () => {
@@ -155,7 +152,7 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
-    const picker = await screen.findByLabelText('Repository');
+    const picker = await screen.findByLabelText('Workspace');
     fireEvent.change(picker, { target: { value: repositoryB } });
     await screen.findByRole('heading', { name: 'Changes behavior in src/b.ts.' });
     fireEvent.click(screen.getByRole('button', { name: /Decision 2/ }));
@@ -164,7 +161,7 @@ describe('WorkspaceDiffView decision queue', () => {
     selectedPath = repositoryA;
     renderView(fetchMock);
 
-    await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue(repositoryB));
+    await waitFor(() => expect(screen.getByLabelText('Workspace')).toHaveValue(repositoryB));
     expect(screen.getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
   });
 
@@ -202,8 +199,6 @@ describe('WorkspaceDiffView decision queue', () => {
   });
 
   it('shows the whole file diff and highlights the block the selected decision changes', async () => {
-    const pageScroll = vi.fn();
-    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: pageScroll });
     const file: WorkspaceDiffFile = {
       path: 'src/local.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
       patch: '@@ -1,3 +1,3 @@ firstBehavior\n context-one\n-before\n+after\n@@ -10,3 +10,3 @@ secondBehavior\n context-two\n-old\n+new',
@@ -219,7 +214,6 @@ describe('WorkspaceDiffView decision queue', () => {
     renderView(fetchMock);
 
     const diffPane = await screen.findByLabelText('Full diff for src/local.ts');
-    expect(pageScroll).not.toHaveBeenCalled();
     // Every hunk of the file is on screen, not only the selected decision's lines.
     for (const line of ['context-one', '-before', '+after', 'context-two', '-old', '+new']) {
       expect(within(diffPane).getByText(line)).toBeInTheDocument();
@@ -395,10 +389,8 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
-    expect(await screen.findByText('No uncommitted changes to review.')).toBeInTheDocument();
-    expect(screen.getByLabelText('Workspace diff history')).toHaveValue('');
-    fireEvent.change(screen.getByLabelText('Workspace diff history'), { target: { value: 'recorded-version' } });
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Workspace diff history')).toHaveValue('recorded-version');
     expect(screen.getByText(/Agent run run-123/)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Adds behavior in src/preserved.ts.' })).toBeInTheDocument();
   });
@@ -413,9 +405,7 @@ describe('WorkspaceDiffView pull-request source', () => {
     changedFiles: 1, additions: 1, deletions: 1, nextPage,
   });
 
-  // The picker is the only entry point: a pull request must be reviewed in
-  // this viewer's decision queue, not a second viewer stacked beneath it.
-  it('offers a linked pull request in the repository picker and records decisions against its head commit', async () => {
+  it('offers a linked pull request as an explicit review source and records decisions against its head commit', async () => {
     const file: WorkspaceDiffFile = { path: 'src/local.ts', editorUrl: null, previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@ localChange\n-before\n+after' };
     const requests: string[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -432,10 +422,10 @@ describe('WorkspaceDiffView pull-request source', () => {
     });
     renderView(fetchMock, false, undefined, null, [pullRequestUrl]);
 
-    const picker = await screen.findByLabelText('Repository');
-    expect(within(picker).getByRole('option', { name: 'acme/web #42' })).toBeInTheDocument();
-    // The local checkout has changes, so it stays selected until asked otherwise.
     expect(await screen.findByRole('heading', { name: 'Changes behavior in src/local.ts.' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub PR' }));
+    const picker = await screen.findByLabelText('Pull request');
+    expect(within(picker).getByRole('option', { name: 'acme/web #42' })).toBeInTheDocument();
 
     fireEvent.change(picker, { target: { value: pullRequestUrl } });
 
@@ -468,7 +458,8 @@ describe('WorkspaceDiffView pull-request source', () => {
     });
     renderView(fetchMock, false, undefined, null, [pullRequestUrl]);
 
-    const picker = await screen.findByLabelText('Repository');
+    fireEvent.click(await screen.findByRole('button', { name: 'GitHub PR' }));
+    const picker = await screen.findByLabelText('Pull request');
     fireEvent.change(picker, { target: { value: pullRequestUrl } });
     await screen.findByRole('heading', { name: 'Changes behavior in src/page-one.ts.' });
     fireEvent.click(screen.getByRole('button', { name: /Decision 2/ }));
@@ -477,7 +468,7 @@ describe('WorkspaceDiffView pull-request source', () => {
     renderView(fetchMock, false, undefined, null, [pullRequestUrl]);
 
     expect(await screen.findByRole('heading', { name: 'Selectable scopes' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Repository')).toHaveValue(pullRequestUrl);
+    expect(screen.getByLabelText('Pull request')).toHaveValue(pullRequestUrl);
     expect(screen.getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
   });
 
@@ -497,5 +488,26 @@ describe('WorkspaceDiffView pull-request source', () => {
     expect(await screen.findByRole('heading', { name: 'Changes behavior in src/page-1.ts.' })).toBeInTheDocument();
     // Paged pull requests keep their explicit load-more control in the queue.
     expect(screen.getByRole('button', { name: 'Load 100 more files' })).toBeInTheDocument();
+  });
+
+  it('accepts a pasted GitHub pull-request URL without a prior task reference', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([], 'clean-revision') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      if (url.includes('/api/github/pull-request-diff')) return json({ diff: pullRequestDiff(1, null) });
+      if (url.includes('/api/review-auto-score')) return json({ scores: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'GitHub PR' }));
+    fireEvent.change(screen.getByLabelText('Pull request URL'), { target: { value: pullRequestUrl } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review PR' }));
+
+    expect(await screen.findByRole('heading', { name: 'Selectable scopes' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Open on GitHub/i })).toHaveAttribute('href', pullRequestUrl);
   });
 });

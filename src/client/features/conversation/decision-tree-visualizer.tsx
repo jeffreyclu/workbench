@@ -1,5 +1,5 @@
-import { Bot, ChevronDown, CircleDot, GitBranch, Terminal, X } from 'lucide-react';
-import { type ReactNode, useMemo, useState } from 'react';
+import { Bot, ChevronDown, GitBranch, X } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import type { AgentStreamEvent, SharedMessage } from '../../../shared/contracts';
 import { ModalDialog } from '../../components/dialogs/modal-dialog';
 import { buildDecisionTree, type DecisionTreeEvent, type DecisionTreeNode } from './decision-tree';
@@ -13,10 +13,6 @@ function streamEvents(tree: DecisionTreeNode[]): TreeEvent[] {
 
 function statusLabel(status: DecisionTreeNode['status']) {
   return status === 'running' ? 'Live' : status === 'completed' ? 'Complete' : status;
-}
-
-function EventCard({ children, event, onHoverEvent }: { children: ReactNode; event: DecisionTreeEvent; onHoverEvent: (event: DecisionTreeEvent | null) => void }) {
-  return <article className="decision-tree-inspectable-card" tabIndex={0} onMouseEnter={() => onHoverEvent(event)} onMouseLeave={() => onHoverEvent(null)} onFocus={() => onHoverEvent(event)} onBlur={() => onHoverEvent(null)}>{children}</article>;
 }
 
 function eventBranches(events: DecisionTreeEvent[]): EventBranch[] {
@@ -40,10 +36,11 @@ function eventBranches(events: DecisionTreeEvent[]): EventBranch[] {
 function ToolCall({ event, onHoverEvent }: { event: DecisionTreeEvent; onHoverEvent: (event: DecisionTreeEvent | null) => void }) {
   return <li className="decision-tree-tool-call">
     <span className="decision-tree-tool-connector" aria-hidden="true"><ChevronDown size={13} /></span>
-    <EventCard event={event} onHoverEvent={onHoverEvent}>
-      <div className="decision-tree-event-type"><Terminal size={12} /><span>Tool call</span></div>
-      <p>{event.action}</p>
-    </EventCard>
+    <article className="decision-tree-event-row">
+      <span className="decision-tree-event-action" title={event.action}>{event.action}</span>
+      <span className="decision-tree-event-rationale" title={event.rationale ?? undefined}>{event.rationale ?? 'No recorded Why.'}</span>
+      <button type="button" className="decision-tree-details-pill" onMouseEnter={() => onHoverEvent(event)} onMouseLeave={() => onHoverEvent(null)} onFocus={() => onHoverEvent(event)} onBlur={() => onHoverEvent(null)} onClick={() => onHoverEvent(event)} aria-describedby="decision-tree-details-panel">Details</button>
+    </article>
   </li>;
 }
 
@@ -55,9 +52,8 @@ function StreamBranch({ stream, onHoverEvent }: { stream: DecisionTreeNode; onHo
       <header><span className="decision-tree-stream-icon"><Bot size={13} /></span><div><strong>{stream.label}</strong><span>{stream.detail}</span></div><em className={`decision-tree-status is-${stream.status}`}>{statusLabel(stream.status)}</em></header>
       {stream.events.length > 0 ? <ol className="decision-tree-events">{branches.map((branch, index) => <li key={branch.decision?.id ?? `unrecorded-${index}`} className={`decision-tree-decision-branch ${branch.decision ? '' : 'is-unrecorded'}`}>
         <span className="decision-tree-event-connector" aria-hidden="true"><ChevronDown size={13} /></span>
-        {branch.decision ? <EventCard event={branch.decision} onHoverEvent={onHoverEvent}><div className="decision-tree-event-type"><CircleDot size={12} /><span>Decision · Why</span></div><p>{branch.decision.detail}</p></EventCard>
-          : <div className="decision-tree-unrecorded"><strong>No recorded decision</strong><span>These calls were captured without a provider-authored Why.</span></div>}
         {branch.calls.length > 0 && <ol className="decision-tree-tool-calls">{branch.calls.map((event) => <ToolCall key={event.id} event={event} onHoverEvent={onHoverEvent} />)}</ol>}
+        {!branch.decision && branch.calls.length === 0 && <div className="decision-tree-unrecorded"><strong>No recorded decision</strong><span>This event has no provider-authored Why.</span></div>}
       </li>)}</ol> : <p className="decision-tree-awaiting">Waiting for recorded decisions or tool calls.</p>}
     </section>
   </li>;

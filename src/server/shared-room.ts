@@ -637,7 +637,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   // Task-linked replies become running only after they own their durable run
   // and, for edits, the selected repository. A busy repository is a queue,
   // not a hung provider turn.
-  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'queued', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile, accountProfile, queued.message.id, taskKind));
+  const replies = agents.map((agent) => repository.createSharedMessage(agent, '', 'queued', conversationId, [], 'none', queued.message.executionProfile === 'routing' ? null : queued.message.executionProfile, accountProfile, queued.message.id));
   for (const reply of replies) {
     const agent = reply.author as AgentRun['agent'];
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'
@@ -898,8 +898,15 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       return;
     }
     if (linkedRun && MUTATING_RUN_KINDS.has(linkedRun.kind)) {
-      const integration = await integrateWorkbenchRunWorktree(sourceCwd, cwd, linkedRun.id);
+      // A failed integration must not reach the catch below, which would mark
+      // this completed message failed and throw its output away.
+      const integration = await integrateWorkbenchRunWorktree(sourceCwd, cwd, linkedRun.id)
+        .catch((error: unknown) => ({ integrated: false, commitHash: null, conflicted: [] as string[], blocked: error instanceof Error ? error.message : String(error) }));
       if (integration.integrated && linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Integrated Workbench agent changes into main at ${integration.commitHash?.slice(0, 12)}.`);
+      // A partly integrated run is still a completed run. Name the files
+      // left behind so the held-back work is recoverable rather than silent.
+      if (integration.conflicted.length && linkedItem) repository.addActivity(linkedItem.id, 'system', 'blocker', `${integration.conflicted.length} file(s) conflicted with main and stayed in the run worktree: ${integration.conflicted.join(', ')}.`);
+      if (integration.blocked && linkedItem) repository.addActivity(linkedItem.id, 'system', 'blocker', `Changes were not integrated into main and remain in the run worktree: ${integration.blocked}`);
     }
     repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'completed', ...telemetry });
     repository.recordAgentHandoff(target.conversationId, messageId, result.agent, result.output);

@@ -44,10 +44,9 @@ describe('DecisionTreeVisualizer', () => {
 
     expect(branches).toHaveAttribute('open');
     expect(screen.getByRole('region', { name: 'Codex agent stream' })).toBeVisible();
-    expect(screen.getAllByText('Check the existing tests before changing behavior.')).toHaveLength(1);
     expect(screen.getByText('Ran the test suite.')).toBeInTheDocument();
-    expect(screen.getByText('Decision · Why')).toBeInTheDocument();
-    expect(screen.getByText('Ran the test suite.').closest('.decision-tree-decision-branch')).toContainElement(screen.getByText('Check the existing tests before changing behavior.'));
+    expect(screen.getByText('Check the existing tests before changing behavior.')).toHaveAttribute('title', 'Check the existing tests before changing behavior.');
+    expect(screen.getByRole('button', { name: 'Details' })).toBeInTheDocument();
   });
 
   it('updates the open debugger as live decisions and tool calls arrive', () => {
@@ -63,7 +62,7 @@ describe('DecisionTreeVisualizer', () => {
     }]} isLoadingEvents={false} onClose={onClose} />);
 
     expect(screen.queryByText('Loading agent events…')).not.toBeInTheDocument();
-    expect(screen.getByText('Confirm the new behavior before testing it.')).toBeInTheDocument();
+    expect(screen.queryByText('Confirm the new behavior before testing it.')).not.toBeInTheDocument();
 
     rerender(<DecisionTreeVisualizer messages={messages} events={[
       { id: 'decision', messageId: 'stream', runId: null, kind: 'decision', detail: 'Confirm the new behavior before testing it.', createdAt: '2026-08-25T12:00:01.000Z' },
@@ -71,7 +70,7 @@ describe('DecisionTreeVisualizer', () => {
     ]} isLoadingEvents={false} onClose={onClose} />);
 
     expect(screen.getByText('Ran the test suite.')).toBeInTheDocument();
-    expect(screen.getAllByText('Confirm the new behavior before testing it.')).toHaveLength(1);
+    expect(screen.getByText('Confirm the new behavior before testing it.')).toHaveAttribute('title', 'Confirm the new behavior before testing it.');
   });
 
   it('does not invent a missing decision summary for calls without one', () => {
@@ -81,8 +80,7 @@ describe('DecisionTreeVisualizer', () => {
     }]} isLoadingEvents={false} onClose={onClose} />);
 
     expect(screen.getByText('Ran the test suite.')).toBeInTheDocument();
-    expect(screen.getByText('No recorded decision')).toBeInTheDocument();
-    expect(screen.getByText('These calls were captured without a provider-authored Why.')).toBeInTheDocument();
+    expect(screen.getByText('No recorded Why.')).toBeInTheDocument();
   });
 
   it('keeps Claude events in their own agent stream', () => {
@@ -92,7 +90,7 @@ describe('DecisionTreeVisualizer', () => {
     ]} isLoadingEvents={false} onClose={vi.fn()} />);
 
     expect(screen.getByRole('region', { name: 'Claude agent stream' })).toBeInTheDocument();
-    expect(screen.getAllByText('Inspect the route before editing it.')).toHaveLength(1);
+    expect(screen.getByText('Inspect the route before editing it.')).toHaveAttribute('title', 'Inspect the route before editing it.');
     expect(screen.getByText('Read src/routes.ts.')).toBeInTheDocument();
   });
 
@@ -102,13 +100,12 @@ describe('DecisionTreeVisualizer', () => {
       { id: 'tool', messageId: 'stream', runId: null, kind: 'tool', detail: 'command_execution: npm test', createdAt: '2026-08-25T12:00:02.000Z' },
     ]} isLoadingEvents={false} onClose={onClose} />);
 
-    const toolCall = screen.getByText('Ran the test suite.').closest('article')!;
-    expect(screen.queryByRole('button', { name: /inspect/i })).not.toBeInTheDocument();
-    fireEvent.mouseEnter(toolCall);
+    const details = screen.getByRole('button', { name: 'Details' });
+    fireEvent.mouseEnter(details);
     expect(screen.getByText('command_execution: npm test')).toBeInTheDocument();
-    fireEvent.mouseLeave(toolCall);
+    fireEvent.mouseLeave(details);
     expect(screen.queryByText('command_execution: npm test')).not.toBeInTheDocument();
-    fireEvent.focus(toolCall);
+    fireEvent.focus(details);
     expect(screen.getByText('command_execution: npm test')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close decision tree' }));
     expect(onClose).toHaveBeenCalledOnce();

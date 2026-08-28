@@ -166,6 +166,115 @@ describe('isolatedRunWorkspace', () => {
     }
   });
 
+  it('lands every clean file when one hot file conflicts with an advanced main', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
+    directories.push(directory);
+    execFileSync('git', ['init', '-q'], { cwd: directory });
+    execFileSync('git', ['config', 'user.email', 'workbench@example.test'], { cwd: directory });
+    execFileSync('git', ['config', 'user.name', 'Workbench Test'], { cwd: directory });
+    writeFileSync(join(directory, 'hot.css'), 'base\n');
+    writeFileSync(join(directory, 'quiet.ts'), 'export const quiet = 0;\n');
+    execFileSync('git', ['add', 'hot.css', 'quiet.ts'], { cwd: directory });
+    execFileSync('git', ['commit', '-qm', 'seed'], { cwd: directory });
+    execFileSync('git', ['branch', '-M', 'main'], { cwd: directory });
+
+    const previous = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      const workspace = await isolatedRunWorkspace(directory, 'partial-run', true, true);
+      writeFileSync(join(workspace, 'hot.css'), 'this run\n');
+      writeFileSync(join(workspace, 'quiet.ts'), 'export const quiet = 1;\n');
+      // Another run integrates the same hot file first, exactly as parallel
+      // runs on shared stylesheets do in production.
+      writeFileSync(join(directory, 'hot.css'), 'other run\n');
+      execFileSync('git', ['commit', '-qam', 'other run'], { cwd: directory });
+
+      const result = await integrateWorkbenchRunWorktree(directory, workspace, 'partial-run', true);
+
+      expect(result.integrated).toBe(true);
+      expect(result.conflicted).toEqual(['hot.css']);
+      // The conflicting file keeps main's content; the rest of the run lands.
+      expect(execFileSync('git', ['show', 'HEAD:hot.css'], { cwd: directory, encoding: 'utf8' })).toBe('other run\n');
+      expect(execFileSync('git', ['show', 'HEAD:quiet.ts'], { cwd: directory, encoding: 'utf8' })).toBe('export const quiet = 1;\n');
+      // The unintegrated work must survive in the detached tree.
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' })).toContain('hot.css');
+      execFileSync('git', ['worktree', 'remove', '--force', workspace], { cwd: directory });
+    } finally {
+      if (previous === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previous;
+    }
+  });
+
+
+  it('reports a primary checkout parked off main instead of failing the completed run', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
+    directories.push(directory);
+    execFileSync('git', ['init', '-q'], { cwd: directory });
+    execFileSync('git', ['config', 'user.email', 'workbench@example.test'], { cwd: directory });
+    execFileSync('git', ['config', 'user.name', 'Workbench Test'], { cwd: directory });
+    writeFileSync(join(directory, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', 'seed.txt'], { cwd: directory });
+    execFileSync('git', ['commit', '-qm', 'seed'], { cwd: directory });
+    execFileSync('git', ['branch', '-M', 'main'], { cwd: directory });
+
+    const previous = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      const workspace = await isolatedRunWorkspace(directory, 'off-main-run', true, true);
+      writeFileSync(join(workspace, 'seed.txt'), 'run work\n');
+      // Jeffrey parks the primary checkout on a branch while the run works.
+      execFileSync('git', ['checkout', '-q', '-b', 'wip'], { cwd: directory });
+      const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: directory, encoding: 'utf8' }).trim();
+
+      const result = await integrateWorkbenchRunWorktree(directory, workspace, 'off-main-run', true);
+
+      expect(result.integrated).toBe(false);
+      expect(result.blocked).toContain('requires the primary checkout on main');
+      // No commit was invented on the wrong branch, and the run's work survives.
+      expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: directory, encoding: 'utf8' }).trim()).toBe(head);
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' })).toContain('seed.txt');
+      execFileSync('git', ['worktree', 'remove', '--force', workspace], { cwd: directory });
+    } finally {
+      if (previous === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previous;
+    }
+  });
+
+  it('names a wholly conflicting single-file run instead of discarding it', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
+    directories.push(directory);
+    execFileSync('git', ['init', '-q'], { cwd: directory });
+    execFileSync('git', ['config', 'user.email', 'workbench@example.test'], { cwd: directory });
+    execFileSync('git', ['config', 'user.name', 'Workbench Test'], { cwd: directory });
+    writeFileSync(join(directory, 'hot.css'), 'base\n');
+    execFileSync('git', ['add', 'hot.css'], { cwd: directory });
+    execFileSync('git', ['commit', '-qm', 'seed'], { cwd: directory });
+    execFileSync('git', ['branch', '-M', 'main'], { cwd: directory });
+
+    const previous = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      const workspace = await isolatedRunWorkspace(directory, 'single-conflict-run', true, true);
+      writeFileSync(join(workspace, 'hot.css'), 'this run\n');
+      writeFileSync(join(directory, 'hot.css'), 'other run\n');
+      execFileSync('git', ['commit', '-qam', 'other run'], { cwd: directory });
+      const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: directory, encoding: 'utf8' }).trim();
+
+      const result = await integrateWorkbenchRunWorktree(directory, workspace, 'single-conflict-run', true);
+
+      expect(result.integrated).toBe(false);
+      expect(result.conflicted).toEqual(['hot.css']);
+      // Main keeps its content, no empty commit lands, and the work survives.
+      expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: directory, encoding: 'utf8' }).trim()).toBe(head);
+      expect(execFileSync('git', ['show', 'HEAD:hot.css'], { cwd: directory, encoding: 'utf8' })).toBe('other run\n');
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' })).toContain('hot.css');
+      execFileSync('git', ['worktree', 'remove', '--force', workspace], { cwd: directory });
+    } finally {
+      if (previous === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previous;
+    }
+  });
+
   it('removes only a clean worktree whose commit is already integrated into main', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
     directories.push(directory);
@@ -187,5 +296,7 @@ describe('isolatedRunWorkspace', () => {
       if (previous === undefined) delete process.env.VITEST;
       else process.env.VITEST = previous;
     }
-  });
+    // Cleanup sweeps the real ~/.workbench/run-worktrees root, so this test's
+    // cost scales with however many run worktrees the machine has accumulated.
+  }, 30_000);
 });

@@ -1718,8 +1718,16 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       }) };
     }
     if (sourceWorkspace && workspace && MUTATING_RUN_KINDS.has(run.kind)) {
-      const integration = await integrateWorkbenchRunWorktree(sourceWorkspace, workspace, run.id);
+      // Integration reports; it never decides whether the run finished. This
+      // await sits before finishRun, so a throw here would erase a completed
+      // run's output entirely -- the failure mode this catch exists to stop.
+      const integration = await integrateWorkbenchRunWorktree(sourceWorkspace, workspace, run.id)
+        .catch((error: unknown) => ({ integrated: false, commitHash: null, conflicted: [] as string[], blocked: error instanceof Error ? error.message : String(error) }));
       if (integration.integrated) repository.addActivity(item.id, 'system', 'progress', `Integrated Workbench agent changes into main at ${integration.commitHash?.slice(0, 12)}.`);
+      // A partly integrated run is still a completed run. Name the files
+      // left behind so the held-back work is recoverable rather than silent.
+      if (integration.conflicted.length) repository.addActivity(item.id, 'system', 'blocker', `${integration.conflicted.length} file(s) conflicted with main and stayed in the run worktree: ${integration.conflicted.join(', ')}.`);
+      if (integration.blocked) repository.addActivity(item.id, 'system', 'blocker', `Changes were not integrated into main and remain in the run worktree: ${integration.blocked}`);
     }
     const completedAt = new Date().toISOString();
     const finishPatch = { agent: result.agent, status: 'completed' as const, output, completedAt, ...telemetry };

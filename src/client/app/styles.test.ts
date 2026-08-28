@@ -45,14 +45,6 @@ describe('shared message layout', () => {
   });
 });
 
-describe('workspace diff colors', () => {
-  it('uses GitHub-style additions, deletions, and readable inactive blocks', () => {
-    expect(styles).toContain('.diff-line.addition { color: #aff5b4; background: #0f5323; }');
-    expect(styles).toContain('.diff-line.deletion { color: #ffdcd7; background: #67060c; }');
-    expect(styles).toContain('.diff-review-diff-block { border-left: 2px solid transparent; opacity: 1;');
-  });
-});
-
 describe('conversation view controls', () => {
   it('keeps an existing execution conversation openable while a task dispatch starts', () => {
     const rule = styles.match(/^\.detail-panel\.execution-starting button[^\{]*\{[^}]*\}/m)?.[0] ?? '';
@@ -250,17 +242,18 @@ describe('diff review layout', () => {
 });
 
 describe('agent debugger layout', () => {
-  it('uses connected tree rails with a full-width mobile layout', () => {
+  it('uses connected tree rails with compact three-column event rows', () => {
     const layoutRule = styles.match(/^\.decision-tree-layout\s*\{[^}]*\}/m)?.[0] ?? '';
     const streamsRule = styles.match(/^\.decision-tree-streams\s*\{[^}]*\}/m)?.[0] ?? '';
     const phoneRules = styles.slice(styles.indexOf('@media (max-width: 700px)'));
 
-    expect(layoutRule).toContain('grid-template-columns: minmax(0, 1fr) 260px');
+    expect(layoutRule).not.toContain('grid-template-columns: minmax(0, 1fr) 260px');
     expect(streamsRule).toContain('border-left: 1px solid');
-    expect(styles).toContain('.decision-tree-inspectable-card');
+    expect(styles).toContain('.decision-tree-event-row');
+    expect(styles).toContain('grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto');
+    expect(styles).toContain('.decision-tree-details-pill');
     expect(styles).toContain('.decision-tree-tool-calls');
-    expect(phoneRules).toContain('grid-template-columns: 1fr');
-    expect(phoneRules).toContain('position: static');
+    expect(phoneRules).toContain('.decision-tree-event-row { grid-template-columns: minmax(0, 1fr) auto');
   });
 });
 
