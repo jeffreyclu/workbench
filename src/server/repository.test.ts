@@ -74,6 +74,65 @@ describe('WorkItemRepository', () => {
     ]);
   });
 
+  it('carries a settled decision onto the next snapshot when the hunk moved but its logic did not, and re-queues it when the logic changed', () => {
+    const item = repository.create({ title: 'Carry forward', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const snapshot = (revision: string, patch: string, otherPatch: string): WorkspaceDiff => ({
+      workspacePath: '/tmp/workbench', branch: 'feature/carry', revision, changedFiles: 2, additions: 2, deletions: 0,
+      publish: { branch: 'feature/carry', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
+      files: [
+        { path: 'src/authorize.ts', previousPath: null, status: 'modified', additions: 1, deletions: 0, patch, isBinary: false },
+        { path: 'src/other.ts', previousPath: null, status: 'modified', additions: 1, deletions: 0, patch: otherPatch, isBinary: false },
+      ],
+    });
+    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, snapshot('rev-1', '@@ -10,1 +10,2 @@ function authorizeRequest()\n context\n+  assertSession(user);', '@@ -1,1 +1,2 @@\n+const a = 1;'));
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/authorize.ts', hunkRange: '@@ -10,1 +10,2 @@ function authorizeRequest()', state: 'reviewed', note: 'Session check is right.' });
+
+    // Same changed line, different line numbers and context: the same decision.
+    // src/other.ts changed for real, so it must come back as pending.
+    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, snapshot('rev-2', '@@ -40,1 +41,2 @@ function authorizeRequest()\n moved context\n+  assertSession(user);', '@@ -1,1 +1,2 @@\n+const a = 2;'));
+    const carried = repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-2');
+
+    expect(carried).toEqual([expect.objectContaining({
+      filePath: 'src/authorize.ts', hunkRange: '@@ -40,1 +41,2 @@ function authorizeRequest()',
+      state: 'reviewed', note: 'Session check is right.', carriedFromRevision: 'rev-1',
+    })]);
+    // The earlier snapshot keeps its own record of what was decided against it.
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-1')).toEqual([expect.objectContaining({
+      revision: 'rev-1', hunkRange: '@@ -10,1 +10,2 @@ function authorizeRequest()', carriedFromRevision: null,
+    })]);
+  });
+
+  it('leaves a decision pending when the same changed lines appear more than once in the new snapshot', () => {
+    const item = repository.create({ title: 'Ambiguous carry', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const file = (patches: string[]): WorkspaceDiff => ({
+      workspacePath: '/tmp/workbench', branch: 'feature/ambiguous', revision: patches.length === 1 ? 'rev-single' : 'rev-double', changedFiles: 1, additions: patches.length, deletions: 0,
+      publish: { branch: 'feature/ambiguous', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
+      files: [{ path: 'src/dup.ts', previousPath: null, status: 'modified', additions: patches.length, deletions: 0, patch: patches.join('\n'), isBinary: false }],
+    });
+    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, file(['@@ -1,1 +1,2 @@\n+  log(step);']));
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-single', filePath: 'src/dup.ts', hunkRange: '@@ -1,1 +1,2 @@', state: 'reviewed' });
+    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, file(['@@ -1,1 +1,2 @@\n+  log(step);', '@@ -20,1 +21,2 @@\n+  log(step);']));
+
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-double')).toEqual([]);
+  });
+
+  it('carries forward a decision recorded before hunk content hashes existed', () => {
+    const item = repository.create({ title: 'Legacy carry', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const snapshot = (revision: string, patch: string): WorkspaceDiff => ({
+      workspacePath: '/tmp/workbench', branch: 'feature/legacy', revision, changedFiles: 1, additions: 1, deletions: 0,
+      publish: { branch: 'feature/legacy', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
+      files: [{ path: 'src/legacy.ts', previousPath: null, status: 'modified', additions: 1, deletions: 0, patch, isBinary: false }],
+    });
+    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, snapshot('rev-legacy', '@@ -1,1 +1,2 @@\n+  retry(request);'));
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-legacy', filePath: 'src/legacy.ts', hunkRange: '@@ -1,1 +1,2 @@', state: 'needs_changes', note: 'Retry has no ceiling.' });
+    database.exec("UPDATE diff_hunk_reviews SET content_hash = NULL");
+    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, snapshot('rev-after', '@@ -8,1 +8,2 @@\n+  retry(request);'));
+
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-after')).toEqual([expect.objectContaining({
+      state: 'needs_changes', note: 'Retry has no ceiling.', carriedFromRevision: 'rev-legacy',
+    })]);
+  });
+
   it('rolls back every hunk when one write in a review decision fails', () => {
     const item = repository.create({ title: 'Atomic cross-file review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     database.exec(`CREATE TRIGGER fail_review_hunk BEFORE INSERT ON diff_hunk_reviews

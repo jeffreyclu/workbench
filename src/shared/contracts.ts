@@ -379,6 +379,10 @@ export interface DiffHunkReview {
   state: DiffHunkReviewState;
   note: string | null;
   updatedAt: string;
+  /** Revision this decision was originally settled against, when it was
+   * carried onto a later snapshot because the hunk's changed lines were
+   * byte-identical. Null for a decision made against this revision. */
+  carriedFromRevision?: string | null;
 }
 
 export const upsertDiffHunkReviewsSchema = z.object({

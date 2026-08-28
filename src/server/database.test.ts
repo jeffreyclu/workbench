@@ -75,6 +75,7 @@ const EXPECTED_MIGRATIONS = [
   '062_agent_run_review_handoffs_immutable',
   '063_shared_conversation_manual_position',
   '064_review_assist_cache',
+  '065_diff_hunk_review_content_hash',
 ];
 
 describe('openDatabase', () => {
@@ -162,6 +163,25 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toContain('manual_position');
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_shared_conversations_manual_position'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds hunk-review content hashes when upgrading from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    // A database that stopped at 064: review rows exist, but nothing records
+    // which hunk content they were settled against.
+    current.exec('DROP INDEX idx_diff_hunk_reviews_content_hash;');
+    current.exec('ALTER TABLE diff_hunk_reviews DROP COLUMN content_hash; ALTER TABLE diff_hunk_reviews DROP COLUMN carried_from_revision;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '065_diff_hunk_review_content_hash'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(diff_hunk_reviews)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['content_hash', 'carried_from_revision']));
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_diff_hunk_reviews_content_hash'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '065_diff_hunk_review_content_hash'").get()).toBeTruthy();
     upgraded.close();
   });
 

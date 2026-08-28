@@ -78,6 +78,27 @@ export function countChangedLines(lines: string[]) {
   return { additions, deletions };
 }
 
+/** The identity of a hunk's *logic*: the file it changed plus its added and
+ * removed lines in order. The @@ header, the line numbers in it, and every
+ * context line are excluded on purpose — a hunk that moved only because
+ * something above it changed is the same decision, and a reviewer should not
+ * have to settle it a second time on the next snapshot. The +/- marker is
+ * kept so adding a line never matches removing the same line, and only
+ * trailing whitespace is normalised, so a real edit always changes the
+ * signature. Returns null for a hunk with nothing changed in it, which has no
+ * logic to carry.
+ *
+ * Shared, not server-only, for the same reason decision derivation is: any
+ * drift between the two sides would carry a review decision onto code it was
+ * never made about. */
+export function hunkLogicSignature(filePath: string, lines: string[]): string | null {
+  const changed = lines
+    .filter((line) => (line.startsWith('+') && !line.startsWith('+++')) || (line.startsWith('-') && !line.startsWith('---')))
+    .map((line) => `${line[0]}${line.slice(1).replace(/\s+$/, '')}`);
+  if (changed.length === 0) return null;
+  return [filePath, ...changed].join('\n');
+}
+
 export function hunkLocation(range: string): string {
   const match = range.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
   if (!match) return range;

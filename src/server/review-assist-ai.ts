@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { hunkLogicSignature } from '../shared/review-decisions.js';
 import type { WorkbenchDatabase } from './database.js';
 
 export type ReviewAssistAction = 'explain' | 'what_could_break' | 'compare_task_intent' | 'score_risk';
@@ -68,7 +69,21 @@ function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision,
   // settled the decision — every settled hunk then paid for a fresh model turn
   // on the next visit, which is exactly the rescore loop this cache prevents.
   // It would also bias the score: an already-approved change reads as safer.
-  const keyedDecision = { behavior: decision.behavior, hunks: decision.hunks };
+  // A hunk's `location` is excluded for the same reason: it is derived from
+  // the @@ line numbers, so an unrelated edit higher in the file renamed every
+  // key and re-bought every answer for code that had not changed at all. It
+  // still reaches the prompt as a label; only the identity of the request is
+  // the file path and the changed lines themselves.
+  //
+  // Context lines are excluded on the same rule the carried review decision
+  // uses (`hunkLogicSignature`): a hunk whose added and removed lines are
+  // byte-identical is the same change, and one edit elsewhere in the file
+  // should not re-buy an answer for code nobody touched. A hunk that changes
+  // nothing has no signature, so it keeps its literal lines as identity.
+  const keyedDecision = {
+    behavior: decision.behavior,
+    hunks: decision.hunks.map((hunk) => hunkLogicSignature(hunk.filePath, hunk.lines) ?? `${hunk.filePath}\n${hunk.lines.join('\n')}`),
+  };
   const keyed = action === 'compare_task_intent'
     ? { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, taskIntent }
     : { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision };
