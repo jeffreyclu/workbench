@@ -58,6 +58,12 @@ describe('splitAgentResponse', () => {
     expect(container.querySelector('.agent-response-section-heading > span')).toBeNull();
   });
 
+  it('marks compact two- and three-part replies so the desktop layout can render them in one row', () => {
+    const { container } = render(<AgentMessageBody body={'## Brief\nFirst.\n\n## Detail\nSecond.\n\n## Verification\nThird.'} running={false} />);
+
+    expect(container.querySelector('.agent-response-deck')).toHaveAttribute('data-section-count', '3');
+  });
+
   it('wraps a single completed reply in a detail bubble when requested by the shared room', () => {
     const { container } = render(<AgentMessageBody body="One concise update." running={false} detailForSingle />);
 

@@ -205,7 +205,7 @@ export function AgentMessageBody({ body, running, conversationId, workItemId, in
   const detailSections = sections.length === 1 && detailForSingle ? [{ title: 'Detail', body: visibleBody }] : sections;
   const lastIndex = detailSections.length - 1;
   return <div className="agent-response" role="group" aria-label={`Agent response in ${detailSections.length} part${detailSections.length === 1 ? '' : 's'}`}>
-    <div className="agent-response-deck">
+    <div className="agent-response-deck" data-section-count={detailSections.length}>
       {detailSections.map((section, index) => {
         const headingId = `${sectionIdPrefix}-${index}`;
         return <section key={`${section.title}-${index}`} className="agent-response-section" role="region" aria-labelledby={headingId} style={{ '--section-index': index } as CSSProperties}>

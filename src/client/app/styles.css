@@ -1061,6 +1061,14 @@ nav { display: grid; gap: 3px; }
 .live-run-interjection strong { color: #e3e6d8; font: 500 10px/1.5 'Manrope', sans-serif; }
 .agent-response { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 9px; min-width: 0; }
 .agent-response-deck { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; }
+/* Brief + detail replies are a compact scan surface on desktop. Keep one
+   column for long reports and for narrow layouts so prose never becomes a
+   column of one-word lines. */
+@media (min-width: 760px) {
+  .agent-response-deck[data-section-count="2"], .agent-response-deck[data-section-count="3"] { grid-template-columns: repeat(var(--agent-response-columns), minmax(0, 1fr)); }
+  .agent-response-deck[data-section-count="2"] { --agent-response-columns: 2; }
+  .agent-response-deck[data-section-count="3"] { --agent-response-columns: 3; }
+}
 .agent-response-section { min-width: 0; max-width: 100%; padding: 9px 12px 10px; background: var(--response-section-surface); border: 1px solid var(--response-section-border); border-radius: 7px; }
 .agent-markdown.streaming { position: relative; }
 .agent-markdown.streaming::after { content: ''; display: inline-block; width: .52em; height: 1.05em; margin-left: .2em; vertical-align: -.18em; background: var(--acid); border-radius: 1px; animation: streaming-caret 900ms steps(2, end) infinite; }
