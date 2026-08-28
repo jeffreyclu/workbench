@@ -18,6 +18,7 @@ import {
 } from '../shared/contracts.js';
 import { isActionFailure } from './action-result.js';
 import { summarizeWorkItemChanges } from './activity-log.js';
+import { sharedTurnKindForMessage } from './shared-room.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from './repository.js';
 import type { WorkItemRepository } from './repository.js';
 
@@ -414,8 +415,11 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     },
     annotations: mutationAnnotations(),
   }, async ({ conversationId, actor, body }) => runTool('add_conversation_message', () => {
-    if (!repository.getConversation(conversationId)) throw new ToolFailure('NOT_FOUND', 'Conversation not found.');
-    return { message: repository.createSharedMessage(actor, body, 'completed', conversationId, [], 'none') };
+    const conversation = repository.getConversation(conversationId);
+    if (!conversation) throw new ToolFailure('NOT_FOUND', 'Conversation not found.');
+    const linkedItem = conversation.workItemId ? repository.get(conversation.workItemId) : null;
+    const kind = sharedTurnKindForMessage(repository, linkedItem, body);
+    return { message: repository.createSharedMessage(actor, body, 'completed', conversationId, [], 'none', null, null, null, kind) };
   }));
 
   server.registerTool('list_execution_plans', {
