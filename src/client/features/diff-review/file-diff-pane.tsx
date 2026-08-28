@@ -36,6 +36,9 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
     if (!body || !block) return;
     const behavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
     body.scrollTo?.({ top: Math.max(0, block.offsetTop - body.clientHeight / 2), behavior });
+    // Moves keyboard/screen-reader focus onto the selected block, not just the
+    // visual scroll — selecting a decision from the queue should land here too.
+    block.focus?.({ preventScroll: true });
   }, [activeDecisionId, filePath]);
 
   return <article className="diff-review-file-diff" aria-label={`Full diff for ${filePath}`}>
@@ -52,6 +55,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         return <section
           key={hunk.range}
           ref={active ? activeBlock : undefined}
+          tabIndex={-1}
           className={`diff-review-diff-block state-${state ?? 'pending'}${state === null ? '' : ' settled'}${active ? ' active' : ''}`}
           aria-current={active ? 'location' : undefined}
           aria-label={`${hunk.location} · ${reviewStateLabel(state)}${active ? ' · selected decision' : ''}`}

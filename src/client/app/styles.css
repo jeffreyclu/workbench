@@ -459,6 +459,8 @@ nav { display: grid; gap: 3px; }
 .diff-review-decision-queue button.state-commented { --state-tone: #9ab6d8; }
 .workspace-diff .diff-review-decision-queue button.settled { background: #0d0e0c; box-shadow: inset 3px 0 0 var(--state-tone); }
 .workspace-diff .diff-review-decision-queue button.settled:hover, .workspace-diff .diff-review-decision-queue button.settled.selected { background: #24241f; }
+.workspace-diff .diff-review-decision-queue button.selected { position: relative; z-index: 1; background: #16170e; outline: 2px solid var(--acid); outline-offset: -2px; }
+.workspace-diff .diff-review-decision-queue button.settled.selected { box-shadow: inset 3px 0 0 var(--state-tone), 0 0 0 1px #414a20; }
 .diff-review-decision-queue button.settled > span:nth-child(2) b { color: #8a8981; }
 .diff-review-decision-queue .diff-review-decision-state { flex-direction: column; gap: 3px; min-width: 54px; padding: 4px 5px; color: var(--state-tone); border: 1px solid #2b2b27; border-radius: 6px; background: #131311; }
 .diff-review-decision-queue button.settled .diff-review-decision-state { border-color: color-mix(in srgb, var(--state-tone) 45%, #1b1b18); background: color-mix(in srgb, var(--state-tone) 13%, #101010); }
