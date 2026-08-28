@@ -100,3 +100,39 @@ on a filename.
 
 Learned on the Manage Connectors V2 card page, where `projection.ts` and
 `useManageConnectorsViewModel` were renamed to `selectors.ts` and `useManageConnectors`.
+
+## Look for an existing pattern before writing new behavior
+
+*Instruction from Jeffrey, 2026-08-28.* When adding a capability — a hook, a utility, an interaction
+pattern — search the repository for an existing implementation first and extend or mirror it, rather
+than writing a fresh one. Jeffrey stated this as a standing expectation ("see if we already have
+existing patterns/utils before reinventing the wheel"), not a one-off request, and it applies beyond
+the literal "new util" case in the monorepo's `CLAUDE.md`: it covers matching an established idiom
+even when no shared module is extracted.
+
+The value is consistency of behavior, not only avoided duplication. Concretely, the accessibility
+follow-up on Manage Connectors V2 needed programmatic focus movement; the repo already had
+`scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth' })` followed by
+`element.focus({ preventScroll: true })` on a `tabIndex={-1}` landmark
+(`frontend/src/components/agent-insights/agent-insights-page.tsx`,
+`.../section-card/section-card.tsx`). Copying that pair kept reduced-motion handling and tab-order
+behavior identical across two pages instead of inventing a second convention.
+
+## Hard-flag every legacy file a new feature touches
+
+When a feature branch modifies pre-existing ("legacy") code that a new code path shares, Jeffrey
+requires the change to be flagged in that legacy file itself — stated on 2026-08-28 as a standing
+rule with "no exceptions": "any legacy code that we touch MUST be flagged for the new logic code
+paths."
+
+The flag is a greppable ticket-keyed comment (for example `CON-194 LEGACY-AFFECTING:`) placed at each
+changed site, plus a short block at the top of the component or hook explaining what changed for the
+pre-existing callers and why the change was shared rather than gated on the new caller. Distinguish
+edits that change behavior for existing consumers from purely additive ones that no existing caller
+reads.
+
+The reason is reviewability and blast radius: a reader opening a legacy component months later must
+be able to see immediately that a newer feature altered its runtime behavior, instead of assuming the
+file is untouched. Choosing to share a fix with the legacy path (rather than gating it) is allowed —
+Jeffrey accepted that for `connect-connector-modal.tsx` — but only if the sharing is documented in
+place.

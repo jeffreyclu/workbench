@@ -1765,22 +1765,6 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
-  {
-    // A review decision survives a new snapshot when the hunk's logic is
-    // byte-identical: content_hash carries the state forward, and
-    // carried_from_revision records where it came from. Rows written before
-    // this migration have no hash and are backfilled from their own snapshot
-    // the first time a carry-forward is attempted, so existing review state is
-    // not thrown away.
-    id: '065_diff_hunk_review_content_hash',
-    apply(database) {
-      const columns = database.prepare('PRAGMA table_info(diff_hunk_reviews)').all() as Array<{ name: string }>;
-      const names = new Set(columns.map((column) => column.name));
-      if (!names.has('content_hash')) database.exec('ALTER TABLE diff_hunk_reviews ADD COLUMN content_hash TEXT;');
-      if (!names.has('carried_from_revision')) database.exec('ALTER TABLE diff_hunk_reviews ADD COLUMN carried_from_revision TEXT;');
-      database.exec('CREATE INDEX IF NOT EXISTS idx_diff_hunk_reviews_content_hash ON diff_hunk_reviews(content_hash) WHERE content_hash IS NOT NULL;');
-    },
-  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

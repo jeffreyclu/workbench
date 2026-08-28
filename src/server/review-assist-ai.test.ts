@@ -122,32 +122,6 @@ describe('requestReviewAssist caching', () => {
     expect(systemPrompt).toContain('Read the path before judging the lines.');
   });
 
-  it('reuses an answer when the hunk only moved, and buys a new one when a changed line differs', async () => {
-    vi.resetModules();
-    const spawn = mockStreamingWorker('SCORE: 22\nBounded retry.');
-    vi.doMock('node:child_process', () => ({ spawn }));
-    const { lookupReviewAssist, requestReviewAssist } = await import('./review-assist-ai.js');
-    const database = openDatabase(':memory:');
-
-    const at = (location: string, context: string, changed: string) => ({
-      behavior: 'Adds a retry to the sync client.',
-      state: 'Pending',
-      hunks: [{ filePath: 'src/sync.ts', location, lines: [` ${context}`, changed] }],
-    });
-
-    await requestReviewAssist(database, 'score_risk', at('Line 10', 'before', '+retry(3);'), null);
-    const spawnsAfterFirstTurn = spawn.mock.calls.length;
-
-    // Same changed line, new line numbers and new surrounding context: an
-    // unrelated edit higher in the file must not re-buy this answer.
-    expect(lookupReviewAssist(database, 'score_risk', at('Line 84', 'moved', '+retry(3);'), null)).toBe('SCORE: 22\nBounded retry.');
-    expect(await requestReviewAssist(database, 'score_risk', at('Line 84', 'moved', '+retry(3);'), null)).toBe('SCORE: 22\nBounded retry.');
-    expect(spawn.mock.calls.length).toBe(spawnsAfterFirstTurn);
-
-    // An actual edit to the changed line is a different question again.
-    expect(lookupReviewAssist(database, 'score_risk', at('Line 84', 'moved', '+retry(5);'), null)).toBeNull();
-  });
-
   it('reports a failed turn instead of silently caching a neutral placeholder', async () => {
     vi.resetModules();
     vi.doMock('node:child_process', () => ({

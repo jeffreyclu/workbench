@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentRunReviewHandoff, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type InsightsTimeframe, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState, type UpsertDiffHunkReviewsInput } from '../shared/contracts.js';
 import type { FeedbackWeight, QueueContext, QueuePlan } from './queue-intelligence.js';
@@ -9,7 +9,6 @@ import { DEFAULT_WORKBENCH_TIMEZONE } from '../shared/due-date.js';
 import { describeLifecycleChange, summarizeWorkItemChanges } from './activity-log.js';
 import { PROMOTION_QUEUED_MESSAGE } from './promotion-messages.js';
 import { collectMemoryDocuments, indexPendingMemory, searchMemory } from './memory-index.js';
-import { hunkLogicSignature, splitPatchHunks } from '../shared/review-decisions.js';
 import { buildFtsMatchQuery } from './fts-query.js';
 import { UnitOfWork } from './unit-of-work.js';
 import { TelemetryRepository } from './repositories/telemetry-repository.js';
@@ -68,30 +67,11 @@ interface DiffHunkReviewRow {
   state: DiffHunkReviewState;
   note: string | null;
   updated_at: string;
-  content_hash: string | null;
-  carried_from_revision: string | null;
 }
 
 function mapDiffHunkReview(row: DiffHunkReviewRow): DiffHunkReview {
-  return {
-    id: row.id, revision: row.revision, filePath: row.file_path, hunkRange: row.hunk_range,
-    state: row.state, note: row.note, updatedAt: row.updated_at,
-    carriedFromRevision: row.carried_from_revision ?? null,
-  };
+  return { id: row.id, revision: row.revision, filePath: row.file_path, hunkRange: row.hunk_range, state: row.state, note: row.note, updatedAt: row.updated_at };
 }
-
-/** Content identity of one hunk, used to decide whether a review decision
- * still applies on a later snapshot. Null when the hunk changes no lines. */
-function diffHunkContentHash(filePath: string, lines: string[]): string | null {
-  const signature = hunkLogicSignature(filePath, lines);
-  return signature === null ? null : createHash('sha256').update(signature).digest('hex');
-}
-
-const DIFF_HUNK_REVIEW_COLUMNS = 'id, revision, file_path, hunk_range, state, note, updated_at, content_hash, carried_from_revision';
-/** Cap on the un-hashed rows one carry-forward pass will backfill, so a scope
- * with a long review history cannot turn a Changes-pane load into a scan of
- * every snapshot it ever captured. */
-const DIFF_HUNK_REVIEW_BACKFILL_LIMIT = 200;
 
 function mapSavedWorkItemFilter(row: SavedWorkItemFilterRow): SavedWorkItemFilter {
   return { id: row.id, name: row.name, view: row.view, filter: workItemFilterSchema.parse(JSON.parse(row.filter_json)), sortOrder: row.sort_order, createdAt: row.created_at, updatedAt: row.updated_at };
@@ -138,7 +118,6 @@ export class WorkItemRepository {
   private readonly execution: ExecutionService;
   private readonly workItemLifecycle: WorkItemService;
   private readonly conversationService: ConversationService;
-  private readonly diffHunkHashCache = new Map<string, Map<string, string>>();
 
   constructor(readonly database: WorkbenchDatabase, private readonly timeZone = process.env.WORKBENCH_TIMEZONE ?? DEFAULT_WORKBENCH_TIMEZONE) {
     this.unitOfWork = new UnitOfWork(database);
@@ -831,97 +810,13 @@ export class WorkItemRepository {
     return row ? this.getRun(row.id) : null;
   }
 
-  /** Content hash of every hunk in one revision's captured snapshot, keyed
-   * `filePath::hunkRange`. Snapshot rows are insert-once, so a revision's
-   * hashes can never change and are memoised: the hunk-review read path runs
-   * on every Changes-pane load and would otherwise re-parse a whole diff.
-   * A revision with no snapshot yet is deliberately not cached — it will have
-   * one as soon as the diff is fetched. */
-  private hunkContentHashes(scope: { workItemId: string } | { conversationId: string }, revision: string): Map<string, string> {
-    const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
-    const cacheKey = `${column}:${id}:${revision}`;
-    const cached = this.diffHunkHashCache.get(cacheKey);
-    if (cached) return cached;
-    const row = this.database.prepare(`SELECT diff_json FROM workspace_diff_snapshots WHERE ${column} = ? AND revision = ?`).get(id, revision) as { diff_json: string } | undefined;
-    const hashes = new Map<string, string>();
-    if (!row) return hashes;
-    for (const file of (JSON.parse(row.diff_json) as WorkspaceDiff).files) {
-      for (const hunk of splitPatchHunks(file)) {
-        const hash = diffHunkContentHash(file.path, hunk.lines);
-        if (hash) hashes.set(`${file.path}::${hunk.range}`, hash);
-      }
-    }
-    if (this.diffHunkHashCache.size >= 8) this.diffHunkHashCache.clear();
-    this.diffHunkHashCache.set(cacheKey, hashes);
-    return hashes;
-  }
-
-  /** Give older review rows the content hash their carry-forward depends on.
-   * Rows predate the hash column or were written before their snapshot was
-   * captured; without this, every decision settled before this feature
-   * shipped would re-queue as pending on the next snapshot. */
-  private backfillDiffHunkReviewHashes(scope: { workItemId: string } | { conversationId: string }, revision: string): void {
-    const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
-    const rows = this.database.prepare(`SELECT id, revision, file_path, hunk_range FROM diff_hunk_reviews
-      WHERE ${column} = ? AND revision != ? AND content_hash IS NULL ORDER BY updated_at DESC, rowid DESC LIMIT ?`)
-      .all(id, revision, DIFF_HUNK_REVIEW_BACKFILL_LIMIT) as unknown as Array<{ id: string; revision: string; file_path: string; hunk_range: string }>;
-    if (rows.length === 0) return;
-    const update = this.database.prepare('UPDATE diff_hunk_reviews SET content_hash = ? WHERE id = ?');
-    this.transaction(() => {
-      for (const row of rows) {
-        const hash = this.hunkContentHashes(scope, row.revision).get(`${row.file_path}::${row.hunk_range}`);
-        if (hash) update.run(hash, row.id);
-      }
-    });
-  }
-
-  /** Carry settled review decisions onto a new snapshot. A hunk whose changed
-   * lines are byte-identical to one a reviewer already settled is the same
-   * decision — only its line numbers moved — so re-queueing it as pending
-   * throws away real review work every time the workspace changes anywhere.
-   *
-   * Earlier revisions are never rewritten: this only inserts rows for the
-   * revision being read, so each snapshot keeps the record of what was decided
-   * against it. A hunk whose content appears more than once in this revision
-   * is left pending rather than guessed at, and any edit to the hunk's changed
-   * lines changes its hash, so a changed decision always returns to the queue. */
-  private carryForwardDiffHunkReviews(scope: { workItemId: string } | { conversationId: string }, revision: string): void {
-    const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
-    const current = this.hunkContentHashes(scope, revision);
-    if (current.size === 0) return;
-    const settled = new Set((this.database.prepare(`SELECT file_path, hunk_range FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ?`)
-      .all(id, revision) as unknown as Array<{ file_path: string; hunk_range: string }>).map((row) => `${row.file_path}::${row.hunk_range}`));
-    const occurrences = new Map<string, number>();
-    for (const hash of current.values()) occurrences.set(hash, (occurrences.get(hash) ?? 0) + 1);
-    const pending = [...current].filter(([key, hash]) => !settled.has(key) && occurrences.get(hash) === 1);
-    if (pending.length === 0) return;
-
-    this.backfillDiffHunkReviewHashes(scope, revision);
-    const priorReview = this.database.prepare(`SELECT revision, state, note, updated_at FROM diff_hunk_reviews
-      WHERE ${column} = ? AND revision != ? AND content_hash = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1`);
-    const insert = this.database.prepare(`INSERT OR IGNORE INTO diff_hunk_reviews (id, ${column}, revision, file_path, hunk_range, state, note, updated_at, content_hash, carried_from_revision)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    this.transaction(() => {
-      for (const [key, hash] of pending) {
-        const prior = priorReview.get(id, revision, hash) as { revision: string; state: DiffHunkReviewState; note: string | null; updated_at: string } | undefined;
-        if (!prior) continue;
-        const separator = key.lastIndexOf('::');
-        insert.run(randomUUID(), id, revision, key.slice(0, separator), key.slice(separator + 2), prior.state, prior.note, prior.updated_at, hash, prior.revision);
-      }
-    });
-  }
-
   upsertDiffHunkReview(scope: { workItemId: string } | { conversationId: string }, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
     const now = new Date().toISOString();
-    const contentHash = this.hunkContentHashes(scope, input.revision).get(`${input.filePath}::${input.hunkRange}`) ?? null;
-    // A decision made by hand on this revision is no longer a carried one, and
-    // a hash learned later must not be lost when an existing row is updated.
-    this.database.prepare(`INSERT INTO diff_hunk_reviews (id, ${column}, revision, file_path, hunk_range, state, note, updated_at, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(${column}, revision, file_path, hunk_range) WHERE ${column} IS NOT NULL DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at,
-        content_hash = COALESCE(excluded.content_hash, diff_hunk_reviews.content_hash), carried_from_revision = NULL`)
-      .run(randomUUID(), id, input.revision, input.filePath, input.hunkRange, input.state, input.note ?? null, now, contentHash);
-    return mapDiffHunkReview(this.database.prepare(`SELECT ${DIFF_HUNK_REVIEW_COLUMNS} FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? AND file_path = ? AND hunk_range = ?`)
+    this.database.prepare(`INSERT INTO diff_hunk_reviews (id, ${column}, revision, file_path, hunk_range, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(${column}, revision, file_path, hunk_range) WHERE ${column} IS NOT NULL DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
+      .run(randomUUID(), id, input.revision, input.filePath, input.hunkRange, input.state, input.note ?? null, now);
+    return mapDiffHunkReview(this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? AND file_path = ? AND hunk_range = ?`)
       .get(id, input.revision, input.filePath, input.hunkRange) as unknown as DiffHunkReviewRow);
   }
 
@@ -937,8 +832,7 @@ export class WorkItemRepository {
 
   listDiffHunkReviews(scope: { workItemId: string } | { conversationId: string }, revision: string): DiffHunkReview[] {
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
-    this.carryForwardDiffHunkReviews(scope, revision);
-    return (this.database.prepare(`SELECT ${DIFF_HUNK_REVIEW_COLUMNS} FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? ORDER BY file_path ASC, hunk_range ASC`)
+    return (this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? ORDER BY file_path ASC, hunk_range ASC`)
       .all(id, revision) as unknown as DiffHunkReviewRow[]).map(mapDiffHunkReview);
   }
 
