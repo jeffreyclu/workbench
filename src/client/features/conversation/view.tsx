@@ -119,6 +119,17 @@ export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'ac
   return [`${agent}${message.kind ? ` · ${message.kind}` : ''} · ${model} · ${profile} · ${usage}`, cacheRead, duration, fallback].filter(Boolean).join(' · ');
 }
 
+/**
+ * A manual conversation has no task classification. Its current visible type
+ * is the latest classified agent turn, which deliberately allows the next
+ * turn to change from (for example) research to execute.
+ */
+export function latestConversationExecutionKind(messages: SharedMessage[]): AgentRun['kind'] | null {
+  return [...messages].reverse().find((message) =>
+    (message.author === 'codex' || message.author === 'claude') && message.kind,
+  )?.kind ?? null;
+}
+
 type ConversationTaskPickerProps = {
   tasks: WorkItem[];
   isLoading: boolean;
@@ -554,6 +565,9 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     refetchInterval: (query) => query.state.data?.messages.some((message) => message.status === 'running' || message.status === 'queued') ? 750 : false,
   });
   const allConversationMessages = messages.data?.messages ?? [];
+  const manualConversationExecutionKind = selectedConversation?.workItemId
+    ? null
+    : latestConversationExecutionKind(allConversationMessages);
   // A pasted pull-request link is enough to review it: resolving one must not
   // require the conversation to be linked to a work item first.
   const githubCandidateUrls = useMemo(() => pullRequestUrls([
@@ -1134,7 +1148,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
         {isPhoneChrome && <div className="mobile-chrome-controls"><button type="button" className={`mobile-chrome-toggle mobile-conversation-toggle icon-button${mobileHeaderOpen ? ' icon-button-active' : ''}`} onClick={() => setMobileHeaderOpen(true)} aria-label="Expand conversation tray" title="Expand conversation tray"><PanelTop size={16} /></button></div>}
         {isPhoneChrome && conversationId && <div className="mobile-review-toggle"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-label="Conversation" title="Conversation" aria-pressed={activePane === 'conversation'} onClick={() => setActivePane('conversation')}><MessageSquare size={13} /><span>Conversation</span></button><button type="button" aria-label="Changes" aria-pressed={activePane === 'changes'} onClick={() => setActivePane('changes')} title={changesAvailability.hasChanges ? 'Review changes' : changesAvailability.isError ? 'Could not check for changes' : changesAvailability.isLoading ? 'Checking for changes…' : 'No changes to review'}><FileDiff size={13} /> <span>Changes</span></button></div></div>}
         {isPhoneChrome && !mobileComposerOpen && <button type="button" className="mobile-composer-toggle icon-button" onClick={() => setMobileComposerOpen(true)} aria-label="Expand composer" title="Expand composer"><SquarePen size={16} /></button>}
-        {conversationId && <div className="thread-filter-bar"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-label="Conversation" title="Conversation" aria-pressed={activePane === 'conversation'} onClick={() => setActivePane('conversation')}><MessageSquare size={13} /><span>Conversation</span></button><button type="button" aria-label="Changes" aria-pressed={activePane === 'changes'} onClick={() => setActivePane('changes')} title={changesAvailability.hasChanges ? 'Review changes' : changesAvailability.isError ? 'Could not check for changes' : changesAvailability.isLoading ? 'Checking for changes…' : 'No changes to review'}><FileDiff size={13} /> <span>Changes</span></button></div>{changesAvailability.isError && <button type="button" className="button secondary compact" onClick={() => void changesAvailability.retry()} disabled={changesAvailability.isLoading}>Retry</button>}{selectedConversation && <button type="button" className={`icon-button${selectedConversation.pinned ? ' icon-button-active' : ''}`} onClick={() => setConversationPinned.mutate(!selectedConversation.pinned)} disabled={setConversationPinned.isPending} aria-pressed={Boolean(selectedConversation.pinned)} aria-label={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'} title={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'}><Pin size={13} fill={selectedConversation.pinned ? 'currentColor' : 'none'} /></button>}{linkedWorkItem.data?.item && <TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} disclosure />}</div>}
+        {conversationId && <div className="thread-filter-bar"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-label="Conversation" title="Conversation" aria-pressed={activePane === 'conversation'} onClick={() => setActivePane('conversation')}><MessageSquare size={13} /><span>Conversation</span></button><button type="button" aria-label="Changes" aria-pressed={activePane === 'changes'} onClick={() => setActivePane('changes')} title={changesAvailability.hasChanges ? 'Review changes' : changesAvailability.isError ? 'Could not check for changes' : changesAvailability.isLoading ? 'Checking for changes…' : 'No changes to review'}><FileDiff size={13} /> <span>Changes</span></button></div>{changesAvailability.isError && <button type="button" className="button secondary compact" onClick={() => void changesAvailability.retry()} disabled={changesAvailability.isLoading}>Retry</button>}{selectedConversation && <button type="button" className={`icon-button${selectedConversation.pinned ? ' icon-button-active' : ''}`} onClick={() => setConversationPinned.mutate(!selectedConversation.pinned)} disabled={setConversationPinned.isPending} aria-pressed={Boolean(selectedConversation.pinned)} aria-label={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'} title={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'}><Pin size={13} fill={selectedConversation.pinned ? 'currentColor' : 'none'} /></button>}{linkedWorkItem.data?.item && <TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} disclosure />}{manualConversationExecutionKind && <span className="classification-badge" title="Latest classified execution type">{manualConversationExecutionKind}</span>}</div>}
         <div className={`conversation-review-layout layout-${activePane}`}>
         <div className="conversation-thread-pane">
         <div className="shared-thread" ref={threadScrollRef}>

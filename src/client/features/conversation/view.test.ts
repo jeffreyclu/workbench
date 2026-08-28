@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { composerSelectionFromConversation, replyBadge } from './view';
+import type { SharedMessage } from '../../../shared/contracts';
+import { composerSelectionFromConversation, latestConversationExecutionKind, replyBadge } from './view';
 
 describe('replyBadge', () => {
   it('shows the actual model alongside the compact agent, profile, usage, and duration telemetry', () => {
@@ -83,5 +84,20 @@ describe('composerSelectionFromConversation', () => {
       preferredAccountProfile: null,
       preferredDispatchTarget: null,
     })).toEqual({ executionProfile: null, accountProfile: 'default', dispatchTarget: 'both' });
+  });
+});
+
+describe('latestConversationExecutionKind', () => {
+  it('surfaces the latest classified agent turn for a manually created conversation', () => {
+    expect(latestConversationExecutionKind([
+      { author: 'jeffrey', kind: null },
+      { author: 'claude', kind: 'research' },
+      { author: 'jeffrey', kind: null },
+      { author: 'codex', kind: 'execute' },
+    ] as SharedMessage[])).toBe('execute');
+  });
+
+  it('does not invent an execution type when a manual conversation has no classified reply', () => {
+    expect(latestConversationExecutionKind([{ author: 'claude', kind: null }] as SharedMessage[])).toBeNull();
   });
 });
