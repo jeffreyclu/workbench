@@ -16,7 +16,7 @@ const runtimePorts = [45173, 45174] as const;
 const tsx = join(root, 'node_modules/.bin/tsx');
 const databasePath = process.env.DATABASE_PATH?.trim() || join(root, 'data/workbench.db');
 
-interface Runtime { releasePath: string; port: number; child: ChildProcess }
+interface Runtime { releasePath: string; port: number; child: ChildProcess; connections: number }
 let active: Runtime | null = null;
 let deploying = false;
 let stopping = false;
@@ -110,11 +110,11 @@ async function stopAfterDrain(runtime: Runtime): Promise<void> {
   let reported = false;
   while (runtime.child.exitCode === null && Date.now() < deadline) {
     const [activeWork, activeAgents, liveProcesses] = await Promise.all([runtimeWorkActive(runtime.port), ownedAgentWorkActive(runtime.port), liveAgentProcessCount(runtime.port)]);
-    if (activeWork === false && activeAgents === false && liveProcesses === 0) {
+    if (activeWork === false && activeAgents === false && liveProcesses === 0 && runtime.connections === 0) {
       runtime.child.kill('SIGTERM');
       return;
     }
-    if ((activeWork || activeAgents || (liveProcesses ?? 1) > 0) && !reported) {
+    if ((activeWork || activeAgents || (liveProcesses ?? 1) > 0 || runtime.connections > 0) && !reported) {
       reported = true;
       console.log(`Workbench backend on port ${runtime.port} is retaining in-flight agent work before shutdown.`);
     }
@@ -158,7 +158,7 @@ async function deploy(releasePath = currentRelease()): Promise<void> {
   try {
     await waitForHealth(port, child);
     const previous = active;
-    active = { releasePath, port, child };
+    active = { releasePath, port, child, connections: 0 };
     completePendingRuntimePromotion(root, releasePath);
     child.once('exit', () => {
       if (stopping || active?.child !== child) return;
@@ -191,6 +191,14 @@ async function waitForActiveRuntime(timeoutMs = GATEWAY_BACKEND_WAIT_MS): Promis
 }
 
 function proxyHttp(incoming: import('node:http').IncomingMessage, outgoing: import('node:http').ServerResponse, runtime: Runtime, retried = false): void {
+  runtime.connections += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    runtime.connections = Math.max(0, runtime.connections - 1);
+  };
+  outgoing.once('close', release);
   const proxied = httpRequest({
     hostname: '127.0.0.1',
     port: runtime.port,
@@ -199,6 +207,7 @@ function proxyHttp(incoming: import('node:http').IncomingMessage, outgoing: impo
     headers: incoming.headers,
   }, (response) => {
     outgoing.writeHead(response.statusCode ?? 502, response.headers);
+    response.once('end', release);
     response.pipe(outgoing);
   });
   proxied.on('error', (error) => {
@@ -206,6 +215,7 @@ function proxyHttp(incoming: import('node:http').IncomingMessage, outgoing: impo
     // final listener close. Retry once against the current healthy runtime
     // before exposing a gateway error to the browser.
     if (!retried && !outgoing.headersSent) {
+      release();
       incoming.unpipe(proxied);
       void waitForActiveRuntime().then((replacement) => proxyHttp(incoming, outgoing, replacement, true)).catch(() => {
         if (!outgoing.headersSent) outgoing.statusCode = 503;
@@ -213,6 +223,7 @@ function proxyHttp(incoming: import('node:http').IncomingMessage, outgoing: impo
       });
       return;
     }
+    release();
     if (!outgoing.headersSent) outgoing.statusCode = 502;
     outgoing.end(`Workbench runtime unavailable: ${error.message}`);
   });
@@ -237,6 +248,14 @@ const gateway = createServer((incoming, outgoing) => {
  * upgrade connection byte-for-byte intact after the backend accepts it.
  */
 function proxyWebSocket(incoming: IncomingMessage, socket: Socket, head: Buffer, runtime: Runtime, retried = false): void {
+  runtime.connections += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    runtime.connections = Math.max(0, runtime.connections - 1);
+  };
+  socket.once('close', release);
   const proxied = httpRequest({
     hostname: '127.0.0.1',
     port: runtime.port,
@@ -253,12 +272,14 @@ function proxyWebSocket(incoming: IncomingMessage, socket: Socket, head: Buffer,
     socket.write(`${statusLine}\r\n${headers.join('\r\n')}\r\n\r\n`);
     if (head.length) backendSocket.write(head);
     if (backendHead.length) backendSocket.unshift(backendHead);
+    backendSocket.once('close', release);
     backendSocket.pipe(socket);
     socket.pipe(backendSocket);
     socket.resume();
   });
   proxied.once('response', (response) => {
     response.resume();
+    release();
     if (!retried && !socket.destroyed) {
       void waitForActiveRuntime().then((replacement) => proxyWebSocket(incoming, socket, head, replacement, true)).catch(() => socket.destroy());
       return;
@@ -270,9 +291,11 @@ function proxyWebSocket(incoming: IncomingMessage, socket: Socket, head: Buffer,
     // normal HTTP, retry it once against the active healthy runtime instead
     // of presenting an unexplained websocket disconnect to the client.
     if (!retried && !socket.destroyed) {
+      release();
       void waitForActiveRuntime().then((replacement) => proxyWebSocket(incoming, socket, head, replacement, true)).catch(() => socket.destroy());
       return;
     }
+    release();
     socket.destroy();
   });
   proxied.end();

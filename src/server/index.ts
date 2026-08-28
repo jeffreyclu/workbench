@@ -8,7 +8,7 @@ import { shutdownFastTaskDraftModel } from './fast-task-draft-ai.js';
 import { shutdownDiffConfidenceModel, warmDiffConfidenceModel } from './diff-confidence-ai.js';
 import { liveRuntimeCapabilities } from './runtime-capabilities.js';
 import { createServer } from 'node:http';
-import { attachRealtimeServer } from './realtime.js';
+import { attachRealtimeServer, retireRealtimeClients } from './realtime.js';
 import { collectMemoryDocuments, indexPendingMemory } from './memory-index.js';
 import { shutdownActiveAgentProcesses } from './agent-runner.js';
 import { shutdownExternalActionClassifier } from './external-action-ai.js';
@@ -27,6 +27,7 @@ const promotionWorker = liveRuntimeCapabilities.promoteRuntime ? startRuntimePro
 configureRuntimeRetirement(() => {
   scheduler?.stop();
   promotionWorker?.stop();
+  retireRealtimeClients();
 });
 warmDiffConfidenceModel();
 

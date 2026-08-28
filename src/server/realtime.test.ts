@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import WebSocket from 'ws';
 import { afterEach, describe, expect, it } from 'vitest';
-import { attachRealtimeServer, publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
+import { attachRealtimeServer, publishRealtimeEvent, publishRealtimeNotification, retireRealtimeClients } from './realtime.js';
 
 describe('realtime server', () => {
   let close: (() => void) | undefined;
@@ -50,5 +50,21 @@ describe('realtime server', () => {
     const client = new WebSocket(`ws://127.0.0.1:${address.port}/api/realtime`, { headers: { Origin: 'https://untrusted.example' } });
     const [, response] = await once(client, 'unexpected-response');
     expect(response.statusCode).toBe(401);
+  });
+
+  it('closes realtime clients when its runtime is retired so they reconnect through the gateway', async () => {
+    server = createServer();
+    close = attachRealtimeServer(server);
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP listener.');
+
+    const client = new WebSocket(`ws://127.0.0.1:${address.port}/api/realtime`);
+    await once(client, 'open');
+    const closed = once(client, 'close');
+    retireRealtimeClients();
+    const [code] = await closed;
+    expect(code).toBe(1012);
   });
 });

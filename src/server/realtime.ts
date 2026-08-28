@@ -18,6 +18,7 @@ export type RealtimeMessage = { type: 'ready' } | { type: 'invalidate'; topics: 
 
 type RealtimeSink = (message: Exclude<RealtimeMessage, { type: 'ready' }>) => void;
 let sink: RealtimeSink | null = null;
+let liveSocketServer: WebSocketServer | null = null;
 
 /** Safe no-op before a runtime has attached a socket server (including unit tests). */
 export function publishRealtimeEvent(...topics: RealtimeTopic[]): void {
@@ -33,6 +34,15 @@ export function publishRealtimeNotification(notification: Omit<RealtimeNotificat
  * unlike durable application state, they do not need a REST refetch first. */
 export function publishRealtimeDiffConfidence(assessments: RealtimeDiffConfidence['assessments']): void {
   sink?.({ type: 'diff-confidence', assessments });
+}
+
+/** Move browser clients off a retiring runtime only after the replacement is
+ * already serving. The client reconnects through the stable gateway, so old
+ * websocket connections cannot pin a retired backend indefinitely. */
+export function retireRealtimeClients(): void {
+  for (const client of liveSocketServer?.clients ?? []) {
+    if (client.readyState === WebSocket.OPEN) client.close(1012, 'Workbench runtime switched');
+  }
 }
 
 function rejectUpgrade(socket: Socket): void {
@@ -57,6 +67,7 @@ function isSameOrigin(request: IncomingMessage): boolean {
 /** Attach one authenticated, server-to-client invalidation socket to an existing HTTP server. */
 export function attachRealtimeServer(server: Server): () => void {
   const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 1_024 });
+  liveSocketServer = wss;
   const heartbeat = setInterval(() => {
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN) client.ping();
@@ -88,6 +99,7 @@ export function attachRealtimeServer(server: Server): () => void {
 
   return () => {
     if (sink === broadcast) sink = null;
+    if (liveSocketServer === wss) liveSocketServer = null;
     clearInterval(heartbeat);
     server.off('upgrade', onUpgrade);
     for (const client of wss.clients) client.terminate();
