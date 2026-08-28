@@ -153,6 +153,8 @@ export function InsightsView() {
           <button className={timeframe === '15m' ? 'active' : ''} onClick={() => setTimeframe('15m')}>Last 15 minutes</button>
           <button className={timeframe === '1h' ? 'active' : ''} onClick={() => setTimeframe('1h')}>Last hour</button>
           <button className={timeframe === '1d' ? 'active' : ''} onClick={() => setTimeframe('1d')}>Last day</button>
+          <button className={timeframe === '7d' ? 'active' : ''} onClick={() => setTimeframe('7d')}>7 days</button>
+          <button className={timeframe === '30d' ? 'active' : ''} onClick={() => setTimeframe('30d')}>30 days</button>
           <button className={timeframe === 'all' ? 'active' : ''} onClick={() => setTimeframe('all')}>All Time</button>
         </div>
       </header>

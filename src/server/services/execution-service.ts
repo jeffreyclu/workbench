@@ -304,6 +304,8 @@ export class ExecutionService {
       '15m': 15 * 60 * 1000,
       '1h': 60 * 60 * 1000,
       '1d': 24 * 60 * 60 * 1000,
+      '7d': 7 * 24 * 60 * 60 * 1000,
+      '30d': 30 * 24 * 60 * 60 * 1000,
     };
     const since = timeframe === 'all' ? new Date(0).toISOString() : new Date(Date.now() - windowMs[timeframe]).toISOString();
     const runs = this.database.prepare(`

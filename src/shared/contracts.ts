@@ -1034,7 +1034,7 @@ export const updateSharedMessageSchema = z.object({
 // Structured logging for scheduler, agent, and system events. Events flow into
 // the diagnostics table, which self-prunes and feeds the insights dashboard.
 
-export type InsightsTimeframe = '15m' | '1h' | '1d' | 'all';
+export type InsightsTimeframe = '15m' | '1h' | '1d' | '7d' | '30d' | 'all';
 
 export const diagnosticEventSchema = z.enum(['scheduler_tick', 'scheduler_error', 'retention_cleanup', 'message_prune', 'run_compact', 'run_recovery', 'agent_failure', 'lease_expired']);
 

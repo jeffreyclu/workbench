@@ -40,7 +40,7 @@ export function createSystemRouter({ repository, admin }: RouteContext) {
     response.json(status);
   });
   router.get('/api/insights', (request, response) => {
-    const timeframe = z.enum(['15m', '1h', '1d', 'all']).catch('all').parse(request.query.timeframe);
+    const timeframe = z.enum(['15m', '1h', '1d', '7d', '30d', 'all']).catch('all').parse(request.query.timeframe);
     response.json(repository.getRunInsights(timeframe));
   });
   router.get('/api/audit-log', (request, response) => {

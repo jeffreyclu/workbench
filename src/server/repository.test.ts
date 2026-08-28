@@ -145,6 +145,8 @@ describe('WorkItemRepository', () => {
     expect(repository.getRunInsights('15m').completedRuns).toBe(1);
     expect(repository.getRunInsights('1h').completedRuns).toBe(1);
     expect(repository.getRunInsights('1d').completedRuns).toBe(2);
+    expect(repository.getRunInsights('7d').completedRuns).toBe(2);
+    expect(repository.getRunInsights('30d').completedRuns).toBe(2);
     expect(repository.getRunInsights('all').completedRuns).toBe(2);
   });
 

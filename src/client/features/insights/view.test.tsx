@@ -13,7 +13,7 @@ function stubInsightsFetch(insightsPayload: unknown) {
 }
 
 describe('InsightsView', () => {
-  it('offers exactly the four approved timeframes and requests the selected one', async () => {
+  it('offers the six approved timeframes and requests the selected one', async () => {
     stubInsightsFetch({
       retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
       medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
@@ -25,8 +25,8 @@ describe('InsightsView', () => {
 
     await screen.findByRole('heading', { name: /insights/i });
     expect(screen.getAllByRole('button', { name: /last 15 minutes|last hour|last day|all time/i })).toHaveLength(4);
-    expect(screen.queryByRole('button', { name: '7 days' })).toBeNull();
-    expect(screen.queryByRole('button', { name: '30 days' })).toBeNull();
+    expect(screen.getByRole('button', { name: '7 days' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '30 days' })).toBeTruthy();
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/api/insights?timeframe=all'))).toBe(true);
 
     fireEvent.click(screen.getByRole('button', { name: 'Last 15 minutes' }));
