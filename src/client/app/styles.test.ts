@@ -225,11 +225,7 @@ describe('diff review layout', () => {
     expect(styles).toContain('.github-diff-file { min-width: 0; overflow: hidden; }');
     expect(styles).toContain('.workspace-diff-file pre { min-width: 0; max-width: 100%;');
     expect(styles).toContain('white-space: pre-wrap; overflow-wrap: anywhere;');
-    expect(styles).toContain('.diff-review-hunk pre { max-height: 440px; margin: 0; overflow-x: hidden; overflow-y: auto;');
-    expect(styles).toContain("font: 10px/1.55 'DM Mono'; white-space: pre-wrap; overflow-wrap: anywhere;");
     expect(styles).toContain('.diff-line > span:last-child, .diff-line-code { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }');
-    expect(styles).toContain('.diff-review-hunk-code { display: grid; min-width: 0; overflow: hidden;');
-    expect(styles).toContain('.diff-review-hunk-code code { display: block; min-width: 0; padding: 3px 9px; overflow-wrap: anywhere; word-break: break-word; white-space: pre-wrap;');
     expect(phoneRules).toContain('.workspace-diff-file, .github-diff-file { min-width: 0; overflow: hidden; }');
   });
 
