@@ -114,4 +114,42 @@ describe('diff review decision detail', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     vi.unstubAllGlobals();
   });
+  it('renders the 0-100 risk score on demand from the score action', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (String(input).endsWith('/api/review-assist/stream')
+      ? sse([{ type: 'done', answer: 'SCORE: 72\nTouches a shared auth boundary with no test coverage.' }])
+      : json({ answer: null }))));
+    renderCard();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Score risk' }));
+
+    await waitFor(() => expect(screen.getByText(/AI risk score/)).toHaveTextContent('72'));
+    expect(screen.getByText('Touches a shared auth boundary with no test coverage.')).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it('shows a previously persisted score with no click and no model turn', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => (String(input).endsWith('/api/review-assist/lookup')
+      ? json({ answer: 'SCORE: 15\nIsolated rename.' })
+      : json({ answer: null })));
+    vi.stubGlobal('fetch', fetchMock);
+    renderCard();
+
+    await waitFor(() => expect(screen.getByText(/AI risk score/)).toHaveTextContent('15'));
+    expect(screen.getByRole('button', { name: 'Rescore' })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.every(([input]) => !String(input).endsWith('/api/review-assist/stream'))).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it('does not invent a number when the model ignores the score format', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (String(input).endsWith('/api/review-assist/stream')
+      ? sse([{ type: 'done', answer: 'I cannot assess this change.' }])
+      : json({ answer: null }))));
+    renderCard();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Score risk' }));
+
+    await waitFor(() => expect(screen.getByText('I cannot assess this change.')).toBeInTheDocument());
+    expect(screen.queryByText(/AI risk score/)).not.toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
 });

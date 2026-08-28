@@ -309,11 +309,13 @@ export const diffConfidenceRequestSchema = z.object({
 });
 
 /** A reviewer-initiated question about one review-queue decision. Each action
- * spawns a fresh single-shot AI turn on click — there is no ambient scoring on
- * this surface, so every request here is explicit and its failure is reported
- * to the reviewer rather than silently downgraded. */
+ * spawns a fresh single-shot AI turn on click — including `score_risk`, which
+ * produces the 0-100 review-risk number on demand for the decision a reviewer
+ * has open rather than ambiently for every hunk in the diff. Every request here
+ * is explicit and its failure is reported to the reviewer rather than silently
+ * downgraded. */
 export const reviewAssistRequestSchema = z.object({
-  action: z.enum(['explain', 'what_could_break', 'compare_task_intent']),
+  action: z.enum(['explain', 'what_could_break', 'compare_task_intent', 'score_risk']),
   decision: z.object({
     behavior: z.string().min(1).max(2_000),
     state: z.string().min(1).max(100),

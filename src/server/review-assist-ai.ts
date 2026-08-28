@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
 
-export type ReviewAssistAction = 'explain' | 'what_could_break' | 'compare_task_intent';
+export type ReviewAssistAction = 'explain' | 'what_could_break' | 'compare_task_intent' | 'score_risk';
 
 export type ReviewAssistDecision = {
   behavior: string;
@@ -25,6 +25,10 @@ const ACTION_DIRECTIVES: Record<ReviewAssistAction, string> = {
   explain: 'Instruction: explain in plain English what this change does and why it plausibly exists. At most three sentences, and stop as soon as the point is made.',
   what_could_break: 'Instruction: list the concrete, plausible ways this change could break something — edge cases, missed call sites, race conditions, silent behavior changes. At most four bullet points, one short line each. If nothing plausible comes to mind, say so directly instead of inventing risk.',
   compare_task_intent: 'Instruction: judge whether this change matches the task it was meant to accomplish. Say directly whether it looks aligned, partially aligned, or off-target, with a one-sentence reason. At most three sentences.',
+  // The two-line shape is a contract with the client, which parses the first
+  // line into the badge number. An answer that does not follow it is rendered
+  // as plain text rather than being coerced into a fake score.
+  score_risk: 'Instruction: rate how risky this change is for a reviewer to approve, from 0 (trivially safe) to 100 (dangerous, easy to get wrong, wide blast radius). Reply with exactly two lines and nothing else. First line: "SCORE: <number>". Second line: at most fifteen words saying why.',
 };
 
 /** Cheapest possible turn whose only job is to pay the session's one-time

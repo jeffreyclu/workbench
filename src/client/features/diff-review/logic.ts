@@ -313,3 +313,16 @@ export function buildFileDiffHunks(file: Pick<WorkspaceDiffFile, 'path' | 'patch
     return { decisionId: `${file.path}::${hunk.range}`, range: hunk.range, location: hunkLocation(hunk.range), additions: counts.additions, deletions: counts.deletions, lines };
   });
 }
+
+/** The model is told to answer `score_risk` as `SCORE: <n>` plus one line of
+ * reason. Parsing is strict on purpose: an answer that ignores the format is
+ * shown as plain text instead of being coerced into a number the model never
+ * committed to, so a bad turn is visible rather than silently neutral. */
+export function parseAiRiskScore(answer: string | undefined | null): { score: number; reason: string } | null {
+  if (!answer) return null;
+  const match = /^\s*SCORE:\s*(\d{1,3})\s*$/im.exec(answer);
+  if (!match) return null;
+  const score = Number(match[1]);
+  if (score > 100) return null;
+  return { score, reason: answer.slice(match.index + match[0].length).trim() };
+}

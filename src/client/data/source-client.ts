@@ -10,6 +10,10 @@ const workspaceDiffBasePath = (scope: WorkspaceDiffScope) => 'workItemId' in sco
   ? `/api/work-items/${scope.workItemId}`
   : `/api/shared/conversations/${scope.conversationId}`;
 
+/** Wire-level action union for `/api/review-assist*`; mirrors
+ * `reviewAssistRequestSchema` in shared contracts. */
+export type ReviewAssistActionName = 'explain' | 'what_could_break' | 'compare_task_intent' | 'score_risk';
+
 export const sourceClient = {
   resolveSourceUrl: (url: string) => request<{ draft: ResolvedSourceDraft }>('/api/sources/resolve', { method: 'POST', body: JSON.stringify({ url }) }),
   searchSources: (query: string, sources: BrokerSourceId[], signal?: AbortSignal) => request<BrokerSearchResponse>('/api/sources/search', { method: 'POST', body: JSON.stringify({ query, sources }), signal }),
@@ -32,7 +36,7 @@ export const sourceClient = {
   assessDiffBlocks: (blocks: Array<{ key: string; lines: string[] }>) => request<{ assessments: Record<string, { risk: number | null; reasoning: string }> }>('/api/diff-confidence', { method: 'POST', body: JSON.stringify({ blocks }) }),
   lookupDiffConfidenceBlocks: (blocks: Array<{ key: string; lines: string[] }>) => request<{ assessments: Record<string, { risk: number | null; reasoning: string }> }>('/api/diff-confidence/lookup', { method: 'POST', body: JSON.stringify({ blocks }) }),
   requestReviewAssist: (input: {
-    action: 'explain' | 'what_could_break' | 'compare_task_intent';
+    action: ReviewAssistActionName;
     decision: { behavior: string; state: string; hunks: Array<{ filePath: string; location: string; lines: string[] }> };
     taskIntent: { title: string; description: string } | null;
   }) => request<{ answer: string }>('/api/review-assist', { method: 'POST', body: JSON.stringify(input) }),
@@ -40,7 +44,7 @@ export const sourceClient = {
   // words about a second after clicking instead of waiting for the whole turn;
   // the resolved value is still the complete, server-persisted answer.
   streamReviewAssist: async (input: {
-    action: 'explain' | 'what_could_break' | 'compare_task_intent';
+    action: ReviewAssistActionName;
     decision: { behavior: string; state: string; hunks: Array<{ filePath: string; location: string; lines: string[] }> };
     taskIntent: { title: string; description: string } | null;
   }, onDelta: (text: string) => void): Promise<string> => {
@@ -85,7 +89,7 @@ export const sourceClient = {
     return answer;
   },
   lookupReviewAssist: (input: {
-    action: 'explain' | 'what_could_break' | 'compare_task_intent';
+    action: ReviewAssistActionName;
     decision: { behavior: string; state: string; hunks: Array<{ filePath: string; location: string; lines: string[] }> };
     taskIntent: { title: string; description: string } | null;
   }) => request<{ answer: string | null }>('/api/review-assist/lookup', { method: 'POST', body: JSON.stringify(input) }),
