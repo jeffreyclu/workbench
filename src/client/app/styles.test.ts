@@ -239,6 +239,15 @@ describe('diff review layout', () => {
   it('makes a pending diff assessment explicit instead of rendering an empty dark pill', () => {
     expect(styles).toContain('.diff-confidence-pending { min-width: 58px; color: #e6c75f; border-color: #8c6f2c; background: #2b2414; opacity: 1; }');
   });
+
+  it('uses GitHub-dark addition and deletion colors without dimming inactive hunks', () => {
+    expect(styles).toContain('.diff-line.addition { color: #aff5b4; background: #033a16; }');
+    expect(styles).toContain('.diff-line.deletion { color: #ffdcd7; background: #67060c; }');
+    const hunkRule = styles.match(/^\.diff-review-diff-block\s*\{[^}]*\}/m)?.[0] ?? '';
+
+    expect(hunkRule).not.toContain('opacity');
+    expect(styles).not.toContain('.diff-review-diff-block:hover { opacity: 1; }');
+  });
 });
 
 describe('agent debugger layout', () => {
