@@ -550,7 +550,7 @@ export interface AgentUsage {
   cacheReadInputTokens: number | null;
   outputTokens: number | null;
 }
-interface AgentCommandResult { output: string; usage: AgentUsage; sessionId?: string | null; }
+interface AgentCommandResult { output: string; usage: AgentUsage; sessionId?: string | null; /** Provider-billed dollars when the CLI reports them (Claude only today). */ costUsd?: number | null; }
 
 function numberAt(record: Record<string, unknown>, ...keys: string[]): number | null {
   const value = keys.map((key) => record[key]).find((candidate) => typeof candidate === 'number');
@@ -566,7 +566,7 @@ function numberAt(record: Record<string, unknown>, ...keys: string[]): number | 
  * (text, thinking, and tool use) while retaining the same request/message id.
  * Those replicas must be counted once; distinct provider responses are summed.
  */
-interface UsageSample { inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null; cumulative: boolean; sampleId: string | null }
+interface UsageSample { inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null; cumulative: boolean; sampleId: string | null; costUsd?: number | null }
 
 function usageFromEvent(agent: AgentRun['agent'], event: unknown): UsageSample | null {
   if (!event || typeof event !== 'object') return null;
@@ -594,8 +594,11 @@ function usageFromEvent(agent: AgentRun['agent'], event: unknown): UsageSample |
     const cacheCreationInputTokens = numberAt(usage ?? {}, 'cache_creation_input_tokens', 'cacheCreationInputTokens');
     const cacheReadInputTokens = numberAt(usage ?? {}, 'cache_read_input_tokens', 'cacheReadInputTokens');
     const inputTokens = rawInput;
-    if (inputTokens === null && outputTokens === null) return null;
-    return { inputTokens, cacheCreationInputTokens, cacheReadInputTokens, outputTokens, cumulative: true, sampleId: null };
+    // Claude's terminal event carries the amount it actually billed. That beats
+    // any list-price estimate, and is what makes cost_source = 'provider' real.
+    const costUsd = numberAt(record, 'total_cost_usd', 'totalCostUsd');
+    if (inputTokens === null && outputTokens === null) return costUsd === null ? null : { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, cumulative: true, sampleId: null, costUsd };
+    return { inputTokens, cacheCreationInputTokens, cacheReadInputTokens, outputTokens, cumulative: true, sampleId: null, costUsd };
   }
   const usage = record.type === 'assistant'
     ? ((record.message as Record<string, unknown> | undefined)?.usage as Record<string, unknown> | undefined)
@@ -1053,6 +1056,7 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
       }
     }
     let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
+    let residualProcessReapTimer: ReturnType<typeof setTimeout> | null = null;
     let stopping = false;
     let cancellationRequested = false;
     let terminationError: Error | null = null;
@@ -1066,6 +1070,15 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     const cancel = () => {
       cancellationRequested = true;
       stopProcessTree();
+    };
+    const reapResidualProcessTree = () => {
+      // A coding CLI can exit successfully while a shell command it launched
+      // leaves workers behind (Vitest is a concrete example). The parent is
+      // gone, but its Unix process group still identifies those descendants.
+      // Reap them on every normal completion just as we do for cancellation.
+      terminateAgentProcessTree(child, 'SIGTERM');
+      residualProcessReapTimer = setTimeout(() => terminateAgentProcessTree(child, 'SIGKILL'), CANCEL_FORCE_KILL_DELAY_MS);
+      residualProcessReapTimer.unref();
     };
     const instrumentedPrompt = `${prompt}
 
@@ -1094,6 +1107,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
     const eventContext: AgentEventContext = { subagents: new Map(), pendingBash: new Map() };
     let reportedUsage: { inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null } = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
     let estimatedOutputTokens = 0;
+    let providerCostUsd: number | null = null;
     let lastReportedUsage = '';
     // See UsageSample: `--forward-subagent-text` can surface the same provider
     // response more than once. Account for one provider request, never its
@@ -1112,6 +1126,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
       onUsage?.(liveUsage, agent);
     };
     const reportUsage = (usage: UsageSample) => {
+      if (typeof usage.costUsd === 'number') providerCostUsd = usage.costUsd;
       if (usage.cumulative) {
         // A cumulative event supersedes accumulated per-message samples, but must
         // not erase a count it simply did not carry.
@@ -1243,6 +1258,8 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
       clearInterval(heartbeat);
       if (pendingFlush) clearTimeout(pendingFlush);
       if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (!cancellationRequested && !signal?.aborted) reapResidualProcessTree();
+      if (residualProcessReapTimer) residualProcessReapTimer.unref();
       signal?.removeEventListener('abort', cancel);
       if (buffered.trim()) {
         terminalError ||= terminalAgentError(agent, buffered.trim()) ?? '';
@@ -1261,7 +1278,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
       else if (code === 0 && !terminalError) {
         const output = finalOutput.trim() || progress.trim() || stdout.trim();
         const outputTokens = reportedUsage.outputTokens ?? (estimatedOutputTokens || null);
-        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens }, sessionId: eventContext.sessionId ?? null });
+        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens }, sessionId: eventContext.sessionId ?? null, costUsd: providerCostUsd });
       }
       else {
         const providerDiagnostic = stderr.trim() || terminalError || finalOutput.trim() || stdout.trim();
@@ -1343,7 +1360,7 @@ export async function runAgentCommandWithFallback(
   resumeSessionId?: string,
   poolEligible = false,
   allowFallback = true,
-): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null }> {
+): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; costUsd?: number | null }> {
   try {
     const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, resumeSessionId, poolEligible, kind);
     return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
@@ -1614,7 +1631,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [result.agent]);
     }
     const { output } = result;
-    const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
+    const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason, costUsd: result.costUsd ?? null };
     let executionPlan: { summary: string; tasks: Array<{ title: string; description: string; workspacePath: string | null }> } | null = null;
     if (run.instructions.includes('WORKBENCH_DECOMPOSITION')) {
       const match = output.match(/<workbench-plan>([\s\S]*?)<\/workbench-plan>/);

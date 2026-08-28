@@ -276,6 +276,19 @@ describe('classifyExecution', () => {
     expect(result.output).toBe('Fixed the final response renderer and verified the focused test.');
   });
 
+  it('reaps test workers left behind after an otherwise successful agent exit', async () => {
+    const pidFile = join(tmpdir(), `workbench-orphan-worker-${Date.now()}.pid`);
+    const completed = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Finished.' } });
+    const { directory } = fakeAgentDirectory(`(trap '' TERM; while true; do /bin/sleep 0.1; done) >/dev/null 2>&1 & echo $! > '${pidFile}'\nprintf '%s\\n' '${completed}'`, 'exit 1');
+
+    await expect(runAgentCommandWithFallback('codex', directory, 'Complete the task.')).resolves.toEqual(expect.objectContaining({ output: 'Finished.' }));
+    const orphanPid = Number(readFileSync(pidFile, 'utf8').trim());
+    await waitFor(() => {
+      try { process.kill(orphanPid, 0); return false; }
+      catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+    }, 5_000);
+  });
+
   it('falls back on a non-zero 429 diagnostic and preserves requested and executing agents', async () => {
     const { directory, log } = fakeAgentDirectory(
       `printf '%s\\n' 'HTTP 429: usage limit reached' >&2\nexit 1`,
