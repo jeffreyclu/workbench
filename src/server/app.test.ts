@@ -709,6 +709,38 @@ describe('GET /api/shared/conversations/:id', () => {
     expect(await unlinked.json()).toEqual({ conversation: expect.objectContaining({ workItemId: null }) });
   });
 
+  it('keeps a linked conversation and task pinned together from either pin control', async () => {
+    const task = repository.create({ title: 'Shared pin target', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Shared pin conversation', task.id);
+
+    const conversationPinned = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/pin`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pinned: true }),
+    });
+    expect(conversationPinned.status).toBe(200);
+    expect(repository.get(task.id)?.status).toBe('pinned');
+    expect(repository.getConversation(conversation.id)).toEqual(expect.objectContaining({ pinned: true, linkedWorkItemPinned: true }));
+
+    const taskUnpinned = await fetch(`${baseUrl}/api/work-items/${task.id}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'ready' }),
+    });
+    expect(taskUnpinned.status).toBe(200);
+    expect(repository.get(task.id)?.status).toBe('ready');
+    expect(repository.getConversation(conversation.id)).toEqual(expect.objectContaining({ pinned: false, linkedWorkItemPinned: false }));
+
+    const taskPinned = await fetch(`${baseUrl}/api/work-items/${task.id}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'pinned' }),
+    });
+    expect(taskPinned.status).toBe(200);
+    expect(repository.getConversation(conversation.id)).toEqual(expect.objectContaining({ pinned: true, linkedWorkItemPinned: true }));
+
+    const conversationUnpinned = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/pin`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pinned: false }),
+    });
+    expect(conversationUnpinned.status).toBe(200);
+    expect(repository.get(task.id)?.status).toBe('ready');
+    expect(repository.getConversation(conversation.id)).toEqual(expect.objectContaining({ pinned: false, linkedWorkItemPinned: false }));
+  });
+
   it('unpins the conversation and its linked task when restoring a pinned archived conversation', async () => {
     const task = repository.create({ title: 'Pinned link target', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     repository.update(task.id, { status: 'pinned' });

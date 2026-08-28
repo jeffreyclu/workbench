@@ -70,3 +70,17 @@ belong in `~/notes/knowledge/` so both tools can read them.
 - `shared-memory/migration-log.md` — record of the 2026-08-23 migration that consolidated 44 files of
   private Claude memory into this shared store, and how two conflicting migrated lessons were reconciled
   rather than copied verbatim.
+
+## Pushing is a separate instruction from the work (2026-08-28)
+
+Jeffrey grants push/PR permission explicitly and narrowly. When he says "push" or "create a PR",
+that IS explicit authorization and the agent must do it rather than claiming it cannot. But that
+authorization does not carry forward: it covers the push he asked for, not the next one.
+
+After a later, differently-scoped instruction — "audit the PR for WDS tokens", "review this",
+"check X" — the deliverable is the finding plus the local edit. Do not push those edits, and do not
+treat the earlier push approval as still active. Report what changed locally and let Jeffrey decide
+whether it goes to the remote.
+
+Learned when an audit-only request for PR #14774 was answered with an unrequested push of
+`2b60429647` to `feat/con-connectors-v2-projection`.

@@ -279,7 +279,18 @@ export class WorkItemRepository {
   }
 
   setConversationPinned(id: string, pinned: boolean): SharedConversation | null {
-    return this.conversations.setPinned(id, pinned) ? this.getConversation(id) : null;
+    const conversation = this.getConversation(id);
+    if (!conversation) return null;
+    return this.transaction(() => {
+      if (!this.conversations.setPinned(id, pinned)) return null;
+      if (conversation.workItemId) {
+        // A task and its directly linked conversation are one parked-work
+        // destination. Keep their pin state together whichever surface
+        // Jeffrey uses; run-history-only conversations are not task links.
+        this.update(conversation.workItemId, { status: pinned ? 'pinned' : 'ready' }, true, { actor: 'jeffrey', source: 'conversation_pin' });
+      }
+      return this.getConversation(id);
+    });
   }
 
   // Handing a conversation to an agent is the signal that it's back in active
@@ -1571,6 +1582,14 @@ export class WorkItemRepository {
           this.database.prepare("DELETE FROM work_item_classifications WHERE work_item_id = ? AND source != 'manual'").run(id);
         }
         if (statusChanged) {
+          // Pinning is shared between a task and each conversation directly
+          // linked to it. A non-pinned task cannot leave its conversation in
+          // the pinned stack either. Historical run-only conversations are
+          // intentionally excluded: they are records, not the task's live
+          // conversation link.
+          this.database.prepare(`UPDATE shared_conversations
+            SET pinned = ?, updated_at = ?
+            WHERE work_item_id = ? AND deleted_at IS NULL`).run(Number(resolved.status === 'pinned'), now, id);
           this.recordLifecycleEvent({
             workItemId: id,
             transition: 'status_changed',
