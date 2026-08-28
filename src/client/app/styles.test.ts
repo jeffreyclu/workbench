@@ -248,9 +248,11 @@ describe('diff review layout', () => {
     expect(styles).toContain('.diff-confidence-pending { min-width: 58px; color: #e6c75f; border-color: #8c6f2c; background: #2b2414; opacity: 1; }');
   });
 
-  it('uses GitHub-dark addition and deletion colors without dimming inactive hunks', () => {
-    expect(styles).toContain('.diff-line.addition { color: #aff5b4; background: #033a16; }');
-    expect(styles).toContain('.diff-line.deletion { color: #ffdcd7; background: #67060c; }');
+  it('uses subtle GitHub-dark diff fills without overriding IDE syntax colors', () => {
+    expect(styles).toContain('.diff-line.addition { background: #12261e; }');
+    expect(styles).toContain('.diff-line.deletion { background: #2d1f23; }');
+    expect(styles).toContain('.diff-line.addition > span:nth-child(-n + 2) { color: #8fb59c; background: #1b3626; border-right-color: #1b3626; }');
+    expect(styles).toContain('.diff-line.deletion > span:nth-child(-n + 2) { color: #c9a3a7; background: #3b252b; border-right-color: #3b252b; }');
     const hunkRule = styles.match(/^\.diff-review-diff-block\s*\{[^}]*\}/m)?.[0] ?? '';
 
     expect(hunkRule).not.toContain('opacity');

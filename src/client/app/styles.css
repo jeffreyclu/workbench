@@ -400,8 +400,8 @@ nav { display: grid; gap: 3px; }
 .diff-line > span { padding: 0 8px; }
 .diff-line > span:last-child, .diff-line-code { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .diff-line > span:nth-child(-n + 2) { color: #77766f; text-align: right; user-select: none; border-right: 1px solid #242421; }
-.diff-line.addition { color: #aff5b4; background: #033a16; }.diff-line.addition > span:nth-child(-n + 2) { color: #aff5b4; background: #0f5323; border-right-color: #0f5323; }
-.diff-line.deletion { color: #ffdcd7; background: #67060c; }.diff-line.deletion > span:nth-child(-n + 2) { color: #ffdcd7; background: #82071e; border-right-color: #82071e; }
+.diff-line.addition { background: #12261e; }.diff-line.addition > span:nth-child(-n + 2) { color: #8fb59c; background: #1b3626; border-right-color: #1b3626; }
+.diff-line.deletion { background: #2d1f23; }.diff-line.deletion > span:nth-child(-n + 2) { color: #c9a3a7; background: #3b252b; border-right-color: #3b252b; }
 .diff-line.header { color: #aaa9a2; background: #20201d; }.diff-line.header > span:nth-child(-n + 2) { background: #1c1c19; }
 .diff-line-marker { padding-right: 2px; user-select: none; }
 .diff-block { margin: 4px 0; }
