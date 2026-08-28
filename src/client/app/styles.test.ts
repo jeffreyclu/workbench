@@ -181,6 +181,14 @@ describe('conversation view controls', () => {
     expect(pinRule).toContain('box-shadow: 0 6px 16px #0009');
   });
 
+  it('reserves space for the expanded task-type control so it displaces the pin', () => {
+    const popoverRule = styles.match(/^\.card-classification-popover\s*\{[^}]*\}/m)?.[0] ?? '';
+
+    expect(popoverRule).toContain('display: inline-flex');
+    expect(popoverRule).toContain('width: max-content');
+    expect(popoverRule).not.toContain('position: absolute');
+  });
+
   it('keeps the mobile composer action as a safe-area-aware bottom-right action', () => {
     const phoneRules = styles.match(/@media \(max-width: 820px\) and \(pointer: coarse\) \{[\s\S]*?\.queued-message-action \{[^}]*\}/)?.[0] ?? '';
 

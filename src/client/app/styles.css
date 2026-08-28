@@ -756,7 +756,10 @@ nav { display: grid; gap: 3px; }
 .card-classification-control.disclosure { position: relative; }
 .card-classification-control.disclosure .icon-button { color: #d7ccff; border-color: #5a4f83; }
 .card-classification-control.disclosure .icon-button:hover { color: #fff; background: #25203a; }
-.card-classification-popover { position: absolute; top: 0; right: 0; z-index: 20; display: inline-flex; align-items: stretch; width: max-content; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
+/* MANUAL LEGACY-AFFECTING: The conversation review bar shares this disclosure.
+   Keep the expanded task type in flex flow so it reserves space and moves the
+   adjacent pin instead of painting over it. */
+.card-classification-popover { display: inline-flex; align-items: stretch; width: max-content; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
 .run-card pre { max-height: 360px; overflow: auto; margin: 0; padding: 13px; color: #bdbcb5; background: #0d0d0c; font: 10px/1.65 'DM Mono'; white-space: pre-wrap; word-break: break-word; }
 .run-card .run-prompt { margin: 0; padding: 10px 12px; color: #77766f; font-size: 10px; font-style: italic; }
 .run-card .run-prompt { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
