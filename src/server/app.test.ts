@@ -107,6 +107,18 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     expect(database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversation.id)).toEqual({ workspace_path: process.cwd() });
   });
 
+  it('selects an inferred repository for a linked conversation with no saved workspace', async () => {
+    const item = repository.create({ title: 'Build a connector projection', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Missing linked workspace', item.id);
+
+    const response = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/workspaces`);
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { selectedPath: string | null; workspaces: Array<{ path: string; selected: boolean }> };
+    expect(body.selectedPath).not.toBeNull();
+    expect(body.workspaces.some((workspace) => workspace.path === body.selectedPath && workspace.selected)).toBe(true);
+  });
+
   it('reports only work owned by this backend in its runtime drain health', async () => {
     const idle = await fetch(`${baseUrl}/api/health`);
     expect(await idle.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: false, ownedAgentWorkActive: false, buildId: expect.any(String) });

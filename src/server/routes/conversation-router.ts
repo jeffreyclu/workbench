@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { createSessionFeedbackSchema, createSharedConversationSchema, createSharedMessageSchema, setConversationPinnedSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema, upsertDiffHunkReviewsSchema } from '../../shared/contracts.js';
 import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
-import { runAgentCommandWithFallback } from '../agent-runner.js';
+import { resolveWorkingDirectory, runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, resolveSharedReplyWorkingDirectory, runSharedBackgroundJob } from '../shared-room.js';
 import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
@@ -49,7 +49,14 @@ export function createConversationRouter({ repository, database, capabilities, a
       .map((entry) => join(root, entry.name))
       .filter((path) => existsSync(join(path, '.git')) || existsSync(join(path, 'package.json')))
       .map((path) => resolve(path));
-    const sourcePath = usableWorkspace(linkedItem?.workspacePath);
+    // A linked task can predate its explicit workspace assignment. Reuse the
+    // same repository resolver as agent dispatch so Changes is immediately
+    // usable instead of making the user rediscover the repository manually.
+    const inferredTaskPath = (() => {
+      try { return linkedItem ? usableWorkspace(resolveWorkingDirectory(linkedItem)) : null; }
+      catch { return null; }
+    })();
+    const sourcePath = usableWorkspace(linkedItem?.workspacePath) ?? inferredTaskPath;
     const activePath = usableWorkspace(activeRunWorkspace);
     const linkedPath = activePath ?? sourcePath;
     if (linkedPath && !candidates.includes(linkedPath)) candidates.unshift(linkedPath);
