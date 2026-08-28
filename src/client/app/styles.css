@@ -428,8 +428,20 @@ nav { display: grid; gap: 3px; }
 .diff-review-completion-state.state-reviewed { color: #8bbd75; border-color: #45603a; }
 .diff-review-decision-card h4 { margin: 0; color: #85847d; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
 .diff-review-exact-change, .diff-review-ai-risk { display: grid; align-content: start; gap: 8px; }
-.diff-review-ai-risk > div { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.diff-review-ai-risk > div { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; min-width: 0; }
 .diff-review-ai-risk p { margin: 0; color: #a9a89f; font-size: 11px; }
+.diff-review-ai-risk .diff-review-queue-risk-score { color: #d8c98a; border-color: #5c5330; }
+.diff-review-ai-assist { display: grid; align-content: start; gap: 8px; }
+.diff-review-ai-assist-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.diff-review-ai-assist-actions button { display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 11px; color: #c9c8c1; border: 1px solid #45443e; border-radius: 6px; background: #20201d; cursor: pointer; font: 700 10px 'DM Mono'; text-align: center; }
+.diff-review-ai-assist-actions button:hover:not(:disabled), .diff-review-ai-assist-actions button:focus-visible { color: #eee; border-color: #6c6b62; outline: 0; }
+.diff-review-ai-assist-actions button:disabled { opacity: .6; cursor: not-allowed; }
+.diff-review-ai-assist > p[role="status"] { margin: 0; color: #85847d; font: 10px 'DM Mono'; }
+.diff-review-ai-assist-answer { margin: 0; padding: 10px 12px; color: #c9c8c1; border: 1px solid #302f2b; border-radius: 6px; background: #171715; font-size: 11px; line-height: 1.6; white-space: pre-wrap; }
+.diff-review-ai-assist-error { display: grid; gap: 7px; padding: 10px 12px; border: 1px solid #5b3935; border-radius: 6px; background: #211716; }
+.diff-review-ai-assist-error p { margin: 0; color: #e1a68f; font-size: 11px; }
+.diff-review-ai-assist-error button { align-self: start; display: inline-flex; align-items: center; justify-content: center; min-height: 28px; padding: 0 10px; color: #e1a68f; border: 1px solid #5b3935; border-radius: 6px; background: #20201d; cursor: pointer; font: 700 10px 'DM Mono'; }
+.diff-review-ai-assist-error button:hover, .diff-review-ai-assist-error button:focus-visible { color: #eee; border-color: #6c6b62; outline: 0; }
 .diff-review-exact-change code { overflow-wrap: anywhere; color: #c9c8c1; font: 10px/1.5 'DM Mono'; }
 .diff-review-exact-change a { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; color: #aaa9a2; border: 1px solid #3c3c36; border-radius: 5px; }
 .diff-review-exact-change a:hover, .diff-review-exact-change a:focus-visible { color: var(--acid); border-color: #596234; outline: 0; }

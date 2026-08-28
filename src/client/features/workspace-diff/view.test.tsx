@@ -97,9 +97,9 @@ describe('WorkspaceDiffView decision queue', () => {
     // Priority order is purely deterministic by source order (ordinal): decision 1 opens first.
     expect(screen.getByRole('button', { name: /Decision 1.*local/ })).toHaveAttribute('aria-current', 'step');
     expect(screen.getByText('src/local.ts', { selector: 'code' })).toBeInTheDocument();
-    // Regex-derived signals no longer surface as risk anywhere; ordering carries no AI signal at all.
-    expect(screen.queryByRole('region', { name: 'Risk signals' })).toBeNull();
-    expect(screen.queryByRole('region', { name: 'AI risk' })).toBeNull();
+    // Deterministic risk signals still surface on the detail card (Phase 1 stays visible by
+    // default); they never gate or reorder the queue, and no ambient AI request ever fires for them.
+    expect(screen.getByText('Risk signals')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Refresh changes' })).toHaveClass('workspace-diff-refresh-pending');
 
     const decisionQueue = screen.getByRole('navigation', { name: 'Review decision queue' });
@@ -143,6 +143,56 @@ describe('WorkspaceDiffView decision queue', () => {
     // Clicking a block inside the diff selects that decision too.
     fireEvent.click(within(diffPane).getByRole('button', { name: 'Select the decision at Lines 1\u20133 in src/local.ts' }));
     expect(diffPane.querySelector('.diff-review-diff-block.active')).toHaveTextContent('@@ -1,3 +1,3 @@ firstBehavior');
+  });
+
+  it('highlights the block for a decision grouped across files by shared subject', async () => {
+    const authFile: WorkspaceDiffFile = {
+      path: 'src/server/auth/routes.ts', previousPath: null, status: 'modified', additions: 3, deletions: 1, isBinary: false,
+      patch: '@@ -10 +10,3 @@ function authorizeRequest()\n-export function authorizeRequest() {}\n+export async function authorizeRequest() {\n+  await repository.update(session)\n+  throw new Error("denied")',
+    };
+    const authTestFile: WorkspaceDiffFile = {
+      path: 'src/server/auth/routes.test.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false,
+      patch: '@@ -30 +30 @@ describe("authorizeRequest")\n-expect(authorizeRequest()).toBe(false)\n+await expect(authorizeRequest()).rejects.toThrow()',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([authFile, authTestFile], 'cross-file-revision') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    // The two files share the "authorizeRequest" subject, so buildReviewDecisions groups
+    // them into one decision whose id differs from either raw per-hunk id. The pane opens
+    // on the first grouped file's hunk, which must still highlight as the selected decision.
+    const diffPane = await screen.findByLabelText('Full diff for src/server/auth/routes.ts');
+    expect(diffPane.querySelector('.diff-review-diff-block.active')).toHaveTextContent('@@ -10 +10,3 @@ function authorizeRequest()');
+  });
+
+  it('clears the on-demand AI explanation when the reviewer switches to a different decision', async () => {
+    const file: WorkspaceDiffFile = {
+      path: 'src/local.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
+      patch: '@@ -1,3 +1,3 @@ firstBehavior\n context-one\n-before\n+after\n@@ -10,3 +10,3 @@ secondBehavior\n context-two\n-old\n+new',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'jump-revision') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      if (url.endsWith('/api/review-assist')) return json({ answer: 'This decision only touches local formatting.' });
+      throw new Error(`Unexpected request: ${url} ${init?.method ?? ''}`);
+    });
+    renderView(fetchMock);
+
+    await screen.findByRole('heading', { name: 'Changes behavior in src/local.ts.' });
+    fireEvent.click(screen.getByRole('button', { name: 'Explain this decision' }));
+    await screen.findByText('This decision only touches local formatting.');
+
+    fireEvent.click(screen.getByRole('button', { name: /Decision 2.*behavior/ }));
+    expect(screen.queryByText('This decision only touches local formatting.')).toBeNull();
   });
 
   it('persists exact hunk outcomes and auto-advances after each decision', async () => {

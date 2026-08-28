@@ -95,7 +95,15 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const orderedDecisions = useMemo(() => orderReviewDecisions(decisions), [decisions]);
   const selectedDecision = orderedDecisions.find((decision) => decision.id === selectedDecisionId) ?? orderedDecisions[0] ?? null;
   const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
-  const fileHunks = useMemo(() => (selectedFile ? buildFileDiffHunks(selectedFile) : []), [selectedFile]);
+  const fileHunks = useMemo(() => {
+    if (!selectedFile) return [];
+    // buildFileDiffHunks assigns each patch hunk its own raw decision id; a
+    // decision that groups hunks across files (same subject, multiple paths)
+    // has a different aggregate id, so remap here or its hunks never match
+    // activeDecisionId and stay unhighlighted.
+    const decisionIdByHunkId = new Map(decisions.flatMap((decision) => decision.hunks.map((hunk) => [hunk.id, decision.id])));
+    return buildFileDiffHunks(selectedFile).map((hunk) => ({ ...hunk, decisionId: decisionIdByHunkId.get(hunk.decisionId) ?? hunk.decisionId }));
+  }, [selectedFile, decisions]);
 
   const recordDecisionState = (decision: ReviewDecision, state: DiffHunkReviewState) =>
     upsertHunkReview.mutateAsync({
@@ -154,7 +162,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
               <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={setSelectedDecisionId} />
               <div className="diff-review-workbench">
                 {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={setSelectedDecisionId} />}
-                <DiffReviewDecisionDetailCard decision={selectedDecision} taskIntent={taskIntent}>
+                <DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent}>
                   <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
                 </DiffReviewDecisionDetailCard>
               </div>

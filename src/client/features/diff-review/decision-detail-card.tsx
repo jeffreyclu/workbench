@@ -2,7 +2,7 @@ import { memo, type ReactNode } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { sourceClient } from '../../data/source-client.js';
 import type { ReviewDecision } from './logic.js';
-import { reviewStateLabel } from './logic.js';
+import { reviewStateLabel, riskSignalLabel } from './logic.js';
 
 export type ReviewAssistAction = 'explain' | 'what_could_break' | 'compare_task_intent';
 export type ReviewAssistTaskIntent = { title: string; description: string } | null;
@@ -45,6 +45,14 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
       <h4 id="diff-review-exact-change-title">Exact change</h4>
       <div>
         <small>Highlighted in the diff · {decision.hunks.length === 1 ? decision.hunks[0].location : `${decision.hunks.length} hunks`} · <b>+{decision.additions}</b> <i>−{decision.deletions}</i></small>
+      </div>
+    </section>
+    <section className="diff-review-ai-risk" aria-labelledby="diff-review-risk-title">
+      <h4 id="diff-review-risk-title">Risk signals</h4>
+      <div>
+        {decision.riskSignals.length === 0
+          ? <p>No elevated risk signals detected.</p>
+          : decision.riskSignals.map((signal) => <span key={signal} className="diff-review-queue-risk-score">{riskSignalLabel(signal)}</span>)}
       </div>
     </section>
     <section className="diff-review-ai-assist" aria-labelledby="diff-review-ai-assist-title">
