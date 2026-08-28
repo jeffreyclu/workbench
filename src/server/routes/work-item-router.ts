@@ -33,6 +33,7 @@ import { resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { generateFastAiTaskDraft } from '../fast-task-draft-ai.js';
 import { assessDiffBlocks, lookupDiffConfidenceBlocks } from '../diff-confidence-ai.js';
 import { lookupReviewAssist, requestReviewAssist } from '../review-assist-ai.js';
+import { reviewAutoScoreSnapshot } from '../review-auto-score.js';
 import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
@@ -123,6 +124,21 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       send({ type: 'error', message: error instanceof Error ? error.message : 'AI review assist failed.' });
     }
     response.end();
+  });
+  // Replay for a Changes pane that opened after an agent came to rest. The
+  // scored answers themselves come from the assist cache; this carries the
+  // progress and the per-decision failures, which are not cacheable state.
+  router.get('/api/review-assist/auto-score', (request, response, next) => {
+    try {
+      const query = z.object({
+        workItemId: z.string().trim().min(1).optional(),
+        conversationId: z.string().trim().min(1).optional(),
+        revision: z.string().trim().min(1),
+      }).refine((value) => Boolean(value.workItemId) !== Boolean(value.conversationId), 'Provide exactly one of workItemId or conversationId.')
+        .parse(request.query);
+      const scope = query.workItemId ? { workItemId: query.workItemId } : { conversationId: query.conversationId! };
+      response.json({ snapshot: reviewAutoScoreSnapshot(scope, query.revision) });
+    } catch (error) { next(error); }
   });
   // Cache-only: never spawns a model turn. See /api/diff-confidence/lookup.
   router.post('/api/review-assist/lookup', (request, response, next) => {

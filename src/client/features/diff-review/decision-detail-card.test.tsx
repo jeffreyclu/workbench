@@ -26,11 +26,11 @@ const frame = (event: unknown) => `data: ${JSON.stringify(event)}\n\n`;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const sse = (events: unknown[]) => new Response(events.map(frame).join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
 
-function renderCard(taskIntent: { title: string; description: string } | null = null) {
+function renderCard(taskIntent: { title: string; description: string } | null = null, autoScore?: { answer: string | null; error: string | null }) {
   const client = new QueryClient();
   return render(
     <QueryClientProvider client={client}>
-      <DiffReviewDecisionDetailCard decision={decision} taskIntent={taskIntent}><div /></DiffReviewDecisionDetailCard>
+      <DiffReviewDecisionDetailCard decision={decision} taskIntent={taskIntent} autoScore={autoScore}><div /></DiffReviewDecisionDetailCard>
     </QueryClientProvider>,
   );
 }
@@ -46,6 +46,28 @@ describe('diff review decision detail', () => {
     renderCard(null);
 
     expect(screen.getByRole('button', { name: 'Compare against task intent' })).toBeDisabled();
+  });
+
+  it('renders a score streamed in by the background pass without asking for one', async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => json({ answer: null }));
+    vi.stubGlobal('fetch', fetchMock);
+    renderCard(null, { answer: 'SCORE: 72\nTouches an auth path with no test.', error: null });
+
+    expect(screen.getByText('72')).toBeInTheDocument();
+    expect(screen.getByText('Touches an auth path with no test.')).toBeInTheDocument();
+    // A decision the background pass already scored must not be re-scored by
+    // the panel's own prefetch.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/review-assist/stream'))).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps a failed background score visible and retryable rather than showing it as unscored', () => {
+    renderCard(null, { answer: null, error: 'AI review assist timed out after 30 seconds.' });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Background scoring failed: AI review assist timed out after 30 seconds.');
+    expect(screen.queryByText('Not scored yet.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Score risk' })).toBeEnabled();
   });
 
   it('shows the model answer after an on-demand assist action succeeds', async () => {

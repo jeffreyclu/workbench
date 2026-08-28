@@ -14,6 +14,7 @@ import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import type { ReviewDecision } from '../diff-review/logic.js';
 import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, reviewDecisionFollowUpReference } from '../diff-review/logic.js';
+import { useAutoReviewScores } from '../diff-review/auto-score.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
 import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js';
@@ -110,6 +111,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const upsertHunkReview = useUpsertDiffHunkReview(scope, reviewRevision);
   const decisions = useMemo(() => buildReviewDecisions(displayedDiff?.files ?? [], hunkReviews.data?.reviews ?? []), [displayedDiff?.files, hunkReviews.data?.reviews]);
   const orderedDecisions = useMemo(() => orderReviewDecisions(decisions), [decisions]);
+  // Scores computed by the background pass that starts when an agent comes to
+  // rest. Nothing here requests them; they stream in and populate whichever
+  // decision panel the reviewer opens.
+  const autoScores = useAutoReviewScores({ workItemId, conversationId }, reviewRevision);
   const selectedDecision = orderedDecisions.find((decision) => decision.id === selectedDecisionId) ?? orderedDecisions[0] ?? null;
   const selectedDecisionIndex = selectedDecision ? orderedDecisions.findIndex((decision) => decision.id === selectedDecision.id) : -1;
   const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
@@ -179,6 +184,8 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
           : <div className="workspace-diff-layout diff-review-layout">
             {reviewHandoff && <AgentRunReviewHandoffCard handoff={reviewHandoff} />}
             <DiffReviewSummaryView decisions={decisions} />
+            {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
+            {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
             {selectedDecision && <>
               <div className="mobile-decision-navigator" aria-label="Decision navigation">
                 <button type="button" onClick={() => moveDecision(-1)} disabled={selectedDecisionIndex <= 0} aria-label="Previous decision"><ChevronLeft size={18} aria-hidden="true" /></button>
@@ -189,7 +196,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
               <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} />
               <div className="diff-review-workbench">
                 {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={selectDecision} />}
-                {!isPhoneReview && <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent}>
+                {!isPhoneReview && <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
                   <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
                 </DiffReviewDecisionDetailCard></div>}
               </div>
@@ -198,7 +205,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                   <span id="mobile-decision-detail-title">Decision details</span>
                   <button type="button" onClick={() => setMobileDecisionDetailOpen(false)} aria-label="Close decision details"><X size={18} /></button>
                 </div>
-                <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent}>
+                <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
                   <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
                 </DiffReviewDecisionDetailCard></div>
               </ModalDialog>}

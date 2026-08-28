@@ -9,10 +9,12 @@ type RealtimeMessage =
   | { type: 'ready' }
   | { type: 'invalidate'; topics: RealtimeTopic[] }
   | { type: 'notification'; tone: ToastTone; message: string; description?: string; duration?: number; action?: { label: string; route: string } }
-  | { type: 'diff-confidence'; assessments: Record<string, { risk: number | null; reasoning: string }> };
+  | { type: 'diff-confidence'; assessments: Record<string, { risk: number | null; reasoning: string }> }
+  | { type: 'review-score'; scope: { workItemId: string } | { conversationId: string }; revision: string; decisionId: string; answer: string | null; error: string | null; completed: number; total: number };
 
 export type RealtimeNotification = Extract<RealtimeMessage, { type: 'notification' }>;
 export type RealtimeDiffConfidence = Extract<RealtimeMessage, { type: 'diff-confidence' }>;
+export type RealtimeReviewScore = Extract<RealtimeMessage, { type: 'review-score' }>;
 const realtimeMessageListeners = new Set<(message: RealtimeMessage) => void>();
 
 export function subscribeRealtimeMessages(listener: (message: RealtimeMessage) => void): () => void {
@@ -61,6 +63,16 @@ function isRealtimeMessage(value: unknown): value is RealtimeMessage {
   if (value.type === 'diff-confidence') {
     const message = value as Partial<RealtimeDiffConfidence>;
     return Boolean(message.assessments) && typeof message.assessments === 'object';
+  }
+  if (value.type === 'review-score') {
+    const message = value as Partial<RealtimeReviewScore>;
+    return typeof message.decisionId === 'string'
+      && typeof message.revision === 'string'
+      && (message.answer === null || typeof message.answer === 'string')
+      && (message.error === null || typeof message.error === 'string')
+      && typeof message.completed === 'number'
+      && typeof message.total === 'number'
+      && Boolean(message.scope) && typeof message.scope === 'object';
   }
   return value.type === 'invalidate'
     && 'topics' in value
@@ -135,7 +147,7 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
           if (!isRealtimeMessage(message)) return;
           if (message.type === 'invalidate') invalidateRealtimeTopics(queryClient, message.topics);
           if (message.type === 'notification') onNotification(message);
-          if (message.type === 'diff-confidence') for (const listener of realtimeMessageListeners) listener(message);
+          if (message.type === 'diff-confidence' || message.type === 'review-score') for (const listener of realtimeMessageListeners) listener(message);
         } catch {
           // Ignore malformed frames. The server never sends application data.
         }

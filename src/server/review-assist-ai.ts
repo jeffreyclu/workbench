@@ -38,8 +38,14 @@ const ACTION_DIRECTIVES: Record<ReviewAssistAction, string> = {
  * first message. */
 const PRIME_PROMPT = 'Instruction: reply with the single word ready.';
 
+/** Keyed on exactly what the prompt reads. Only `compare_task_intent` puts the
+ * task into its prompt, so folding intent into every key fragmented the cache:
+ * an edited task description threw away a score that did not depend on it, and
+ * a background-computed score missed the moment the reviewer's window derived
+ * intent even slightly differently. */
 function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent): string {
-  return createHash('sha256').update(JSON.stringify({ action, decision, taskIntent })).digest('hex');
+  const keyed = action === 'compare_task_intent' ? { action, decision, taskIntent } : { action, decision };
+  return createHash('sha256').update(JSON.stringify(keyed)).digest('hex');
 }
 
 function readCached(database: WorkbenchDatabase, hash: string): string | undefined {

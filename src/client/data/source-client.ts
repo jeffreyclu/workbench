@@ -93,4 +93,20 @@ export const sourceClient = {
     decision: { behavior: string; state: string; hunks: Array<{ filePath: string; location: string; lines: string[] }> };
     taskIntent: { title: string; description: string } | null;
   }) => request<{ answer: string | null }>('/api/review-assist/lookup', { method: 'POST', body: JSON.stringify(input) }),
+  /** Replays a background scoring pass a pane may have opened in the middle
+   * of. Live results arrive over the realtime socket; this only backfills what
+   * was streamed before the pane existed. */
+  getReviewAutoScore: (input: ({ workItemId: string } | { conversationId: string }) & { revision: string }) => {
+    const query = new URLSearchParams(input as Record<string, string>);
+    return request<{ snapshot: ReviewAutoScoreSnapshot | null }>(`/api/review-assist/auto-score?${query.toString()}`);
+  },
+};
+
+export type ReviewAutoScoreSnapshot = {
+  revision: string;
+  running: boolean;
+  completed: number;
+  total: number;
+  skipped: number;
+  entries: Array<{ decisionId: string; ordinal: number; answer: string | null; error: string | null }>;
 };

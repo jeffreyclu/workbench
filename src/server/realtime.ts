@@ -14,7 +14,21 @@ export type RealtimeNotification = {
   action?: { label: string; route: string };
 };
 export type RealtimeDiffConfidence = { type: 'diff-confidence'; assessments: Record<string, { risk: number | null; reasoning: string }> };
-export type RealtimeMessage = { type: 'ready' } | { type: 'invalidate'; topics: RealtimeTopic[] } | RealtimeNotification | RealtimeDiffConfidence;
+/** One decision's background risk score, streamed as the scorer settles it.
+ * `error` is carried rather than dropped so a decision that failed to score
+ * stays a visible, retryable failure in its panel instead of silently reading
+ * as "not scored yet". */
+export type RealtimeReviewScore = {
+  type: 'review-score';
+  scope: { workItemId: string } | { conversationId: string };
+  revision: string;
+  decisionId: string;
+  answer: string | null;
+  error: string | null;
+  completed: number;
+  total: number;
+};
+export type RealtimeMessage = { type: 'ready' } | { type: 'invalidate'; topics: RealtimeTopic[] } | RealtimeNotification | RealtimeDiffConfidence | RealtimeReviewScore;
 
 type RealtimeSink = (message: Exclude<RealtimeMessage, { type: 'ready' }>) => void;
 let sink: RealtimeSink | null = null;
@@ -34,6 +48,13 @@ export function publishRealtimeNotification(notification: Omit<RealtimeNotificat
  * unlike durable application state, they do not need a REST refetch first. */
 export function publishRealtimeDiffConfidence(assessments: RealtimeDiffConfidence['assessments']): void {
   sink?.({ type: 'diff-confidence', assessments });
+}
+
+/** Streams one background review score to any open Changes pane. Ephemeral
+ * like diff-confidence: the durable answer is already in the assist cache, so
+ * a client that missed the frame still reads it from REST. */
+export function publishRealtimeReviewScore(score: Omit<RealtimeReviewScore, 'type'>): void {
+  sink?.({ type: 'review-score', ...score });
 }
 
 /** Move browser clients off a retiring runtime only after the replacement is

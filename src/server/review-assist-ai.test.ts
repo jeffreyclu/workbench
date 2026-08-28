@@ -63,6 +63,25 @@ describe('requestReviewAssist caching', () => {
     expect(spawn.mock.calls.length).toBe(spawnCountAfterFirstTurn);
   });
 
+  it('keys a score on the decision alone, so a background-computed score survives any task intent', async () => {
+    vi.resetModules();
+    const spawn = mockStreamingWorker('SCORE: 30\nNarrow change.');
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { lookupReviewAssist, requestReviewAssist } = await import('./review-assist-ai.js');
+    const database = openDatabase(':memory:');
+
+    // What the background pass computes: no task intent, because a risk score's
+    // prompt never reads one.
+    await requestReviewAssist(database, 'score_risk', decision, null);
+
+    // What a reviewer's open panel asks for, carrying whatever intent its
+    // window derived. It must still be a cache hit.
+    expect(lookupReviewAssist(database, 'score_risk', decision, { title: 'Ship sync retries', description: 'Retry transient failures.' }))
+      .toBe('SCORE: 30\nNarrow change.');
+    // Intent still keys the one action whose prompt actually includes it.
+    expect(lookupReviewAssist(database, 'compare_task_intent', decision, null)).toBeNull();
+  });
+
   it('reports a failed turn instead of silently caching a neutral placeholder', async () => {
     vi.resetModules();
     vi.doMock('node:child_process', () => ({

@@ -14,6 +14,7 @@ import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js
 import { notifyAgentRunFinished } from './slack-notify.js';
 import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
+import { scheduleReviewAutoScore } from './review-auto-score.js';
 
 const MAX_OUTPUT_BYTES = 1_000_000;
 /** How long a run may produce no stream event before its output gets a visible elapsed marker. */
@@ -1396,6 +1397,18 @@ const RETRYABLE_KINDS = new Set<string>(['analysis', 'research', 'review', 'stra
 /** Run kinds that edit the working tree, and therefore serialize on it. Read-only kinds never wait for a workspace. */
 export const MUTATING_RUN_KINDS = new Set<string>(['execute']);
 
+/** An agent coming to rest is the moment its changes stop moving, so it is the
+ * moment worth scoring them. Fire-and-forget: a reviewer's queue must never
+ * wait on model turns, and a scoring failure must never fail the run that
+ * produced the changes. Both the conversation and the task surface are
+ * scheduled when a run belongs to both, because either pane may be the one
+ * open; the second pass is nearly free since it reads the same answer cache. */
+function startReviewAutoScore(repository: WorkItemRepository, run: AgentRun, fallbackWorkspace: string | null): void {
+  if (!MUTATING_RUN_KINDS.has(run.kind)) return;
+  void scheduleReviewAutoScore(repository, { workItemId: run.workItemId }, fallbackWorkspace);
+  if (run.conversationId) void scheduleReviewAutoScore(repository, { conversationId: run.conversationId }, fallbackWorkspace);
+}
+
 /** How long a run whose workspace is busy waits before the scheduler offers it the workspace again. */
 const WORKSPACE_WAIT_RETRY_MS = 5_000;
 
@@ -1637,6 +1650,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.moveForAttention(item.id, 'top', `${result.agent} completed ${run.kind}; review the result.`);
     }
     repository.addActivity(item.id, result.agent, 'progress', `Completed ${run.kind}.`);
+    startReviewAutoScore(repository, run, sourceWorkspace ?? workspace ?? null);
     publishRealtimeEvent('work-items', 'shared', 'insights');
     publishRealtimeNotification(executionPlan
       ? { tone: 'info', message: 'Agent has follow-ups for review', description: item.title, duration: 0, action: { label: 'Review suggestions', route: run.conversationId ? `/conversations/${run.conversationId}` : `/tasks/${item.id}` } }
@@ -1644,8 +1658,13 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     notifyAgentRunFinished(item, { agent: result.agent, kind: run.kind }, 'completed', output);
   } catch (error) {
     if (controller.signal.aborted) {
-      if (repository.isCancellationRequested(run.id) && repository.finishRunCancellation(run.id, ownerId) && run.messageId) {
-        repository.updateSharedMessage(run.messageId, { status: 'canceled' });
+      if (repository.isCancellationRequested(run.id) && repository.finishRunCancellation(run.id, ownerId)) {
+        if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'canceled' });
+        // Cancelling stops the agent, not its edits: whatever it already wrote
+        // is still in the working tree, and a half-finished change is the kind
+        // most worth reading. Scoped to a finalised cancellation so an abort
+        // from process shutdown does not start work nobody will see.
+        startReviewAutoScore(repository, run, sourceWorkspace ?? workspace ?? null);
       }
       return;
     }
@@ -1665,6 +1684,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.moveForAttention(item.id, 'top', `${activeAgent} execution failed and needs intervention.`);
     }
     repository.addActivity(item.id, activeAgent, 'blocker', `${run.kind} failed: ${message}`);
+    startReviewAutoScore(repository, run, sourceWorkspace ?? workspace ?? null);
     publishRealtimeEvent('work-items', 'shared', 'insights');
     publishRealtimeNotification({ tone: 'error', message: 'Agent needs your attention', description: item.title, duration: 0, action: { label: run.conversationId ? 'Open conversation' : 'Open task', route: run.conversationId ? `/conversations/${run.conversationId}` : `/tasks/${item.id}` } });
     notifyAgentRunFinished(item, repository.getRun(run.id) ?? run, 'failed', message);

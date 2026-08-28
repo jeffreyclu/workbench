@@ -2,7 +2,8 @@ import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sourceClient, type ReviewAssistActionName } from '../../data/source-client.js';
 import type { ReviewDecision } from './logic.js';
-import { aiRiskBand, parseAiRiskScore, reviewStateLabel, riskSignalLabel } from './logic.js';
+import { aiRiskBand, parseAiRiskScore, reviewAssistDecisionPayload, reviewStateLabel, riskSignalLabel } from './logic.js';
+import type { AutoScoreResult } from './auto-score.js';
 
 export type ReviewAssistAction = ReviewAssistActionName;
 export type ReviewAssistTaskIntent = { title: string; description: string } | null;
@@ -27,16 +28,17 @@ const EXPLAIN_ACTIONS = ASSIST_ACTIONS.filter((action) => action !== 'score_risk
 /** Assistance is on demand only: nothing here fires until the reviewer clicks
  * one of these buttons, and a failed turn stays visible with its own retry
  * rather than folding into a neutral placeholder. */
-export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, children }: {
+export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, children }: {
   decision: ReviewDecision;
   taskIntent: ReviewAssistTaskIntent;
+  /** Result of the background pass that scores a diff once its agent comes to
+   * rest, streamed in rather than requested by this panel. Absent means no pass
+   * has reached this decision yet, which is different from a pass that tried
+   * and failed — that arrives with `error` set and stays retryable. */
+  autoScore?: AutoScoreResult;
   children: ReactNode;
 }) {
-  const decisionPayload = {
-    behavior: decision.behavior,
-    state: reviewStateLabel(decision.state),
-    hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines })),
-  };
+  const decisionPayload = reviewAssistDecisionPayload(decision);
 
   // Streamed text is held separately from the mutation result so a turn in
   // flight is readable as it arrives; the mutation still owns the final,
@@ -68,7 +70,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
   // click can be instant is for the answer to already exist. This stays
   // deliberately narrow: the focused decision only, after a dwell, never a
   // score bubble on every hunk in the diff.
-  const cachedScore = cachedAssistAnswers.data?.score_risk;
+  const cachedScore = cachedAssistAnswers.data?.score_risk ?? autoScore?.answer ?? undefined;
   const cachedExplanation = cachedAssistAnswers.data?.explain;
   // The decision and task intent fully determine the request, so the payload
   // travels by ref and the effect keys off their identity instead of re-firing
@@ -107,6 +109,10 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
   const scoredNow = assist.isSuccess && assist.variables === 'score_risk' ? assist.data : undefined;
   const riskScore = parseAiRiskScore(scoredNow ?? cachedScore);
   const unparsedScoreAnswer = !riskScore ? (scoredNow ?? cachedScore) : undefined;
+  // A background failure is shown only while nothing better exists: a manual
+  // rescore that succeeded supersedes it, but an unattended failure is never
+  // quietly downgraded to "not scored yet".
+  const autoScoreError = !riskScore && !unparsedScoreAnswer ? autoScore?.error : null;
   const scoringNow = assist.isPending && assist.variables === 'score_risk';
 
   return <article className="diff-review-decision-card" aria-labelledby="diff-review-decision-title">
@@ -148,7 +154,9 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
             ? <span className="diff-review-ai-risk-score is-pending" role="status">AI risk score <b>··</b><small>/100</small></span>
             : unparsedScoreAnswer
               ? <small className="diff-review-ai-risk-reason">{unparsedScoreAnswer}</small>
-              : <small className="diff-review-ai-risk-reason">Not scored yet.</small>}
+              : autoScoreError
+                ? <small className="diff-review-ai-risk-reason is-error" role="alert">Background scoring failed: {autoScoreError} Use Score risk to retry.</small>
+                : <small className="diff-review-ai-risk-reason">Not scored yet.</small>}
       </div>
       <div>
         {decision.riskSignals.length === 0

@@ -10,6 +10,15 @@ import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
 
+// The background risk scorer spawns model turns. Runner tests only care that it
+// is scheduled at the moments a run comes to rest, never that it produces scores.
+const scheduleReviewAutoScore = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}));
+vi.mock('./review-auto-score.js', () => ({
+  scheduleReviewAutoScore,
+  reviewAutoScoreSnapshot: () => null,
+  resetReviewAutoScore: () => {},
+}));
+
 const originalPath = process.env.PATH;
 const temporaryDirectories: string[] = [];
 
@@ -384,6 +393,30 @@ describe('classifyExecution', () => {
     } finally {
       cancelingDatabase.close();
       ownerDatabase.close();
+    }
+  });
+
+  it('scores what a canceled run already wrote, because cancelling stops the agent and not its edits', async () => {
+    scheduleReviewAutoScore.mockClear();
+    const { directory } = fakeAgentDirectory(
+      `trap 'exit 143' TERM\nwhile true; do /bin/sleep 0.1; done`,
+      'exit 1',
+    );
+    const database = openDatabase(join(directory, 'shared.db'));
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Canceled mid-edit', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'codex', 'codex', 'Wait until canceled.');
+    const execution = executeAgentRun(repository, run, 'owner-process', 3_000);
+
+    try {
+      expect(isAgentRunActive(run.id)).toBe(true);
+      expect(repository.requestRunCancellation(run.id)).toBe(true);
+      await execution;
+      expect(repository.getRun(run.id)?.status).toBe('canceled');
+      expect(scheduleReviewAutoScore).toHaveBeenCalled();
+      expect(scheduleReviewAutoScore.mock.calls[0][1]).toEqual({ workItemId: task.id });
+    } finally {
+      database.close();
     }
   });
 
