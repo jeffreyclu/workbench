@@ -1,6 +1,7 @@
 import { memo, type ReactNode } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { sourceClient } from '../../data/source-client.js';
+import { boundConfidenceRequestBlocks, confidenceProminence, confidenceTone, type DiffConfidenceAssessment } from '../diff-confidence.js';
 import type { ReviewDecision } from './logic.js';
 import { reviewStateLabel, riskSignalLabel } from './logic.js';
 
@@ -33,6 +34,19 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
     }).then((response) => response.answer),
   });
 
+  const riskScore = useMutation({
+    mutationFn: async (): Promise<DiffConfidenceAssessment> => {
+      const { requests, sourceKeyByRequestKey } = boundConfidenceRequestBlocks([
+        { key: decision.id, lines: decision.hunks.flatMap((hunk) => hunk.lines) },
+      ]);
+      const { assessments } = await sourceClient.assessDiffBlocks(requests);
+      const requestKey = Object.keys(sourceKeyByRequestKey).find((key) => sourceKeyByRequestKey[key] === decision.id) ?? decision.id;
+      const assessment = assessments[requestKey];
+      if (!assessment) throw new Error('AI risk score returned no assessment for this decision.');
+      return assessment;
+    },
+  });
+
   return <article className="diff-review-decision-card" aria-labelledby="diff-review-decision-title">
     <header>
       <div>
@@ -54,6 +68,32 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
           ? <p>No elevated risk signals detected.</p>
           : decision.riskSignals.map((signal) => <span key={signal} className="diff-review-queue-risk-score">{riskSignalLabel(signal)}</span>)}
       </div>
+    </section>
+    <section className="diff-review-ai-risk-score" aria-labelledby="diff-review-risk-score-title">
+      <h4 id="diff-review-risk-score-title">AI risk score</h4>
+      {!riskScore.isPending && !riskScore.isSuccess && !riskScore.isError && <button type="button" onClick={() => riskScore.mutate()}>Score risk (AI)</button>}
+      {riskScore.isPending && <p role="status">Scoring…</p>}
+      {riskScore.isError && <div className="diff-review-ai-assist-error" role="alert">
+        <p>{riskScore.error instanceof Error ? riskScore.error.message : 'AI risk score failed.'}</p>
+        <button type="button" onClick={() => riskScore.mutate()}>Retry</button>
+      </div>}
+      {riskScore.isSuccess && (() => {
+        const assessment = riskScore.data;
+        const unavailable = assessment.risk === null;
+        const tone = confidenceTone(assessment.risk);
+        const { opacity, fontWeight } = confidenceProminence(assessment.risk);
+        return <div className="diff-review-risk-score-result">
+          <span
+            className="diff-review-risk-score-value"
+            style={{ color: tone, borderColor: tone, opacity, fontWeight }}
+            aria-label={unavailable ? 'AI risk assessment unavailable' : `AI risk assessment: ${assessment.risk} out of 100`}
+          >
+            {unavailable ? '--' : `${assessment.risk}/100`}
+          </span>
+          <p>{assessment.reasoning}</p>
+          <button type="button" onClick={() => riskScore.mutate()}>Rescore</button>
+        </div>;
+      })()}
     </section>
     <section className="diff-review-ai-assist" aria-labelledby="diff-review-ai-assist-title">
       <h4 id="diff-review-ai-assist-title">AI assist</h4>
