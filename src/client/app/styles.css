@@ -1273,34 +1273,34 @@ nav { display: grid; gap: 3px; }
   /* Chrome lives over the surface, never in front of it in document flow. */
   .agent-console-header { position: absolute; inset: 0; z-index: 6; flex: 0 0 0; min-height: 0; height: 0; padding: 0; overflow: visible; border: 0; }
   /* The compact control opens a single conversation tray. It owns the action
-     bar, title, metadata, and review switch; the close X stays independent. */
+     bar, title, and metadata; the review switch and close X stay independent. */
   .agent-console-header.is-mobile-header-collapsed { min-height: 0; padding: 0; border-bottom-color: transparent; }
   .agent-console-header.is-mobile-header-collapsed .agent-console-title { display: none; }
   .agent-console-header.is-mobile-header-collapsed .conversation-window-actions { display: none; }
-  .agent-console-header.is-mobile-header-collapsed ~ .thread-filter-bar { display: none; }
   .mobile-header-handle { display: none; }
-  .agent-console-header:not(.is-mobile-header-collapsed) { position: fixed; inset: 0 0 auto; z-index: 6; height: 136px; background: #11120ff5; border-bottom: 1px solid var(--line); box-shadow: 0 10px 26px #0007; }
-  .agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle { position: fixed; bottom: calc(100dvh - 132px); left: 50%; z-index: 8; display: grid; place-items: center; width: 76px; height: 25px; padding: 0; background: transparent; border: 0; cursor: grab; touch-action: pan-y; transform: translateX(-50%); }
+  .agent-console-header:not(.is-mobile-header-collapsed) { position: fixed; inset: 0 0 auto; z-index: 6; height: 112px; background: #11120ff5; border-bottom: 1px solid var(--line); box-shadow: 0 10px 26px #0007; }
+  .agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle { position: fixed; bottom: calc(100dvh - 108px); left: 50%; z-index: 8; display: grid; place-items: center; width: 76px; height: 25px; padding: 0; background: transparent; border: 0; cursor: grab; touch-action: pan-y; transform: translateX(-50%); }
   .agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle span { width: 38px; height: 4px; background: #73736b; border-radius: 999px; }
   .agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle:active { cursor: grabbing; }
   .agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle:focus-visible { outline: 2px solid var(--acid); outline-offset: -5px; }
   .mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; width: 32px; height: 32px; }
   .conversation-window-actions .mobile-related-task-link { display: grid; }
-  .agent-console-title { position: fixed; top: 14px; right: 58px; left: 14px; z-index: 6; min-width: 0; padding: 0; background: transparent; border: 0; }
+  .agent-console-title { position: fixed; top: 15px; right: 58px; left: 104px; z-index: 6; display: flex; align-items: center; gap: 7px; min-width: 0; padding: 0; background: transparent; border: 0; }
   .agent-console-header.has-conversation-actions { min-height: 0; }
   .agent-console-header.has-conversation-actions .agent-console-title { max-width: none; padding-top: 0; }
-  .agent-console-header h2 { width: 100%; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-console-header h2 { flex: 1; width: auto; min-width: 0; margin: 0; overflow-x: auto; overflow-y: hidden; font-size: 18px; line-height: 1.15; text-overflow: clip; white-space: nowrap; -webkit-overflow-scrolling: touch; touch-action: pan-x; }
   .related-task-link { display: none; }
   .related-task-link span { display: none; }
   /* Details lead the tray. Review and action controls share the row below it
      without introducing a second chrome panel. */
-  .conversation-window-actions { position: fixed; top: 72px; right: 10px; left: auto; z-index: 7; display: flex; flex-wrap: nowrap; justify-content: flex-end; width: max-content; min-width: 0; max-width: calc(100% - 146px); gap: 2px; margin: 0; padding: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; transform: none; }
-  .conversation-window-actions .icon-button { flex: 0 0 auto; width: 28px; height: 28px; }
-  .conversation-window-actions .conversation-task-picker { flex: 0 0 auto; min-height: 28px; }
+  .conversation-window-actions { position: fixed; top: 56px; right: 10px; left: auto; z-index: 7; display: flex; flex-wrap: nowrap; justify-content: flex-end; width: max-content; min-width: 0; max-width: none; gap: 2px; margin: 0; padding: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; transform: none; }
+  .conversation-window-actions .icon-button { flex: 0 0 auto; width: 36px; height: 36px; }
+  .conversation-window-actions .conversation-task-picker { flex: 0 0 auto; min-height: 36px; }
   .conversation-window-actions .conversation-delete-control { flex: 0 0 auto; }
-  .thread-filter-bar { position: fixed; top: 68px; right: auto; left: 10px; z-index: 7; width: auto; align-items: center; flex-wrap: nowrap; gap: 3px; padding: 0; background: transparent; border: 0; box-shadow: none; }
+  .mobile-review-toggle { position: fixed; top: 12px; left: 12px; z-index: 8; display: flex; align-items: center; padding: 3px; background: #171715; border: 1px solid #373731; border-radius: 10px; box-shadow: 0 6px 16px #0009; }
+  .thread-filter-bar { display: none; }
   .conversation-surface-tabs { flex: 0 0 auto; margin-right: 0; border: 1px solid #373731; background: #171715; }
-  .conversation-surface-tabs button { flex: 0 0 auto; justify-content: center; min-height: 32px; padding-inline: 6px; font-size: 9px; }
+  .conversation-surface-tabs button { flex: 0 0 auto; justify-content: center; min-width: 36px; min-height: 36px; padding: 0 8px; font-size: 0; }
   .conversation-review-layout { border-top: 0; }
   .conversation-review-layout.layout-changes .conversation-thread-pane { display: contents; }
   .conversation-review-layout.layout-changes .shared-composer,

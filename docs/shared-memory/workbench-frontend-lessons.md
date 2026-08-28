@@ -207,6 +207,11 @@ available opaque floating block at the top-left, including while the tray is
 collapsed. Give tray action icons a usable 36px target; do not shrink them to
 28px just to share a row with the review switch.
 
+*Clarification from Jeffrey, 2026-08-27.* This is a structural boundary, not
+just a visual one: render the phone Conversation/Changes switch in its own
+phone-only control outside the header and desktop filter bar. Do not leave the
+mobile switch inside header chrome and position it to look separate.
+
 *Decision from Jeffrey, 2026-08-27.* The constrained one-line title in the
 expanded phone conversation tray scrolls horizontally on touch; it does not
 ellipsis. Keep the title bounded between the floating review switch and close
