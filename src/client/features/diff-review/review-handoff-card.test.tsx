@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentRunReviewHandoff } from '../../../shared/contracts.js';
 import { AgentRunReviewHandoffCard } from './review-handoff-card.js';
@@ -16,14 +16,19 @@ const handoff: AgentRunReviewHandoff = {
 };
 
 describe('AgentRunReviewHandoffCard', () => {
-  it('shows the handoff and observed verification above review decisions', () => {
+  it('keeps handoff details closed until the reviewer opens one', () => {
     render(<AgentRunReviewHandoffCard handoff={handoff} />);
 
     expect(screen.getByText('Agent handoff')).toBeInTheDocument();
-    expect(screen.getByText('Agent-reported context only. It is not verification evidence.')).toBeInTheDocument();
-    expect(screen.getByText('src/app.ts')).toBeInTheDocument();
-    expect(screen.getByText(/pnpm typecheck/)).toBeInTheDocument();
-    expect(screen.getByText('1/2 passed')).toBeInTheDocument();
+    const sections = document.querySelectorAll<HTMLDetailsElement>('.review-handoff-section');
+    expect(sections).toHaveLength(3);
+    sections.forEach((section) => expect(section.open).toBe(false));
+
+    fireEvent.click(screen.getByText('Verification'));
+
+    expect(sections[2].open).toBe(true);
+    expect(screen.getByText(/pnpm typecheck/)).toBeVisible();
+    expect(screen.getByText('1/2 passed')).toBeVisible();
   });
 
   it('states the evidence gap when no verification command was observed', () => {
