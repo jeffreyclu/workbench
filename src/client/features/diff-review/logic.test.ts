@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
-import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions } from './logic.js';
+import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions } from './logic.js';
 
 const localFile: WorkspaceDiffFile = {
   path: 'src/local.ts', status: 'modified', additions: 1, deletions: 1, previousPath: null,
@@ -130,5 +130,13 @@ describe('whole-file diff blocks', () => {
 
     expect(binary).toHaveLength(1);
     expect(binary[0]).toMatchObject({ range: 'Binary file', decisionId: 'logo.png::Binary file', lines: [] });
+  });
+});
+
+describe('aiRiskBand', () => {
+  it('bands a score so the number reads as severity, not arithmetic', () => {
+    expect([0, 33].map(aiRiskBand)).toEqual(['low', 'low']);
+    expect([34, 66].map(aiRiskBand)).toEqual(['elevated', 'elevated']);
+    expect([67, 100].map(aiRiskBand)).toEqual(['high', 'high']);
   });
 });

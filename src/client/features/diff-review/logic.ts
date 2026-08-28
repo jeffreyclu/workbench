@@ -326,3 +326,11 @@ export function parseAiRiskScore(answer: string | undefined | null): { score: nu
   if (score > 100) return null;
   return { score, reason: answer.slice(match.index + match[0].length).trim() };
 }
+
+/** Three bands, because a bare number carries no judgement: the reviewer should
+ * be able to read severity from the colour without doing arithmetic. */
+export function aiRiskBand(score: number): 'low' | 'elevated' | 'high' {
+  if (score < 34) return 'low';
+  if (score < 67) return 'elevated';
+  return 'high';
+}

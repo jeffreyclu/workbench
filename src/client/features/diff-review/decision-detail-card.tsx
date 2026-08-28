@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sourceClient, type ReviewAssistActionName } from '../../data/source-client.js';
 import type { ReviewDecision } from './logic.js';
-import { parseAiRiskScore, reviewStateLabel, riskSignalLabel } from './logic.js';
+import { aiRiskBand, parseAiRiskScore, reviewStateLabel, riskSignalLabel } from './logic.js';
 
 export type ReviewAssistAction = ReviewAssistActionName;
 export type ReviewAssistTaskIntent = { title: string; description: string } | null;
@@ -20,6 +20,9 @@ const ACTION_LABELS: Record<ReviewAssistAction, string> = {
 };
 
 const ASSIST_ACTIONS = Object.keys(ACTION_LABELS) as ReviewAssistAction[];
+/** Every action is cached and prefetched alike, but only the read-and-explain
+ * questions belong in the assist row — the score has its own control. */
+const EXPLAIN_ACTIONS = ASSIST_ACTIONS.filter((action) => action !== 'score_risk');
 
 /** Assistance is on demand only: nothing here fires until the reviewer clicks
  * one of these buttons, and a failed turn stays visible with its own retry
@@ -121,20 +124,31 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
       </div>
     </section>
     <section className="diff-review-ai-risk" aria-labelledby="diff-review-risk-title">
-      <h4 id="diff-review-risk-title">Risk signals</h4>
+      {/* The score action lives beside the number it produces, not in the assist
+        * row: it answers a different question, and its label swaps width once a
+        * score exists, which reflowed that row on every rescore. */}
+      <div className="diff-review-ai-risk-head">
+        <h4 id="diff-review-risk-title">Risk signals</h4>
+        <button
+          type="button"
+          className="diff-review-ai-risk-action"
+          disabled={assist.isPending}
+          onClick={() => assist.mutate('score_risk')}
+        >{riskScore || unparsedScoreAnswer ? 'Rescore' : 'Score risk'}</button>
+      </div>
       <div className="diff-review-ai-risk-score-row">
         {/* The 0-100 number, persisted per decision. It is produced by the
-          * `Score risk` action below — never by an ambient pass over the diff. */}
+          * `Score risk` action above — never by an ambient pass over the diff. */}
         {riskScore
           ? <>
-            <span className="diff-review-ai-risk-score" data-risk-score={riskScore.score}>AI risk score <b>{riskScore.score}</b>/100</span>
+            <span className="diff-review-ai-risk-score" data-band={aiRiskBand(riskScore.score)}>AI risk score <b>{riskScore.score}</b><small>/100</small></span>
             {riskScore.reason && <small className="diff-review-ai-risk-reason">{riskScore.reason}</small>}
           </>
           : scoringNow
-            ? <span className="diff-review-ai-risk-score is-pending" role="status">AI risk score …</span>
+            ? <span className="diff-review-ai-risk-score is-pending" role="status">AI risk score <b>··</b><small>/100</small></span>
             : unparsedScoreAnswer
               ? <small className="diff-review-ai-risk-reason">{unparsedScoreAnswer}</small>
-              : <small className="diff-review-ai-risk-reason">Not scored yet — use <b>Score risk</b>.</small>}
+              : <small className="diff-review-ai-risk-reason">Not scored yet.</small>}
       </div>
       <div>
         {decision.riskSignals.length === 0
@@ -145,16 +159,15 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
     <section className="diff-review-ai-assist" aria-labelledby="diff-review-ai-assist-title">
       <h4 id="diff-review-ai-assist-title">AI assist</h4>
       <div className="diff-review-ai-assist-actions">
-        {ASSIST_ACTIONS.map((action) => {
+        {EXPLAIN_ACTIONS.map((action) => {
           const hasCachedAnswer = Boolean(cachedAssistAnswers.data?.[action]);
-          const label = action === 'score_risk' && hasCachedAnswer ? 'Rescore' : ACTION_LABELS[action];
           return <button
             key={action}
             type="button"
             disabled={assist.isPending || (action === 'compare_task_intent' && !taskIntent)}
             title={action === 'compare_task_intent' && !taskIntent ? 'No task is linked to this review.' : hasCachedAnswer ? 'Already answered — click to view.' : undefined}
             onClick={() => assist.mutate(action)}
-          >{label}{hasCachedAnswer && action !== 'score_risk' ? ' ✓' : ''}</button>;
+          >{ACTION_LABELS[action]}{hasCachedAnswer ? ' ✓' : ''}</button>;
         })}
       </div>
       {assist.isPending && (streamedAnswer

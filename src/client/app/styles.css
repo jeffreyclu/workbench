@@ -431,10 +431,18 @@ nav { display: grid; gap: 3px; }
 .diff-review-exact-change, .diff-review-ai-risk { display: grid; align-content: start; gap: 8px; }
 .diff-review-ai-risk > div { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .diff-review-ai-risk p { margin: 0; color: #a9a89f; font-size: 11px; }
-.diff-review-ai-risk-score-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex-wrap: wrap; }
-.diff-review-ai-risk-score { display: inline-flex; align-items: baseline; gap: 3px; padding: 3px 8px; border: 1px solid #3a3a34; border-radius: 999px; background: #131311; color: #d8d7cd; font: 10px 'DM Mono'; letter-spacing: 0.04em; text-transform: uppercase; }
-.diff-review-ai-risk-score b { font-size: 15px; font-weight: 500; }
-.diff-review-ai-risk-score.is-pending { color: #a9a89f; opacity: 0.7; }
+.diff-review-ai-risk-head { justify-content: space-between; }
+.diff-review-ai-risk-action { flex: 0 0 auto; min-width: 88px; min-height: 24px; padding: 0 10px; color: #a9a89f; border: 1px solid #3b3a35; border-radius: 999px; background: transparent; cursor: pointer; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
+.diff-review-ai-risk-action:hover:not(:disabled), .diff-review-ai-risk-action:focus-visible { color: var(--acid); border-color: #596234; outline: 0; }
+.diff-review-ai-risk-action:disabled { opacity: .5; cursor: not-allowed; }
+.diff-review-ai-risk-score-row { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.diff-review-ai-risk-score { --band: #8a8980; display: inline-flex; align-items: baseline; gap: 4px; padding: 5px 11px 5px 9px; color: #85847d; border: 1px solid #2f2f2a; border-left: 3px solid var(--band); border-radius: 4px; background: #17171490; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
+.diff-review-ai-risk-score b { order: -2; color: var(--band); font: 500 21px/1 'DM Mono'; letter-spacing: -.02em; }
+.diff-review-ai-risk-score small { order: -1; color: #6d6c66; font: 10px 'DM Mono'; letter-spacing: 0; text-transform: none; }
+.diff-review-ai-risk-score[data-band="low"] { --band: #8bbd75; }
+.diff-review-ai-risk-score[data-band="elevated"] { --band: #d6bd76; }
+.diff-review-ai-risk-score[data-band="high"] { --band: #e1a68f; }
+.diff-review-ai-risk-score.is-pending { opacity: .55; }
 .diff-review-ai-risk-reason { color: #a9a89f; font-size: 11px; min-width: 0; }
 .diff-review-ai-assist { display: grid; align-content: start; gap: 8px; padding-top: 14px; border-top: 1px solid #242421; }
 .diff-review-ai-assist-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
