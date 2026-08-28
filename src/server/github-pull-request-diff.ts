@@ -9,7 +9,7 @@ type GitHubPullRequestResponse = {
   title: string;
   number: number;
   base: { ref: string };
-  head: { ref: string };
+  head: { ref: string; sha: string };
   changed_files: number;
   additions: number;
   deletions: number;
@@ -87,6 +87,8 @@ export async function getGitHubPullRequestDiff(
     title: pullRequest.title,
     baseRef: pullRequest.base.ref,
     headRef: pullRequest.head.ref,
+    headSha: pullRequest.head.sha,
+    revision: pullRequest.head.sha,
     files,
     changedFiles: pullRequest.changed_files,
     additions: pullRequest.additions,
@@ -117,7 +119,7 @@ export async function getGitHubPullRequestImage(
   const root = `https://api.github.com/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/pulls/${target.number}`;
   const pullRequest = await getJson<GitHubPullRequestResponse>(fetchImpl, root, options.token);
   const encodedPath = path.split('/').map(encodeURIComponent).join('/');
-  const response = await fetchImpl(`https://api.github.com/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/contents/${encodedPath}?ref=${encodeURIComponent(pullRequest.head.ref)}`, {
+  const response = await fetchImpl(`https://api.github.com/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/contents/${encodedPath}?ref=${encodeURIComponent(pullRequest.head.sha)}`, {
     headers: { ...githubHeaders(options.token), Accept: 'application/vnd.github.raw+json' },
     signal: AbortSignal.timeout(20_000),
   });

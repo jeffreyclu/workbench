@@ -72,6 +72,7 @@ const EXPECTED_MIGRATIONS = [
   '059_diff_hunk_reviews',
   '060_workspace_diff_snapshot_provenance',
   '061_agent_run_review_handoffs',
+  '062_agent_run_review_handoffs_immutable',
 ];
 
 describe('openDatabase', () => {
@@ -668,6 +669,7 @@ describe('openDatabase', () => {
     const current = openDatabase(path);
     current.exec('DROP TABLE agent_run_review_handoffs;');
     current.prepare("DELETE FROM schema_migrations WHERE id = '061_agent_run_review_handoffs'").run();
+    current.prepare("DELETE FROM schema_migrations WHERE id = '062_agent_run_review_handoffs_immutable'").run();
     expect(current.prepare("SELECT id FROM schema_migrations WHERE id = '060_workspace_diff_snapshot_provenance'").get())
       .toEqual({ id: '060_workspace_diff_snapshot_provenance' });
     current.close();
@@ -728,11 +730,29 @@ describe('openDatabase', () => {
     );
     expect(upgraded.prepare("SELECT format_version FROM agent_run_review_handoffs WHERE agent_run_id = 'handoff-run'").get())
       .toEqual({ format_version: 1 });
-    expect(() => upgraded.prepare("UPDATE agent_run_review_handoffs SET changes_json = '{}' WHERE agent_run_id = 'handoff-run'").run())
-      .toThrow(/constraint/i);
+    expect(() => upgraded.prepare("UPDATE agent_run_review_handoffs SET summary = 'Rewritten' WHERE agent_run_id = 'handoff-run'").run())
+      .toThrow(/immutable/i);
 
     upgraded.prepare("DELETE FROM agent_runs WHERE id = 'handoff-run'").run();
     expect(upgraded.prepare('SELECT count(*) AS count FROM agent_run_review_handoffs').get()).toEqual({ count: 0 });
+    upgraded.close();
+  });
+
+  it('makes review handoffs immutable when upgrading from migration 061', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TRIGGER agent_run_review_handoffs_immutable;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '062_agent_run_review_handoffs_immutable'").run();
+    expect(current.prepare("SELECT id FROM schema_migrations WHERE id = '061_agent_run_review_handoffs'").get())
+      .toEqual({ id: '061_agent_run_review_handoffs' });
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '062_agent_run_review_handoffs_immutable'").get())
+      .toEqual({ id: '062_agent_run_review_handoffs_immutable' });
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_run_review_handoffs_immutable'").get())
+      .toEqual({ name: 'agent_run_review_handoffs_immutable' });
     upgraded.close();
   });
 

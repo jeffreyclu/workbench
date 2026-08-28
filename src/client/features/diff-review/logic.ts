@@ -1,16 +1,27 @@
 import type { DiffHunkReview, DiffHunkReviewState, WorkspaceDiffFile } from '../../../shared/contracts.js';
 
 export const REVIEW_RISK_SIGNALS = ['public_api', 'persistence', 'auth', 'cross_file', 'error_path'] as const;
-
 export type ReviewRiskSignal = typeof REVIEW_RISK_SIGNALS[number];
 
-export interface ReviewDecision {
+export interface ReviewDecisionHunk {
   id: string;
   filePath: string;
   editorUrl: string | null;
   hunkRange: string;
   location: string;
+  lines: string[];
+  additions: number;
+  deletions: number;
+  state: DiffHunkReviewState | null;
+  note: string | null;
+}
+
+export interface ReviewDecision {
+  id: string;
+  subject: string | null;
   behavior: string;
+  hunks: ReviewDecisionHunk[];
+  filePaths: string[];
   additions: number;
   deletions: number;
   riskSignals: ReviewRiskSignal[];
@@ -27,24 +38,20 @@ export interface ReviewFileQueueItem {
   riskSignals: ReviewRiskSignal[];
 }
 
-interface PatchHunk {
-  range: string;
-  lines: string[];
+interface PatchHunk { range: string; lines: string[] }
+interface DecisionCandidate {
+  subject: string | null;
+  fileStatus: WorkspaceDiffFile['status'];
+  hunk: ReviewDecisionHunk;
+  riskSignals: ReviewRiskSignal[];
 }
 
-const RISK_WEIGHTS: Record<ReviewRiskSignal, number> = {
-  auth: 5,
-  persistence: 4,
-  public_api: 3,
-  error_path: 2,
-  cross_file: 1,
-};
-
-const STATE_ORDER: Record<DiffHunkReviewState, number> = {
-  needs_changes: 1,
-  commented: 2,
-  reviewed: 3,
-};
+const RISK_WEIGHTS: Record<ReviewRiskSignal, number> = { auth: 5, persistence: 4, public_api: 3, error_path: 2, cross_file: 1 };
+const STATE_ORDER: Record<DiffHunkReviewState, number> = { needs_changes: 1, commented: 2, reviewed: 3 };
+const NON_SUBJECTS = new Set([
+  'async', 'await', 'catch', 'class', 'const', 'describe', 'else', 'export', 'false', 'function', 'if',
+  'import', 'interface', 'it', 'let', 'null', 'return', 'test', 'throw', 'true', 'type', 'undefined', 'var',
+]);
 
 function splitPatchHunks(file: Pick<WorkspaceDiffFile, 'patch' | 'isBinary'>): PatchHunk[] {
   if (!file.patch) return [{ range: file.isBinary ? 'Binary file' : 'Whole-file change', lines: [] }];
@@ -54,9 +61,7 @@ function splitPatchHunks(file: Pick<WorkspaceDiffFile, 'patch' | 'isBinary'>): P
     if (line.startsWith('@@')) {
       current = { range: line, lines: [] };
       hunks.push(current);
-    } else if (current) {
-      current.lines.push(line);
-    }
+    } else if (current) current.lines.push(line);
   }
   return hunks.length > 0 ? hunks : [{ range: 'Whole-file change', lines: file.patch.split('\n') }];
 }
@@ -84,30 +89,80 @@ function hunkLocation(range: string): string {
 }
 
 function hunkContext(range: string): string | null {
-  const match = range.match(/^@@[^@]*@@\s*(.+)$/);
-  const context = match?.[1]?.trim();
-  return context ? context.slice(0, 100) : null;
+  const context = range.match(/^@@[^@]*@@\s*(.+)$/)?.[1]?.trim();
+  return context ? context.slice(0, 160) : null;
 }
 
-function behaviorSummary(file: Pick<WorkspaceDiffFile, 'path' | 'status'>, hunk: PatchHunk, additions: number, deletions: number): string {
+function identifierFromCode(value: string): string | null {
+  const declaration = value.match(/\b(?:function|class|interface|type|const|let|var)\s+([A-Za-z_$][\w$]*)/);
+  if (declaration) return declaration[1];
+  const namedTest = value.match(/\b(?:describe|test|it)\s*\(\s*['"`]([A-Za-z_$][\w$]*)/);
+  if (namedTest) return namedTest[1];
+  const functionLike = value.match(/\b([A-Za-z_$][\w$]*)\s*\(/);
+  if (functionLike && !NON_SUBJECTS.has(functionLike[1])) return functionLike[1];
+  return null;
+}
+
+function hunkSubject(hunk: PatchHunk): string | null {
   const context = hunkContext(hunk.range);
-  if (context) return `Changes ${context} in ${file.path}.`;
-  const location = hunkLocation(hunk.range).toLowerCase();
-  if (file.status === 'added' || deletions === 0) return `Adds behavior to ${file.path} near ${location}.`;
-  if (file.status === 'removed' || additions === 0) return `Removes behavior from ${file.path} near ${location}.`;
-  return `Updates behavior in ${file.path} near ${location}.`;
+  const contextSubject = context ? identifierFromCode(context) : null;
+  if (contextSubject) return contextSubject;
+  for (const line of hunk.lines) {
+    if (!line.startsWith('+') && !line.startsWith('-')) continue;
+    const subject = identifierFromCode(line.slice(1));
+    if (subject) return subject;
+  }
+  return null;
 }
 
-function riskSignals(file: Pick<WorkspaceDiffFile, 'path' | 'status'>, hunk: PatchHunk, changedFileCount: number): ReviewRiskSignal[] {
+function humanizeIdentifier(value: string): string {
+  return value.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').toLowerCase();
+}
+
+function staticRiskSignals(file: Pick<WorkspaceDiffFile, 'path'>, hunk: PatchHunk): ReviewRiskSignal[] {
   const changedLines = hunk.lines.filter((line) => line.startsWith('+') || line.startsWith('-')).join('\n');
   const evidence = `${file.path}\n${changedLines}`;
   const signals: ReviewRiskSignal[] = [];
   if (/(?:^|\/)(?:api|routes?|contracts?|public)(?:\/|\.|-)|\b(?:export\s+(?:async\s+)?(?:function|class|const|interface|type)|router\.(?:get|post|put|patch|delete)|app\.(?:get|post|put|patch|delete))\b/i.test(evidence)) signals.push('public_api');
   if (/(?:database|migration|repository|schema|sqlite|sql|prisma|drizzle|\b(?:select|insert|update|delete)\s+(?:from|into|[a-z_]+\s+set)\b)/i.test(evidence)) signals.push('persistence');
   if (/(?:auth|oauth|permission|authorize|session|credential|secret|access[_ -]?token|bearer)/i.test(evidence)) signals.push('auth');
-  if (changedFileCount > 1 && (file.status === 'renamed' || /(?:\bimport\b|\bexport\b|\brequire\s*\(|\bfrom\s+['"])/.test(changedLines))) signals.push('cross_file');
   if (/(?:\bthrow\b|\bcatch\b|\berror\b|\bfail(?:ed|ure)?\b|\bretr(?:y|ies)\b|\btimeout\b|\babort\b)/i.test(evidence)) signals.push('error_path');
   return signals;
+}
+
+function aggregateState(hunks: ReviewDecisionHunk[]): DiffHunkReviewState | null {
+  const states = hunks.map((hunk) => hunk.state);
+  if (states.includes(null)) return null;
+  if (states.includes('needs_changes')) return 'needs_changes';
+  if (states.includes('commented')) return 'commented';
+  return 'reviewed';
+}
+
+function aggregateNote(hunks: ReviewDecisionHunk[]): string | null {
+  const notes = [...new Set(hunks.map((hunk) => hunk.note?.trim()).filter((note): note is string => Boolean(note)))];
+  if (notes.length === 0) return null;
+  if (notes.length === 1) return notes[0];
+  return hunks.filter((hunk) => hunk.note).map((hunk) => `${hunk.filePath} (${hunk.location}): ${hunk.note}`).join('\n\n');
+}
+
+function behaviorSummary(subject: string | null, hunks: ReviewDecisionHunk[], statuses: WorkspaceDiffFile['status'][], signals: ReviewRiskSignal[]): string {
+  const subjectLabel = subject ? humanizeIdentifier(subject) : null;
+  const additions = hunks.reduce((total, hunk) => total + hunk.additions, 0);
+  const deletions = hunks.reduce((total, hunk) => total + hunk.deletions, 0);
+  const verb = statuses.every((status) => status === 'added') || deletions === 0 ? 'Adds'
+    : statuses.every((status) => status === 'removed') || additions === 0 ? 'Removes'
+      : 'Changes';
+  if (!subjectLabel) {
+    if (hunks.length === 1) return `${verb} behavior in ${hunks[0].filePath}.`;
+    return `${verb} related behavior across ${new Set(hunks.map((hunk) => hunk.filePath)).size} files.`;
+  }
+  const effect = signals.includes('auth') ? `${subjectLabel} access checks`
+    : signals.includes('persistence') ? `how ${subjectLabel} stores or retrieves data`
+      : signals.includes('error_path') ? `how ${subjectLabel} handles failures`
+        : signals.includes('public_api') ? `the public ${subjectLabel} contract`
+          : subjectLabel;
+  const fileCount = new Set(hunks.map((hunk) => hunk.filePath)).size;
+  return `${verb} ${effect}${fileCount > 1 ? ` across ${fileCount} files` : ''}.`;
 }
 
 function decisionPriority(decision: ReviewDecision): number {
@@ -116,27 +171,52 @@ function decisionPriority(decision: ReviewDecision): number {
 
 export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHunkReview[]): ReviewDecision[] {
   const reviewByKey = new Map(reviews.map((review) => [`${review.filePath}::${review.hunkRange}`, review]));
-  const decisions: ReviewDecision[] = [];
+  const candidates: DecisionCandidate[] = [];
   for (const file of files) {
-    for (const hunk of splitPatchHunks(file)) {
-      const review = reviewByKey.get(`${file.path}::${hunk.range}`);
-      const counts = countChangedLines(hunk.lines);
-      decisions.push({
-        id: `${file.path}::${hunk.range}`,
-        filePath: file.path,
-        editorUrl: file.editorUrl ?? null,
-        hunkRange: hunk.range,
-        location: hunkLocation(hunk.range),
-        behavior: behaviorSummary(file, hunk, counts.additions, counts.deletions),
-        additions: counts.additions,
-        deletions: counts.deletions,
-        riskSignals: riskSignals(file, hunk, files.length),
-        state: review?.state ?? null,
-        note: review?.note ?? null,
+    for (const patchHunk of splitPatchHunks(file)) {
+      const review = reviewByKey.get(`${file.path}::${patchHunk.range}`);
+      const counts = countChangedLines(patchHunk.lines);
+      candidates.push({
+        subject: hunkSubject(patchHunk), fileStatus: file.status,
+        hunk: {
+          id: `${file.path}::${patchHunk.range}`, filePath: file.path, editorUrl: file.editorUrl ?? null,
+          hunkRange: patchHunk.range, location: hunkLocation(patchHunk.range), lines: patchHunk.lines,
+          additions: counts.additions, deletions: counts.deletions, state: review?.state ?? null, note: review?.note ?? null,
+        },
+        riskSignals: staticRiskSignals(file, patchHunk),
       });
     }
   }
-  return decisions;
+
+  const subjectFileCounts = new Map<string, Set<string>>();
+  for (const candidate of candidates) {
+    if (!candidate.subject) continue;
+    const paths = subjectFileCounts.get(candidate.subject) ?? new Set<string>();
+    paths.add(candidate.hunk.filePath);
+    subjectFileCounts.set(candidate.subject, paths);
+  }
+  const groups = new Map<string, DecisionCandidate[]>();
+  for (const candidate of candidates) {
+    const spansFiles = candidate.subject && (subjectFileCounts.get(candidate.subject)?.size ?? 0) > 1;
+    const key = spansFiles ? `subject:${candidate.subject}` : `hunk:${candidate.hunk.id}`;
+    groups.set(key, [...(groups.get(key) ?? []), candidate]);
+  }
+
+  return [...groups.values()].map((group) => {
+    const hunks = group.map((candidate) => candidate.hunk);
+    const filePaths = [...new Set(hunks.map((hunk) => hunk.filePath))];
+    const riskSignals = REVIEW_RISK_SIGNALS.filter((signal) => group.some((candidate) => candidate.riskSignals.includes(signal)));
+    if (filePaths.length > 1) riskSignals.push('cross_file');
+    return {
+      id: group.length > 1 ? `decision:${group[0].subject}:${hunks.map((hunk) => hunk.id).sort().join('|')}` : hunks[0].id,
+      subject: group[0].subject,
+      behavior: behaviorSummary(group[0].subject, hunks, group.map((candidate) => candidate.fileStatus), riskSignals),
+      hunks, filePaths,
+      additions: hunks.reduce((total, hunk) => total + hunk.additions, 0),
+      deletions: hunks.reduce((total, hunk) => total + hunk.deletions, 0),
+      riskSignals, state: aggregateState(hunks), note: aggregateNote(hunks),
+    };
+  });
 }
 
 export function orderReviewDecisions(decisions: ReviewDecision[]): ReviewDecision[] {
@@ -144,30 +224,24 @@ export function orderReviewDecisions(decisions: ReviewDecision[]): ReviewDecisio
     const stateDifference = (left.state ? STATE_ORDER[left.state] : 0) - (right.state ? STATE_ORDER[right.state] : 0);
     if (stateDifference !== 0) return stateDifference;
     const riskDifference = decisionPriority(right) - decisionPriority(left);
-    if (riskDifference !== 0) return riskDifference;
-    return left.id.localeCompare(right.id);
+    return riskDifference !== 0 ? riskDifference : left.id.localeCompare(right.id);
   });
 }
 
 export function buildReviewFileQueue(decisions: ReviewDecision[]): ReviewFileQueueItem[] {
   const files = new Map<string, ReviewDecision[]>();
   for (const decision of orderReviewDecisions(decisions)) {
-    const entries = files.get(decision.filePath) ?? [];
-    entries.push(decision);
-    files.set(decision.filePath, entries);
+    for (const path of decision.filePaths) files.set(path, [...(files.get(path) ?? []), decision]);
   }
   return [...files.entries()].map(([path, entries]) => {
     const states = entries.map((entry) => entry.state);
     const state = states.includes('needs_changes') ? 'needs_changes'
       : states.includes(null) ? 'pending'
-        : states.includes('commented') ? 'commented'
-          : 'approved';
+        : states.includes('commented') ? 'commented' : 'approved';
+    const matchingHunk = entries.flatMap((entry) => entry.hunks).find((hunk) => hunk.filePath === path);
     return {
-      path,
-      editorUrl: entries[0]?.editorUrl ?? null,
-      decisions: entries.length,
-      completed: states.filter((entry) => entry !== null).length,
-      state,
+      path, editorUrl: matchingHunk?.editorUrl ?? null, decisions: entries.length,
+      completed: states.filter((entry) => entry !== null).length, state,
       riskSignals: REVIEW_RISK_SIGNALS.filter((signal) => entries.some((entry) => entry.riskSignals.includes(signal))),
     };
   });
@@ -193,4 +267,57 @@ export function riskSignalLabel(signal: ReviewRiskSignal): string {
   if (signal === 'cross_file') return 'Cross-file';
   if (signal === 'error_path') return 'Error path';
   return signal[0].toUpperCase() + signal.slice(1);
+}
+
+export interface ReviewDiffLine {
+  key: string;
+  kind: 'context' | 'addition' | 'deletion';
+  oldLine: number | null;
+  newLine: number | null;
+  text: string;
+}
+
+/** One hunk of a file's patch, carrying the id of the decision it belongs to so
+ * selecting a decision can highlight its block inside the whole-file diff. */
+export interface ReviewDiffHunk {
+  decisionId: string;
+  range: string;
+  location: string;
+  additions: number;
+  deletions: number;
+  lines: ReviewDiffLine[];
+}
+
+function hunkStart(range: string, side: 'old' | 'new'): number | null {
+  const match = range.match(side === 'old' ? /^@@ -(\d+)/ : /^@@ -\S+ \+(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+/** The complete patch of one file, split into decision-addressable blocks. The
+ * review surface renders every line of it — reviewers judge a change in its
+ * surrounding context, not as detached lines. */
+export function buildFileDiffHunks(file: Pick<WorkspaceDiffFile, 'path' | 'patch' | 'isBinary'>): ReviewDiffHunk[] {
+  return splitPatchHunks(file).map((hunk) => {
+    let oldLine = hunkStart(hunk.range, 'old');
+    let newLine = hunkStart(hunk.range, 'new');
+    const lines: ReviewDiffLine[] = hunk.lines.map((text, index) => {
+      const key = `${hunk.range}:${index}`;
+      if (text.startsWith('+')) {
+        const line = { key, kind: 'addition' as const, oldLine: null, newLine, text };
+        if (newLine !== null) newLine += 1;
+        return line;
+      }
+      if (text.startsWith('-')) {
+        const line = { key, kind: 'deletion' as const, oldLine, newLine: null, text };
+        if (oldLine !== null) oldLine += 1;
+        return line;
+      }
+      const line = { key, kind: 'context' as const, oldLine, newLine, text };
+      if (oldLine !== null) oldLine += 1;
+      if (newLine !== null) newLine += 1;
+      return line;
+    });
+    const counts = countChangedLines(hunk.lines);
+    return { decisionId: `${file.path}::${hunk.range}`, range: hunk.range, location: hunkLocation(hunk.range), additions: counts.additions, deletions: counts.deletions, lines };
+  });
 }

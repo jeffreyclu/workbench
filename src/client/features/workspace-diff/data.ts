@@ -1,6 +1,6 @@
 import { api } from '../../data/api.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
-import type { DiffHunkReviewState } from '../../../shared/contracts.js';
+import type { DiffHunkReviewState, UpsertDiffHunkReviewsInput } from '../../../shared/contracts.js';
 
 const scopeKey = (scope: WorkspaceDiffScope) => ('workItemId' in scope ? scope.workItemId : scope.conversationId);
 
@@ -17,4 +17,5 @@ export const workspaceDiffData = {
   getStatus: (scope: WorkspaceDiffScope, revision: string) => api.getWorkspaceDiffStatus(scope, revision),
   getHunkReviews: (scope: WorkspaceDiffScope, revision: string) => api.getDiffHunkReviews(scope, revision),
   upsertHunkReview: (scope: WorkspaceDiffScope, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string }) => api.upsertDiffHunkReview(scope, input),
+  upsertHunkReviews: (scope: WorkspaceDiffScope, input: UpsertDiffHunkReviewsInput) => api.upsertDiffHunkReviews(scope, input),
 };

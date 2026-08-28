@@ -358,6 +358,25 @@ export interface DiffHunkReview {
   updatedAt: string;
 }
 
+export const upsertDiffHunkReviewsSchema = z.object({
+  revision: z.string().trim().min(1),
+  hunks: z.array(z.object({
+    filePath: z.string().trim().min(1),
+    hunkRange: z.string().trim().min(1),
+  })).min(1).max(500),
+  state: z.enum(['reviewed', 'needs_changes', 'commented']),
+  note: z.string().trim().min(1).optional(),
+}).superRefine((input, context) => {
+  const keys = new Set<string>();
+  for (const hunk of input.hunks) {
+    const key = `${hunk.filePath}\u0000${hunk.hunkRange}`;
+    if (keys.has(key)) context.addIssue({ code: 'custom', message: 'Each hunk may appear only once.', path: ['hunks'] });
+    keys.add(key);
+  }
+});
+
+export type UpsertDiffHunkReviewsInput = z.infer<typeof upsertDiffHunkReviewsSchema>;
+
 export interface WorkspacePublishStatus {
   branch: string | null;
   hasOrigin: boolean;
@@ -389,6 +408,10 @@ export interface GitHubPullRequestDiff {
   title: string;
   baseRef: string;
   headRef: string;
+  /** Immutable Git commit used to anchor review decisions for this PR revision. */
+  headSha: string;
+  /** Review revision. Equal to `headSha` so force-pushes never reuse decisions. */
+  revision: string;
   files: GitHubPullRequestFile[];
   changedFiles: number;
   additions: number;

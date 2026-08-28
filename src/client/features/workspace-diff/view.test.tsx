@@ -69,24 +69,62 @@ describe('WorkspaceDiffView decision queue', () => {
     renderView(fetchMock, true);
 
     expect(await screen.findByLabelText('3 decisions across 2 files, 0 completed')).toHaveTextContent('3 decisions across 2 files');
-    expect(screen.getByRole('button', { name: /Decision 1.*authorizeRequest/ })).toHaveAttribute('aria-current', 'step');
+    expect(screen.getByRole('button', { name: /Decision 1.*authorize request/ })).toHaveAttribute('aria-current', 'step');
     expect(screen.getByText('src/server/auth/routes.ts', { selector: 'code' })).toBeInTheDocument();
     expect(screen.getByText('@@ -20 +20,3 @@ authorizeRequest', { selector: 'code' })).toBeInTheDocument();
     expect(screen.getByText('Public API')).toBeInTheDocument();
     expect(screen.getByText('Persistence')).toBeInTheDocument();
     expect(screen.getByText('Auth')).toBeInTheDocument();
-    expect(screen.getByText('Cross-file')).toBeInTheDocument();
     expect(screen.getByText('Error path')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Refresh changes' })).toHaveClass('workspace-diff-refresh-pending');
-    expect(document.querySelector('.diff-line')).not.toBeInTheDocument();
-    expect(screen.queryByText('-export function authorizeRequest() {}')).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain('/api/diff-confidence');
+
+    const authDiff = screen.getByLabelText('Full diff for src/server/auth/routes.ts');
+    expect(within(authDiff).getByText('-export function authorizeRequest() {}')).toBeInTheDocument();
+    expect(within(authDiff).getByText('+ await repository.update(session)')).toBeInTheDocument();
+    expect(authDiff.querySelector('.diff-review-diff-block.active')).toHaveTextContent('@@ -20 +20,3 @@ authorizeRequest');
 
     const fileRail = screen.getByRole('navigation', { name: 'Review files by queue priority' });
     const fileButtons = within(fileRail).getAllByRole('button');
     expect(fileButtons[0]).toHaveTextContent('src/server/auth/routes.ts');
     fireEvent.click(within(fileRail).getByRole('button', { name: /src\/local\.ts/ }));
-    expect(await screen.findByRole('link', { name: 'Open src/local.ts in editor' })).toHaveAttribute('href', 'vscode://file/tmp/workbench/src/local.ts');
+    expect(await screen.findByLabelText('Full diff for src/local.ts')).toBeInTheDocument();
+  });
+
+  it('shows the whole file diff and highlights the block the selected decision changes', async () => {
+    const file: WorkspaceDiffFile = {
+      path: 'src/local.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
+      patch: '@@ -1,3 +1,3 @@ firstBehavior\n context-one\n-before\n+after\n@@ -10,3 +10,3 @@ secondBehavior\n context-two\n-old\n+new',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'jump-revision') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    const diffPane = await screen.findByLabelText('Full diff for src/local.ts');
+    // Every hunk of the file is on screen, not only the selected decision's lines.
+    for (const line of ['context-one', '-before', '+after', 'context-two', '-old', '+new']) {
+      expect(within(diffPane).getByText(line)).toBeInTheDocument();
+    }
+    expect(diffPane.querySelectorAll('.diff-review-diff-block')).toHaveLength(2);
+    expect(diffPane.querySelector('.diff-review-diff-block.active')).toHaveTextContent('@@ -1,3 +1,3 @@ firstBehavior');
+
+    // Old and new line numbers are carried through, so the highlighted block is locatable in the file.
+    const deletedLine = within(diffPane).getByText('-before').closest('.diff-line');
+    expect(deletedLine).toHaveTextContent('2-before');
+
+    fireEvent.click(screen.getByRole('button', { name: /Decision 2.*behavior/ }));
+    expect(diffPane.querySelector('.diff-review-diff-block.active')).toHaveTextContent('@@ -10,3 +10,3 @@ secondBehavior');
+    expect(screen.getByRole('heading', { name: 'Changes behavior in src/local.ts.' })).toBeInTheDocument();
+
+    // Clicking a block inside the diff selects that decision too.
+    fireEvent.click(within(diffPane).getByRole('button', { name: 'Select the decision at Lines 1\u20133 in src/local.ts' }));
+    expect(diffPane.querySelector('.diff-review-diff-block.active')).toHaveTextContent('@@ -1,3 +1,3 @@ firstBehavior');
   });
 
   it('persists exact hunk outcomes and auto-advances after each decision', async () => {
@@ -102,29 +140,29 @@ describe('WorkspaceDiffView decision queue', () => {
       if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
       if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'hunk-revision') });
       if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews });
-      if (url.endsWith('/workspace-diff/hunk-reviews') && init?.method === 'PUT') {
-        const body = JSON.parse(String(init.body)) as { revision: string; filePath: string; hunkRange: string; state: DiffHunkReview['state']; note?: string };
+      if (url.endsWith('/workspace-diff/hunk-reviews/batch') && init?.method === 'PUT') {
+        const body = JSON.parse(String(init.body)) as { revision: string; hunks: Array<{ filePath: string; hunkRange: string }>; state: DiffHunkReview['state']; note?: string };
         putBodies.push(body);
-        const saved: DiffHunkReview = { id: `review-${reviews.length + 1}`, ...body, note: body.note ?? null, updatedAt: '2026-08-27T00:00:00.000Z' };
-        reviews = [...reviews.filter((review) => review.hunkRange !== body.hunkRange), saved];
-        return json({ review: saved });
+        const saved = body.hunks.map((hunk, index): DiffHunkReview => ({ id: `review-${reviews.length + index + 1}`, revision: body.revision, ...hunk, state: body.state, note: body.note ?? null, updatedAt: '2026-08-27T00:00:00.000Z' }));
+        reviews = [...reviews.filter((review) => !body.hunks.some((hunk) => hunk.filePath === review.filePath && hunk.hunkRange === review.hunkRange)), ...saved];
+        return json({ reviews: saved });
       }
       throw new Error(`Unexpected request: ${url}`);
     });
     renderView(fetchMock);
 
-    expect(await screen.findByRole('heading', { name: 'Changes firstBehavior in src/reviewed.ts.' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    expect(await screen.findByRole('heading', { name: 'Changes secondBehavior in src/reviewed.ts.' })).toBeInTheDocument();
-    expect(putBodies[0]).toEqual({ revision: 'hunk-revision', filePath: 'src/reviewed.ts', hunkRange: '@@ -1 +1 @@ firstBehavior', state: 'reviewed' });
+    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/reviewed.ts.' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
+    expect(await screen.findByText('@@ -10 +10 @@ secondBehavior')).toBeInTheDocument();
+    expect(putBodies[0]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -1 +1 @@ firstBehavior' }], state: 'reviewed' });
 
-    fireEvent.change(screen.getByLabelText(/Review note/), { target: { value: 'Handle the rollback path.' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Needs changes' }));
-    expect(await screen.findByRole('heading', { name: 'Changes thirdBehavior in src/reviewed.ts.' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/Note/), { target: { value: 'Handle the rollback path.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
+    expect(await screen.findByText('@@ -20 +20 @@ thirdBehavior')).toBeInTheDocument();
     expect(screen.getByText('Commented', { selector: '.diff-review-completion-state' })).toBeInTheDocument();
     expect(screen.getByText('Existing context.', { selector: '.diff-review-saved-note p' })).toBeInTheDocument();
-    expect(putBodies[1]).toEqual({ revision: 'hunk-revision', filePath: 'src/reviewed.ts', hunkRange: '@@ -10 +10 @@ secondBehavior', state: 'needs_changes', note: 'Handle the rollback path.' });
-    expect(await screen.findByLabelText('3 decisions across 1 file, 3 completed')).toHaveTextContent('1 need changes');
+    expect(putBodies[1]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -10 +10 @@ secondBehavior' }], state: 'reviewed', note: 'Handle the rollback path.' });
+    expect(await screen.findByLabelText('3 decisions across 1 file, 3 completed')).toHaveTextContent('3 completed');
   });
 
   it('keeps the active decision in place and shows an actionable error when persistence fails', async () => {
@@ -135,15 +173,15 @@ describe('WorkspaceDiffView decision queue', () => {
       if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
       if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file]) });
       if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
-      if (url.endsWith('/workspace-diff/hunk-reviews') && init?.method === 'PUT') return json({ error: 'Database busy.' }, 503);
+      if (url.endsWith('/workspace-diff/hunk-reviews/batch') && init?.method === 'PUT') return json({ error: 'Database busy.' }, 503);
       throw new Error(`Unexpected request: ${url}`);
     });
     renderView(fetchMock);
 
-    expect(await screen.findByRole('heading', { name: 'Changes failureBehavior in src/failure.ts.' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/failure.ts.' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not save this decision. Database busy.');
-    expect(screen.getByRole('heading', { name: 'Changes failureBehavior in src/failure.ts.' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Changes behavior in src/failure.ts.' })).toBeInTheDocument();
   });
 
   it('opens the latest preserved version automatically when current Git changes are clean', async () => {
@@ -161,6 +199,6 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
     expect(screen.getByLabelText('Workspace diff history')).toHaveValue('recorded-version');
     expect(screen.getByText(/Agent run run-123/)).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Changes preservedBehavior in src/preserved.ts.' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Adds behavior in src/preserved.ts.' })).toBeInTheDocument();
   });
 });

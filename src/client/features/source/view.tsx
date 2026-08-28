@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, LoaderCircle, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import type { BrokerConnection } from '../../../shared/contracts';
 import { sourceData, sourceQueryKeys } from './data';
-import { useSourceConnections } from './hooks';
-import { canAuthorizeSource, sourceDisconnectProvider } from './state';
+import { useManagedSourceAuthorization, useSourceConnections } from './hooks';
+import { canAuthorizeSource, sourceDisconnectProvider, usesManagedAuthorization, type SourceAuthorizationState } from './state';
 import { ModalDialog } from '../../components/dialogs/modal-dialog';
 import { ConfirmationDialog } from '../../components/dialogs/confirmation-dialog';
 import { Skeleton } from '../../components/skeleton/skeleton';
@@ -22,11 +22,53 @@ function SourceConnectionCardSkeleton() {
   );
 }
 
+const AuthorizationStatusCard = memo(function AuthorizationStatusCard({
+  connectionName,
+  state,
+  onCheck,
+}: {
+  connectionName: string;
+  state: Exclude<SourceAuthorizationState, { status: 'idle' }>;
+  onCheck: () => void;
+}) {
+  const checking = state.status === 'check-auth';
+  const authorized = state.status === 'authorized';
+  const failed = state.status === 'failed';
+  const title = authorized
+    ? `${connectionName} authorized`
+    : failed
+      ? 'Authorization check failed'
+      : checking
+        ? 'Checking authorization…'
+        : `Waiting for ${connectionName} authorization`;
+  const detail = authorized
+    ? 'The connection is ready to use.'
+    : failed
+      ? state.error
+      : 'Finish authorization in the browser on this Mac. Workbench will keep checking automatically.';
+
+  return (
+    <div className={`authorization-status-card ${state.status}`} role="status" aria-live="polite">
+      <div className="authorization-status-copy">
+        {authorized ? <Check size={16} aria-hidden="true" /> : checking ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <span className="authorization-status-dot" aria-hidden="true" />}
+        <span><strong>{title}</strong><small>{detail}</small></span>
+      </div>
+      {!authorized && <div className="authorization-status-actions">
+        <a href={state.authorizationUrl} target="_blank" rel="noreferrer">Open authorization page</a>
+        <button type="button" className="button secondary compact" onClick={onCheck} disabled={checking}>
+          {checking ? 'Checking…' : 'Check now'}
+        </button>
+      </div>}
+    </div>
+  );
+});
+
 function SourceConnectionCard({ connection }: { connection: BrokerConnection }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [disconnectPromptOpen, setDisconnectPromptOpen] = useState(false);
   const provider = connection.id;
+  const authorization = useManagedSourceAuthorization(connection);
   const [grafanaToken, setGrafanaToken] = useState('');
   const reconnecting = connection.state === 'error' || connection.state === 'reauth_required';
   const disconnect = useMutation({
@@ -63,9 +105,10 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
         throw error;
       }
     },
-    onSuccess: () => {
+    onSuccess: (authorizationUrl) => {
       void queryClient.invalidateQueries({ queryKey: sourceQueryKeys.connections });
       if (provider === 'grafana') setOpen(false);
+      if (authorizationUrl && usesManagedAuthorization(provider)) authorization.startAuthorization(authorizationUrl);
     },
   });
   useEffect(() => {
@@ -101,6 +144,11 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
     <div className="connection-meta">{connection.host === 'workbench' ? 'Workbench' : 'Managed connector'}<span>·</span>{connection.capabilities.map((capability) => capability.replace('_', ' ')).join(' · ') || 'Unavailable'}</div>
     {connection.lastError && <p className="error-message">{connection.lastError}</p>}
     {disconnect.error && <p className="error-message">Could not disconnect: {disconnect.error.message}</p>}
+    {authorization.state.status !== 'idle' && <AuthorizationStatusCard
+      connectionName={connection.name}
+      state={authorization.state}
+      onCheck={authorization.checkAuthorization}
+    />}
     {provider === 'figma' && connected && <div className="connection-form figma-scope-form">
       <label htmlFor="figma-scope">Discovery scope <span>One Figma file, page, or node URL per line.</span></label>
       {figmaScope.isLoading ? <div className="figma-scope-skeleton" aria-hidden="true"><Skeleton width="100%" height="12px" /><Skeleton width="74%" height="12px" /><Skeleton width="58%" height="12px" /></div> : <textarea id="figma-scope" value={figmaRoots} onChange={(event) => setFigmaRoots(event.target.value)} placeholder="https://www.figma.com/design/..." rows={3} />}
@@ -112,7 +160,6 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
     {open && canAuthorize && <div className="connection-form mcp-connection-form">
       {provider === 'grafana' && <label htmlFor="grafana-token">Service-account token <input id="grafana-token" type="password" autoComplete="off" value={grafanaToken} onChange={(event) => setGrafanaToken(event.target.value)} placeholder="glsa_…" /></label>}
       <button className="button primary" onClick={() => mcpConnect.mutate()} disabled={mcpConnect.isPending || (provider === 'grafana' && !grafanaToken.trim())}>{mcpConnect.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />} {provider === 'grafana' ? 'Save Grafana token' : provider === 'slack' ? 'Open ChatGPT connections' : 'Authorize MCP'}</button>
-      {mcpConnect.isSuccess && mcpConnect.data && <p className="muted">Approve access in the {connection.name} window that just opened. If it did not appear, <a href={mcpConnect.data} target="_blank" rel="noreferrer">open the authorization page</a> in this browser — it must be this Mac, because the callback returns to 127.0.0.1.</p>}
       {mcpConnect.error && <p className="error-message">Connection failed: {mcpConnect.error.message}</p>}
     </div>}
     {disconnectPromptOpen && <ConfirmationDialog

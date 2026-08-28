@@ -1723,6 +1723,21 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // Review handoffs are evidence captured at the end of a coding run. A
+    // correction must be a new run, not an in-place rewrite that destroys the
+    // reviewer’s original map.
+    id: '062_agent_run_review_handoffs_immutable',
+    apply(database) {
+      database.exec(`
+        CREATE TRIGGER agent_run_review_handoffs_immutable
+        BEFORE UPDATE ON agent_run_review_handoffs
+        BEGIN
+          SELECT RAISE(ABORT, 'agent run review handoffs are immutable');
+        END;
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

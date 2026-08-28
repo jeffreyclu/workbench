@@ -17,6 +17,12 @@ const figmaConnection: BrokerConnection = {
   lastError: null,
 };
 
+const pendingFigmaConnection: BrokerConnection = {
+  ...figmaConnection,
+  state: 'needs_auth',
+  detail: 'Authorize Figma MCP to enable design context.',
+};
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
@@ -137,5 +143,66 @@ describe('SourcesDialog connection loading', () => {
     expect(await screen.findByText('Linear')).toBeTruthy();
     expect(await screen.findByText('Figma')).toBeTruthy();
     expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/source-connections')).toHaveLength(2);
+  });
+});
+
+describe('SourcesDialog managed authorization', () => {
+  it('keeps a non-blocking waiting card visible and checks authorization on demand', async () => {
+    let authorized = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/source-connections/figma/managed/oauth/start' && init?.method === 'POST') {
+        return jsonResponse({ url: 'https://example.com/figma-oauth' });
+      }
+      if (url === '/api/source-connections') {
+        return jsonResponse({ connections: [authorized ? figmaConnection : pendingFigmaConnection] });
+      }
+      if (url === '/api/source-connections/figma/scope') return jsonResponse({ roots: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderDialog(fetchMock);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect MCP' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize MCP' }));
+
+    expect(await screen.findByText('Waiting for Figma authorization')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open authorization page' }).getAttribute('href')).toBe('https://example.com/figma-oauth');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('button', { name: 'Authorize MCP' })).toBeNull();
+    expect(screen.getByText('Waiting for Figma authorization')).toBeTruthy();
+
+    authorized = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
+
+    expect(await screen.findByText('Figma authorized')).toBeTruthy();
+    expect(screen.getByText('The connection is ready to use.')).toBeTruthy();
+  });
+
+  it('shows a recoverable failed state when an authorization check fails', async () => {
+    let failConnectionCheck = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/source-connections/figma/managed/oauth/start' && init?.method === 'POST') {
+        return jsonResponse({ url: 'https://example.com/figma-oauth' });
+      }
+      if (url === '/api/source-connections') {
+        if (failConnectionCheck) return jsonResponse({ error: 'Network unavailable.' }, 503);
+        return jsonResponse({ connections: [pendingFigmaConnection] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderDialog(fetchMock);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect MCP' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize MCP' }));
+    await screen.findByText('Waiting for Figma authorization');
+
+    failConnectionCheck = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
+
+    expect(await screen.findByText('Authorization check failed')).toBeTruthy();
+    expect(screen.getByText('Network unavailable.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Check now' })).toBeTruthy();
   });
 });

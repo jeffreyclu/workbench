@@ -17,6 +17,7 @@ import {
   runKindSchema,
   savedWorkItemFilterViewSchema,
   unblockWorkItemSchema,
+  upsertDiffHunkReviewsSchema,
   updateSavedWorkItemFilterSchema,
   updateWorkItemSchema,
   VERSION_CONFLICT_CODE,
@@ -153,6 +154,14 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
         note: z.string().trim().min(1).optional(),
       }).parse(request.body);
       response.json({ review: repository.upsertDiffHunkReview({ workItemId: item.id }, input) });
+    } catch (error) { next(error); }
+  });
+  router.put('/api/work-items/:id/workspace-diff/hunk-reviews/batch', (request, response, next) => {
+    try {
+      const item = repository.get(request.params.id);
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      const input = upsertDiffHunkReviewsSchema.parse(request.body);
+      response.json({ reviews: repository.upsertDiffHunkReviews({ workItemId: item.id }, input) });
     } catch (error) { next(error); }
   });
   router.get('/api/work-items', (request, response) => {

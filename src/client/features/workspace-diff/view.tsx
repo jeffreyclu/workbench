@@ -8,7 +8,8 @@ import { sourceClient } from '../../data/source-client.js';
 import type { DiffFollowUpReference } from '../diff-confidence.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
-import { buildReviewDecisions, buildReviewFileQueue, nextPendingDecisionId, orderReviewDecisions } from '../diff-review/logic.js';
+import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
+import { buildFileDiffHunks, buildReviewDecisions, buildReviewFileQueue, nextPendingDecisionId, orderReviewDecisions } from '../diff-review/logic.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
 import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
@@ -88,12 +89,18 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const orderedDecisions = useMemo(() => orderReviewDecisions(decisions), [decisions]);
   const fileQueue = useMemo(() => buildReviewFileQueue(decisions), [decisions]);
   const selectedDecision = orderedDecisions.find((decision) => decision.id === selectedDecisionId) ?? orderedDecisions[0] ?? null;
+  const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
+  const fileHunks = useMemo(() => (selectedFile ? buildFileDiffHunks(selectedFile) : []), [selectedFile]);
 
   const saveDecision = async (state: 'reviewed' | 'needs_changes' | 'commented', note: string | undefined) => {
     if (!selectedDecision) return;
     const nextId = nextPendingDecisionId(orderedDecisions, selectedDecision.id);
     try {
-      await upsertHunkReview.mutateAsync({ filePath: selectedDecision.filePath, hunkRange: selectedDecision.hunkRange, state, note });
+      await upsertHunkReview.mutateAsync({
+        hunks: selectedDecision.hunks.map((hunk) => ({ filePath: hunk.filePath, hunkRange: hunk.hunkRange })),
+        state,
+        note,
+      });
       setSelectedDecisionId(nextId);
     } catch {
       // The mutation exposes its stable request error beside the actions.
@@ -120,9 +127,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
             <DiffReviewSummaryView decisions={decisions} />
             {selectedDecision && <>
               <DiffReviewDecisionQueue decisions={orderedDecisions} files={fileQueue} selectedId={selectedDecision.id} onSelect={setSelectedDecisionId} />
-              <DiffReviewDecisionDetailCard decision={selectedDecision}>
-                <DiffReviewActions key={selectedDecision.id} initialNote={selectedDecision.note} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state, note) => void saveDecision(state, note)} />
-              </DiffReviewDecisionDetailCard>
+              <div className="diff-review-workbench">
+                {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={setSelectedDecisionId} />}
+                <DiffReviewDecisionDetailCard decision={selectedDecision}>
+                  <DiffReviewActions key={selectedDecision.id} initialNote={selectedDecision.note} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state, note) => void saveDecision(state, note)} />
+                </DiffReviewDecisionDetailCard>
+              </div>
             </>}
           </div>}
   </section>;

@@ -73,7 +73,7 @@ import { conversationData, conversationQueryKeys } from './data';
 import { DecisionTreeVisualizer } from './decision-tree-visualizer';
 import { celebrate } from '../../components/celebrate';
 import { SessionFeedbackPrompt } from '../../components/dialogs/session-feedback-prompt';
-import { useConversationChangesAvailability, useDebouncedValue } from './hooks';
+import { useConversationChangesAvailability, useDebouncedValue, useOpenChangesAfterCompletedRun } from './hooks';
 import { GitHubDiffView } from '../github-diff/view';
 import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { WorkspaceDiffScope } from '../../data/source-client';
@@ -481,6 +481,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     conversationIsRunning,
   );
   useEffect(() => { setActivePane('conversation'); }, [conversationId]);
+  useOpenChangesAfterCompletedRun(changesAvailability.completedRunRefresh, changesAvailability.hasChanges, () => setActivePane('changes'));
   useEffect(() => {
     if (activePane !== 'changes') setMobileComposerOpen(false);
   }, [activePane]);

@@ -1,5 +1,4 @@
 import { memo, type ReactNode } from 'react';
-import { ExternalLink } from 'lucide-react';
 import type { ReviewDecision } from './logic.js';
 import { reviewStateLabel, riskSignalLabel } from './logic.js';
 
@@ -15,9 +14,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
     <section className="diff-review-exact-change" aria-labelledby="diff-review-exact-change-title">
       <h4 id="diff-review-exact-change-title">Exact change</h4>
       <div>
-        <span><code>{decision.filePath}</code>{decision.editorUrl && <a href={decision.editorUrl} aria-label={`Open ${decision.filePath} in editor`} title="Open in editor"><ExternalLink size={13} aria-hidden="true" /></a>}</span>
-        <code>{decision.hunkRange}</code>
-        <small>{decision.location} · <b>+{decision.additions}</b> <i>−{decision.deletions}</i></small>
+        <small>Highlighted in the diff · {decision.hunks.length === 1 ? decision.hunks[0].location : `${decision.hunks.length} hunks`} · <b>+{decision.additions}</b> <i>−{decision.deletions}</i></small>
       </div>
     </section>
     <section className="diff-review-risks" aria-labelledby="diff-review-risks-title">

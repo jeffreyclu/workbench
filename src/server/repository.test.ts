@@ -55,6 +55,43 @@ describe('WorkItemRepository', () => {
     expect(repository.listDiffHunkReviews({ workItemId: other.id }, 'rev-1')).toEqual([expect.objectContaining({ state: 'reviewed' })]);
   });
 
+  it('upserts every hunk in one review decision through the batch boundary', () => {
+    const item = repository.create({ title: 'Cross-file review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const reviews = repository.upsertDiffHunkReviews({ workItemId: item.id }, {
+      revision: 'rev-cross-file',
+      hunks: [
+        { filePath: 'src/authorize.ts', hunkRange: '@@ -1 +1 @@ function authorizeRequest()' },
+        { filePath: 'src/authorize.test.ts', hunkRange: '@@ -10 +10 @@ describe("authorizeRequest")' },
+      ],
+      state: 'reviewed',
+      note: 'Validated together.',
+    });
+
+    expect(reviews).toHaveLength(2);
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-cross-file')).toEqual([
+      expect.objectContaining({ filePath: 'src/authorize.test.ts', state: 'reviewed', note: 'Validated together.' }),
+      expect.objectContaining({ filePath: 'src/authorize.ts', state: 'reviewed', note: 'Validated together.' }),
+    ]);
+  });
+
+  it('rolls back every hunk when one write in a review decision fails', () => {
+    const item = repository.create({ title: 'Atomic cross-file review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    database.exec(`CREATE TRIGGER fail_review_hunk BEFORE INSERT ON diff_hunk_reviews
+      WHEN NEW.file_path = 'src/fail.ts'
+      BEGIN SELECT RAISE(ABORT, 'forced review failure'); END`);
+
+    expect(() => repository.upsertDiffHunkReviews({ workItemId: item.id }, {
+      revision: 'rev-atomic',
+      hunks: [
+        { filePath: 'src/succeeds-first.ts', hunkRange: '@@ -1 +1 @@ function updateDecision()' },
+        { filePath: 'src/fail.ts', hunkRange: '@@ -10 +10 @@ describe("updateDecision")' },
+      ],
+      state: 'needs_changes',
+      note: 'Both hunks must remain pending.',
+    })).toThrow('forced review failure');
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-atomic')).toEqual([]);
+  });
+
   it('uses the normal CLI account for repository-created runs unless a profile is explicitly selected', () => {
     const item = repository.create({ title: 'Account default', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
 
