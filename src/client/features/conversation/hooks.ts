@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { WorkItemReference } from '../../../shared/contracts.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { pullRequestUrls } from '../github-diff/logic.js';
 import { useGitHubPullRequestDiffPreviews } from '../github-diff/hooks.js';
@@ -16,7 +15,7 @@ export function useDebouncedValue(value: string, delayMs: number) {
   return debouncedValue;
 }
 
-export function useConversationChangesAvailability(scope: WorkspaceDiffScope | null, sourceUrl: string | null, references: WorkItemReference[], isRunning: boolean) {
+export function useConversationChangesAvailability(scope: WorkspaceDiffScope | null, candidateUrls: string[], isRunning: boolean) {
   const queryClient = useQueryClient();
   const workspaceDiff = useWorkspaceDiff(scope);
   // A commit clears Git's current diff, but Workbench preserves it as a
@@ -41,7 +40,7 @@ export function useConversationChangesAvailability(scope: WorkspaceDiffScope | n
     }
     wasRunning.current = isRunning;
   }, [isRunning, scope, scopeKey, queryClient]);
-  const linkedPullRequestUrls = pullRequestUrls([...(sourceUrl ? [sourceUrl] : []), ...references.map((reference) => reference.url)]);
+  const linkedPullRequestUrls = pullRequestUrls(candidateUrls);
   const pullRequestDiffs = useGitHubPullRequestDiffPreviews(linkedPullRequestUrls);
   const hasWorkspaceChanges = (workspaceDiff.data?.diff?.changedFiles ?? 0) > 0;
   const hasRecordedWorkspaceChanges = (snapshots.data?.snapshots ?? []).some((snapshot) => snapshot.diff.changedFiles > 0);

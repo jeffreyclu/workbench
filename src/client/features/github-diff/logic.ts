@@ -46,6 +46,14 @@ export function parsePatch(patch: string): DiffLine[] {
 
 const pullRequestUrlPattern = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/files)?\/?(?:[?#].*)?$/i;
 
+// Pasted links arrive inside prose, markdown links, and trailing punctuation,
+// so text scanning cannot reuse the anchored single-URL pattern above.
+const pullRequestUrlInTextPattern = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+(?:\/files)?/gi;
+
+export function pullRequestUrlsInText(text: string): string[] {
+  return text.match(pullRequestUrlInTextPattern) ?? [];
+}
+
 export function pullRequestUrls(urls: string[]): string[] {
   const seen = new Set<string>();
   return urls.filter((url) => {

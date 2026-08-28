@@ -1,6 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { ExternalLink, FileDiff, GitPullRequest } from 'lucide-react';
-import type { WorkItemReference } from '../../../shared/contracts.js';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
 import { useDiffBlockConfidence, useDiffRiskSummary } from '../diff-confidence-hooks.js';
 import { groupDiffBlocks, isChangedBlock, type DiffFollowUpReference } from '../diff-confidence.js';
@@ -19,8 +18,8 @@ function DiffSkeleton() {
   </section>;
 }
 
-export const GitHubDiffView = memo(function GitHubDiffView({ sourceUrl, references, onFollowUp }: { sourceUrl: string | null; references: WorkItemReference[]; onFollowUp?: (reference: DiffFollowUpReference) => void }) {
-  const urls = useMemo(() => pullRequestUrls([...(sourceUrl ? [sourceUrl] : []), ...references.map((reference) => reference.url)]), [references, sourceUrl]);
+export const GitHubDiffView = memo(function GitHubDiffView({ candidateUrls, onFollowUp }: { candidateUrls: string[]; onFollowUp?: (reference: DiffFollowUpReference) => void }) {
+  const urls = useMemo(() => pullRequestUrls(candidateUrls), [candidateUrls]);
   const [url, setUrl] = useSelectedGitHubPullRequest(urls);
   const query = useGitHubPullRequestDiff(url);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);

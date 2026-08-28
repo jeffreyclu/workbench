@@ -22,7 +22,7 @@ describe('useConversationChangesAvailability', () => {
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-    const { result } = renderHook(() => useConversationChangesAvailability({ workItemId: 'work-item-1' }, null, [], false), { wrapper });
+    const { result } = renderHook(() => useConversationChangesAvailability({ workItemId: 'work-item-1' }, [], false), { wrapper });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.hasChanges).toBe(false);
@@ -43,7 +43,7 @@ describe('useConversationChangesAvailability', () => {
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-    const { result } = renderHook(() => useConversationChangesAvailability({ workItemId: 'work-item-1' }, 'https://github.com/writer/workbench/pull/42', [{ id: 'reference-43', workItemId: 'work-item-1', type: 'pull_request', url: 'https://github.com/writer/workbench/pull/43', title: 'Related PR', createdAt: '2026-08-27T00:00:00.000Z' }], false), { wrapper });
+    const { result } = renderHook(() => useConversationChangesAvailability({ workItemId: 'work-item-1' }, ['https://github.com/writer/workbench/pull/42', 'https://github.com/writer/workbench/pull/43'], false), { wrapper });
 
     await waitFor(() => expect(result.current.hasChanges).toBe(true));
     expect(result.current.isError).toBe(false);

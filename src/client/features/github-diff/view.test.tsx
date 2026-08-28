@@ -17,7 +17,7 @@ describe('GitHubDiffView', () => {
     } }), { headers: { 'Content-Type': 'application/json' } })));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    render(<QueryClientProvider client={client}><GitHubDiffView sourceUrl="https://github.com/writer/workbench/pull/42" references={[]} /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><GitHubDiffView candidateUrls={['https://github.com/writer/workbench/pull/42']} /></QueryClientProvider>);
 
     expect(await screen.findByLabelText('3 changed files, 21 additions, 8 deletions')).toBeInTheDocument();
   });
@@ -31,7 +31,7 @@ describe('GitHubDiffView', () => {
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    render(<QueryClientProvider client={client}><GitHubDiffView sourceUrl="https://github.com/writer/workbench/pull/42" references={[]} /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><GitHubDiffView candidateUrls={['https://github.com/writer/workbench/pull/42']} /></QueryClientProvider>);
 
     expect(await screen.findByText('Could not load this pull-request diff.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
@@ -56,7 +56,7 @@ describe('GitHubDiffView', () => {
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    render(<QueryClientProvider client={client}><GitHubDiffView sourceUrl="https://github.com/writer/workbench/pull/42" references={[]} /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><GitHubDiffView candidateUrls={['https://github.com/writer/workbench/pull/42']} /></QueryClientProvider>);
 
     expect(await screen.findByLabelText('AI risk assessment: 42 out of 100')).toBeInTheDocument();
     expect(document.querySelector('.diff-line.addition')?.textContent).toContain('+after');
@@ -71,11 +71,11 @@ describe('GitHubDiffView', () => {
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    const { rerender } = render(<QueryClientProvider client={client}><GitHubDiffView sourceUrl="https://github.com/writer/workbench/pull/42" references={[]} /></QueryClientProvider>);
+    const { rerender } = render(<QueryClientProvider client={client}><GitHubDiffView candidateUrls={['https://github.com/writer/workbench/pull/42']} /></QueryClientProvider>);
     expect(await screen.findByRole('heading', { name: 'Pull request 42' })).toBeInTheDocument();
     expect(screen.queryByLabelText('Pull request')).not.toBeInTheDocument();
 
-    rerender(<QueryClientProvider client={client}><GitHubDiffView sourceUrl="https://github.com/writer/workbench/pull/42" references={[{ id: 'reference-43', workItemId: 'work-item-1', type: 'pull_request', url: 'https://github.com/writer/workbench/pull/43', title: 'Related PR', createdAt: '2026-08-27T00:00:00.000Z' }]} /></QueryClientProvider>);
+    rerender(<QueryClientProvider client={client}><GitHubDiffView candidateUrls={['https://github.com/writer/workbench/pull/42', 'https://github.com/writer/workbench/pull/43']} /></QueryClientProvider>);
     fireEvent.change(await screen.findByLabelText('Pull request'), { target: { value: 'https://github.com/writer/workbench/pull/43' } });
     expect(await screen.findByRole('heading', { name: 'Pull request 43' })).toBeInTheDocument();
   });
@@ -91,7 +91,7 @@ describe('GitHubDiffView', () => {
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    render(<QueryClientProvider client={client}><GitHubDiffView sourceUrl="https://github.com/writer/workbench/pull/42" references={[]} /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><GitHubDiffView candidateUrls={['https://github.com/writer/workbench/pull/42']} /></QueryClientProvider>);
 
     expect(await screen.findByRole('img', { name: 'Preview of assets/first.png' })).toHaveAttribute('src', expect.stringContaining('/api/github/pull-request-image?'));
     expect(screen.getByRole('link', { name: /View on GitHub/i })).toHaveAttribute('href', 'https://github.com/writer/workbench/pull/42/files');
