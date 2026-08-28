@@ -550,7 +550,7 @@ export interface AgentUsage {
   cacheReadInputTokens: number | null;
   outputTokens: number | null;
 }
-interface AgentCommandResult { output: string; usage: AgentUsage; sessionId?: string | null; /** Provider-billed dollars when the CLI reports them (Claude only today). */ costUsd?: number | null; }
+interface AgentCommandResult { output: string; usage: AgentUsage; sessionId?: string | null; /** Largest single-request context observed this turn. */ peakContextTokens?: number; /** Provider-billed dollars when the CLI reports them (Claude only today). */ costUsd?: number | null; }
 
 function numberAt(record: Record<string, unknown>, ...keys: string[]): number | null {
   const value = keys.map((key) => record[key]).find((candidate) => typeof candidate === 'number');
@@ -681,6 +681,56 @@ export function effortFor(profile: ExecutionProfile): 'low' | 'medium' | 'high' 
   return profile === 'economy' ? 'low' : profile === 'standard' ? 'medium' : 'high';
 }
 
+/**
+ * In-run context ceiling handed to `--autocompact`.
+ *
+ * The previous flat 180k was inert: the worst measured run (124 provider
+ * requests in one turn) peaked at 146k, so compaction never fired once and
+ * every later request re-read a ~100k context. Cache reads are the dominant
+ * line item precisely because context is allowed to sit near its high-water
+ * mark for the back half of a long run, so the ceiling has to be low enough to
+ * actually bite. Tier it by profile instead: economy work is short-horizon and
+ * loses nothing to an aggressive cap, while deep runs keep the headroom a real
+ * implementation pass needs. 100k previously caused compaction thrash for deep
+ * coding runs, which is why deep stays well above it.
+ */
+export function autocompactCeilingFor(profile: ExecutionProfile): string {
+  return process.env[`WORKBENCH_AUTOCOMPACT_${profile.toUpperCase()}`]?.trim()
+    || { economy: '60k', standard: '100k', deep: '140k' }[profile];
+}
+
+/**
+ * The same ceiling as a token count, so the post-turn checkpoint and the in-run
+ * compaction bound can never drift apart. An unparseable override falls back to
+ * the standard tier rather than to zero, which would checkpoint every turn.
+ */
+export function autocompactCeilingTokens(profile: ExecutionProfile): number {
+  const raw = autocompactCeilingFor(profile).toLowerCase().trim();
+  const match = /^(\d+(?:\.\d+)?)(k|m)?$/.exec(raw);
+  if (!match) return 100_000;
+  const scale = match[2] === 'm' ? 1_000_000 : match[2] === 'k' ? 1_000 : 1;
+  return Math.round(Number(match[1]) * scale);
+}
+
+/**
+ * Whether a finished turn's Claude session should be retired instead of stored
+ * for the next turn to resume. A turn whose largest single request already
+ * reached the in-run ceiling spent its back half compacting and re-reading a
+ * context pinned at that high-water mark, and a resuming turn starts back at
+ * the mark. Reseeding from Workbench's own bounded prompt is cheaper than
+ * inheriting it. An unmeasured turn keeps its session: losing usage samples is
+ * not evidence of bloat, and discarding on missing data would throw away live
+ * implementation context every time the stream reported nothing.
+ */
+export function shouldCheckpointSession(peakContextTokens: number | undefined, profile: ExecutionProfile): boolean {
+  return (peakContextTokens ?? 0) >= autocompactCeilingTokens(profile);
+}
+
+/** Shared wording so the execute and conversation paths report a checkpoint identically. */
+export function checkpointActivityDetail(peakContextTokens: number, profile: ExecutionProfile): string {
+  return `Context checkpoint: this turn peaked at ${Math.round(peakContextTokens / 1000)}k tokens against a ${Math.round(autocompactCeilingTokens(profile) / 1000)}k ceiling. The next turn starts a fresh Claude session instead of replaying this one.`;
+}
+
 export type AgentInputSteering = (body: string) => Promise<boolean>;
 
 export function commandFor(agent: AgentRun['agent'], cwd: string, profile: ExecutionProfile, modelOverride?: string, resumeSessionId?: string, kind: AgentRun['kind'] = 'execute'): { command: string; args: string[] } {
@@ -709,18 +759,16 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
     // actually needs, instead of inheriting Jeffrey's full personal config
     // (atlassian, linear, the figma plugin). Codex's `exec --ephemeral` never
     // carried that baggage; this closes the gap for the trivial per-turn work.
-    // --autocompact caps the real driver of the worst runs (up to 13M cached
-    // tokens on a single ~10-minute, many-tool-call run): without a bound the CLI lets a
-    // single run's conversation grow unpruned, so every later turn re-sends and
-    // re-reads everything every earlier turn already produced. 100k compacted
-    // deep coding runs after only a few ordinary tool turns, causing compaction
-    // thrash; leave room for a real implementation pass while retaining a cap.
+    // --autocompact caps the real driver of the worst runs: without a bound the
+    // CLI lets a single run's conversation grow unpruned, so every later request
+    // re-reads everything every earlier tool call already produced. See
+    // autocompactCeilingFor for why the ceiling is tiered rather than flat.
     // Keep stdin open for shared-room interjections. They become another user
     // turn in this Claude process instead of canceling it or spawning another.
     // Coding runs (kind === 'execute') resume the conversation's prior Claude
     // session instead of starting cold, so implementation work keeps its live
     // context across turns; --autocompact stays unconditional either way.
-    args: ['-p', '--permission-mode', 'bypassPermissions', '--no-chrome', '--disallowedTools', readOnly ? 'Task,Edit,Write,NotebookEdit' : 'Task', '--append-system-prompt', RUNNER_SYSTEM_CONTRACT, '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, ...(resumeSessionId ? ['--resume', resumeSessionId] : []), '--disable-slash-commands', '--autocompact', '180k', '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
+    args: ['-p', '--permission-mode', 'bypassPermissions', '--no-chrome', '--disallowedTools', readOnly ? 'Task,Edit,Write,NotebookEdit' : 'Task', '--append-system-prompt', RUNNER_SYSTEM_CONTRACT, '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, ...(resumeSessionId ? ['--resume', resumeSessionId] : []), '--disable-slash-commands', '--autocompact', autocompactCeilingFor(profile), '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
   };
 }
 
@@ -1107,6 +1155,11 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
     const eventContext: AgentEventContext = { subagents: new Map(), pendingBash: new Map() };
     let reportedUsage: { inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null } = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
     let estimatedOutputTokens = 0;
+    // High-water mark of a single provider request's context. Per-message usage
+    // samples are per-request, so their input+cache total is that request's
+    // context size; the peak is what decides whether a resumed session has grown
+    // past the point where carrying it forward is cheaper than reseeding.
+    let peakContextTokens = 0;
     let providerCostUsd: number | null = null;
     let lastReportedUsage = '';
     // See UsageSample: `--forward-subagent-text` can surface the same provider
@@ -1139,6 +1192,8 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
       } else {
         if (usage.sampleId && seenUsageSamples.has(usage.sampleId)) return;
         if (usage.sampleId) seenUsageSamples.add(usage.sampleId);
+        const sampleContext = (usage.inputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0);
+        if (sampleContext > peakContextTokens) peakContextTokens = sampleContext;
         reportedUsage = {
           inputTokens: usage.inputTokens === null ? reportedUsage.inputTokens : (reportedUsage.inputTokens ?? 0) + usage.inputTokens,
           cacheCreationInputTokens: usage.cacheCreationInputTokens === null ? reportedUsage.cacheCreationInputTokens : (reportedUsage.cacheCreationInputTokens ?? 0) + usage.cacheCreationInputTokens,
@@ -1278,7 +1333,7 @@ ${CLAUDE_EXECUTION_CONTRACT}` : ''}`;
       else if (code === 0 && !terminalError) {
         const output = finalOutput.trim() || progress.trim() || stdout.trim();
         const outputTokens = reportedUsage.outputTokens ?? (estimatedOutputTokens || null);
-        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens }, sessionId: eventContext.sessionId ?? null, costUsd: providerCostUsd });
+        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens }, sessionId: eventContext.sessionId ?? null, costUsd: providerCostUsd, peakContextTokens });
       }
       else {
         const providerDiagnostic = stderr.trim() || terminalError || finalOutput.trim() || stdout.trim();
@@ -1360,7 +1415,7 @@ export async function runAgentCommandWithFallback(
   resumeSessionId?: string,
   poolEligible = false,
   allowFallback = true,
-): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; costUsd?: number | null }> {
+): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; costUsd?: number | null; peakContextTokens?: number }> {
   try {
     const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, resumeSessionId, poolEligible, kind);
     return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
@@ -1603,7 +1658,26 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
       })));
     }, run.kind, run.accountProfile, undefined, undefined, resumeSessionId, !resumesSession);
-    if (resumesSession && run.conversationId) repository.setConversationClaudeSessionId(run.conversationId, result.sessionId ?? null);
+    // Post-turn checkpoint. Execute runs resume a Claude CLI session across
+    // turns, so without a bound each later turn starts already carrying every
+    // earlier turn's tool history and re-reads it on every request. When this
+    // turn's largest single request already reached the in-run ceiling, carrying
+    // the session forward costs more than reseeding: retire the session id so
+    // the next turn starts fresh from Workbench's bounded prompt (shared context
+    // and RAG are replayed only on that non-resuming path). The conversation
+    // path applies the same rule in shared-room, because the id it stores is the
+    // one this path later resumes.
+    // Only a Claude result may write this column: after a fallback the id
+    // belongs to a different agent, and the Claude session that failed mid-turn
+    // is not worth resuming either way.
+    if (resumesSession && run.conversationId) {
+      if (result.agent !== 'claude') repository.setConversationClaudeSessionId(run.conversationId, null);
+      else {
+        const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile);
+        repository.setConversationClaudeSessionId(run.conversationId, checkpoint ? null : result.sessionId ?? null);
+        if (checkpoint) repository.addActivity(item.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile));
+      }
+    }
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the run to Codex.';
       repository.addActivity(item.id, 'system', 'agent_fallback', reason);

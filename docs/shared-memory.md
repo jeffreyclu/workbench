@@ -146,3 +146,17 @@ owns. Shared modules that a new component imports keep their existing state mech
 converting them changes behavior for legacy surfaces still rendering them. Whenever a Jotai migration
 is blocked by that rule, write the blocked import down instead of converting it — the file-level
 carve-out list for Manage Connectors V2 lives in `~/notes/knowledge/writer-frontend-stack.md`.
+
+## Never post code review comments to GitHub — draft them for Jeffrey (2026-08-28)
+
+When Jeffrey asks for review comments on a pull request, the deliverable is text he will paste
+himself, not a mutation. He interrupted a review of `WriterInternal/fe.web-app#5287` with "wait are
+you trying to comment on GH?? don't do that. just tell me where and what to comment." Reviewing a PR
+therefore means producing, for each finding, the exact file, the exact right-side line number in the
+GitHub "Files changed" view, and the comment body ready to paste — and stopping there.
+
+Read-only GitHub calls used to establish those anchors (`gh api .../pulls/<n>/files`, fetching
+`refs/pull/<n>/head`, `git show`) are fine and are what make the line numbers trustworthy. What is
+forbidden is any write: `gh pr review`, `gh pr comment`, `gh api -X POST` against a comments
+endpoint. Anchor findings on lines that are actually part of the diff whenever possible, because a
+line outside every hunk forces Jeffrey to expand context before GitHub will let him comment there.

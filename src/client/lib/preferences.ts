@@ -8,6 +8,7 @@ import type { AgentRun } from '../../shared/contracts';
 const conversationModelStorageKey = 'workbench:conversation-model-profiles';
 const taskModelStorageKey = 'workbench:task-model-profiles';
 const conversationDraftStorageKey = 'workbench:conversation-drafts';
+const workspaceDiffSelectionsStorageKey = 'workbench:workspace-diff-selections';
 const lastOpenedItemStorageKeys = {
   conversation: 'workbench:last-opened-conversation',
   attention: 'workbench:last-opened-attention-item',
@@ -97,4 +98,49 @@ export function readConversationModelProfiles(): Record<string, NonNullable<Agen
 
 export function writeConversationModelProfiles(profiles: Record<string, NonNullable<AgentRun['executionProfile']>>): void {
   window.localStorage.setItem(conversationModelStorageKey, JSON.stringify(profiles));
+}
+
+type WorkspaceDiffSelections = Record<string, { source: string; decisions: Record<string, string> }>;
+
+function readWorkspaceDiffSelections(): WorkspaceDiffSelections {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(workspaceDiffSelectionsStorageKey) ?? '{}') as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(value).flatMap(([scope, selection]) => {
+      if (!selection || typeof selection !== 'object') return [];
+      const { source, decisions } = selection as Record<string, unknown>;
+      if (typeof source !== 'string' || !source) return [];
+      const validDecisions = decisions && typeof decisions === 'object'
+        ? Object.fromEntries(Object.entries(decisions).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[1])))
+        : {};
+      return [[scope, { source, decisions: validDecisions }]];
+    }));
+  } catch {
+    return {};
+  }
+}
+
+export function readWorkspaceDiffSelection(scope: string): { source: string; decisions: Record<string, string> } | null {
+  return readWorkspaceDiffSelections()[scope] ?? null;
+}
+
+export function writeWorkspaceDiffSource(scope: string, source: string): void {
+  try {
+    const selections = readWorkspaceDiffSelections();
+    selections[scope] = { source, decisions: selections[scope]?.decisions ?? {} };
+    window.localStorage.setItem(workspaceDiffSelectionsStorageKey, JSON.stringify(selections));
+  } catch {
+    // Review navigation remains usable when browser storage is unavailable.
+  }
+}
+
+export function writeWorkspaceDiffDecision(scope: string, revision: string, decisionId: string): void {
+  try {
+    const selections = readWorkspaceDiffSelections();
+    const selection = selections[scope];
+    if (!selection) return;
+    selection.decisions[revision] = decisionId;
+    window.localStorage.setItem(workspaceDiffSelectionsStorageKey, JSON.stringify(selections));
+  } catch {
+    // A decision can still be reviewed even if its browser preference cannot save.
+  }
 }

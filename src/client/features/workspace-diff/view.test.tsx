@@ -32,6 +32,7 @@ function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, onFo
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   vi.unstubAllGlobals();
 });
 
@@ -129,6 +130,39 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
     expect(screen.getByLabelText('Full diff for src/recovered.ts')).toBeInTheDocument();
     expect(screen.queryByText('No uncommitted changes to review.')).toBeNull();
+  });
+
+  it('restores the selected local repository and decision after the Changes view remounts', async () => {
+    const repositoryA = '/tmp/repository-a';
+    const repositoryB = '/tmp/repository-b';
+    let selectedPath = repositoryA;
+    const repositoryADiff = workspaceDiff([{ path: 'src/a.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@ repositoryAChange\n-before\n+after' }], 'repository-a');
+    const repositoryBDiff = workspaceDiff([{ path: 'src/b.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@ firstRepositoryBChange\n-before\n+after\n@@ -10 +10 @@ secondRepositoryBChange\n-before\n+after' }], 'repository-b');
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath, workspaces: [{ path: repositoryA, label: 'repository-a' }, { path: repositoryB, label: 'repository-b' }] });
+      if (url.endsWith('/workspaces/selection') && init?.method === 'PUT') {
+        selectedPath = (JSON.parse(String(init.body)) as { workspacePath: string }).workspacePath;
+        return json({ selectedPath, workspaces: [{ path: repositoryA, label: 'repository-a' }, { path: repositoryB, label: 'repository-b' }] });
+      }
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: selectedPath === repositoryB ? repositoryBDiff : repositoryADiff });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    const picker = await screen.findByLabelText('Repository');
+    fireEvent.change(picker, { target: { value: repositoryB } });
+    await screen.findByRole('heading', { name: 'Changes behavior in src/b.ts.' });
+    fireEvent.click(screen.getByRole('button', { name: /Decision 2/ }));
+
+    cleanup();
+    selectedPath = repositoryA;
+    renderView(fetchMock);
+
+    await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue(repositoryB));
+    expect(screen.getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
   });
 
   it('orders the queue deterministically by source order, with no ambient AI scoring', async () => {
@@ -404,6 +438,39 @@ describe('WorkspaceDiffView pull-request source', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
 
     await waitFor(() => expect(requests.some((request) => request.startsWith('PUT') && request.includes('/hunk-reviews/batch') && request.includes('"revision":"sha-42"'))).toBe(true));
+  });
+
+  it('restores the selected repository and decision after the Changes view remounts', async () => {
+    const persistedPullRequestDiff = {
+      ...pullRequestDiff(1, null),
+      files: [
+        { path: 'src/page-one.ts', previousPath: null, status: 'modified' as const, additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@ firstScopeChange\n-before\n+after' },
+        { path: 'src/page-two.ts', previousPath: null, status: 'modified' as const, additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@ secondScopeChange\n-before\n+after' },
+      ],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench' }] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([], 'clean-revision') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      if (url.includes('/api/github/pull-request-diff')) return json({ diff: persistedPullRequestDiff });
+      if (url.includes('/api/review-auto-score')) return json({ scores: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock, false, undefined, null, [pullRequestUrl]);
+
+    const picker = await screen.findByLabelText('Repository');
+    fireEvent.change(picker, { target: { value: pullRequestUrl } });
+    await screen.findByRole('heading', { name: 'Changes behavior in src/page-one.ts.' });
+    fireEvent.click(screen.getByRole('button', { name: /Decision 2/ }));
+
+    cleanup();
+    renderView(fetchMock, false, undefined, null, [pullRequestUrl]);
+
+    expect(await screen.findByRole('heading', { name: 'Selectable scopes' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Repository')).toHaveValue(pullRequestUrl);
+    expect(screen.getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
   });
 
   it('opens the linked pull request when the local checkout has nothing to review', async () => {

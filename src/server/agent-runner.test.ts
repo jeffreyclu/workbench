@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRun, WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, CLAUDE_EXECUTION_CONTRACT, autocompactCeilingTokens, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -106,10 +106,60 @@ describe('classifyExecution', () => {
     expect(claude).not.toContain('--dangerously-skip-permissions');
     expect(claude).toEqual(expect.arrayContaining(['--input-format', 'stream-json']));
     expect(claude).not.toContain('--forward-subagent-text');
-    expect(claude).toEqual(expect.arrayContaining(['--autocompact', '180k']));
+    expect(claude).toEqual(expect.arrayContaining(['--autocompact', '60k']));
     expect(claude).toEqual(expect.arrayContaining(['--add-dir', '/tmp/project', homedir()]));
     expect(commandFor('claude', '/tmp/project', 'standard').args).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions']));
     expect(commandFor('claude', '/tmp/project', 'standard').args).not.toContain('--no-session-persistence');
+  });
+
+  it('bounds in-run context by profile so the ceiling actually fires on long runs', () => {
+    // The flat 180k ceiling was inert: the worst measured run peaked at 146k and
+    // never compacted once, so every later request re-read a ~100k context.
+    expect(commandFor('claude', '/tmp/project', 'economy').args).toEqual(expect.arrayContaining(['--autocompact', '60k']));
+    expect(commandFor('claude', '/tmp/project', 'standard').args).toEqual(expect.arrayContaining(['--autocompact', '100k']));
+    expect(commandFor('claude', '/tmp/project', 'deep').args).toEqual(expect.arrayContaining(['--autocompact', '140k']));
+    expect(commandFor('claude', '/tmp/project', 'deep').args).not.toContain('180k');
+  });
+
+  it('parses the context ceiling into tokens so the checkpoint cannot drift from compaction', () => {
+    expect(autocompactCeilingTokens('economy')).toBe(60_000);
+    expect(autocompactCeilingTokens('standard')).toBe(100_000);
+    expect(autocompactCeilingTokens('deep')).toBe(140_000);
+  });
+
+  it('falls back to the standard ceiling rather than zero when an override is unparseable', () => {
+    // A zero ceiling would checkpoint every single turn, discarding live context.
+    process.env.WORKBENCH_AUTOCOMPACT_STANDARD = 'not-a-size';
+    try {
+      expect(autocompactCeilingTokens('standard')).toBe(100_000);
+    } finally {
+      delete process.env.WORKBENCH_AUTOCOMPACT_STANDARD;
+    }
+  });
+
+  it('retires a session whose turn peaked at the in-run ceiling', () => {
+    // The measured worst run peaked at 146k. Resuming that session hands the
+    // next turn a context already at its high-water mark.
+    expect(shouldCheckpointSession(146_000, 'standard')).toBe(true);
+    expect(shouldCheckpointSession(100_000, 'standard')).toBe(true);
+    expect(shouldCheckpointSession(146_000, 'deep')).toBe(true);
+  });
+
+  it('keeps a session that stayed under the ceiling so live context survives', () => {
+    expect(shouldCheckpointSession(99_999, 'standard')).toBe(false);
+    expect(shouldCheckpointSession(0, 'economy')).toBe(false);
+  });
+
+  it('keeps the session when the turn reported no usage at all', () => {
+    // Missing usage samples are not evidence of bloat; discarding on unknown
+    // peaks would throw away implementation context on every silent stream.
+    expect(shouldCheckpointSession(undefined, 'standard')).toBe(false);
+  });
+
+  it('reports the checkpoint with both the measured peak and the ceiling that tripped it', () => {
+    const detail = checkpointActivityDetail(146_000, 'standard');
+    expect(detail).toContain('146k');
+    expect(detail).toContain('100k');
   });
 
   it('passes invariant Claude runner rules through the static system-prompt channel', () => {

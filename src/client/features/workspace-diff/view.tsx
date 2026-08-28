@@ -22,6 +22,7 @@ import { useGitHubPullRequestDiff } from '../github-diff/hooks.js';
 import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
 import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
 import { workspaceDiffQueryKeys } from './data.js';
+import { readWorkspaceDiffSelection, writeWorkspaceDiffDecision, writeWorkspaceDiffSource } from '../../lib/preferences.js';
 
 /** The parts of a diff this review surface reads, whichever source produced
  * it. A local workspace diff satisfies it directly; a pull request is adapted
@@ -67,6 +68,8 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const queryClient = useQueryClient();
   const conversationId = 'conversationId' in scope ? scope.conversationId : null;
   const workItemId = 'workItemId' in scope ? scope.workItemId : null;
+  const preferenceScope = conversationId ? `conversation:${conversationId}` : `work-item:${workItemId}`;
+  const rememberedSelection = useMemo(() => readWorkspaceDiffSelection(preferenceScope), [preferenceScope]);
   const explorerKey = conversationId ? ['conversation-workspaces', conversationId] : ['work-item-workspaces', workItemId];
   const explorer = useQuery({
     queryKey: explorerKey,
@@ -124,6 +127,19 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     // Drop a selection whose pull request is no longer referenced here.
     setSelectedPullRequestUrl((current) => current && availablePullRequests.includes(current) ? current : null);
   }, [availablePullRequests]);
+  useEffect(() => {
+    if (rememberedSelection && availablePullRequests.includes(rememberedSelection.source)) setSelectedPullRequestUrl(rememberedSelection.source);
+  }, [availablePullRequests, rememberedSelection]);
+  useEffect(() => {
+    // A remembered local workspace is authoritative for this browser session,
+    // just as a remembered pull request is. The server remains the shared
+    // default when no local preference exists.
+    const source = rememberedSelection?.source;
+    if (!source || availablePullRequests.includes(source) || !explorer.data) return;
+    if (explorer.data.workspaces.some((workspace) => workspace.path === source)) {
+      if (source !== explorer.data.selectedPath) selectWorkspace.mutate(source);
+    }
+  }, [availablePullRequests, explorer.data, rememberedSelection?.source, selectWorkspace]);
   const pullRequestQuery = useGitHubPullRequestDiff(selectedPullRequestUrl);
   const isPullRequestSource = selectedPullRequestUrl !== null;
   const pullRequest = pullRequestQuery.data?.pages[0]?.diff ?? null;
@@ -161,6 +177,14 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const selectedDecisionIndex = selectedDecision ? orderedDecisions.findIndex((decision) => decision.id === selectedDecision.id) : -1;
   const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
   const fileHunks = useMemo(() => (selectedFile ? buildFileDiffHunks(selectedFile) : []), [selectedFile]);
+  useEffect(() => {
+    if (!displayedDiff?.revision || selectedDecisionId || !rememberedSelection) return;
+    const rememberedDecisionId = rememberedSelection.decisions[displayedDiff.revision];
+    if (rememberedDecisionId && orderedDecisions.some((decision) => decision.id === rememberedDecisionId)) setSelectedDecisionId(rememberedDecisionId);
+  }, [displayedDiff?.revision, orderedDecisions, rememberedSelection, selectedDecisionId]);
+  useEffect(() => {
+    if (displayedDiff?.revision && selectedDecisionId) writeWorkspaceDiffDecision(preferenceScope, displayedDiff.revision, selectedDecisionId);
+  }, [displayedDiff?.revision, preferenceScope, selectedDecisionId]);
 
   const recordDecisionState = (decision: ReviewDecision, state: DiffHunkReviewState) =>
     upsertHunkReview.mutateAsync({
@@ -193,6 +217,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // Switching source resets the queue: decision ids belong to one diff.
   const selectSource = (value: string) => {
     if (!value) return;
+    writeWorkspaceDiffSource(preferenceScope, value);
     setSelectedDecisionId(null);
     hasChosenSource.current = true;
     if (availablePullRequests.includes(value)) {

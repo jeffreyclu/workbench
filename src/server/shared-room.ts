@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
-import { EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type RetrievedMemory } from './agent-runner.js';
+import { EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, shouldCheckpointSession, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -795,7 +795,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       retrievedMemoryChars: injectedMemory.reduce((total, match) => total + match.title.length + match.body.length, 0),
     });
     const guardedPrompt = prompt;
-    let result: { output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; codexThreadId?: string };
+    let result: { output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; codexThreadId?: string; peakContextTokens?: number };
     try {
       result = agent === 'codex'
       ? await runSteerableCodex(guardedPrompt, cwd, controller.signal, (partial) => {
@@ -860,7 +860,15 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       }, undefined, false, !isPairedReply);
     }
     if (result.agent === 'codex') repository.setConversationCodexThreadId(target.conversationId, null);
-    if (result.agent === 'claude') repository.setConversationClaudeSessionId(target.conversationId, result.sessionId ?? null);
+    // Conversation turns never resume this session, but they do store its id and
+    // the next execute run resumes from exactly that id. A turn that hit the
+    // in-run ceiling would otherwise seed execute with an already-saturated
+    // session, so the same checkpoint rule applies on this side of the handoff.
+    if (result.agent === 'claude') {
+      const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile);
+      repository.setConversationClaudeSessionId(target.conversationId, checkpoint ? null : result.sessionId ?? null);
+      if (checkpoint && linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile));
+    }
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       if (isPairedReply) throw new Error('Claude reported an invalid workspace-scope blocker. Its paired response was kept as a Claude failure and was not replaced with Codex.');
       if (controller.signal.aborted) throw new Error('Agent run canceled.');
