@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { useConversationChangesAvailability, useOpenChangesAfterCompletedRun } from './hooks.js';
+import { useConversationChangesAvailability } from './hooks.js';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -47,20 +47,5 @@ describe('useConversationChangesAvailability', () => {
 
     await waitFor(() => expect(result.current.hasChanges).toBe(true));
     expect(result.current.isError).toBe(false);
-  });
-});
-
-describe('useOpenChangesAfterCompletedRun', () => {
-  it('opens the inline review only when the completed refresh has a diff', () => {
-    const onOpen = vi.fn();
-    const { rerender } = renderHook(({ completedRunRefresh, hasChanges }) => useOpenChangesAfterCompletedRun(completedRunRefresh, hasChanges, onOpen), {
-      initialProps: { completedRunRefresh: 0, hasChanges: false },
-    });
-
-    rerender({ completedRunRefresh: 1, hasChanges: true });
-    expect(onOpen).toHaveBeenCalledTimes(1);
-
-    rerender({ completedRunRefresh: 2, hasChanges: false });
-    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 });

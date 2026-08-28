@@ -54,6 +54,11 @@ function usePhoneReviewControls() {
   return isPhone;
 }
 
+/**
+ * IDE LEGACY-AFFECTING: Existing task and conversation review surfaces now
+ * start on the current/latest diff. Recorded snapshots remain available only
+ * after an explicit history selection.
+ */
 export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, reviewHandoff, onFollowUp, taskIntent = null, pullRequestUrlCandidates }: {
   scope: WorkspaceDiffScope;
   isRunning?: boolean;
@@ -110,14 +115,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
   const [mobileDecisionDetailOpen, setMobileDecisionDetailOpen] = useState(false);
   const isPhoneReview = usePhoneReviewControls();
-  // null means "automatically show the latest record when Git is clean";
-  // an empty string is the user's explicit choice to view current changes.
-  const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
+  // Latest changes are always the default; recorded snapshots require an
+  // explicit choice from the history selector.
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState('');
   const diff = query.data?.diff;
   const snapshots = snapshotsQuery.data?.snapshots ?? [];
-  const selectedSnapshot = selectedSnapshotId === null && diff?.changedFiles === 0
-    ? snapshots.find((snapshot) => snapshot.diff.changedFiles > 0) ?? null
-    : snapshots.find((snapshot) => snapshot.id === selectedSnapshotId) ?? null;
+  const selectedSnapshot = snapshots.find((snapshot) => snapshot.id === selectedSnapshotId) ?? null;
 
   // Pull requests are review sources in the same picker as the local
   // checkouts: one selection, one viewer, one decision queue.
@@ -263,7 +266,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
         : <div><span className="workspace-diff-eyebrow"><FileDiff size={14} /> {selectedSnapshot ? 'Recorded version' : 'Workspace review'}</span><h2>{selectedSnapshot ? 'Workspace review record' : 'Review workspace decisions'}</h2><small>{displayedDiff?.branch}</small><p>{selectedSnapshot ? `Captured ${new Date(selectedSnapshot.capturedAt).toLocaleString()}. This record is preserved in the history.` : 'Review behavior decisions in priority order before publishing these workspace changes.'}</p>{selectedSnapshot && <small className="workspace-diff-provenance">{selectedSnapshot.originatingAgentRunId ? `Agent run ${selectedSnapshot.originatingAgentRunId}` : 'No originating agent run recorded'}{selectedSnapshot.commitHash ? ` · Commit ${selectedSnapshot.commitHash.slice(0, 12)}` : ' · No commit recorded'}</small>}</div>}
       <div className="workspace-diff-actions">
         {(conversationId || workItemId) && (workspaces.length > 0 || availablePullRequests.length > 0) && <label className="workspace-repository-picker"><span>Repository</span><select value={selectedPullRequestUrl ?? explorer.data?.selectedPath ?? ''} onChange={(event) => selectSource(event.target.value)} disabled={selectWorkspace.isPending}><option value="" disabled>Select repository</option>{workspaces.length > 0 && <optgroup label="Local repositories">{workspaces.map((workspace) => <option key={workspace.path} value={workspace.path}>{workspace.label}</option>)}</optgroup>}{availablePullRequests.length > 0 && <optgroup label="Pull requests">{availablePullRequests.map((url) => <option key={url} value={url}>{pullRequestLabel(url)}</option>)}</optgroup>}</select></label>}
-        {!isPullRequestSource && snapshots.length > 0 && <label className="workspace-diff-timeline"><History size={13} /><span className="visually-hidden">Workspace diff history</span><select value={selectedSnapshotId ?? selectedSnapshot?.id ?? ''} onChange={(event) => { setSelectedSnapshotId(event.target.value); setSelectedDecisionId(null); }}><option value="">Current changes</option>{snapshots.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{new Date(snapshot.capturedAt).toLocaleString()} · {snapshot.diff.changedFiles} files</option>)}</select></label>}
+        {!isPullRequestSource && snapshots.length > 0 && <label className="workspace-diff-timeline"><History size={13} /><span className="visually-hidden">Workspace diff history</span><select value={selectedSnapshotId} onChange={(event) => { setSelectedSnapshotId(event.target.value); setSelectedDecisionId(null); }}><option value="">Latest changes</option>{snapshots.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{new Date(snapshot.capturedAt).toLocaleString()} · {snapshot.diff.changedFiles} files</option>)}</select></label>}
         <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={refreshSource} disabled={isRefreshing}><RefreshCw size={13} className={isRefreshing ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>
       </div>
     </header>

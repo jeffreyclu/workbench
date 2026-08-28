@@ -77,6 +77,11 @@ import { WorkspaceDiffView } from '../workspace-diff/view';
 import { formatDiffFollowUpReference, type DiffFollowUpReference } from '../diff-confidence';
 import type { AgentAccountProfile } from '../../data/runtime-client';
 
+/**
+ * IDE LEGACY-AFFECTING: Workspace review is now a closed disclosure. The
+ * existing task detail still loads the same review data, but task selection no
+ * longer moves the page into a large patch automatically.
+ */
 export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCreated, onRemoving }: { id: string; onClose: () => void; onOpenConversation: (conversationId: string) => void; onOpenTask: (taskId: string) => void; onCreated: (item: WorkItem) => void; onRemoving?: (id: string) => Promise<void> }) {
   const queryClient = useQueryClient();
   const detail = useTaskDetail(id);
@@ -700,7 +705,12 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       {deleteTaskPromptOpen && <ConfirmationDialog title={`Delete “${item.title}”?`} description="This permanently deletes the task and cannot be undone." confirmLabel="Delete task" pending={lifecycle.isPending} onClose={() => setDeleteTaskPromptOpen(false)} onConfirm={() => lifecycle.mutate('delete')} />}
       {feedbackTarget && <SessionFeedbackPrompt onSubmit={async (rating: SessionFeedbackRating) => { await api.createSessionFeedback({ ...feedbackTarget, rating }); setFeedbackTarget(null); onClose(); }} />}
 
-      <WorkspaceDiffView scope={{ workItemId: item.id }} activeWorkspacePaths={detail.data.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : [])} reviewHandoff={detail.data.runs.find((run) => run.reviewHandoff)?.reviewHandoff ?? null} onFollowUp={addDiffFollowUp} taskIntent={{ title: item.title, description: item.description }} pullRequestUrlCandidates={references.map((reference) => reference.url)} />
+      <details className="detail-section task-collapsible workspace-review-section">
+        <summary><span>Workspace review</span><small>Latest changes and recorded snapshots</small></summary>
+        <div className="task-collapsible-content">
+          <WorkspaceDiffView scope={{ workItemId: item.id }} activeWorkspacePaths={detail.data.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : [])} reviewHandoff={detail.data.runs.find((run) => run.reviewHandoff)?.reviewHandoff ?? null} onFollowUp={addDiffFollowUp} taskIntent={{ title: item.title, description: item.description }} pullRequestUrlCandidates={references.map((reference) => reference.url)} />
+        </div>
+      </details>
       <details className="detail-section task-collapsible relationships-section">
         <summary><span>Linked items & history</span><small>{(detail.data.parentItem ? 1 : 0) + detail.data.children.length + linkedTasks.length + detail.data.conversations.length + detail.data.artifacts.length + references.length} linked</small></summary>
         <div className="task-collapsible-content">

@@ -23,7 +23,6 @@ export function useConversationChangesAvailability(scope: WorkspaceDiffScope | n
   const snapshots = useWorkspaceDiffSnapshots(scope, workspaceDiff.data?.diff?.revision);
   const wasRunning = useRef(isRunning);
   const previousScopeKey = useRef(scope ? ('conversationId' in scope ? `conversation:${scope.conversationId}` : `work-item:${scope.workItemId}`) : null);
-  const [completedRunRefresh, setCompletedRunRefresh] = useState(0);
   const scopeKey = scope ? ('conversationId' in scope ? `conversation:${scope.conversationId}` : `work-item:${scope.workItemId}`) : null;
   useEffect(() => {
     // A completed run can have produced its diff in a detached Workbench
@@ -35,8 +34,7 @@ export function useConversationChangesAvailability(scope: WorkspaceDiffScope | n
       return;
     }
     if (wasRunning.current && !isRunning && scope) {
-      void queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.detail(scope) })
-        .finally(() => setCompletedRunRefresh((current) => current + 1));
+      void queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.detail(scope) });
     }
     wasRunning.current = isRunning;
   }, [isRunning, scope, scopeKey, queryClient]);
@@ -58,19 +56,6 @@ export function useConversationChangesAvailability(scope: WorkspaceDiffScope | n
     hasChanges: hasWorkspaceChanges || hasRecordedWorkspaceChanges || hasPullRequestChanges,
     isLoading: workspaceDiff.isLoading || snapshots.isLoading || pullRequestDiffs.some((pullRequestDiff) => pullRequestDiff.isLoading),
     isError,
-    completedRunRefresh,
     retry,
   };
-}
-
-/** Move a completed implementation straight into its in-app diff review. */
-export function useOpenChangesAfterCompletedRun(completedRunRefresh: number, hasChanges: boolean, onOpen: () => void) {
-  const lastHandledRefresh = useRef(completedRunRefresh);
-  const openRef = useRef(onOpen);
-  useEffect(() => { openRef.current = onOpen; }, [onOpen]);
-  useEffect(() => {
-    if (completedRunRefresh === lastHandledRefresh.current) return;
-    lastHandledRefresh.current = completedRunRefresh;
-    if (hasChanges) openRef.current();
-  }, [completedRunRefresh, hasChanges]);
 }

@@ -1262,8 +1262,11 @@ describe('shared room', () => {
     const changes = await screen.findByRole('button', { name: 'Changes' });
     await waitFor(() => expect(changes).toBeEnabled());
     fireEvent.click(changes);
-    expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeTruthy();
+    expect(await screen.findByText('No uncommitted changes to review.')).toBeTruthy();
+    expect(screen.getByLabelText('Workspace diff history')).toHaveValue('');
     expect(screen.getByRole('option', { name: /1 files/ })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Workspace diff history'), { target: { value: 'snapshot-1' } });
+    expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeTruthy();
   });
 
   it('does not duplicate the conversation pin in the top action bar', async () => {

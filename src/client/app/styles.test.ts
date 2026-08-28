@@ -45,6 +45,14 @@ describe('shared message layout', () => {
   });
 });
 
+describe('workspace diff colors', () => {
+  it('uses GitHub-style additions, deletions, and readable inactive blocks', () => {
+    expect(styles).toContain('.diff-line.addition { color: #aff5b4; background: #0f5323; }');
+    expect(styles).toContain('.diff-line.deletion { color: #ffdcd7; background: #67060c; }');
+    expect(styles).toContain('.diff-review-diff-block { border-left: 2px solid transparent; opacity: 1;');
+  });
+});
+
 describe('conversation view controls', () => {
   it('keeps an existing execution conversation openable while a task dispatch starts', () => {
     const rule = styles.match(/^\.detail-panel\.execution-starting button[^\{]*\{[^}]*\}/m)?.[0] ?? '';

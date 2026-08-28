@@ -112,7 +112,7 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(attempts).toBe(2);
   });
 
-  it('automatically renders the latest recorded changes when the current checkout is clean', async () => {
+  it('defaults to latest changes even when a recorded snapshot exists', async () => {
     const recordedFile: WorkspaceDiffFile = {
       path: 'src/recovered.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false,
       patch: '@@ -1 +1 @@ recoveredBehavior\n-before\n+after',
@@ -127,9 +127,12 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
+    expect(await screen.findByText('No uncommitted changes to review.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Workspace diff history')).toHaveValue('');
+    expect(screen.queryByLabelText('Full diff for src/recovered.ts')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Workspace diff history'), { target: { value: 'recorded-run' } });
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
     expect(screen.getByLabelText('Full diff for src/recovered.ts')).toBeInTheDocument();
-    expect(screen.queryByText('No uncommitted changes to review.')).toBeNull();
   });
 
   it('restores the selected local repository and decision after the Changes view remounts', async () => {
@@ -199,6 +202,8 @@ describe('WorkspaceDiffView decision queue', () => {
   });
 
   it('shows the whole file diff and highlights the block the selected decision changes', async () => {
+    const pageScroll = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: pageScroll });
     const file: WorkspaceDiffFile = {
       path: 'src/local.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
       patch: '@@ -1,3 +1,3 @@ firstBehavior\n context-one\n-before\n+after\n@@ -10,3 +10,3 @@ secondBehavior\n context-two\n-old\n+new',
@@ -214,6 +219,7 @@ describe('WorkspaceDiffView decision queue', () => {
     renderView(fetchMock);
 
     const diffPane = await screen.findByLabelText('Full diff for src/local.ts');
+    expect(pageScroll).not.toHaveBeenCalled();
     // Every hunk of the file is on screen, not only the selected decision's lines.
     for (const line of ['context-one', '-before', '+after', 'context-two', '-old', '+new']) {
       expect(within(diffPane).getByText(line)).toBeInTheDocument();
@@ -389,8 +395,10 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
+    expect(await screen.findByText('No uncommitted changes to review.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Workspace diff history')).toHaveValue('');
+    fireEvent.change(screen.getByLabelText('Workspace diff history'), { target: { value: 'recorded-version' } });
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Workspace diff history')).toHaveValue('recorded-version');
     expect(screen.getByText(/Agent run run-123/)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Adds behavior in src/preserved.ts.' })).toBeInTheDocument();
   });

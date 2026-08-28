@@ -380,13 +380,13 @@ nav { display: grid; gap: 3px; }
 .workspace-diff-file > header span { flex: 0 0 auto; color: #898880; text-transform: capitalize; }
 .diff-file-info { display: flex; align-items: center; gap: 12px; min-width: 0; overflow: hidden; }
 .workspace-diff-file pre { min-width: 0; max-width: 100%; margin: 0; padding: 8px 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; background: #10100f; font: 11px/1.55 'DM Mono'; }
-.diff-line { display: grid; grid-template-columns: 42px 42px minmax(0, 1fr); min-height: 18px; color: #c9c8c1; white-space: pre-wrap; }
+.diff-line { display: grid; grid-template-columns: 42px 42px minmax(0, 1fr); min-height: 18px; color: #f0f6fc; white-space: pre-wrap; }
 .diff-line > span { padding: 0 8px; }
 .diff-line > span:last-child, .diff-line-code { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
-.diff-line > span:nth-child(-n + 2) { color: #77766f; text-align: right; user-select: none; border-right: 1px solid #242421; }
-.diff-line.addition { color: #c3d8f0; background: #182636; }.diff-line.addition > span:nth-child(-n + 2) { background: #142031; }
-.diff-line.deletion { color: #f0dcb0; background: #33270f; }.diff-line.deletion > span:nth-child(-n + 2) { background: #2b200c; }
-.diff-line.header { color: #aaa9a2; background: #20201d; }.diff-line.header > span:nth-child(-n + 2) { background: #1c1c19; }
+.diff-line > span:nth-child(-n + 2) { color: #8b949e; text-align: right; user-select: none; border-right: 1px solid #30363d; }
+.diff-line.addition { color: #aff5b4; background: #0f5323; }.diff-line.addition > span:nth-child(-n + 2) { background: #033a16; }
+.diff-line.deletion { color: #ffdcd7; background: #67060c; }.diff-line.deletion > span:nth-child(-n + 2) { background: #490202; }
+.diff-line.header { color: #8b949e; background: #161b22; }.diff-line.header > span:nth-child(-n + 2) { background: #0d1117; }
 .diff-line-marker { padding-right: 2px; user-select: none; }
 .diff-block { margin: 4px 0; }
 .diff-summary-strip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px; color: #aaa9a2; border: 1px solid #353530; border-radius: 999px; background: #1b1b18; font: 700 9px 'DM Mono'; }
@@ -494,15 +494,15 @@ nav { display: grid; gap: 3px; }
 .diff-review-actions > p { margin: 0; color: #e1a68f; font-size: 11px; }.diff-review-saving { color: #85847d; font: 10px 'DM Mono'; }
 .diff-review-load-error { padding: 14px; border: 1px solid #5b3935; border-radius: 7px; background: #211716; }.diff-review-load-error strong { color: #e1a68f; }.diff-review-load-error p { color: #aaa9a2; }
 .diff-review-workbench { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; border-top: 1px solid #252522; }
-.diff-review-file-diff { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; border-right: 1px solid #252522; background: #101010; }
-.diff-review-file-diff > header { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #252522; background: #171715; }
+.diff-review-file-diff { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; border-right: 1px solid #30363d; background: #0d1117; }
+.diff-review-file-diff > header { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #30363d; background: #161b22; }
 .diff-review-file-diff > header > span { display: flex; align-items: center; gap: 7px; min-width: 0; color: #85847d; }
 .diff-review-file-diff > header code { overflow-wrap: anywhere; color: #deddd6; font: 11px 'DM Mono'; }
 .diff-review-file-diff > header small { margin-left: auto; flex: 0 0 auto; color: #77766f; font: 10px 'DM Mono'; }
 .diff-review-file-diff > header a { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: 0 0 auto; color: #aaa9a2; border: 1px solid #3c3c36; border-radius: 5px; }
 .diff-review-file-diff > header a:hover, .diff-review-file-diff > header a:focus-visible { color: var(--acid); border-color: #596234; outline: 0; }
 .diff-review-file-diff-body { max-height: min(72vh, 760px); overflow-y: auto; overscroll-behavior-y: contain; font: 11px/1.65 'DM Mono'; scroll-padding-block: 60px; }
-.diff-review-diff-block { border-left: 2px solid transparent; opacity: .5; transition: opacity .15s ease, border-color .15s ease, background .15s ease; }
+.diff-review-diff-block { border-left: 2px solid transparent; opacity: 1; transition: border-color .15s ease, background .15s ease; }
 .diff-review-diff-block { --state-tone: #6f6e68; }
 .diff-review-diff-block.state-reviewed { --state-tone: #8bbd75; }
 .diff-review-diff-block.state-needs_changes { --state-tone: #e1a68f; }

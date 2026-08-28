@@ -73,7 +73,7 @@ import { conversationData, conversationQueryKeys } from './data';
 import { DecisionTreeVisualizer } from './decision-tree-visualizer';
 import { celebrate } from '../../components/celebrate';
 import { SessionFeedbackPrompt } from '../../components/dialogs/session-feedback-prompt';
-import { useConversationChangesAvailability, useDebouncedValue, useOpenChangesAfterCompletedRun } from './hooks';
+import { useConversationChangesAvailability, useDebouncedValue } from './hooks';
 import { pullRequestUrls, pullRequestUrlsInText } from '../github-diff/logic.js';
 import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { WorkspaceDiffScope } from '../../data/source-client';
@@ -562,7 +562,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     ...(messages.data?.messages ?? []).flatMap((message) => pullRequestUrlsInText(message.body)),
   ]), [linkedWorkItem.data?.item?.sourceUrl, linkedWorkItem.data?.references, messages.data?.messages]);
   const changesAvailability = useConversationChangesAvailability(workspaceDiffScope, githubCandidateUrls, conversationIsRunning);
-  useOpenChangesAfterCompletedRun(changesAvailability.completedRunRefresh, changesAvailability.hasChanges, () => setActivePane('changes'));
+  // IDE LEGACY-AFFECTING: A completed agent run refreshes change availability,
+  // but must not replace the conversation the reviewer is reading with Changes.
   const agentAccounts = useQuery({ queryKey: ['agent-accounts'], queryFn: api.listAgentAccounts, refetchInterval: 5_000 });
   const accountProfiles = useMemo(() => {
     const configured = agentAccounts.data?.accounts ?? [];

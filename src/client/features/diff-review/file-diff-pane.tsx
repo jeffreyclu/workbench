@@ -3,7 +3,12 @@ import { ExternalLink, FileDiff } from 'lucide-react';
 import type { ReviewDecision, ReviewDiffHunk } from './logic.js';
 import { reviewStateLabel } from './logic.js';
 
-/** The whole diff of the selected file, with the active decision's block
+/**
+ * IDE LEGACY-AFFECTING: Task detail mounts this existing review pane whenever
+ * a task opens. Keeping its focus movement inside the diff scroller prevents
+ * task selection from scrolling the page down to a review block.
+ *
+ * The whole diff of the selected file, with the active decision's block
  * highlighted and scrolled into view. A decision is judged in its surrounding
  * context, so the pane never shows a block in isolation. */
 export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, onSelect }: {
@@ -15,12 +20,17 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   onSelect: (decisionId: string) => void;
 }) {
   const activeBlock = useRef<HTMLElement | null>(null);
+  const diffBody = useRef<HTMLDivElement | null>(null);
   const decisionByHunkId = new Map(decisions.flatMap((decision) => decision.hunks.map((hunk) => [hunk.id, decision] as const)));
 
   useEffect(() => {
-    // jsdom and older browsers do not implement scrollIntoView; jumping is an
-    // affordance, never a requirement for reading the diff.
-    activeBlock.current?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    // IDE LEGACY-AFFECTING: `scrollIntoView` scrolls every ancestor, including
+    // the task detail. Scroll only this pane so opening a task stays at its top.
+    const body = diffBody.current;
+    const block = activeBlock.current;
+    if (!body || !block) return;
+    const behavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    body.scrollTo?.({ top: Math.max(0, block.offsetTop - body.clientHeight / 2), behavior });
   }, [activeDecisionId, filePath]);
 
   return <article className="diff-review-file-diff" aria-label={`Full diff for ${filePath}`}>
@@ -29,7 +39,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
       <small>{hunks.length} {hunks.length === 1 ? 'block' : 'blocks'} in this file</small>
       {editorUrl && <a href={editorUrl} aria-label={`Open ${filePath} in editor`} title="Open in editor"><ExternalLink size={13} aria-hidden="true" /></a>}
     </header>
-    <div className="diff-review-file-diff-body">
+    <div className="diff-review-file-diff-body" ref={diffBody}>
       {hunks.map((hunk) => {
         const decision = decisionByHunkId.get(hunk.decisionId);
         const active = decision?.id === activeDecisionId;
