@@ -49,7 +49,6 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       try { return existsSync(path) && statSync(path).isDirectory() ? path : null; }
       catch { return null; } // The collector may remove a run worktree mid-request.
     };
-    const isRunWorktree = (workspacePath: string | null) => Boolean(workspacePath?.includes('/.workbench/run-worktrees/'));
     const selected = database.prepare('SELECT workspace_path FROM work_item_workspace_selection WHERE work_item_id = ?').get(workItemId) as { workspace_path: string } | undefined;
     const root = dirname(process.cwd());
     const candidates = readdirSync(root, { withFileTypes: true })
@@ -57,18 +56,17 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       .map((entry) => resolve(join(root, entry.name)))
       .filter((path) => existsSync(join(path, '.git')) || existsSync(join(path, 'package.json')));
     const runWorkspaces = repository.listRuns(item.id)
-      .filter((run) => (run.status === 'queued' || run.status === 'running') && usableWorkspace(run.resolvedWorkspace))
+      .filter((run) => usableWorkspace(run.resolvedWorkspace))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
     const activeRunWorkspace = runWorkspaces.find((run) => run.status === 'queued' || run.status === 'running')?.resolvedWorkspace ?? null;
     const latestRunWorkspace = usableWorkspace(activeRunWorkspace) ?? usableWorkspace(runWorkspaces[0]?.resolvedWorkspace);
     const defaultPath = latestRunWorkspace ?? usableWorkspace(resolveWorkingDirectory(item));
     if (defaultPath && !candidates.includes(defaultPath)) candidates.unshift(defaultPath);
     const savedPath = usableWorkspace(selected?.workspace_path);
-    const savedPathIsUsable = Boolean(savedPath && candidates.includes(savedPath) && !isRunWorktree(savedPath));
-    const selectedPath = latestRunWorkspace ?? (savedPathIsUsable ? savedPath : defaultPath);
+    const selectedPath = latestRunWorkspace ?? (savedPath && candidates.includes(savedPath) ? savedPath : defaultPath);
     // Persist recovery from a garbage-collected run worktree. Otherwise one
     // device can keep reintroducing a dead selection on every other device.
-    if (selected && !savedPathIsUsable) {
+    if (selected && !savedPath) {
       if (selectedPath) database.prepare(`INSERT INTO work_item_workspace_selection (work_item_id, workspace_path, updated_at)
         VALUES (?, ?, ?) ON CONFLICT(work_item_id) DO UPDATE SET workspace_path = excluded.workspace_path, updated_at = excluded.updated_at`)
         .run(workItemId, selectedPath, new Date().toISOString());
