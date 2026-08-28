@@ -15,6 +15,42 @@ describe('formatDiffFollowUpReference', () => {
   });
 });
 
+describe('formatDiffFollowUpReference for a review decision', () => {
+  it('carries the behaviour, state, AI assessment and every hunk into one agent-readable message', () => {
+    expect(formatDiffFollowUpReference({
+      ordinal: 4,
+      behavior: 'Changes authorize request access checks.',
+      assessment: { risk: 91, reasoning: 'Removes the ownership check.' },
+      state: 'Pending',
+      hunks: [
+        { filePath: 'src/server/auth.ts', location: 'Lines 20–22', lines: ['-const owner = ...', '+// TODO'] },
+        { filePath: 'src/server/routes.ts', location: 'Line 8', lines: ['+authorize(request)'] },
+      ],
+    })).toBe([
+      'Please follow up on review decision 4.',
+      '**Changes authorize request access checks.**',
+      'AI risk: 91/100 · Review state: Pending',
+      '> Removes the ownership check.',
+      '**src/server/auth.ts** · Lines 20–22\n\n```diff\n-const owner = ...\n+// TODO\n```',
+      '**src/server/routes.ts** · Line 8\n\n```diff\n+authorize(request)\n```',
+    ].join('\n\n'));
+  });
+
+  it('states the omission instead of pasting an entire rewritten file into the composer', () => {
+    const lines = Array.from({ length: 400 }, (_value, index) => `+line ${index}`);
+    const text = formatDiffFollowUpReference({
+      ordinal: 1, behavior: 'Rewrites the module.', assessment: null, state: 'Pending',
+      hunks: [{ filePath: 'src/big.ts', location: 'Lines 1–400', lines }],
+    });
+
+    expect(text).toContain('AI risk: not scored yet');
+    expect(text).toContain('+line 0');
+    expect(text).toContain('… 281 more lines omitted …');
+    expect(text).toContain('+line 399');
+    expect(text.split('\n').filter((line) => line.startsWith('+line'))).toHaveLength(119);
+  });
+});
+
 describe('boundConfidenceRequestBlocks', () => {
   it('leaves a block the server already accepts untouched', () => {
     const bounded = boundConfidenceRequestBlocks([{ key: 'src/example.ts::@@ -1,2 +1,2 @@', lines: ['+after', '-before'] }]);

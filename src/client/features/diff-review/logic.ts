@@ -1,4 +1,5 @@
 import type { DiffHunkReview, DiffHunkReviewState, WorkspaceDiffFile } from '../../../shared/contracts.js';
+import type { DiffConfidenceAssessment, DiffDecisionFollowUpReference } from '../diff-confidence.js';
 
 export const REVIEW_RISK_SIGNALS = ['public_api', 'persistence', 'auth', 'cross_file', 'error_path'] as const;
 export type ReviewRiskSignal = typeof REVIEW_RISK_SIGNALS[number];
@@ -268,6 +269,21 @@ export function riskSignalLabel(signal: ReviewRiskSignal): string {
   if (signal === 'cross_file') return 'Cross-file';
   if (signal === 'error_path') return 'Error path';
   return signal[0].toUpperCase() + signal.slice(1);
+}
+
+/** Turns one queue decision into the context the agent receives in the
+ * composer. The reviewer discusses the decision, not a detached line range, so
+ * every hunk it spans travels with the behaviour and the model's assessment.
+ * Static signals are deliberately absent: the model's score is the only risk
+ * this surface reports. */
+export function reviewDecisionFollowUpReference(decision: ReviewDecision, assessment: DiffConfidenceAssessment | undefined): DiffDecisionFollowUpReference {
+  return {
+    ordinal: decision.ordinal,
+    behavior: decision.behavior,
+    assessment: assessment ?? null,
+    state: reviewStateLabel(decision.state),
+    hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines })),
+  };
 }
 
 export interface ReviewDiffLine {

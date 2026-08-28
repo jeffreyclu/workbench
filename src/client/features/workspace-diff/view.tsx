@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { FileDiff, History, RefreshCw } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
+import type { DiffHunkReviewState } from '../../../shared/contracts.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
@@ -10,8 +11,8 @@ import { useDiffBlockConfidence } from '../diff-confidence-hooks.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
-import type { ReviewDecisionAssessments } from '../diff-review/logic.js';
-import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, reviewDecisionBlocks } from '../diff-review/logic.js';
+import type { ReviewDecision, ReviewDecisionAssessments } from '../diff-review/logic.js';
+import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, reviewDecisionBlocks, reviewDecisionFollowUpReference } from '../diff-review/logic.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
 import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
@@ -24,7 +25,7 @@ function DiffSkeleton() {
   </section>;
 }
 
-export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths }: {
+export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, onFollowUp }: {
   scope: WorkspaceDiffScope;
   isRunning?: boolean;
   activeWorkspacePaths?: string[];
@@ -106,19 +107,38 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
   const fileHunks = useMemo(() => (selectedFile ? buildFileDiffHunks(selectedFile) : []), [selectedFile]);
 
-  const saveDecision = async (state: 'reviewed' | 'needs_changes' | 'commented', note: string | undefined) => {
+  const recordDecisionState = (decision: ReviewDecision, state: DiffHunkReviewState) =>
+    upsertHunkReview.mutateAsync({
+      hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, hunkRange: hunk.hunkRange })),
+      state,
+    });
+
+  const saveDecision = async (state: DiffHunkReviewState) => {
     if (!selectedDecision) return;
     const nextId = nextPendingDecisionId(orderedDecisions, selectedDecision.id, assessments);
     try {
-      await upsertHunkReview.mutateAsync({
-        hunks: selectedDecision.hunks.map((hunk) => ({ filePath: hunk.filePath, hunkRange: hunk.hunkRange })),
-        state,
-        note,
-      });
+      await recordDecisionState(selectedDecision, state);
       setSelectedDecisionId(nextId);
     } catch {
       // The mutation exposes its stable request error beside the actions.
     }
+  };
+
+  // Following up hands the decision to the agent, so it is recorded as
+  // commented rather than left pending. Selection deliberately stays put: the
+  // reviewer is about to type about this decision, not move past it. Attaching
+  // still happens if the state write fails — the conversation is the point.
+  const followUpOnDecision = async () => {
+    if (!selectedDecision || !onFollowUp) return;
+    const reference = reviewDecisionFollowUpReference(selectedDecision, assessments[selectedDecision.id]);
+    if (selectedDecision.state === null) {
+      try {
+        await recordDecisionState(selectedDecision, 'commented');
+      } catch {
+        // The mutation exposes its stable request error beside the actions.
+      }
+    }
+    onFollowUp(reference);
   };
 
   if (query.isLoading) return <DiffSkeleton />;
@@ -144,7 +164,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
               <div className="diff-review-workbench">
                 {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={setSelectedDecisionId} />}
                 <DiffReviewDecisionDetailCard decision={selectedDecision} assessment={assessments[selectedDecision.id]}>
-                  <DiffReviewActions key={selectedDecision.id} initialNote={selectedDecision.note} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state, note) => void saveDecision(state, note)} />
+                  <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
                 </DiffReviewDecisionDetailCard>
               </div>
             </>}

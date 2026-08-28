@@ -32,7 +32,6 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
             : assessment.reasoning}</p>
       </div>
     </section>
-    {decision.note && <section className="diff-review-saved-note"><h4>Review note</h4><p>{decision.note}</p></section>}
     {children}
   </article>;
 });

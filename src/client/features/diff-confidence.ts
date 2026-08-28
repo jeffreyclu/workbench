@@ -21,19 +21,64 @@ export interface DiffConfidenceAssessment {
   reasoning: string;
 }
 
-export interface DiffFollowUpReference {
+/** One changed block of a rendered patch, as followed up from the GitHub diff. */
+export interface DiffBlockFollowUpReference {
   filePath: string;
   lines: DiffBlockLine[];
   assessment: DiffConfidenceAssessment;
 }
 
+/** One review-queue decision, carrying everything the agent needs to act on it:
+ * what the change does, which hunks it spans, why it is risky, and the patch.
+ * Deliberately holds plain fields so this module stays independent of the
+ * review feature's own model. */
+export interface DiffDecisionFollowUpReference {
+  ordinal: number;
+  behavior: string;
+  /** Null while the scorer has not produced an assessment for this decision. */
+  assessment: DiffConfidenceAssessment | null;
+  state: string;
+  hunks: Array<{ filePath: string; location: string; lines: string[] }>;
+}
+
+export type DiffFollowUpReference = DiffBlockFollowUpReference | DiffDecisionFollowUpReference;
+
+/** A follow-up quotes the patch so the agent reads the same lines the reviewer
+ * did. A whole-file rewrite would otherwise bury the composer, so each hunk is
+ * bounded and the omission is stated rather than silently truncated. */
+const FOLLOW_UP_HUNK_LINE_LIMIT = 120;
+
+function boundFollowUpPatch(lines: string[]): string {
+  if (lines.length <= FOLLOW_UP_HUNK_LINE_LIMIT) return lines.join('\n');
+  const head = lines.slice(0, FOLLOW_UP_HUNK_LINE_LIMIT - 20);
+  const tail = lines.slice(lines.length - 19);
+  return [...head, `… ${lines.length - head.length - tail.length} more lines omitted …`, ...tail].join('\n');
+}
+
 /** Produces agent-readable context without inventing a file attachment or a new persistence layer. */
-export function formatDiffFollowUpReference({ filePath, lines, assessment }: DiffFollowUpReference): string {
+export function formatDiffFollowUpReference(reference: DiffFollowUpReference): string {
+  return 'lines' in reference ? formatBlockFollowUp(reference) : formatDecisionFollowUp(reference);
+}
+
+function formatBlockFollowUp({ filePath, lines, assessment }: DiffBlockFollowUpReference): string {
   const lineNumbers = lines.map((line) => line.newLine ?? line.oldLine).filter((line): line is number => line !== null);
   const location = lineNumbers.length ? `:${Math.min(...lineNumbers)}${Math.max(...lineNumbers) === Math.min(...lineNumbers) ? '' : `-${Math.max(...lineNumbers)}`}` : '';
   const patch = lines.map((line) => line.text).join('\n');
   const risk = assessment.risk === null ? 'unavailable' : `${assessment.risk}/100`;
   return `Please follow up on this risk assessment.\n\n**${filePath}${location}** · AI risk: ${risk}\n\n> ${assessment.reasoning}\n\n\`\`\`diff\n${patch}\n\`\`\``;
+}
+
+function formatDecisionFollowUp({ ordinal, behavior, assessment, state, hunks }: DiffDecisionFollowUpReference): string {
+  const risk = !assessment ? 'not scored yet' : assessment.risk === null ? 'unavailable' : `${assessment.risk}/100`;
+  const facts = [`AI risk: ${risk}`, `Review state: ${state}`];
+  const sections = hunks.map((hunk) => `**${hunk.filePath}** · ${hunk.location}\n\n\`\`\`diff\n${boundFollowUpPatch(hunk.lines)}\n\`\`\``);
+  return [
+    `Please follow up on review decision ${ordinal}.`,
+    `**${behavior}**`,
+    facts.join(' · '),
+    ...(assessment?.reasoning ? [`> ${assessment.reasoning}`] : []),
+    ...sections,
+  ].join('\n\n');
 }
 
 /** Group parsed diff lines into logical blocks: each contiguous run of changed

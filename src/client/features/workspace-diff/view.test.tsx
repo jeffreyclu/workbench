@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
+import { formatDiffFollowUpReference, type DiffFollowUpReference } from '../diff-confidence.js';
 import { WorkspaceDiffView } from './view.js';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -22,7 +23,7 @@ function workspaceDiff(files: WorkspaceDiffFile[], revision = 'review-revision')
 /** The queue scores every decision through the shared AI endpoint. Tests supply
  * the scores by decision id; any decision without an explicit score is scored
  * low so ordering assertions stay about the values under test. */
-function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, scores: Record<string, { risk: number | null; reasoning: string }> = {}) {
+function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, scores: Record<string, { risk: number | null; reasoning: string }> = {}, onFollowUp?: (reference: DiffFollowUpReference) => void) {
   const withConfidence = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).endsWith('/api/diff-confidence')) {
       const blocks = (JSON.parse(String(init?.body)) as { blocks: Array<{ key: string }> }).blocks;
@@ -32,7 +33,7 @@ function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, scor
   });
   vi.stubGlobal('fetch', withConfidence);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} onFollowUp={onFollowUp} /></QueryClientProvider>);
 }
 
 afterEach(() => {
@@ -84,13 +85,15 @@ describe('WorkspaceDiffView decision queue', () => {
 
     expect(await screen.findByLabelText('3 decisions across 2 files, 0 completed')).toHaveTextContent('3 decisions across 2 files');
     expect(await screen.findByText('1 AI high-risk', { exact: false })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Decision 1.*authorize request/ })).toHaveAttribute('aria-current', 'step');
+    // The number belongs to the decision (source order), the position belongs to
+    // the queue (AI risk order): decision 3 is the riskiest and opens first.
+    expect(screen.getByRole('button', { name: /Decision 3.*authorize request/ })).toHaveAttribute('aria-current', 'step');
     expect(screen.getByText('src/server/auth/routes.ts', { selector: 'code' })).toBeInTheDocument();
     expect(screen.getByText('@@ -20 +20,3 @@ authorizeRequest', { selector: 'code' })).toBeInTheDocument();
     // Regex-derived signals no longer surface as risk anywhere; the model's score is the only risk shown.
     expect(screen.queryByRole('region', { name: 'Risk signals' })).toBeNull();
     expect(screen.queryByText('Public API')).toBeNull();
-    expect(within(screen.getByRole('button', { name: /Decision 1/ })).getByLabelText('AI risk 91 out of 100')).toBeInTheDocument();
+    expect(within(screen.getByRole('button', { name: /Decision 3/ })).getByLabelText('AI risk 91 out of 100')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Refresh changes' })).toHaveClass('workspace-diff-refresh-pending');
 
     // The model's score drives both the badge on each queue row and the card.
@@ -204,13 +207,45 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(await screen.findByText('@@ -10 +10 @@ secondBehavior')).toBeInTheDocument();
     expect(putBodies[0]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -1 +1 @@ firstBehavior' }], state: 'reviewed' });
 
-    fireEvent.change(screen.getByLabelText(/Note/), { target: { value: 'Handle the rollback path.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
     expect(await screen.findByText('@@ -20 +20 @@ thirdBehavior')).toBeInTheDocument();
     expect(screen.getByText('Commented', { selector: '.diff-review-completion-state' })).toBeInTheDocument();
-    expect(screen.getByText('Existing context.', { selector: '.diff-review-saved-note p' })).toBeInTheDocument();
-    expect(putBodies[1]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -10 +10 @@ secondBehavior' }], state: 'reviewed', note: 'Handle the rollback path.' });
+    expect(putBodies[1]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -10 +10 @@ secondBehavior' }], state: 'reviewed' });
     expect(await screen.findByLabelText('3 decisions across 1 file, 3 completed')).toHaveTextContent('3 completed');
+  });
+
+  it('attaches the decision, its hunks and its risk to the composer and records it as commented', async () => {
+    const file: WorkspaceDiffFile = {
+      path: 'src/follow-up.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false,
+      patch: '@@ -1 +1 @@ followUpBehavior\n-before\n+after',
+    };
+    const putBodies: unknown[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'follow-up-revision') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      if (url.endsWith('/workspace-diff/hunk-reviews/batch') && init?.method === 'PUT') {
+        putBodies.push(JSON.parse(String(init.body)));
+        return json({ reviews: [] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const onFollowUp = vi.fn();
+    renderView(fetchMock, false, { 'src/follow-up.ts::@@ -1 +1 @@ followUpBehavior': { risk: 71, reasoning: 'The rename has no migration.' } }, onFollowUp);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Follow up' }));
+
+    await waitFor(() => expect(onFollowUp).toHaveBeenCalledTimes(1));
+    const reference = onFollowUp.mock.calls[0][0] as DiffFollowUpReference;
+    const text = formatDiffFollowUpReference(reference);
+    expect(text).toContain('review decision 1');
+    expect(text).toContain('src/follow-up.ts');
+    expect(text).toContain('AI risk: 71/100');
+    expect(text).toContain('The rename has no migration.');
+    expect(text).toContain('-before\n+after');
+    expect(putBodies[0]).toEqual({ revision: 'follow-up-revision', hunks: [{ filePath: 'src/follow-up.ts', hunkRange: '@@ -1 +1 @@ followUpBehavior' }], state: 'commented' });
   });
 
   it('keeps the active decision in place and shows an actionable error when persistence fails', async () => {
