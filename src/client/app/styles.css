@@ -413,6 +413,8 @@ nav { display: grid; gap: 3px; }
 .diff-review-decision-queue button > span:nth-child(2) { display: grid; gap: 3px; min-width: 0; }
 .diff-review-decision-queue button small { overflow: hidden; color: #85847d; text-overflow: ellipsis; white-space: nowrap; }
 .diff-review-decision-queue button em { color: #77766f; font-size: 9px; font-style: normal; }
+.diff-review-queue-risks { display: flex; flex-wrap: wrap; gap: 4px; }
+.diff-review-queue-risks i { padding: 2px 5px; color: #e1a68f; border: 1px solid #634a40; border-radius: 999px; background: #211a17; font: 700 8px 'DM Mono'; font-style: normal; }
 .diff-review-decision-state { display: inline-flex; align-items: center; justify-content: center; color: #77766f; }
 .diff-review-decision-state.state-reviewed { color: #8bbd75; }
 .diff-review-decision-card { display: grid; align-content: start; align-self: start; gap: 16px; min-width: 0; padding: 16px 18px 18px; background: var(--panel); }

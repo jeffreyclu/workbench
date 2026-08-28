@@ -72,10 +72,12 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(screen.getByRole('button', { name: /Decision 1.*authorize request/ })).toHaveAttribute('aria-current', 'step');
     expect(screen.getByText('src/server/auth/routes.ts', { selector: 'code' })).toBeInTheDocument();
     expect(screen.getByText('@@ -20 +20,3 @@ authorizeRequest', { selector: 'code' })).toBeInTheDocument();
-    expect(screen.getByText('Public API')).toBeInTheDocument();
-    expect(screen.getByText('Persistence')).toBeInTheDocument();
-    expect(screen.getByText('Auth')).toBeInTheDocument();
-    expect(screen.getByText('Error path')).toBeInTheDocument();
+    const riskSignals = within(screen.getByRole('region', { name: 'Risk signals' }));
+    expect(riskSignals.getByText('Public API')).toBeInTheDocument();
+    expect(riskSignals.getByText('Persistence')).toBeInTheDocument();
+    expect(riskSignals.getByText('Auth')).toBeInTheDocument();
+    expect(riskSignals.getByText('Error path')).toBeInTheDocument();
+    expect(within(screen.getByRole('button', { name: /Decision 1/ })).getByText('Public API')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Refresh changes' })).toHaveClass('workspace-diff-refresh-pending');
     expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain('/api/diff-confidence');
 
