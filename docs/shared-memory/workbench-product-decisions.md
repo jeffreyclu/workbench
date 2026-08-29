@@ -367,6 +367,10 @@ conversation, before any agent response exists. Its selected type must be sent
 with the first message and used by dispatch; it is not only a label added after
 the classifier has already launched an agent.
 
+Task-linked conversations use the task-type robot instead. That control must
+remain available in the mobile conversation header; mobile parity applies to
+both standalone and task-linked conversations.
+
 ### Creating a conversation opens it immediately
 
 *Decision from Jeffrey, 2026-08-25.*

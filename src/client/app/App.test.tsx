@@ -1462,6 +1462,29 @@ describe('shared room', () => {
     expect(composer).toHaveClass('is-mobile-composer-collapsed');
   });
 
+  it('shows the task-type robot in a task-linked mobile conversation', async () => {
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({ matches: query === '(max-width: 820px) and (pointer: coarse)', media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    const conversationId = '00000000-0000-4000-8000-000000000043';
+    const taskId = '00000000-0000-4000-8000-000000000044';
+    const conversation = { id: conversationId, title: 'Linked mobile conversation', workItemId: taskId, pinned: false, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const item = { id: taskId, title: 'Linked mobile task', description: '', status: 'ready', priority: 2, queuePosition: 1, source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete', agentOutcome: null, classificationKind: 'review', sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: null, stack: 'attention', workspacePath: null, strategy: '', assignees: ['codex'], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [], createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', lastTouchedAt: '2026-01-01T00:00:00Z' };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    await screen.findByRole('heading', { name: 'Linked mobile conversation' });
+    fireEvent.click(screen.getByRole('button', { name: 'Expand conversation tray' }));
+    const taskType = await screen.findByRole('button', { name: 'Task type: Review' });
+    expect(taskType.closest('.conversation-window-actions')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Task type: Review' })).toHaveLength(1);
+  });
+
   it('sends an ordinary composer message without turning it into an interjection', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000026';
