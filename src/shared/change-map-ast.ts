@@ -127,7 +127,10 @@ function parseSide(lines: string[], sign: '+' | '-'): ParsedSide {
   return { roots, changed };
 }
 
-export interface HunkFacts {
+/** Everything one side of a hunk says. Kept per side rather than merged into
+ * one bag: a call on the `-` side is a call this patch deleted, and reading it
+ * as a live one drew edges to code that will not exist after the change. */
+export interface SideFacts {
   declared: Set<string>;
   declaredTypes: Set<string>;
   calls: Set<string>;
@@ -135,15 +138,28 @@ export interface HunkFacts {
   inheritance: Set<string>;
   identifiers: Set<string>;
   imports: Array<{ module: string | null; symbols: string[] }>;
+}
+
+export interface HunkFacts {
+  /** Read from the file as the patch leaves it: `+` lines and their context. */
+  added: SideFacts;
+  /** Read from the file as it stood: `-` lines and their context. */
+  removed: SideFacts;
   /** Symbol name to the parameters this hunk added to an existing signature. */
   widenedSignatures: Map<string, string[]>;
+  /** Symbol name to the parameters this hunk took off an existing signature. */
+  narrowedSignatures: Map<string, string[]>;
+}
+
+export function emptySideFacts(): SideFacts {
+  return {
+    declared: new Set(), declaredTypes: new Set(), calls: new Set(),
+    typeReferences: new Set(), inheritance: new Set(), identifiers: new Set(), imports: [],
+  };
 }
 
 export function emptyHunkFacts(): HunkFacts {
-  return {
-    declared: new Set(), declaredTypes: new Set(), calls: new Set(), typeReferences: new Set(),
-    inheritance: new Set(), identifiers: new Set(), imports: [], widenedSignatures: new Map(),
-  };
+  return { added: emptySideFacts(), removed: emptySideFacts(), widenedSignatures: new Map(), narrowedSignatures: new Map() };
 }
 
 function identifierName(node: unknown): string | null {
@@ -208,15 +224,23 @@ function startedOnChangedLine(node: AstNode, offset: number, changed: Set<number
   return node.loc ? changed.has(node.loc.start.line - offset) : false;
 }
 
-/** Read one hunk into facts. `declares` is false for a test file: a test names
- * the code under test without owning any of it, so it consumes only. */
+/** Read one hunk into facts, keeping the two sides of the diff apart.
+ * `declares` is false for a test file: a test names the code under test
+ * without owning any of it, so it consumes only. */
 export function readHunk(lines: string[], declares: boolean): HunkFacts {
   const facts = emptyHunkFacts();
   const after = parseSide(lines, '+');
   const before = parseSide(lines, '-');
-  if (declares) facts.widenedSignatures = widenedSignatures(after, before);
+  if (declares) {
+    facts.widenedSignatures = addedParameters(after, before);
+    facts.narrowedSignatures = addedParameters(before, after);
+  }
 
-  for (const side of [after, before]) {
+  // Each side fills its own bag. The `-` side is read exactly as carefully as
+  // the `+` side, because "this decision stopped calling that" is as real a
+  // fact about the change as "this decision started calling that". It is a
+  // different fact, and the map now says which one it has.
+  for (const [side, bag] of [[after, facts.added], [before, facts.removed]] as const) {
     for (const { node: root, lineOffset } of side.roots) {
       if (declares) {
         // Module level only, which the fragment reports faithfully: diff lines
@@ -226,21 +250,21 @@ export function readHunk(lines: string[], declares: boolean): HunkFacts {
           if (statement.loc && statement.loc.start.column !== 0) continue;
           if (!spans(statement, lineOffset, side.changed)) continue;
           const { names, types } = declaredBy(statement);
-          for (const name of names) facts.declared.add(name);
-          for (const name of types) facts.declaredTypes.add(name);
+          for (const name of names) bag.declared.add(name);
+          for (const name of types) bag.declaredTypes.add(name);
         }
       }
       walk(root, (node) => {
         if (!startedOnChangedLine(node, lineOffset, side.changed)) return;
         if (node.type === 'Identifier' || node.type === 'JSXIdentifier') {
-          facts.identifiers.add(String(node.name));
+          bag.identifiers.add(String(node.name));
           return;
         }
         if (node.type === 'CallExpression' || node.type === 'OptionalCallExpression' || node.type === 'NewExpression') {
           const callee = identifierName(node.callee);
-          if (callee) facts.calls.add(callee);
+          if (callee) bag.calls.add(callee);
           const module = requiredModule(node);
-          if (module && side === after) facts.imports.push({ module, symbols: [] });
+          if (module) bag.imports.push({ module, symbols: [] });
           return;
         }
         // Rendering a component is invoking it, so JSX carries the same weight
@@ -248,32 +272,32 @@ export function readHunk(lines: string[], declares: boolean): HunkFacts {
         // changed component links to every place the diff renders it.
         if (node.type === 'JSXOpeningElement') {
           const name = identifierName(node.name);
-          if (name && /^[A-Z]/.test(name)) facts.calls.add(name);
+          if (name && /^[A-Z]/.test(name)) bag.calls.add(name);
           return;
         }
         if (node.type === 'TSTypeReference' || node.type === 'TSTypeQuery') {
           const name = identifierName(node.typeName ?? node.exprName);
-          if (name) facts.typeReferences.add(name);
+          if (name) bag.typeReferences.add(name);
           return;
         }
         if (node.type === 'TSExpressionWithTypeArguments' || node.type === 'ClassImplements') {
           const name = identifierName(node.expression ?? node.id);
-          if (name) facts.inheritance.add(name);
+          if (name) bag.inheritance.add(name);
           return;
         }
         if (node.type === 'ClassDeclaration' || node.type === 'ClassExpression') {
           const name = identifierName(node.superClass);
-          if (name) facts.inheritance.add(name);
+          if (name) bag.inheritance.add(name);
           return;
         }
-        if (side === after && (node.type === 'ImportDeclaration' || node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration')) {
+        if (node.type === 'ImportDeclaration' || node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') {
           const source = isNode(node.source) ? String(node.source.value) : null;
           if (node.type !== 'ImportDeclaration' && !source) return;
           const symbols = ((node.specifiers as AstNode[] | undefined) ?? []).flatMap((specifier) => [
             identifierName(specifier.imported ?? specifier.exported),
             identifierName(specifier.local),
           ]).filter((name): name is string => Boolean(name));
-          facts.imports.push({ module: source, symbols: [...new Set(symbols)] });
+          bag.imports.push({ module: source, symbols: [...new Set(symbols)] });
         }
       });
     }
@@ -313,18 +337,20 @@ function signatures(side: ParsedSide): Map<string, string[]> {
   return found;
 }
 
-/** Parameters this hunk added to a signature that already existed. A name that
- * only appears on the `+` side is a brand-new function, and nobody in the diff
- * was calling it before, so it widens nothing. */
-function widenedSignatures(after: ParsedSide, before: ParsedSide): Map<string, string[]> {
-  const now = signatures(after);
-  const previously = signatures(before);
-  const widened = new Map<string, string[]>();
-  for (const [name, params] of now) {
-    const previous = previously.get(name);
-    if (!previous) continue;
-    const added = params.filter((param) => !previous.includes(param));
-    if (added.length > 0) widened.set(name, added);
+/** Parameters `now` has on a signature that `previously` did not. Run one way
+ * round it reports what the patch added to a signature; run the other way, what
+ * the patch took off. A name present on only one side is a function this patch
+ * created or deleted outright rather than a signature that changed, and nobody
+ * in the diff was calling it before, so it is skipped either way. */
+function addedParameters(now: ParsedSide, previously: ParsedSide): Map<string, string[]> {
+  const current = signatures(now);
+  const prior = signatures(previously);
+  const changed = new Map<string, string[]>();
+  for (const [name, params] of current) {
+    const before = prior.get(name);
+    if (!before) continue;
+    const added = params.filter((param) => !before.includes(param));
+    if (added.length > 0) changed.set(name, added);
   }
-  return widened;
+  return changed;
 }

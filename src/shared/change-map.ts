@@ -1,4 +1,4 @@
-import { emptyHunkFacts, readHunk } from './change-map-ast.js';
+import { emptySideFacts, readHunk, type SideFacts } from './change-map-ast.js';
 import type { DiffHunkReviewState } from './contracts.js';
 import type { ReviewDecision, ReviewRiskSignal } from './review-decisions.js';
 
@@ -19,20 +19,51 @@ import type { ReviewDecision, ReviewRiskSignal } from './review-decisions.js';
  * test and a fixture at once: only JS/TS hunks are read at all, only
  * module-level declarations make a decision the source of an edge, and a test
  * hunk never declares anything. */
-export const CHANGE_RELATIONS = ['passes-parameter', 'implements', 'references-type', 'imports', 'calls', 'uses'] as const;
+export const CHANGE_RELATIONS = ['passes-parameter', 'drops-parameter', 'implements', 'references-type', 'imports', 'calls', 'uses'] as const;
 export type ChangeRelation = typeof CHANGE_RELATIONS[number];
+
+/** Whether the relationship an edge describes survives the patch. A `removed`
+ * edge is a real fact — a caller that was taken out is exactly the kind of
+ * thing a reviewer has to notice — but it is not a live dependency, so it
+ * never outranks one and it is drawn as the dashed line it is. */
+export type ChangeDirection = 'added' | 'removed';
 
 /** Strongest wins when two decisions relate in several ways at once. A caller
  * updated for a widened signature also merely "uses" the symbol; saying so
  * would bury the fact that actually matters to the reviewer. */
 const RELATION_STRENGTH: Record<ChangeRelation, number> = {
-  'passes-parameter': 6, implements: 5, 'references-type': 4, imports: 3, calls: 2, uses: 1,
+  'passes-parameter': 7, 'drops-parameter': 6, implements: 5, 'references-type': 4, imports: 3, calls: 2, uses: 1,
 };
 
 export const CHANGE_RELATION_LABELS: Record<ChangeRelation, string> = {
-  'passes-parameter': 'Passes new parameter', implements: 'Implements', 'references-type': 'References type',
-  imports: 'Imports', calls: 'Calls', uses: 'Uses',
+  'passes-parameter': 'Passes new parameter', 'drops-parameter': 'Loses removed parameter', implements: 'Implements',
+  'references-type': 'References type', imports: 'Imports', calls: 'Calls', uses: 'Uses',
 };
+
+/** The label as drawn on an edge. A relation the patch deletes reads as the
+ * past tense of itself, so the diagram never shows a dependency that is gone
+ * in the same words as one that is there. */
+export function changeEdgeLabel(edge: { relation: ChangeRelation; change: ChangeDirection }): string {
+  const label = CHANGE_RELATION_LABELS[edge.relation];
+  return edge.change === 'removed' ? `No longer ${label.charAt(0).toLowerCase()}${label.slice(1)}` : label;
+}
+
+/** A module-level name the decision owns, and what the patch did to it. */
+export interface ChangeMapSymbol {
+  name: string;
+  kind: 'type' | 'value';
+  /** `added` and `removed` mean the declaration itself appeared or went away;
+   * `changed` means it exists on both sides and its body or signature moved. */
+  change: 'added' | 'removed' | 'changed';
+}
+
+/** A parameter list that moved on a signature that already existed — the edit
+ * most likely to have forced the rest of the diff. */
+export interface ChangeMapSignatureChange {
+  symbol: string;
+  added: string[];
+  removed: string[];
+}
 
 export interface ChangeMapNode {
   /** The review decision id, so selection is shared with the queue and the diff pane. */
@@ -42,6 +73,13 @@ export interface ChangeMapNode {
   subject: string | null;
   filePath: string;
   fileCount: number;
+  /** Every file the decision touches. Carried in full so a node can be read
+   * without opening the diff, rather than reduced to a count. */
+  filePaths: string[];
+  /** The code the node is actually about: the names it declares, drops or
+   * rewrites, so the box shows symbols and not only a generated sentence. */
+  symbols: ChangeMapSymbol[];
+  signatureChanges: ChangeMapSignatureChange[];
   behavior: string;
   additions: number;
   deletions: number;
@@ -58,6 +96,8 @@ export interface ChangeMapEdge {
   /** The decision that had to move because of it. */
   toId: string;
   relation: ChangeRelation;
+  /** Whether this relationship exists after the patch or was deleted by it. */
+  change: ChangeDirection;
   symbols: string[];
   explanation: string;
 }
@@ -108,15 +148,19 @@ interface DecisionFacts {
   /** The decision's non-test JS/TS files: the only ones it may own a symbol in,
    * and the only ones another decision's import can resolve to. */
   sourceFiles: string[];
+  /** Names this decision owns, from either side of the diff: a symbol it
+   * deleted is still a symbol it owns, and the rest of the diff moved because
+   * that symbol went away. */
   declared: Set<string>;
   declaredTypes: Set<string>;
   /** Symbol name to the parameters this decision added to its signature. */
   widenedSignatures: Map<string, string[]>;
-  calls: Set<string>;
-  typeReferences: Set<string>;
-  inheritance: Set<string>;
-  identifiers: Set<string>;
-  imports: Array<{ module: string | null; symbols: string[] }>;
+  /** Symbol name to the parameters this decision took off its signature. */
+  narrowedSignatures: Map<string, string[]>;
+  /** What the decision references after the patch, and what it referenced
+   * before. Kept apart so a deleted call never draws a live edge. */
+  added: SideFacts;
+  removed: SideFacts;
 }
 
 function stripExtension(path: string): string {
@@ -147,19 +191,16 @@ export function resolveModulePath(fromFile: string, specifier: string): string |
 function factsFor(decision: ReviewDecision): DecisionFacts {
   const codeHunks = decision.hunks.filter((hunk) => CODE_FILE.test(hunk.filePath));
   const sourceHunks = codeHunks.filter((hunk) => !TEST_FILE.test(hunk.filePath));
-  const merged = emptyHunkFacts();
+  const added = emptySideFacts();
+  const removed = emptySideFacts();
+  const widenedSignatures = new Map<string, string[]>();
+  const narrowedSignatures = new Map<string, string[]>();
   for (const hunk of codeHunks) {
     const facts = readHunk(hunk.lines, !TEST_FILE.test(hunk.filePath));
-    for (const name of facts.declared) merged.declared.add(name);
-    for (const name of facts.declaredTypes) merged.declaredTypes.add(name);
-    for (const name of facts.calls) merged.calls.add(name);
-    for (const name of facts.typeReferences) merged.typeReferences.add(name);
-    for (const name of facts.inheritance) merged.inheritance.add(name);
-    for (const name of facts.identifiers) merged.identifiers.add(name);
-    merged.imports.push(...facts.imports);
-    for (const [name, parameters] of facts.widenedSignatures) {
-      merged.widenedSignatures.set(name, [...new Set([...(merged.widenedSignatures.get(name) ?? []), ...parameters])]);
-    }
+    mergeSide(added, facts.added);
+    mergeSide(removed, facts.removed);
+    mergeParameters(widenedSignatures, facts.widenedSignatures);
+    mergeParameters(narrowedSignatures, facts.narrowedSignatures);
   }
   // The subject is the enclosing function or type of a body-only edit, which is
   // exactly the thing other hunks in the diff react to. The parser only sees
@@ -167,19 +208,58 @@ function factsFor(decision: ReviewDecision): DecisionFacts {
   // declaration to find. It is a guess read from the hunk header, so a decision
   // with no source hunk cannot use it: a test's subject — the name it passes to
   // `describe` — is the code under test, not something the test owns.
-  if (decision.subject && sourceHunks.length > 0) merged.declared.add(decision.subject);
+  if (decision.subject && sourceHunks.length > 0) added.declared.add(decision.subject);
   return {
     decision,
     sourceFiles: [...new Set(sourceHunks.map((hunk) => hunk.filePath))],
-    declared: merged.declared,
-    declaredTypes: merged.declaredTypes,
-    widenedSignatures: merged.widenedSignatures,
-    calls: merged.calls,
-    typeReferences: merged.typeReferences,
-    inheritance: merged.inheritance,
-    identifiers: merged.identifiers,
-    imports: merged.imports,
+    declared: new Set([...added.declared, ...removed.declared]),
+    declaredTypes: new Set([...added.declaredTypes, ...removed.declaredTypes]),
+    widenedSignatures,
+    narrowedSignatures,
+    added,
+    removed,
   };
+}
+
+function mergeSide(target: SideFacts, source: SideFacts): void {
+  for (const name of source.declared) target.declared.add(name);
+  for (const name of source.declaredTypes) target.declaredTypes.add(name);
+  for (const name of source.calls) target.calls.add(name);
+  for (const name of source.typeReferences) target.typeReferences.add(name);
+  for (const name of source.inheritance) target.inheritance.add(name);
+  for (const name of source.identifiers) target.identifiers.add(name);
+  target.imports.push(...source.imports);
+}
+
+function mergeParameters(target: Map<string, string[]>, source: Map<string, string[]>): void {
+  for (const [name, parameters] of source) {
+    target.set(name, [...new Set([...(target.get(name) ?? []), ...parameters])]);
+  }
+}
+
+/** The node's own contents: every name it declares, with what the patch did to
+ * it. Sorted so the declarations that appeared or went away lead, because a
+ * symbol that changed shape is the reason the edges around it exist. */
+function symbolsOf(fact: DecisionFacts): ChangeMapSymbol[] {
+  const order = { added: 0, removed: 1, changed: 2 };
+  return [...fact.declared].map((name) => {
+    const inAfter = fact.added.declared.has(name);
+    const inBefore = fact.removed.declared.has(name);
+    return {
+      name,
+      kind: fact.declaredTypes.has(name) ? 'type' as const : 'value' as const,
+      change: inAfter && inBefore ? 'changed' as const : inAfter ? 'added' as const : 'removed' as const,
+    };
+  }).sort((left, right) => order[left.change] - order[right.change] || left.name.localeCompare(right.name));
+}
+
+function signatureChangesOf(fact: DecisionFacts): ChangeMapSignatureChange[] {
+  const names = new Set([...fact.widenedSignatures.keys(), ...fact.narrowedSignatures.keys()]);
+  return [...names].sort().map((symbol) => ({
+    symbol,
+    added: fact.widenedSignatures.get(symbol) ?? [],
+    removed: fact.narrowedSignatures.get(symbol) ?? [],
+  }));
 }
 
 function parameterPhrase(parameters: string[]): string {
@@ -188,19 +268,24 @@ function parameterPhrase(parameters: string[]): string {
   return `the ${named.slice(0, -1).join(', ')} and ${named[named.length - 1]} parameters`;
 }
 
-function explain(relation: ChangeRelation, from: ReviewDecision, to: ReviewDecision, fromPath: string, symbols: string[], parameters: string[]): string {
+function explain(relation: ChangeRelation, change: ChangeDirection, from: ReviewDecision, to: ReviewDecision, fromPath: string, symbols: string[], parameters: string[]): string {
   const symbol = `\`${symbols[0]}\``;
   const also = symbols.length > 1 ? ` Also ${symbols.slice(1).map((name) => `\`${name}\``).join(', ')}.` : '';
-  if (relation === 'passes-parameter') return `Decision ${from.ordinal} adds ${parameterPhrase(parameters)} to ${symbol}; decision ${to.ordinal} calls it.`;
-  if (relation === 'implements') return `Decision ${to.ordinal} extends or implements ${symbol}, changed in decision ${from.ordinal}.${also}`;
-  if (relation === 'references-type') return `Decision ${to.ordinal} uses the ${symbol} type, changed in decision ${from.ordinal}.${also}`;
-  if (relation === 'imports') return `Decision ${to.ordinal} imports ${symbol} from ${fromPath}, changed in decision ${from.ordinal}.${also}`;
-  if (relation === 'calls') return `Decision ${to.ordinal} calls ${symbol}, changed in decision ${from.ordinal}.${also}`;
-  return `Decision ${to.ordinal} references ${symbol}, changed in decision ${from.ordinal}.${also}`;
+  // Past tense throughout when the patch deleted the reference: the sentence
+  // has to say the call is gone, not describe it as though it were still there.
+  const gone = change === 'removed';
+  if (relation === 'passes-parameter') return `Decision ${from.ordinal} adds ${parameterPhrase(parameters)} to ${symbol}; decision ${to.ordinal} ${gone ? 'no longer calls it' : 'calls it'}.`;
+  if (relation === 'drops-parameter') return `Decision ${from.ordinal} removes ${parameterPhrase(parameters)} from ${symbol}; decision ${to.ordinal} ${gone ? 'no longer calls it' : 'calls it'}.`;
+  if (relation === 'implements') return `Decision ${to.ordinal} ${gone ? 'no longer extends or implements' : 'extends or implements'} ${symbol}, changed in decision ${from.ordinal}.${also}`;
+  if (relation === 'references-type') return `Decision ${to.ordinal} ${gone ? 'no longer uses' : 'uses'} the ${symbol} type, changed in decision ${from.ordinal}.${also}`;
+  if (relation === 'imports') return `Decision ${to.ordinal} ${gone ? 'no longer imports' : 'imports'} ${symbol} from ${fromPath}, changed in decision ${from.ordinal}.${also}`;
+  if (relation === 'calls') return `Decision ${to.ordinal} ${gone ? 'no longer calls' : 'calls'} ${symbol}, changed in decision ${from.ordinal}.${also}`;
+  return `Decision ${to.ordinal} ${gone ? 'no longer references' : 'references'} ${symbol}, changed in decision ${from.ordinal}.${also}`;
 }
 
 interface EdgeCandidate {
   relation: ChangeRelation;
+  change: ChangeDirection;
   symbols: string[];
   parameters: string[];
 }
@@ -235,6 +320,13 @@ export function buildChangeMap(allDecisions: ReviewDecision[]): ChangeMap {
       pairs.set(key, { ...candidate, from, to });
       return;
     }
+    // A relationship that survives the patch beats one the patch deleted, no
+    // matter how strong the deleted one was: the reviewer follows an edge to
+    // read the code as it will be, and a pair that is both is a live pair.
+    if (existing.change !== candidate.change) {
+      if (candidate.change === 'added') pairs.set(key, { ...candidate, from, to });
+      return;
+    }
     if (RELATION_STRENGTH[candidate.relation] > RELATION_STRENGTH[existing.relation]) {
       pairs.set(key, { ...candidate, from, to });
     } else if (candidate.relation === existing.relation) {
@@ -248,44 +340,54 @@ export function buildChangeMap(allDecisions: ReviewDecision[]): ChangeMap {
   };
 
   for (const consumer of facts) {
-    // Weakest relation first: `record` keeps the strongest one per pair, so the
-    // order here is about reading the loop, not about the result.
-    for (const symbol of consumer.identifiers) {
-      if (symbol.length < 3 || AMBIGUOUS_NAMES.has(symbol)) continue;
-      for (const producer of producersOf(symbol)) record(producer, consumer, { relation: 'uses', symbols: [symbol], parameters: [] });
-    }
-    for (const symbol of consumer.calls) {
-      for (const producer of producersOf(symbol)) record(producer, consumer, { relation: 'calls', symbols: [symbol], parameters: [] });
-    }
-    for (const imported of consumer.imports) {
-      const module = imported.module ? resolveModulePath(consumer.decision.filePaths[0] ?? '', imported.module) : null;
-      const byPath = module ? ownersByPath.get(module) ?? ownersByPath.get(`${module}/index`) ?? [] : [];
-      for (const producer of byPath) {
-        const symbol = imported.symbols.find((name) => producer.declared.has(name)) ?? imported.symbols[0] ?? module!.split('/').pop()!;
-        record(producer, consumer, { relation: 'imports', symbols: [symbol], parameters: [] });
+    // Once per side of the diff. `change` says which side the reference came
+    // from, so an edge states whether the consumer still does this after the
+    // patch or only used to — the two used to be indistinguishable.
+    for (const [change, references] of [['added', consumer.added], ['removed', consumer.removed]] as const) {
+      // Weakest relation first: `record` keeps the strongest one per pair, so
+      // the order here is about reading the loop, not about the result.
+      for (const symbol of references.identifiers) {
+        if (symbol.length < 3 || AMBIGUOUS_NAMES.has(symbol)) continue;
+        for (const producer of producersOf(symbol)) record(producer, consumer, { relation: 'uses', change, symbols: [symbol], parameters: [] });
       }
-      for (const symbol of imported.symbols) {
-        for (const producer of producersOf(symbol)) record(producer, consumer, { relation: 'imports', symbols: [symbol], parameters: [] });
+      for (const symbol of references.calls) {
+        for (const producer of producersOf(symbol)) record(producer, consumer, { relation: 'calls', change, symbols: [symbol], parameters: [] });
       }
-    }
-    for (const symbol of consumer.typeReferences) {
-      for (const producer of producersOf(symbol)) {
-        if (producer.declaredTypes.has(symbol)) record(producer, consumer, { relation: 'references-type', symbols: [symbol], parameters: [] });
+      for (const imported of references.imports) {
+        const module = imported.module ? resolveModulePath(consumer.decision.filePaths[0] ?? '', imported.module) : null;
+        const byPath = module ? ownersByPath.get(module) ?? ownersByPath.get(`${module}/index`) ?? [] : [];
+        for (const producer of byPath) {
+          const symbol = imported.symbols.find((name) => producer.declared.has(name)) ?? imported.symbols[0] ?? module!.split('/').pop()!;
+          record(producer, consumer, { relation: 'imports', change, symbols: [symbol], parameters: [] });
+        }
+        for (const symbol of imported.symbols) {
+          for (const producer of producersOf(symbol)) record(producer, consumer, { relation: 'imports', change, symbols: [symbol], parameters: [] });
+        }
       }
-    }
-    for (const symbol of consumer.inheritance) {
-      for (const producer of producersOf(symbol)) record(producer, consumer, { relation: 'implements', symbols: [symbol], parameters: [] });
-    }
-    for (const symbol of consumer.calls) {
-      for (const producer of producersOf(symbol)) {
-        const parameters = producer.widenedSignatures.get(symbol);
-        if (parameters) record(producer, consumer, { relation: 'passes-parameter', symbols: [symbol], parameters });
+      for (const symbol of references.typeReferences) {
+        for (const producer of producersOf(symbol)) {
+          if (producer.declaredTypes.has(symbol)) record(producer, consumer, { relation: 'references-type', change, symbols: [symbol], parameters: [] });
+        }
+      }
+      for (const symbol of references.inheritance) {
+        for (const producer of producersOf(symbol)) record(producer, consumer, { relation: 'implements', change, symbols: [symbol], parameters: [] });
+      }
+      for (const symbol of references.calls) {
+        for (const producer of producersOf(symbol)) {
+          const widened = producer.widenedSignatures.get(symbol);
+          if (widened) record(producer, consumer, { relation: 'passes-parameter', change, symbols: [symbol], parameters: widened });
+          const narrowed = producer.narrowedSignatures.get(symbol);
+          if (narrowed) record(producer, consumer, { relation: 'drops-parameter', change, symbols: [symbol], parameters: narrowed });
+        }
       }
     }
   }
 
+  // Live edges first, so a trimmed map drops the relationships the patch
+  // deleted before it drops a single one that still exists.
   const ranked = [...pairs.values()].sort((left, right) =>
-    RELATION_STRENGTH[right.relation] - RELATION_STRENGTH[left.relation]
+    (left.change === right.change ? 0 : left.change === 'added' ? -1 : 1)
+    || RELATION_STRENGTH[right.relation] - RELATION_STRENGTH[left.relation]
     || left.from.decision.ordinal - right.from.decision.ordinal
     || left.to.decision.ordinal - right.to.decision.ordinal);
   const kept = ranked.slice(0, MAX_EDGES);
@@ -294,8 +396,9 @@ export function buildChangeMap(allDecisions: ReviewDecision[]): ChangeMap {
     fromId: pair.from.decision.id,
     toId: pair.to.decision.id,
     relation: pair.relation,
+    change: pair.change,
     symbols: pair.symbols,
-    explanation: explain(pair.relation, pair.from.decision, pair.to.decision, pair.from.sourceFiles[0] ?? pair.from.decision.filePaths[0] ?? '', pair.symbols, pair.parameters),
+    explanation: explain(pair.relation, pair.change, pair.from.decision, pair.to.decision, pair.from.sourceFiles[0] ?? pair.from.decision.filePaths[0] ?? '', pair.symbols, pair.parameters),
   }));
 
   const degrees = new Map<string, number>();
@@ -316,6 +419,9 @@ export function buildChangeMap(allDecisions: ReviewDecision[]): ChangeMap {
       subject: decision.subject,
       filePath: primaryPath,
       fileCount: decision.filePaths.length,
+      filePaths: decision.filePaths,
+      symbols: symbolsOf(facts[index]),
+      signatureChanges: signatureChangesOf(facts[index]),
       behavior: decision.behavior,
       additions: decision.additions,
       deletions: decision.deletions,

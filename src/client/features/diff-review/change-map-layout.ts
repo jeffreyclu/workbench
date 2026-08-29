@@ -11,7 +11,9 @@ import type { ChangeMap, ChangeMapEdge, ChangeMapNode } from '../../../shared/ch
  * the layering allows, and two edges touching the same node arrive at two
  * different places on it. */
 export const CHANGE_MAP_NODE_WIDTH = 188;
-export const CHANGE_MAP_NODE_HEIGHT = 62;
+// Four lines: ordinal and label, file, counts, and the symbols the change
+// declares or removes.
+export const CHANGE_MAP_NODE_HEIGHT = 78;
 const COLUMN_GAP = 96;
 const ROW_GAP = 22;
 const PADDING = 14;

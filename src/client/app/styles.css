@@ -476,6 +476,15 @@ nav { display: grid; gap: 3px; }
 .change-map-edge.relation-imports, .change-map-arrow.relation-imports, .change-map-legend li.relation-imports { --relation-tone: #6f9f8c; }
 .change-map-edge.relation-calls, .change-map-arrow.relation-calls, .change-map-legend li.relation-calls { --relation-tone: #8bbd75; }
 .change-map-edge.relation-uses, .change-map-arrow.relation-uses, .change-map-legend li.relation-uses { --relation-tone: #77766f; }
+.relation-drops-parameter { --relation-tone: #d68a7a; }
+.change-map-edge.relation-drops-parameter, .change-map-arrow.relation-drops-parameter, .change-map-legend li.relation-drops-parameter { --relation-tone: #d68a7a; }
+/* A relationship the patch deletes: drawn, because the reviewer has to see the
+   caller that went away, but drawn as the ghost it is so it never reads as a
+   dependency that still exists. */
+.change-map-edge.removed .change-map-edge-line { stroke-dasharray: 3 4; opacity: 0.5; }
+.change-map-edge.removed .change-map-edge-label { opacity: 0.7; font-style: italic; }
+.change-map-node-symbols { fill: #8f8d85; font-family: var(--mono, ui-monospace, monospace); font-size: 10px; }
+.change-map-node.selected .change-map-node-symbols { fill: #c9c6bc; }
 .change-map-arrow path { fill: var(--relation-tone); }
 .change-map-edge-line { fill: none; stroke: var(--relation-tone); stroke-width: 1.4; opacity: 0.7; }
 .change-map-edge.backward .change-map-edge-line { stroke-dasharray: 4 3; }

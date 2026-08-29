@@ -1,5 +1,5 @@
 import { memo, type KeyboardEvent } from 'react';
-import { CHANGE_RELATIONS, CHANGE_RELATION_LABELS, type ChangeRelation } from '../../../shared/change-map.js';
+import { CHANGE_RELATIONS, changeEdgeLabel, type ChangeMapNode } from '../../../shared/change-map.js';
 import { CHANGE_MAP_NODE_HEIGHT, CHANGE_MAP_NODE_WIDTH, type ChangeMapLayout } from './change-map-layout.js';
 import { plainRelationText } from './change-map-logic.js';
 import type { DecisionPopoverAnchor } from './decision-popover.js';
@@ -16,6 +16,45 @@ function truncate(value: string, limit: number): string {
 function fileTail(filePath: string): string {
   const parts = filePath.split('/');
   return parts.length <= 2 ? filePath : `…/${parts.slice(-2).join('/')}`;
+}
+
+/** A declaration and what the patch did to it: `+` added, `−` removed, bare
+ * for one that exists on both sides and was rewritten. */
+function markSymbol(symbol: ChangeMapNode['symbols'][number]): string {
+  if (symbol.change === 'added') return `+${symbol.name}`;
+  if (symbol.change === 'removed') return `−${symbol.name}`;
+  return symbol.name;
+}
+
+/** As many of the node's symbols as the box can hold, with the count of the
+ * rest, so a wide change never reads as a narrow one. The full list stays in
+ * the accessible name and in the decision panel. */
+function symbolLine(symbols: ChangeMapNode['symbols'], limit: number): string | null {
+  if (symbols.length === 0) return null;
+  const marked = symbols.map(markSymbol);
+  let text = '';
+  let shown = 0;
+  for (const mark of marked) {
+    const next = shown === 0 ? mark : `${text} ${mark}`;
+    if (next.length > limit) break;
+    text = next;
+    shown += 1;
+  }
+  if (shown === 0) return truncate(marked[0], limit);
+  return shown < marked.length ? `${text} +${marked.length - shown}` : text;
+}
+
+/** Everything the node is, spelled out for a screen reader: the files it
+ * touches, the declarations it moves, and the signatures it changes. */
+function nodeContext(node: ChangeMapNode): string {
+  const files = node.filePaths.length > 0 ? ` Files: ${node.filePaths.join(', ')}.` : '';
+  const symbols = node.symbols.length > 0 ? ` Declares: ${node.symbols.map(markSymbol).join(', ')}.` : '';
+  const signatures = node.signatureChanges.map((change) => {
+    const added = change.added.length > 0 ? `adds ${change.added.join(', ')}` : '';
+    const removed = change.removed.length > 0 ? `removes ${change.removed.join(', ')}` : '';
+    return `${change.symbol} ${[added, removed].filter(Boolean).join(' and ')}`;
+  });
+  return `${files}${symbols}${signatures.length > 0 ? ` Signature changes: ${signatures.join('; ')}.` : ''}`;
 }
 
 export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedId, cameFromId, riskBands, openDetailFor, selectedEdgeId, label = 'Change map diagram', nodeAttribute = 'data-change-map-node', onSelect, onOpenDetail, onSelectEdge }: {
@@ -62,18 +101,18 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
         const active = edge.id === selectedEdgeId;
         const touchesSelection = edge.fromId === selectedId || edge.toId === selectedId;
         const dimmed = Boolean(selectedId) && !touchesSelection && !active;
-        return <g key={edge.id} className={`change-map-edge relation-${edge.relation}${active ? ' active' : ''}${touchesSelection ? ' touches-selection' : ''}${dimmed ? ' dimmed' : ''}${edge.backward ? ' backward' : ''}`}>
+        return <g key={edge.id} className={`change-map-edge relation-${edge.relation}${edge.change === 'removed' ? ' removed' : ''}${active ? ' active' : ''}${touchesSelection ? ' touches-selection' : ''}${dimmed ? ' dimmed' : ''}${edge.backward ? ' backward' : ''}`}>
           <path className="change-map-edge-line" d={edge.path} markerEnd={`url(#change-map-arrow-${edge.relation})`} />
           <path
             className="change-map-edge-target"
             d={edge.path}
             role="button"
             tabIndex={0}
-            aria-label={`${CHANGE_RELATION_LABELS[edge.relation as ChangeRelation]}: ${plainRelationText(edge.explanation)}`}
+            aria-label={`${changeEdgeLabel(edge)}: ${plainRelationText(edge.explanation)}`}
             onClick={() => onSelectEdge(active ? null : edge.id)}
             onKeyDown={(event) => activate(event, () => onSelectEdge(active ? null : edge.id))}
           />
-          {(active || touchesSelection) && <text className="change-map-edge-label" x={edge.labelX} y={edge.labelY} textAnchor="middle">{CHANGE_RELATION_LABELS[edge.relation as ChangeRelation]}</text>}
+          {(active || touchesSelection) && <text className="change-map-edge-label" x={edge.labelX} y={edge.labelY} textAnchor="middle">{changeEdgeLabel(edge)}</text>}
         </g>;
       })}
       {layout.nodes.map((node) => {
@@ -99,7 +138,7 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
           {...{ [nodeAttribute]: node.id }}
           aria-haspopup={onOpenDetail ? 'dialog' : undefined}
           aria-expanded={onOpenDetail ? openDetailFor === node.id : undefined}
-          aria-label={`Decision ${node.ordinal}: ${node.behavior} ${node.degree === 0 ? 'No related changes.' : `${node.degree} related ${node.degree === 1 ? 'change' : 'changes'}.`}${cameFrom ? ' Came from here.' : ''}${reviewed ? ' Already reviewed.' : ''}${band ? ` ${band} risk.` : ''}${onOpenDetail ? ' Open decision details.' : ''}`}
+          aria-label={`Decision ${node.ordinal}: ${node.behavior}${nodeContext(node)} ${node.degree === 0 ? 'No related changes.' : `${node.degree} related ${node.degree === 1 ? 'change' : 'changes'}.`}${cameFrom ? ' Came from here.' : ''}${reviewed ? ' Already reviewed.' : ''}${band ? ` ${band} risk.` : ''}${onOpenDetail ? ' Open decision details.' : ''}`}
           onClick={(event) => openDetail(event.currentTarget)}
           onKeyDown={(event) => activate(event, () => openDetail(event.currentTarget))}
         >
@@ -108,6 +147,7 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
           <text className="change-map-node-title" x={node.x + 13} y={node.y + 23}>{node.ordinal}. {truncate(node.label, 20)}</text>
           <text className="change-map-node-file" x={node.x + 13} y={node.y + 39}>{truncate(fileTail(node.filePath), 26)}</text>
           <text className="change-map-node-counts" x={node.x + 13} y={node.y + 53}>+{node.additions} / -{node.deletions}{node.fileCount > 1 ? ` · ${node.fileCount} files` : ''}</text>
+          {symbolLine(node.symbols, 26) && <text className="change-map-node-symbols" x={node.x + 13} y={node.y + 68}>{symbolLine(node.symbols, 26)}</text>}
           {cameFrom && <text className="change-map-node-trail" x={node.x + CHANGE_MAP_NODE_WIDTH - 9} y={node.y + CHANGE_MAP_NODE_HEIGHT - 8} textAnchor="end">came from</text>}
           {band && <circle className={`change-map-node-risk-dot band-${band}`} cx={node.x + CHANGE_MAP_NODE_WIDTH - 9} cy={node.y + 9} r="3.5" />}
         </g>;

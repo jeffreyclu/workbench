@@ -299,4 +299,79 @@ describe('module specifier resolution', () => {
   it('returns null for a bare package specifier, which is never in the diff', () => {
     expect(resolveModulePath('src/client/caller.ts', 'react')).toBeNull();
   });
+
+  it('marks a call the patch deleted as a relationship that no longer exists', () => {
+    const producer = decision('src/shared/loader.ts', [
+      '-export function loadWorkspace(id: string) {',
+      '+export function loadWorkspace(id: string, signal: AbortSignal) {',
+      '   return id;',
+      ' }',
+    ]);
+    const consumer = decision('src/client/panel.ts', [
+      '-  const workspace = loadWorkspace(id);',
+      '+  const workspace = openWorkspace(id);',
+    ]);
+    const edge = buildChangeMap([producer, consumer]).edges
+      .find((candidate) => candidate.fromId === producer.id && candidate.toId === consumer.id);
+    expect(edge?.change).toBe('removed');
+    expect(edge?.explanation).toContain('no longer calls');
+  });
+
+  it('keeps a live relationship over a deleted one between the same pair', () => {
+    const producer = decision('src/shared/loader.ts', [
+      '-export function loadWorkspace(id: string) {',
+      '+export function loadWorkspace(id: string, signal: AbortSignal) {',
+      '   return id;',
+      ' }',
+    ]);
+    const consumer = decision('src/client/panel.ts', [
+      '-  const stale = loadWorkspace(id);',
+      '+  const workspace = loadWorkspace(id, signal);',
+    ]);
+    const edge = buildChangeMap([producer, consumer]).edges
+      .find((candidate) => candidate.fromId === producer.id && candidate.toId === consumer.id);
+    expect(edge?.change).toBe('added');
+    expect(edge?.relation).toBe('passes-parameter');
+  });
+
+  it('links a parameter the patch removes to the call sites that still call it', () => {
+    const producer = decision('src/shared/loader.ts', [
+      '-export function loadWorkspace(id: string, legacy: boolean) {',
+      '+export function loadWorkspace(id: string) {',
+      '   return id;',
+      ' }',
+    ]);
+    const consumer = decision('src/client/panel.ts', [
+      '-  const workspace = loadWorkspace(id, true);',
+      '+  const workspace = loadWorkspace(id);',
+    ]);
+    const edge = buildChangeMap([producer, consumer]).edges
+      .find((candidate) => candidate.fromId === producer.id && candidate.toId === consumer.id);
+    expect(edge?.relation).toBe('drops-parameter');
+    expect(edge?.change).toBe('added');
+    expect(edge?.explanation).toContain('removes the `legacy` parameter');
+  });
+
+  it('carries each node its own declarations, files and signature changes', () => {
+    const change = groupedDecision([
+      {
+        filePath: 'src/shared/loader.ts',
+        lines: [
+          '-export function loadWorkspace(id: string) {',
+          '+export function loadWorkspace(id: string, signal: AbortSignal) {',
+          '   return id;',
+          ' }',
+          '-export function legacyLoader() {}',
+          '+export interface LoaderOptions { signal: AbortSignal }',
+        ],
+      },
+      { filePath: 'src/shared/loader.test.ts', lines: ['+  expect(loadWorkspace(id, signal)).toBeTruthy();'] },
+    ], 'loadWorkspace');
+    const node = buildChangeMap([change]).nodes[0];
+    expect(node.filePaths).toEqual(['src/shared/loader.ts', 'src/shared/loader.test.ts']);
+    expect(node.symbols).toContainEqual({ name: 'LoaderOptions', kind: 'type', change: 'added' });
+    expect(node.symbols).toContainEqual({ name: 'legacyLoader', kind: 'value', change: 'removed' });
+    expect(node.symbols).toContainEqual({ name: 'loadWorkspace', kind: 'value', change: 'changed' });
+    expect(node.signatureChanges).toContainEqual({ symbol: 'loadWorkspace', added: ['signal'], removed: [] });
+  });
 });

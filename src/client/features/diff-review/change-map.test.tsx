@@ -10,6 +10,7 @@ afterEach(cleanup);
 function node(id: string, ordinal: number, label: string, degree: number): ChangeMapNode {
   return {
     id, ordinal, label, degree, subject: label, filePath: `src/${id}.ts`, fileCount: 1,
+    filePaths: [`src/${id}.ts`], symbols: [{ name: label, kind: 'value' as const, change: 'changed' as const }], signatureChanges: [],
     behavior: `Changes ${label}.`, additions: 1, deletions: 1, state: null, riskSignals: [],
   };
 }
