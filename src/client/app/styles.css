@@ -442,7 +442,7 @@ nav { display: grid; gap: 3px; }
 .change-map-scope { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 14px 8px; color: #85847d; font: 9px 'DM Mono'; }
 .change-map-scope button { flex: 0 0 auto; padding: 4px 7px; color: #c4c3bc; border: 1px solid #45443e; border-radius: 5px; background: #1b1b18; cursor: pointer; font: 9px 'DM Mono'; }
 .change-map-scope button:hover, .change-map-scope button:focus-visible { color: var(--acid); border-color: #596234; outline: 0; }
-.change-map-canvas { overflow: auto; overscroll-behavior-x: contain; max-height: 340px; padding: 0 14px 8px; }
+.change-map-canvas { overflow: auto; overscroll-behavior-x: contain; max-height: 460px; padding: 0 14px 8px; }
 .change-map-canvas:focus-visible { outline: 1px solid var(--acid); outline-offset: -3px; }
 .change-map-node { --state-tone: #56554e; cursor: pointer; }
 .change-map-node.state-reviewed { --state-tone: #8bbd75; }
@@ -470,6 +470,7 @@ nav { display: grid; gap: 3px; }
 .change-map-edge-line { fill: none; stroke: var(--relation-tone); stroke-width: 1.4; opacity: 0.7; }
 .change-map-edge.backward .change-map-edge-line { stroke-dasharray: 4 3; }
 .change-map-edge.active .change-map-edge-line, .change-map-edge.touches-selection .change-map-edge-line { opacity: 1; stroke-width: 2.2; }
+.change-map-edge.dimmed { opacity: 0.16; }
 .change-map-edge-target { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
 .change-map-edge-target:focus-visible { outline: none; stroke: var(--acid); stroke-opacity: 0.3; }
 .change-map-edge-label { fill: #a9a89f; font: 9px 'DM Mono'; paint-order: stroke; stroke: #131311; stroke-width: 3px; }

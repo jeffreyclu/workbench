@@ -58,6 +58,11 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
   const relationsPresent = CHANGE_RELATIONS.filter((relation) => layout.edges.some((edge) => edge.relation === relation));
   const relatedCount = layout.nodes.filter((node) => node.degree > 0).length;
 
+  // Lines that answer the current selection are painted last, so they sit on
+  // top of the ones the reviewer is not asking about rather than under them.
+  const orderedEdges = [...layout.edges].sort((left, right) =>
+    Number(left.fromId === selectedId || left.toId === selectedId) - Number(right.fromId === selectedId || right.toId === selectedId));
+
   const activate = (event: KeyboardEvent, action: () => void) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
@@ -91,10 +96,11 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
               <path d="M 0 1 L 8 4 L 0 7 z" />
             </marker>)}
           </defs>
-          {layout.edges.map((edge) => {
+          {orderedEdges.map((edge) => {
             const active = edge.id === selectedEdgeId;
             const touchesSelection = edge.fromId === selectedId || edge.toId === selectedId;
-            return <g key={edge.id} className={`change-map-edge relation-${edge.relation}${active ? ' active' : ''}${touchesSelection ? ' touches-selection' : ''}${edge.backward ? ' backward' : ''}`}>
+            const dimmed = Boolean(selectedId) && !touchesSelection && !active;
+            return <g key={edge.id} className={`change-map-edge relation-${edge.relation}${active ? ' active' : ''}${touchesSelection ? ' touches-selection' : ''}${dimmed ? ' dimmed' : ''}${edge.backward ? ' backward' : ''}`}>
               <path className="change-map-edge-line" d={edge.path} markerEnd={`url(#change-map-arrow-${edge.relation})`} />
               <path
                 className="change-map-edge-target"
