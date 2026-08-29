@@ -371,6 +371,18 @@ describe('codexUsageFromAppServerEvent', () => {
     })).toEqual({ inputTokens: 6_680, cacheCreationInputTokens: 0, cacheReadInputTokens: 11_008, outputTokens: 5 });
   });
 
+  it('prefers cumulative Codex turn usage over the last provider request', () => {
+    expect(codexUsageFromAppServerEvent({
+      method: 'thread/tokenUsage/updated',
+      params: {
+        tokenUsage: {
+          last: { inputTokens: 100_000, cachedInputTokens: 90_000, outputTokens: 10 },
+          total: { inputTokens: 620_000, cachedInputTokens: 550_000, outputTokens: 70 },
+        },
+      },
+    })).toEqual({ inputTokens: 70_000, cacheCreationInputTokens: null, cacheReadInputTokens: 550_000, outputTokens: 70 });
+  });
+
   it('returns null for a turn/completed event with no usage field, matching current app-server output', () => {
     expect(codexUsageFromAppServerEvent({
       method: 'turn/completed',

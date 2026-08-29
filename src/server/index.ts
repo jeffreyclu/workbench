@@ -13,6 +13,7 @@ import { attachRealtimeServer, retireRealtimeClients } from './realtime.js';
 import { collectMemoryDocuments, indexPendingMemory } from './memory-index.js';
 import { shutdownActiveAgentProcesses } from './agent-runner.js';
 import { shutdownExternalActionClassifier } from './external-action-ai.js';
+import { shutdownTurnGroundingClassifier } from './turn-grounding-ai.js';
 import { configureRuntimeRetirement } from './runtime-retirement.js';
 
 const port = Number(process.env.PORT ?? 4317);
@@ -66,6 +67,7 @@ const shutdown = () => {
   repository.interruptOwnedWork(OWNER_ID, 'Workbench runtime promoted while this agent was running. Retry or continue the conversation.');
   shutdownActiveAgentProcesses();
   shutdownExternalActionClassifier();
+  shutdownTurnGroundingClassifier();
   shutdownDiffConfidenceModel();
   shutdownReviewAssist();
   shutdownFastTaskDraftModel();

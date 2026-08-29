@@ -342,6 +342,13 @@ shows a warning once recorded cache reads reach that threshold; bounded prompt
 sections, deduplicated RAG, and compact conversation history remain the inputs
 used to seed a fresh turn.
 
+On 2026-08-28, Jeffrey clarified that post-turn retirement alone is insufficient
+because one tool-heavy turn can still read millions of cached tokens. At 500k
+deduplicated cache-read tokens during an interactive run, Workbench must ask the
+agent to finish only its in-flight operation, emit a checkpoint, and automatically
+continue the unfinished request in a fresh compact provider session. This is a
+cooperative between-operation handoff, not SIGTERM/SIGKILL and not a failed run.
+
 ### Cache-read reduction: dual-agent dispatch stays, other levers are the approved path
 
 On 2026-08-25, with cache-read at 521.9M tokens (30:1 over fresh input) across

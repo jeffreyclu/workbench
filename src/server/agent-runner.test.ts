@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CLAUDE_EXECUTION_CONTRACT, autocompactCeilingTokens, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, toolCallLimitFor } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, toolCallLimitFor } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -309,6 +309,33 @@ describe('classifyExecution', () => {
 
     expect(result.output).toBe('Finished after the large cache read.');
     expect(result.usage.cacheReadInputTokens).toBe(1_600_000);
+  });
+
+  it('continues a cooperative Claude cache checkpoint in a fresh process without terminating either segment', async () => {
+    const countFile = join(tmpdir(), `workbench-cache-segments-${Date.now()}`);
+    const checkpoint = JSON.stringify({ type: 'result', result: `${CACHE_HANDOFF_MARKER} edited the file; verification remains.`, usage: { input_tokens: 10, cache_read_input_tokens: CACHE_READ_SOFT_LIMIT_TOKENS, output_tokens: 5 } });
+    const highUsage = JSON.stringify({ type: 'assistant', request_id: 'budget-crossing-request', message: { usage: { input_tokens: 10, cache_read_input_tokens: CACHE_READ_SOFT_LIMIT_TOKENS, output_tokens: 5 } } });
+    const completed = JSON.stringify({ type: 'result', result: 'Finished in the compact continuation.', usage: { input_tokens: 20, cache_read_input_tokens: 100, output_tokens: 7 } });
+    const body = `count=0\nif [ -f '${countFile}' ]; then read count < '${countFile}'; fi\ncount=$((count + 1))\nprintf '%s' "$count" > '${countFile}'\nif [ "$count" -eq 1 ]; then\n  printf '%s\\n%s\\n' '${highUsage}' '${checkpoint}'\nelse\n  printf '%s\\n' '${completed}'\nfi`;
+    const fixture = fakeAgentDirectory('exit 1', body);
+
+    const result = await runAgentCommandWithFallback('claude', fixture.directory, 'Implement and verify the change.');
+
+    expect(result.output).toBe('Finished in the compact continuation.');
+    expect(result.usage.cacheReadInputTokens).toBe(CACHE_READ_SOFT_LIMIT_TOKENS + 100);
+    expect(readFileSync(countFile, 'utf8')).toBe('2');
+    rmSync(countFile, { force: true });
+  });
+
+  it('builds a bounded cache continuation and preserves null-aware usage accounting', () => {
+    expect(CACHE_HANDOFF_INSTRUCTION).toContain('do not start another tool');
+    expect(hasCacheHandoff(`${CACHE_HANDOFF_MARKER} saved`)).toBe(true);
+    const continuation = cacheContinuationPrompt('x'.repeat(20_000), 'y'.repeat(20_000));
+    expect(continuation.length).toBeLessThan(21_000);
+    expect(addUsage(
+      { inputTokens: null, cacheCreationInputTokens: 2, cacheReadInputTokens: 5, outputTokens: null },
+      { inputTokens: 3, cacheCreationInputTokens: null, cacheReadInputTokens: 7, outputTokens: null },
+    )).toEqual({ inputTokens: 3, cacheCreationInputTokens: 2, cacheReadInputTokens: 12, outputTokens: null });
   });
 
   it('injects the explicit-order external-source guardrail into every work-item prompt', () => {

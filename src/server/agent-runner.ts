@@ -566,7 +566,23 @@ export interface AgentUsage {
   cacheReadInputTokens: number | null;
   outputTokens: number | null;
 }
-interface AgentCommandResult { output: string; usage: AgentUsage; sessionId?: string | null; /** Largest single-request context observed this turn. */ peakContextTokens?: number; /** Provider-billed dollars when the CLI reports them (Claude only today). */ costUsd?: number | null; }
+interface AgentCommandResult { output: string; usage: AgentUsage; sessionId?: string | null; /** Largest single-request context observed this turn. */ peakContextTokens?: number; /** Provider-billed dollars when the CLI reports them (Claude only today). */ costUsd?: number | null; cacheHandoffRequested?: boolean; }
+
+export const CACHE_HANDOFF_MARKER = 'WORKBENCH_CACHE_HANDOFF:';
+export const CACHE_HANDOFF_INSTRUCTION = `Cache soft budget reached. Finish only the operation already in flight; do not start another tool or model cycle in this provider session. Preserve all completed work, then return a concise checkpoint beginning exactly \`${CACHE_HANDOFF_MARKER}\` with what changed, what remains, and verification already observed. Workbench will continue the task automatically in a fresh compact session.`;
+
+export function hasCacheHandoff(output: string): boolean {
+  return output.includes(CACHE_HANDOFF_MARKER);
+}
+
+export function cacheContinuationPrompt(originalPrompt: string, checkpoint: string): string {
+  return `Continue the original request in a fresh provider session after a cache-budget checkpoint. Treat the checkpoint as progress evidence, inspect only what is needed to finish, and return the final user-facing answer. Do not repeat the checkpoint marker unless this new session receives another cache-budget instruction.\n\nOriginal request:\n${compactPromptSection(originalPrompt, 12_000)}\n\nCompleted segment checkpoint:\n${compactPromptSection(checkpoint, 8_000)}`;
+}
+
+export function addUsage(left: AgentUsage, right: AgentUsage): AgentUsage {
+  const add = (a: number | null, b: number | null) => a === null && b === null ? null : (a ?? 0) + (b ?? 0);
+  return { inputTokens: add(left.inputTokens, right.inputTokens), cacheCreationInputTokens: add(left.cacheCreationInputTokens, right.cacheCreationInputTokens), cacheReadInputTokens: add(left.cacheReadInputTokens, right.cacheReadInputTokens), outputTokens: add(left.outputTokens, right.outputTokens) };
+}
 
 function numberAt(record: Record<string, unknown>, ...keys: string[]): number | null {
   const value = keys.map((key) => record[key]).find((candidate) => typeof candidate === 'number');
@@ -1197,6 +1213,8 @@ ${AGENT_EXECUTION_CONTRACT}`;
     // past the point where carrying it forward is cheaper than reseeding.
     let peakContextTokens = 0;
     let providerCostUsd: number | null = null;
+    let cacheHandoffRequested = false;
+    let steerAgentInput: AgentInputSteering | null = null;
     let lastReportedUsage = '';
     // See UsageSample: `--forward-subagent-text` can surface the same provider
     // response more than once. Account for one provider request, never its
@@ -1238,6 +1256,11 @@ ${AGENT_EXECUTION_CONTRACT}`;
         };
       }
       emitLiveUsage();
+      if (!cacheHandoffRequested && (reportedUsage.cacheReadInputTokens ?? 0) >= CACHE_READ_SOFT_LIMIT_TOKENS && steerAgentInput) {
+        cacheHandoffRequested = true;
+        progress += `${progress ? '\n\n' : ''}● Cache soft budget reached. Finishing the current operation, then continuing in a fresh compact session…`;
+        void steerAgentInput(CACHE_HANDOFF_INSTRUCTION);
+      }
     };
     const timeout = setTimeout(() => {
       terminationError = new Error('Agent run timed out after 30 minutes.');
@@ -1384,7 +1407,7 @@ ${AGENT_EXECUTION_CONTRACT}`;
       else if (code === 0 && !terminalError) {
         const output = finalOutput.trim() || progress.trim() || stdout.trim();
         const outputTokens = reportedUsage.outputTokens ?? (estimatedOutputTokens || null);
-        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens }, sessionId: eventContext.sessionId ?? null, costUsd: providerCostUsd, peakContextTokens });
+        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens }, sessionId: eventContext.sessionId ?? null, costUsd: providerCostUsd, peakContextTokens, cacheHandoffRequested });
       }
       else {
         const providerDiagnostic = stderr.trim() || terminalError || finalOutput.trim() || stdout.trim();
@@ -1410,6 +1433,7 @@ ${AGENT_EXECUTION_CONTRACT}`;
         resolve(!error && !stopping && !cancellationRequested && child.exitCode === null);
       });
     });
+    steerAgentInput = sendClaudeInput;
     // Initial task input must be first; then a live interjection may append to
     // the same provider session.
     void sendClaudeInput(efficientPrompt).then((accepted) => {
@@ -1468,8 +1492,20 @@ export async function runAgentCommandWithFallback(
   allowFallback = true,
 ): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; costUsd?: number | null; peakContextTokens?: number }> {
   try {
-    const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, resumeSessionId, poolEligible, kind);
-    return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
+    let segmentPrompt = prompt;
+    let segmentResume = resumeSessionId;
+    let aggregate: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
+    let result: AgentCommandResult;
+    for (;;) {
+      const before = aggregate;
+      result = await runAgentCommandWithUsage(primary, cwd, segmentPrompt, onProgress, signal, profile, (usage, agent) => onUsage?.(addUsage(before, usage), agent), onAudit, accountProfile, modelOverride, onSteeringReady, segmentResume, poolEligible && segmentPrompt === prompt, kind);
+      aggregate = addUsage(aggregate, result.usage);
+      if (!result.cacheHandoffRequested || !hasCacheHandoff(result.output)) break;
+      onProgress?.('● Cache checkpoint saved. Continuing automatically in a fresh compact session…');
+      segmentPrompt = cacheContinuationPrompt(prompt, result.output);
+      segmentResume = undefined;
+    }
+    return { ...result, usage: aggregate, agent: primary, fallbackFrom: null, fallbackReason: null };
   } catch (error) {
     // Provider session IDs are cache hints, not durable retry identities. A
     // task retry can outlive Claude's local session (including across a
