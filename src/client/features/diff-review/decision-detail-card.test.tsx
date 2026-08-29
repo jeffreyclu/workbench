@@ -17,6 +17,7 @@ const decision: ReviewDecision = {
   filePaths: ['src/example.ts'],
   additions: 1,
   deletions: 1,
+  changeType: 'behavior_edit' as const, secondaryChangeTypes: [],
   riskSignals: [],
   state: null,
   note: null,
@@ -36,6 +37,19 @@ function renderCard(taskIntent: { title: string; description: string } | null = 
 }
 
 describe('diff review decision detail', () => {
+  it('says what kind of change the decision is, because that decides what the reviewer has to establish', () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DiffReviewDecisionDetailCard decision={{ ...decision, changeType: 'refactor_pure', secondaryChangeTypes: ['deletion'] }} taskIntent={null}><div /></DiffReviewDecisionDetailCard>
+      </QueryClientProvider>,
+    );
+
+    // A refactor that also drops a declaration must not read as a plain
+    // refactor: the dropped symbol is the part that needs an answer.
+    expect(screen.getByText(/Refactor/)).toBeInTheDocument();
+    expect(screen.getByText(/also deletion/)).toBeInTheDocument();
+  });
+
   it('names which decision the popover is describing', () => {
     // Where the change is now reads off the block's gutter marker; the panel only
     // has to say which decision it belongs to and what that decision does.

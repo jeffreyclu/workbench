@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { REVIEW_CHANGE_TYPES } from './change-type.js';
 import { projectKey } from './project-name.js';
 
 export const workItemStatusSchema = z.enum([
@@ -319,6 +320,11 @@ export const reviewAssistRequestSchema = z.object({
   decision: z.object({
     behavior: z.string().min(1).max(2_000),
     state: z.string().min(1).max(100),
+    // Defaulted rather than required: a browser tab left open across a runtime
+    // upgrade still posts the old payload shape, and degrading it to the
+    // residual type is better than a validation error in the reviewer's face.
+    changeType: z.enum(REVIEW_CHANGE_TYPES).default('behavior_edit'),
+    secondaryChangeTypes: z.array(z.enum(REVIEW_CHANGE_TYPES)).max(REVIEW_CHANGE_TYPES.length).default([]),
     hunks: z.array(z.object({
       filePath: z.string().min(1).max(2_000),
       location: z.string().min(1).max(200),

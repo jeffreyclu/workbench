@@ -30,7 +30,8 @@ function decision(filePath: string, lines: string[], subject: string | null = nu
     filePaths: [filePath],
     additions: lines.filter((line) => line.startsWith('+')).length,
     deletions: lines.filter((line) => line.startsWith('-')).length,
-    riskSignals: [],
+    changeType: 'behavior_edit' as const, secondaryChangeTypes: [],
+  riskSignals: [],
     state: null,
     note: null,
   };

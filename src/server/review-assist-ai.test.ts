@@ -5,13 +5,15 @@ import { openDatabase } from './database.js';
 const decision = {
   behavior: 'Adds a retry to the sync client.',
   state: 'Pending',
+  changeType: 'new_code' as const,
+  secondaryChangeTypes: [],
   hunks: [{ filePath: 'src/sync.ts', location: 'Line 10', lines: ['+retry(3);'] }],
 };
 
 /** The warm worker protocol is one result per message written to stdin: the
  * first is the priming turn the pool pays before any reviewer clicks, the
  * second is the real question. */
-function mockStreamingWorker(answer = 'This adds a bounded retry around the sync call.', deltas: string[] = []) {
+function mockStreamingWorker(answer = 'This adds a bounded retry around the sync call.', deltas: string[] = [], writes: string[] = []) {
   return vi.fn(() => {
     const emitter = new EventEmitter() as EventEmitter & {
       stdout: EventEmitter & { setEncoding?: (encoding: string) => void };
@@ -23,7 +25,8 @@ function mockStreamingWorker(answer = 'This adds a bounded retry around the sync
     emitter.stderr = new EventEmitter();
     let turns = 0;
     emitter.stdin = Object.assign(new EventEmitter(), {
-      write: () => {
+      write: (chunk: string) => {
+        writes.push(chunk);
         const isPrimingTurn = turns++ === 0;
         queueMicrotask(() => {
           if (!isPrimingTurn) {
@@ -111,6 +114,8 @@ describe('requestReviewAssist caching', () => {
     await requestReviewAssist(database, 'score_risk', {
       behavior: 'Changes the range filter assertions.',
       state: 'Pending',
+      changeType: 'test_only' as const,
+      secondaryChangeTypes: [],
       hunks: [{ filePath: 'src/client/features/range-filter.test.tsx', location: 'Line 42', lines: ["+    expect(screen.getByRole('button', { name: '7 days' })).toBeTruthy();"] }],
     }, null);
 
@@ -188,5 +193,46 @@ describe('lookupReviewAssist', () => {
 
     expect(lookupReviewAssist(database, 'compare_task_intent', decision, null)).toBeNull();
     expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe('change-type obligations', () => {
+  const deletion = {
+    behavior: 'Removes the legacy parser.',
+    state: 'Pending',
+    changeType: 'deletion' as const,
+    secondaryChangeTypes: [],
+    hunks: [{ filePath: 'src/legacy-parse.ts', location: 'Lines 1-9', lines: ['-export function legacyParse(input: string) {', '-  return input.trim();', '-}'] }],
+  };
+
+  it('asks a deletion why, and forbids the all-clear it has no evidence for', async () => {
+    vi.resetModules();
+    const writes: string[] = [];
+    const spawn = mockStreamingWorker('Removed with no visible reason.', [], writes);
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { requestReviewAssist } = await import('./review-assist-ai.js');
+
+    await requestReviewAssist(openDatabase(':memory:'), 'explain', deletion, null);
+
+    // The priming turn is written first; the reviewer's question is the last.
+    const prompt = writes[writes.length - 1];
+    expect(prompt).toContain('Change type: Deletion.');
+    expect(prompt).toContain('say plainly when the reason is not visible');
+    // The worker has no tools and no repo: an assistant that answers "nothing
+    // else references this" is inventing the only evidence that matters.
+    expect(prompt).toContain('never as safe');
+    expect(spawn.mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it('keys the cache on change type, so the same lines asked as a different kind of change are not served a stale answer', async () => {
+    vi.resetModules();
+    const spawn = mockStreamingWorker('Removed with no visible reason.');
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { requestReviewAssist, lookupReviewAssist } = await import('./review-assist-ai.js');
+    const database = openDatabase(':memory:');
+
+    await requestReviewAssist(database, 'explain', deletion, null);
+    expect(lookupReviewAssist(database, 'explain', deletion, null)).toBe('Removed with no visible reason.');
+    expect(lookupReviewAssist(database, 'explain', { ...deletion, changeType: 'refactor_pure' as const }, null)).toBeNull();
   });
 });

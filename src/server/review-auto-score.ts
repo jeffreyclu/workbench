@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
-import { buildReviewDecisions, reviewAssistDecisionPayload } from '../shared/review-decisions.js';
+import { buildReviewDecisions, reviewAssistDecisionPayload, type ReviewDecision } from '../shared/review-decisions.js';
+import type { ReviewChangeType } from '../shared/change-type.js';
 import { publishRealtimeReviewScore } from './realtime.js';
 import { lookupReviewAssist, requestReviewAssist } from './review-assist-ai.js';
 import type { WorkItemRepository } from './repository.js';
@@ -24,6 +25,27 @@ export type ReviewAutoScoreSnapshot = {
  * and scoring all of it would hold the assist pool for minutes. The remainder
  * stays available on demand from each decision's own Score risk button. */
 const MAX_AUTO_SCORED_DECISIONS = 40;
+
+/** Which decisions the capped background budget is spent on first. When the cap
+ * bites it should drop the scores a reviewer can already guess — docs,
+ * generated output, test assertions — before the ones they cannot, like a
+ * deletion whose remaining references are unknown or a wholesale rewrite. */
+const AUTO_SCORE_PRIORITY: Record<ReviewChangeType, number> = {
+  deletion: 0, replacement: 0,
+  behavior_edit: 1, new_code: 1, refactor_pure: 1,
+  extension: 2, move_rename: 2,
+  config_dep: 3, test_only: 4,
+  docs_comment: 5, generated: 5,
+};
+
+/** Ordering only, never filtering: every decision past the cap stays available
+ * from its own Score risk button and is counted in `skipped`. */
+export function orderDecisionsForAutoScore(decisions: ReviewDecision[]): ReviewDecision[] {
+  return [...decisions].sort((left, right) => {
+    const byType = (AUTO_SCORE_PRIORITY[left.changeType] ?? 3) - (AUTO_SCORE_PRIORITY[right.changeType] ?? 3);
+    return byType !== 0 ? byType : left.ordinal - right.ordinal;
+  });
+}
 
 type ScoreJob = {
   scope: ReviewScoreScope;
@@ -66,7 +88,7 @@ async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreSco
     return;
   }
   const decisions = buildReviewDecisions(diff.files, repository.listDiffHunkReviews(scope, diff.revision));
-  const scoreable = decisions.slice(0, MAX_AUTO_SCORED_DECISIONS);
+  const scoreable = orderDecisionsForAutoScore(decisions).slice(0, MAX_AUTO_SCORED_DECISIONS);
   const job: ScoreJob = {
     scope,
     revision: diff.revision,

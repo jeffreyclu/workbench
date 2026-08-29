@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
+import type { ReviewDecision } from '../shared/review-decisions.js';
+import type { ReviewChangeType } from '../shared/change-type.js';
 
 const getWorkspaceDiff = vi.fn();
 const requestReviewAssist = vi.fn();
@@ -16,7 +18,7 @@ vi.mock('./realtime.js', () => ({
   publishRealtimeReviewScore: (score: unknown) => publishRealtimeReviewScore(score),
 }));
 
-const { resetReviewAutoScore, reviewAutoScoreSnapshot, reviewAutoScoreView, scheduleReviewAutoScore } = await import('./review-auto-score.js');
+const { orderDecisionsForAutoScore, resetReviewAutoScore, reviewAutoScoreSnapshot, reviewAutoScoreView, scheduleReviewAutoScore } = await import('./review-auto-score.js');
 
 function diffWith(files: number) {
   return {
@@ -160,5 +162,27 @@ describe('background review scoring', () => {
     lookupReviewAssist.mockReturnValue('SCORE: 15\nPersisted answer.');
 
     expect(await reviewAutoScoreView(repository, { workItemId: item.id }, 'rev-2')).toBeNull();
+  });
+});
+
+describe('auto-score ordering', () => {
+  const decision = (ordinal: number, changeType: ReviewChangeType): ReviewDecision => ({
+    id: `decision-${ordinal}`, ordinal, subject: null, behavior: `Decision ${ordinal}.`,
+    hunks: [], filePaths: [], additions: 0, deletions: 0, riskSignals: [],
+    changeType, secondaryChangeTypes: [], state: null, note: null,
+  });
+
+  it('spends the capped budget on the decisions a reviewer cannot guess the score of', () => {
+    const ordered = orderDecisionsForAutoScore([
+      decision(1, 'docs_comment'), decision(2, 'test_only'), decision(3, 'deletion'), decision(4, 'new_code'),
+    ]);
+
+    expect(ordered.map((entry) => entry.ordinal)).toEqual([3, 4, 2, 1]);
+  });
+
+  it('keeps source order within a change type, so the queue stays predictable', () => {
+    const ordered = orderDecisionsForAutoScore([decision(7, 'new_code'), decision(2, 'new_code'), decision(5, 'new_code')]);
+
+    expect(ordered.map((entry) => entry.ordinal)).toEqual([2, 5, 7]);
   });
 });

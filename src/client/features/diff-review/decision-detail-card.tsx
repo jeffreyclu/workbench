@@ -1,6 +1,7 @@
 import { memo, useState, type ReactNode } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { sourceClient } from '../../data/source-client.js';
+import { changeTypeLabel } from './logic.js';
 import type { ReviewDecision } from './logic.js';
 import { aiRiskBand, parseAiRiskScore, reviewAssistDecisionPayload } from './logic.js';
 import type { AutoScoreResult } from './auto-score.js';
@@ -64,6 +65,11 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
     <header>
       <div>
         <span className="diff-review-decision-eyebrow">Decision {decision.ordinal}</span>
+        {/* The kind of change is the first thing that decides what a reviewer
+          * owes this decision — coverage for new code, call sites for a
+          * replacement, a reason for a deletion — so it sits next to the
+          * ordinal rather than inside the AI panel. */}
+        <span className="diff-review-decision-eyebrow"> · {changeTypeLabel(decision.changeType)}{decision.secondaryChangeTypes.length > 0 ? ` · also ${decision.secondaryChangeTypes.map((type) => changeTypeLabel(type).toLowerCase()).join(' + ')}` : ''}</span>
         <h3 id={titleId}>{decision.behavior}</h3>
       </div>
     </header>

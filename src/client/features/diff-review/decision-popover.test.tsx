@@ -29,6 +29,7 @@ const decision: ReviewDecision = {
   filePaths: ['src/example.ts'],
   additions: 1,
   deletions: 1,
+  changeType: 'behavior_edit' as const, secondaryChangeTypes: [],
   riskSignals: [],
   state: null,
   note: null,

@@ -18,7 +18,8 @@ function decision(ordinal: number, state: ReviewDecision['state']): ReviewDecisi
     filePaths: ['src/example.ts'],
     additions: 1,
     deletions: 0,
-    riskSignals: [],
+    changeType: 'behavior_edit' as const, secondaryChangeTypes: [],
+  riskSignals: [],
     state,
     note: null,
   };

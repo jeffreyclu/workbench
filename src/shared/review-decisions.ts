@@ -1,4 +1,5 @@
 import type { DiffHunkReview, DiffHunkReviewState, WorkspaceDiffFile } from './contracts.js';
+import { classifyChangeType, type ReviewChangeType } from './change-type.js';
 
 /** Decision derivation is shared, not client-only: the server's background
  * scorer must produce byte-identical decision payloads, because the AI answer
@@ -34,6 +35,13 @@ export interface ReviewDecision {
   additions: number;
   deletions: number;
   riskSignals: ReviewRiskSignal[];
+  /** What kind of change this is, which selects the questions a reviewer owes
+   * it. Derived here rather than in the client so the background scorer asks
+   * the same questions the queue does. */
+  changeType: ReviewChangeType;
+  /** Types that also apply to part of the decision — a refactor that drops a
+   * declaration, or a change that ships its own tests. */
+  secondaryChangeTypes: ReviewChangeType[];
   state: DiffHunkReviewState | null;
   note: string | null;
 }
@@ -265,6 +273,9 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
     const filePaths = [...new Set(hunks.map((hunk) => hunk.filePath))];
     const riskSignals = REVIEW_RISK_SIGNALS.filter((signal) => group.some((candidate) => candidate.riskSignals.includes(signal)));
     if (filePaths.length > 1) riskSignals.push('cross_file');
+    const changeType = classifyChangeType(group.map((candidate) => ({
+      filePath: candidate.hunk.filePath, fileStatus: candidate.fileStatus, lines: candidate.hunk.lines,
+    })));
     return {
       ordinal: index + 1,
       id: group.length > 1 ? `decision:${primary.subject}:${hunks.map((hunk) => hunk.id).sort().join('|')}` : hunks[0].id,
@@ -273,7 +284,8 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
       hunks, filePaths,
       additions: hunks.reduce((total, hunk) => total + hunk.additions, 0),
       deletions: hunks.reduce((total, hunk) => total + hunk.deletions, 0),
-      riskSignals, state: aggregateState(hunks), note: aggregateNote(hunks),
+      riskSignals, changeType: changeType.primary, secondaryChangeTypes: changeType.secondary,
+      state: aggregateState(hunks), note: aggregateNote(hunks),
     };
   });
 }
@@ -305,11 +317,15 @@ export function reviewStateShortLabel(state: DiffHunkReviewState | null): string
 export function reviewAssistDecisionPayload(decision: ReviewDecision): {
   behavior: string;
   state: string;
+  changeType: ReviewChangeType;
+  secondaryChangeTypes: ReviewChangeType[];
   hunks: Array<{ filePath: string; location: string; lines: string[] }>;
 } {
   return {
     behavior: decision.behavior,
     state: reviewStateLabel(decision.state),
+    changeType: decision.changeType,
+    secondaryChangeTypes: decision.secondaryChangeTypes,
     hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines })),
   };
 }

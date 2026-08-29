@@ -3,6 +3,8 @@ import type { DiffHunkReviewState, WorkspaceDiffFile } from '../../../shared/con
 // same decisions, with the same ids, as the queue the reviewer is reading.
 export { REVIEW_RISK_SIGNALS, buildReviewDecisions, reviewAssistDecisionPayload, reviewStateLabel, reviewStateShortLabel } from '../../../shared/review-decisions.js';
 export type { ReviewDecision, ReviewDecisionHunk, ReviewRiskSignal } from '../../../shared/review-decisions.js';
+export { REVIEW_CHANGE_TYPES, changeTypeLabel } from '../../../shared/change-type.js';
+export type { ReviewChangeType } from '../../../shared/change-type.js';
 import { countChangedLines, hunkLocation, reviewStateLabel, splitPatchHunks } from '../../../shared/review-decisions.js';
 import type { ReviewDecision, ReviewRiskSignal } from '../../../shared/review-decisions.js';
 

@@ -1,11 +1,17 @@
 import { createHash } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
+import { changeTypeLabel, isReviewChangeType, type ReviewChangeType } from '../shared/change-type.js';
 
 export type ReviewAssistAction = 'explain' | 'what_could_break' | 'compare_task_intent' | 'score_risk';
 
 export type ReviewAssistDecision = {
   behavior: string;
+  /** Selects the obligations block in the prompt: what a reviewer must
+   * establish differs by kind of change, so one rubric for every diff asked
+   * new code and a deletion the same useless question. */
+  changeType: ReviewChangeType;
+  secondaryChangeTypes: ReviewChangeType[];
   /** Still accepted on the wire — the queue sends one payload shape to every
    * review surface — but deliberately ignored here: see `hashRequest`. */
   state: string;
@@ -27,13 +33,19 @@ const CHANGES_AGENT_SYSTEM_PROMPT = [
   'Each hunk is labelled with the file path it came from. Read the path before judging the lines.',
   'A path matching *.test.*, *.spec.*, __tests__/, /tests/, /e2e/, /__mocks__/, or /fixtures/ is test code. It ships to no user and cannot break production behavior on its own: changing, tightening, or updating assertions there is routine low-risk work. Judge a test change only on whether it weakens, deletes, or wrongly relaxes coverage — an assertion updated to match intended new behavior is expected, not a risk.',
   'Documentation, comment, styling, fixture, and lockfile-free config changes likewise carry far less blast radius than production source under src/, lib/, app/, or server/.',
+  // The worker runs with no tools and cwd /tmp: it can see the hunks in the
+  // message and nothing else. Left unsaid, it answered "all call sites are
+  // updated" about call sites it had never been shown, which is the most
+  // damaging thing this surface can do — a fabricated all-clear is worse than
+  // no answer.
+  'You are shown only the hunks in this message. You cannot see the rest of the file, the pre-change version, call sites, or the test suite. Never assert anything about code you were not shown: say "not visible here" and name what would have to be checked.',
   'Follow the instruction at the top of the message exactly. No preamble, no markdown headings, no restating the diff back verbatim.',
 ].join(' ');
 
 /** Bumped whenever the system prompt or an action directive changes what a good
  * answer looks like. It is part of the cache key, so a corrected rubric
  * recomputes stale answers once instead of serving the old judgement forever. */
-const ASSIST_PROMPT_VERSION = 2;
+const ASSIST_PROMPT_VERSION = 3;
 
 // Answer length is the dominant latency term once the session is primed:
 // measured on this machine a warm turn spends ~0.9s on session overhead and the
@@ -47,6 +59,32 @@ const ACTION_DIRECTIVES: Record<ReviewAssistAction, string> = {
   // line into the badge number. An answer that does not follow it is rendered
   // as plain text rather than being coerced into a fake score.
   score_risk: 'Instruction: rate how risky this change is for a reviewer to approve, from 0 (trivially safe) to 100 (dangerous, easy to get wrong, wide blast radius). Blast radius is set by the file path as much as by the lines: a test, fixture, or documentation file scores under 20 unless it removes or weakens coverage. Reply with exactly two lines and nothing else. First line: "SCORE: <number>". Second line: at most fifteen words saying why.',
+};
+
+/** The per-type half of the rubric. The action says what the reviewer asked
+ * for; this says what counts as a good answer for this kind of change. Each
+ * one names the evidence the model does not have, because the alternative is
+ * that it invents it. */
+const CHANGE_TYPE_DIRECTIVES: Record<ReviewChangeType, string> = {
+  new_code: 'This is brand-new code. Coverage first: for every visible branch — guard, catch, early return, loop, switch arm — name the test line in this diff that exercises it, or mark it UNCOVERED. If no test file appears in this diff, say coverage is not visible rather than guessing either way. Then judge correctness, naming, and complexity of the new logic itself.',
+  extension: 'This extends existing logic rather than rewriting it. Ask which previously handled inputs now take the new path, and whether the existing behavior is preserved for everything else.',
+  behavior_edit: 'This edits existing behavior in place. State the old behavior and the new behavior in one line each, then name who would notice the difference.',
+  refactor_pure: 'This looks like a behavior-preserving refactor. Compare old and new on the same axes and in the same order: signature, error handling, ordering and control flow, complexity. Name every difference that is not cosmetic. Call sites are not visible here — do not claim they are updated.',
+  replacement: 'This replaces an existing implementation. Compare the removed and added versions on signature, error handling, edge cases, and ordering, then say which callers must be re-checked. Callers are not visible here — list them as unverified rather than as fine.',
+  move_rename: 'This moves or renames code. The only questions that matter are whether the body changed while moving, and whether references to the old location or name are updated. References outside this diff are not visible — say so.',
+  deletion: 'This deletes code. Say the most likely reason it was deleted, and say plainly when the reason is not visible in the diff. Then say what breaks if anything still references it, and flag any test deleted alongside it. Remaining references are not visible here: treat "is it still referenced?" as unverified, never as safe.',
+  test_only: 'This is test-only and ships to no user. Judge it solely on whether coverage got weaker: assertions deleted, loosened, or skipped. An assertion updated to match intended new behavior is expected, not a risk.',
+  config_dep: 'This is configuration or dependency change. Judge the size of the version jump, environment coupling, and whether build or runtime behavior moves with it.',
+  docs_comment: 'This is documentation or comments only, with no runtime behavior. Judge only whether the text now contradicts the code.',
+  generated: 'This is generated or vendored output, not hand-written. Judge only whether it looks consistently regenerated.',
+};
+
+/** Defensible score ranges per type, so the number means the same thing across
+ * a diff. The model may leave a band, but only for a reason it states. */
+const CHANGE_TYPE_RISK_BANDS: Record<ReviewChangeType, string> = {
+  new_code: '20-70', extension: '20-60', behavior_edit: '25-75', refactor_pure: '20-60',
+  replacement: '40-85', move_rename: '20-60', deletion: '40-90', test_only: '0-20',
+  config_dep: '10-60', docs_comment: '0-10', generated: '0-10',
 };
 
 /** Cheapest possible turn whose only job is to pay the session's one-time
@@ -68,7 +106,10 @@ function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision,
   // settled the decision — every settled hunk then paid for a fresh model turn
   // on the next visit, which is exactly the rescore loop this cache prevents.
   // It would also bias the score: an already-approved change reads as safer.
-  const keyedDecision = { behavior: decision.behavior, hunks: decision.hunks };
+  // Change type is keyed: it selects a different obligations block, so the
+  // same hunks classified differently are a different question with a
+  // different right answer.
+  const keyedDecision = { behavior: decision.behavior, changeType: decision.changeType, secondaryChangeTypes: decision.secondaryChangeTypes, hunks: decision.hunks };
   const keyed = action === 'compare_task_intent'
     ? { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, taskIntent }
     : { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision };
@@ -95,11 +136,18 @@ export function lookupReviewAssist(database: WorkbenchDatabase, action: ReviewAs
 
 function buildPrompt(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent): string {
   const hunkText = decision.hunks.map((hunk) => `${hunk.filePath} (${hunk.location}):\n${hunk.lines.join('\n')}`).join('\n\n');
+  const changeType = isReviewChangeType(decision.changeType) ? decision.changeType : 'behavior_edit';
+  const secondary = decision.secondaryChangeTypes.filter(isReviewChangeType);
+  const typeLine = secondary.length > 0
+    ? `Change type: ${changeTypeLabel(changeType)} (also involves: ${secondary.map(changeTypeLabel).join(', ')}).`
+    : `Change type: ${changeTypeLabel(changeType)}.`;
   const parts = [
     ACTION_DIRECTIVES[action],
+    `${typeLine}\n${CHANGE_TYPE_DIRECTIVES[changeType]}`,
     `Decision: ${decision.behavior}`,
     `Diff:\n${hunkText}`,
   ];
+  if (action === 'score_risk') parts.push(`Defensible range for this change type: ${CHANGE_TYPE_RISK_BANDS[changeType]}. Leave it only for a reason you state in the second line.`);
   if (action === 'compare_task_intent') {
     parts.push(taskIntent ? `Task title: ${taskIntent.title}\nTask description: ${taskIntent.description}` : 'No task is linked to this review; say so and note that alignment cannot be judged.');
   }
