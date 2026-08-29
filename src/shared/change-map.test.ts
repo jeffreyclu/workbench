@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildChangeMap, resolveModulePath, type ChangeRelation } from './change-map.js';
+import { buildChangeMap, changeEdgeContinuity, resolveModulePath, type ChangeRelation } from './change-map.js';
 import type { ReviewDecision } from './review-decisions.js';
 
 let sequence = 0;
@@ -332,6 +332,47 @@ describe('module specifier resolution', () => {
       .find((candidate) => candidate.fromId === producer.id && candidate.toId === consumer.id);
     expect(edge?.change).toBe('added');
     expect(edge?.relation).toBe('passes-parameter');
+  });
+
+  it('keeps the deleted relation as `prior`, so a rewired pair is not read as new coupling', () => {
+    const producer = decision('src/shared/loader.ts', [
+      '-export function loadWorkspace(id: string) {',
+      '+export function loadWorkspace(id: string, signal: AbortSignal) {',
+      ' }',
+    ]);
+    const consumer = decision('src/client/panel.ts', [
+      '-  const stale = loadWorkspace(id);',
+      '+  const workspace = loadWorkspace(id, signal);',
+    ]);
+    const edge = buildChangeMap([producer, consumer]).edges
+      .find((candidate) => candidate.fromId === producer.id && candidate.toId === consumer.id);
+    expect(edge?.prior).toBe('calls');
+    expect(edge?.relation).toBe('passes-parameter');
+    expect(changeEdgeContinuity(edge!)).toBe('rewired');
+  });
+
+  it('reads a pair that called before and still calls as kept coupling', () => {
+    const producer = decision('src/shared/loader.ts', [
+      '-export function loadWorkspace(id: string) { return id; }',
+      '+export function loadWorkspace(id: string) { return id.trim(); }',
+    ]);
+    const consumer = decision('src/client/panel.ts', [
+      '-  const stale = loadWorkspace(id);',
+      '+  const workspace = loadWorkspace(id);',
+    ]);
+    const edge = buildChangeMap([producer, consumer]).edges
+      .find((candidate) => candidate.fromId === producer.id && candidate.toId === consumer.id);
+    expect(edge?.prior).toBe('calls');
+    expect(changeEdgeContinuity(edge!)).toBe('kept');
+  });
+
+  it('leaves coupling with nothing behind it reading as new', () => {
+    const producer = decision('src/shared/loader.ts', ['+export function loadWorkspace(id: string) {}']);
+    const consumer = decision('src/client/panel.ts', ['+  const workspace = loadWorkspace(id);']);
+    const edge = buildChangeMap([producer, consumer]).edges
+      .find((candidate) => candidate.fromId === producer.id && candidate.toId === consumer.id);
+    expect(edge?.prior).toBeNull();
+    expect(changeEdgeContinuity(edge!)).toBe('new');
   });
 
   it('links a parameter the patch removes to the call sites that still call it', () => {

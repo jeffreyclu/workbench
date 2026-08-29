@@ -40,12 +40,31 @@ export const CHANGE_RELATION_LABELS: Record<ChangeRelation, string> = {
   'references-type': 'References type', imports: 'Imports', calls: 'Calls', uses: 'Uses',
 };
 
+/** How the pair reads across the patch. `new` is coupling that did not exist,
+ * `kept` is coupling the patch touched but left in place, `rewired` is a pair
+ * that relates in a different way than it used to, and `severed` is coupling
+ * the patch removed outright. This is the only honest complexity signal a diff
+ * can give: it compares the two sides of the lines that actually changed, and
+ * says nothing about relationships the patch never touched. */
+export type ChangeContinuity = 'new' | 'kept' | 'rewired' | 'severed';
+
+export function changeEdgeContinuity(edge: { relation: ChangeRelation; change: ChangeDirection; prior?: ChangeRelation | null }): ChangeContinuity {
+  if (edge.change === 'removed') return 'severed';
+  if (!edge.prior) return 'new';
+  return edge.prior === edge.relation ? 'kept' : 'rewired';
+}
+
+const lowerFirst = (label: string): string => `${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+
 /** The label as drawn on an edge. A relation the patch deletes reads as the
  * past tense of itself, so the diagram never shows a dependency that is gone
- * in the same words as one that is there. */
-export function changeEdgeLabel(edge: { relation: ChangeRelation; change: ChangeDirection }): string {
+ * in the same words as one that is there. A pair the patch rewired carries
+ * both readings at once — the new relation, with the old one behind it. */
+export function changeEdgeLabel(edge: { relation: ChangeRelation; change: ChangeDirection; prior?: ChangeRelation | null }): string {
   const label = CHANGE_RELATION_LABELS[edge.relation];
-  return edge.change === 'removed' ? `No longer ${label.charAt(0).toLowerCase()}${label.slice(1)}` : label;
+  if (edge.change === 'removed') return `No longer ${lowerFirst(label)}`;
+  if (edge.prior && edge.prior !== edge.relation) return `${label} (was ${lowerFirst(CHANGE_RELATION_LABELS[edge.prior])})`;
+  return label;
 }
 
 /** A module-level name the decision owns, and what the patch did to it. */
@@ -98,6 +117,11 @@ export interface ChangeMapEdge {
   relation: ChangeRelation;
   /** Whether this relationship exists after the patch or was deleted by it. */
   change: ChangeDirection;
+  /** The relation this pair had before the patch, when the patch removed one
+   * and added another between the same two decisions. `null` means nothing
+   * was there to begin with, which is what makes the edge new coupling rather
+   * than a rewiring of coupling that already existed. */
+  prior: ChangeRelation | null;
   symbols: string[];
   explanation: string;
 }
@@ -311,24 +335,31 @@ export function buildChangeMap(allDecisions: ReviewDecision[]): ChangeMap {
     }
   }
 
-  const pairs = new Map<string, EdgeCandidate & { from: DecisionFacts; to: DecisionFacts }>();
+  const pairs = new Map<string, EdgeCandidate & { from: DecisionFacts; to: DecisionFacts; prior: ChangeRelation | null }>();
   const record = (from: DecisionFacts, to: DecisionFacts, candidate: EdgeCandidate) => {
     if (from.decision.id === to.decision.id) return;
     const key = `${from.decision.id} ${to.decision.id}`;
     const existing = pairs.get(key);
     if (!existing) {
-      pairs.set(key, { ...candidate, from, to });
+      pairs.set(key, { ...candidate, from, to, prior: null });
       return;
     }
     // A relationship that survives the patch beats one the patch deleted, no
     // matter how strong the deleted one was: the reviewer follows an edge to
     // read the code as it will be, and a pair that is both is a live pair.
+    // The deleted relation is not discarded though — it is kept as `prior`, so
+    // the live edge carries the shape the pair used to have underneath the one
+    // it has now. Without it, a pair the patch rewired was indistinguishable
+    // from coupling the patch invented.
     if (existing.change !== candidate.change) {
-      if (candidate.change === 'added') pairs.set(key, { ...candidate, from, to });
+      const gone = candidate.change === 'removed' ? candidate.relation : existing.relation;
+      const live = candidate.change === 'added' ? { ...candidate, from, to } : existing;
+      const prior = existing.prior && RELATION_STRENGTH[existing.prior] >= RELATION_STRENGTH[gone] ? existing.prior : gone;
+      pairs.set(key, { ...live, prior });
       return;
     }
     if (RELATION_STRENGTH[candidate.relation] > RELATION_STRENGTH[existing.relation]) {
-      pairs.set(key, { ...candidate, from, to });
+      pairs.set(key, { ...candidate, from, to, prior: existing.prior });
     } else if (candidate.relation === existing.relation) {
       existing.symbols = [...new Set([...existing.symbols, ...candidate.symbols])].slice(0, 3);
     }
@@ -372,12 +403,18 @@ export function buildChangeMap(allDecisions: ReviewDecision[]): ChangeMap {
       for (const symbol of references.inheritance) {
         for (const producer of producersOf(symbol)) record(producer, consumer, { relation: 'implements', change, symbols: [symbol], parameters: [] });
       }
-      for (const symbol of references.calls) {
-        for (const producer of producersOf(symbol)) {
-          const widened = producer.widenedSignatures.get(symbol);
-          if (widened) record(producer, consumer, { relation: 'passes-parameter', change, symbols: [symbol], parameters: widened });
-          const narrowed = producer.narrowedSignatures.get(symbol);
-          if (narrowed) record(producer, consumer, { relation: 'drops-parameter', change, symbols: [symbol], parameters: narrowed });
+      // Only on the added side. These two relations describe what the patch did
+      // to a call site, so claiming a deleted line "passes the new parameter"
+      // states the opposite of the truth — and `prior` now prints that claim.
+      // The deleted line still records the plain `calls` it really was.
+      if (change === 'added') {
+        for (const symbol of references.calls) {
+          for (const producer of producersOf(symbol)) {
+            const widened = producer.widenedSignatures.get(symbol);
+            if (widened) record(producer, consumer, { relation: 'passes-parameter', change, symbols: [symbol], parameters: widened });
+            const narrowed = producer.narrowedSignatures.get(symbol);
+            if (narrowed) record(producer, consumer, { relation: 'drops-parameter', change, symbols: [symbol], parameters: narrowed });
+          }
         }
       }
     }
@@ -397,6 +434,7 @@ export function buildChangeMap(allDecisions: ReviewDecision[]): ChangeMap {
     toId: pair.to.decision.id,
     relation: pair.relation,
     change: pair.change,
+    prior: pair.prior,
     symbols: pair.symbols,
     explanation: explain(pair.relation, pair.change, pair.from.decision, pair.to.decision, pair.from.sourceFiles[0] ?? pair.from.decision.filePaths[0] ?? '', pair.symbols, pair.parameters),
   }));

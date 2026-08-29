@@ -1,5 +1,5 @@
 import { memo, type KeyboardEvent } from 'react';
-import { CHANGE_RELATIONS, changeEdgeLabel, type ChangeMapNode } from '../../../shared/change-map.js';
+import { CHANGE_RELATIONS, changeEdgeLabel, type ChangeMapNode, changeEdgeContinuity } from '../../../shared/change-map.js';
 import { CHANGE_MAP_NODE_HEIGHT, CHANGE_MAP_NODE_WIDTH, type ChangeMapLayout } from './change-map-layout.js';
 import { plainRelationText } from './change-map-logic.js';
 import type { DecisionPopoverAnchor } from './decision-popover.js';
@@ -101,7 +101,7 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
         const active = edge.id === selectedEdgeId;
         const touchesSelection = edge.fromId === selectedId || edge.toId === selectedId;
         const dimmed = Boolean(selectedId) && !touchesSelection && !active;
-        return <g key={edge.id} className={`change-map-edge relation-${edge.relation}${edge.change === 'removed' ? ' removed' : ''}${active ? ' active' : ''}${touchesSelection ? ' touches-selection' : ''}${dimmed ? ' dimmed' : ''}${edge.backward ? ' backward' : ''}`}>
+        return <g key={edge.id} className={`change-map-edge relation-${edge.relation} ${changeEdgeContinuity(edge)}${active ? ' active' : ''}${touchesSelection ? ' touches-selection' : ''}${dimmed ? ' dimmed' : ''}${edge.backward ? ' backward' : ''}`}>
           <path className="change-map-edge-line" d={edge.path} markerEnd={`url(#change-map-arrow-${edge.relation})`} />
           <path
             className="change-map-edge-target"

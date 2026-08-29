@@ -479,6 +479,13 @@ nav { display: grid; gap: 3px; }
 .change-map-arrow path { fill: var(--relation-tone); }
 .change-map-edge-line { fill: none; stroke: var(--relation-tone); stroke-width: 1.4; opacity: 0.7; }
 .change-map-edge.backward .change-map-edge-line { stroke-dasharray: 4 3; }
+/* How the pair reads across the patch, drawn so the four cases are not one
+   line. Severed coupling fades and breaks up, rewired coupling keeps full
+   weight with a long dash because it is a live edge that changed shape, and
+   coupling the patch merely touched sits back so new coupling reads first. */
+.change-map-edge.severed .change-map-edge-line { stroke-dasharray: 2 4; opacity: 0.4; }
+.change-map-edge.rewired .change-map-edge-line { stroke-dasharray: 8 3; }
+.change-map-edge.kept .change-map-edge-line { opacity: 0.42; }
 .change-map-edge.active .change-map-edge-line, .change-map-edge.touches-selection .change-map-edge-line { opacity: 1; stroke-width: 2.2; }
 .change-map-edge-target { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
 .change-map-edge-target:focus-visible { outline: none; stroke: var(--acid); stroke-opacity: 0.3; }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ChangeMap, ChangeMapEdge, ChangeMapNode } from '../../../shared/change-map.js';
+import { changeEdgeContinuity, changeEdgeLabel, type ChangeMap, type ChangeMapEdge, type ChangeMapNode } from '../../../shared/change-map.js';
 import { selectChangeConnections, selectFocusedChangeMap } from './change-map-logic.js';
 
 function node(id: string, ordinal: number): ChangeMapNode {
@@ -11,8 +11,34 @@ function node(id: string, ordinal: number): ChangeMapNode {
 }
 
 function edge(fromId: string, toId: string, relation: ChangeMapEdge['relation'] = 'calls'): ChangeMapEdge {
-  return { id: `${fromId}->${toId}`, fromId, toId, relation, change: 'added', symbols: [], explanation: `${fromId} to ${toId}` };
+  return { id: `${fromId}->${toId}`, fromId, toId, relation, change: 'added', prior: null, symbols: [], explanation: `${fromId} to ${toId}` };
 }
+
+describe('changeEdgeContinuity', () => {
+  it('separates coupling the patch invented from coupling it only touched', () => {
+    expect(changeEdgeContinuity({ relation: 'calls', change: 'added', prior: null })).toBe('new');
+    expect(changeEdgeContinuity({ relation: 'calls', change: 'added', prior: 'calls' })).toBe('kept');
+  });
+
+  it('reads a pair that relates differently than it used to as rewired', () => {
+    expect(changeEdgeContinuity({ relation: 'imports', change: 'added', prior: 'calls' })).toBe('rewired');
+  });
+
+  it('reads a relationship the patch deleted as severed', () => {
+    expect(changeEdgeContinuity({ relation: 'calls', change: 'removed', prior: null })).toBe('severed');
+  });
+});
+
+describe('changeEdgeLabel', () => {
+  it('carries the old relation behind the new one on a rewired pair', () => {
+    expect(changeEdgeLabel({ relation: 'imports', change: 'added', prior: 'calls' })).toBe('Imports (was calls)');
+  });
+
+  it('leaves an unchanged relation and new coupling reading the same', () => {
+    expect(changeEdgeLabel({ relation: 'calls', change: 'added', prior: 'calls' })).toBe('Calls');
+    expect(changeEdgeLabel({ relation: 'calls', change: 'added', prior: null })).toBe('Calls');
+  });
+});
 
 const nodes = [node('root', 1), ...Array.from({ length: 6 }, (_, index) => node(`up-${index + 1}`, index + 2)), ...Array.from({ length: 6 }, (_, index) => node(`down-${index + 1}`, index + 8))];
 const map: ChangeMap = {
