@@ -253,6 +253,12 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
             <button
               type="button"
               className={`diff-review-block-marker state-${state ?? 'pending'}`}
+              // A stable handle on the marker, so the open popover can re-find
+              // it after a re-render. Selecting a multi-file decision switches
+              // the pane to its first file, which unmounts the very button that
+              // was clicked; without this the panel would be left anchored to a
+              // detached node and land in the viewport corner.
+              data-decision-marker={decisionId}
               // Only advertise a popover when one is actually wired: a marker
               // that announces a dialog and opens nothing is a dead click.
               aria-haspopup={onOpenDetail ? 'dialog' : undefined}

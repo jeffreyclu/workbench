@@ -14,7 +14,7 @@ import { DecisionPopover } from '../diff-review/decision-popover.js';
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import type { ReviewDecision } from '../diff-review/logic.js';
-import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, reviewStateShortLabel } from '../diff-review/logic.js';
+import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, parseAiRiskScore, reviewStateShortLabel } from '../diff-review/logic.js';
 import { useAutoReviewScores } from '../diff-review/auto-score.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
@@ -218,6 +218,25 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const selectedDecision = orderedDecisions.find((decision) => decision.id === selectedDecisionId) ?? orderedDecisions[0] ?? null;
   const selectedDecisionIndex = selectedDecision ? orderedDecisions.findIndex((decision) => decision.id === selectedDecision.id) : -1;
   const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
+  // The same AI score the detail panel shows, reduced to a band for the gutter
+  // dot, so severity is readable straight off the diff instead of only after
+  // opening each decision.
+  const riskBands = useMemo(() => {
+    const bands = new Map<string, string>();
+    for (const [decisionId, result] of autoScores.results) {
+      const parsed = parseAiRiskScore(result.answer);
+      if (parsed) bands.set(decisionId, aiRiskBand(parsed.score));
+    }
+    return bands;
+  }, [autoScores.results]);
+  // The popover follows the marker that opened it rather than the selection.
+  // They are normally the same decision, but a refetch can reconcile the
+  // selection onto a different one — and gating the panel on that equality
+  // turned the marker into a dead click. Resolving by the anchored id keeps it
+  // open, falling back to the selected decision so it always has content.
+  const popoverDecision = detailAnchor
+    ? orderedDecisions.find((decision) => decision.id === detailAnchor.decisionId) ?? selectedDecision
+    : null;
   const fileHunks = useMemo(() => (selectedFile ? buildFileDiffHunks(selectedFile) : []), [selectedFile]);
   useEffect(() => {
     if (!displayedDiff?.revision || selectedDecisionId || !rememberedSelection) return;
@@ -234,11 +253,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
       state,
     });
 
-  const saveDecision = async (state: DiffHunkReviewState) => {
-    if (!selectedDecision) return;
-    const nextId = nextPendingDecisionId(orderedDecisions, selectedDecision.id);
+  const saveDecision = async (decision: ReviewDecision, state: DiffHunkReviewState) => {
+    const nextId = nextPendingDecisionId(orderedDecisions, decision.id);
     try {
-      await recordDecisionState(selectedDecision, state);
+      await recordDecisionState(decision, state);
       setSelectedDecisionId(nextId);
       setDetailAnchor(null);
       if (isPhoneReview) setMobileDecisionDetailOpen(false);
@@ -370,10 +388,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                   <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">
-                    {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} />}
-                    {!isPhoneReview && detailAnchor && detailAnchor.decisionId === selectedDecision.id && <DecisionPopover anchor={detailAnchor.anchor} labelledBy="diff-review-decision-title" onClose={() => setDetailAnchor(null)}>
-                      <DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
-                        <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} />
+                    {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} />}
+                    {!isPhoneReview && detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} labelledBy="diff-review-decision-title" onClose={() => setDetailAnchor(null)}>
+                      <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)}>
+                        <DiffReviewActions key={popoverDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(popoverDecision, state)} />
                       </DiffReviewDecisionDetailCard>
                     </DecisionPopover>}
                   </div>
@@ -383,7 +401,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                       <button type="button" onClick={() => setMobileDecisionDetailOpen(false)} aria-label="Close decision details"><X size={18} /></button>
                     </div>
                     <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
-                      <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} />
+                      <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(selectedDecision, state)} />
                     </DiffReviewDecisionDetailCard></div>
                   </ModalDialog>}
                 </>}

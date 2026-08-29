@@ -55,7 +55,10 @@ function Harness() {
       onSelect={selectDecision}
       onOpenDetail={(decisionId, anchor) => setDetailAnchor((current) => (current?.decisionId === decisionId ? null : { decisionId, anchor }))}
     />
-    {detailAnchor && detailAnchor.decisionId === selectedId && <DecisionPopover anchor={detailAnchor.anchor} labelledBy="popover-title" onClose={() => setDetailAnchor(null)}>
+    {/* Mirrors the view: the panel follows the marker that opened it, not the
+      * selection. Gating on the two being equal is what turned the marker into
+      * a dead click when a refetch reconciled the selection elsewhere. */}
+    {detailAnchor && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} labelledBy="popover-title" onClose={() => setDetailAnchor(null)}>
       <p id="popover-title">Decision detail</p>
     </DecisionPopover>}
   </>;
@@ -84,5 +87,36 @@ describe('decision popover', () => {
     press(marker());
     press(marker());
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('gives the marker a stable handle so an open panel can re-find it', () => {
+    render(<Harness />);
+    expect(marker()).toHaveAttribute('data-decision-marker', decision.id);
+  });
+
+  /** The panel is a first-class surface: it carries the AI risk score and the
+   * assist actions, so failing to open is never an acceptable outcome. These
+   * two cover the ways the anchor can go bad underneath it. */
+  it('re-anchors to the live marker when the clicked button was replaced by a re-render', () => {
+    render(<Harness />);
+    const detached = document.createElement('button');
+    render(<DecisionPopover anchor={detached} anchorId={decision.id} labelledBy="popover-title" onClose={() => {}}>
+      <p id="popover-title">Decision detail</p>
+    </DecisionPopover>);
+    const panel = screen.getByRole('dialog');
+    expect(panel).toBeVisible();
+    // Placed off the re-found marker's right edge, not dropped into the
+    // centred last-resort position a missing anchor would produce.
+    expect(panel).toHaveStyle({ left: '10px' });
+  });
+
+  it('still opens, centred, when no marker for the decision is on screen', () => {
+    const detached = document.createElement('button');
+    render(<DecisionPopover anchor={detached} anchorId="absent-decision" labelledBy="popover-title" onClose={() => {}}>
+      <p id="popover-title">Decision detail</p>
+    </DecisionPopover>);
+    const panel = screen.getByRole('dialog');
+    expect(panel).toBeVisible();
+    expect(panel).toHaveStyle({ visibility: 'visible', left: `${(window.innerWidth - 336) / 2}px` });
   });
 });
