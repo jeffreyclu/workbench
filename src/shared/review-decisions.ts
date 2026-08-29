@@ -13,6 +13,11 @@ export type ReviewRiskSignal = typeof REVIEW_RISK_SIGNALS[number];
 export interface ReviewDecisionHunk {
   id: string;
   filePath: string;
+  /** Carried through so the reviewer-facing panel can rerun the change-type
+   * classifier on exactly the input the decision was built from. Without it the
+   * client can only approximate the trace, and an approximate trace is worse
+   * than none — it would explain a verdict the pipeline never reached. */
+  fileStatus: WorkspaceDiffFile['status'];
   editorUrl: string | null;
   hunkRange: string;
   location: string;
@@ -225,7 +230,7 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
       candidates.push({
         subject: hunkSubject(patchHunk), fileStatus: file.status,
         hunk: {
-          id: `${file.path}::${patchHunk.range}`, filePath: file.path, editorUrl: file.editorUrl ?? null,
+          id: `${file.path}::${patchHunk.range}`, filePath: file.path, fileStatus: file.status, editorUrl: file.editorUrl ?? null,
           hunkRange: patchHunk.range, location: hunkLocation(patchHunk.range), lines: patchHunk.lines,
           additions: counts.additions, deletions: counts.deletions, state: review?.state ?? null, note: review?.note ?? null,
         },

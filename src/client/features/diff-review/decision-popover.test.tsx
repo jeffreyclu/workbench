@@ -25,7 +25,7 @@ const decision: ReviewDecision = {
   ordinal: 1,
   subject: 'example',
   behavior: 'Changes example in src/example.ts.',
-  hunks: [{ id: hunks[0].decisionId, filePath: 'src/example.ts', editorUrl: null, hunkRange: hunks[0].range, location: hunks[0].location, lines: [], additions: 1, deletions: 1, state: null, note: null }],
+  hunks: [{ id: hunks[0].decisionId, filePath: 'src/example.ts', fileStatus: 'modified', editorUrl: null, hunkRange: hunks[0].range, location: hunks[0].location, lines: [], additions: 1, deletions: 1, state: null, note: null }],
   filePaths: ['src/example.ts'],
   additions: 1,
   deletions: 1,

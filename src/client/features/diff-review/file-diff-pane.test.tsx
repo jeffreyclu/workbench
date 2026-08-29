@@ -23,7 +23,7 @@ const decision = (state: ReviewDecision['state']): ReviewDecision => ({
   ordinal: 1,
   subject: 'example',
   behavior: 'Changes example in src/example.ts.',
-  hunks: [{ id: hunks[0].decisionId, filePath: 'src/example.ts', editorUrl: null, hunkRange: hunks[0].range, location: hunks[0].location, lines: [], additions: 1, deletions: 1, state, note: null }],
+  hunks: [{ id: hunks[0].decisionId, filePath: 'src/example.ts', fileStatus: 'modified', editorUrl: null, hunkRange: hunks[0].range, location: hunks[0].location, lines: [], additions: 1, deletions: 1, state, note: null }],
   filePaths: ['src/example.ts'],
   additions: 1,
   deletions: 1,
@@ -98,7 +98,7 @@ describe('review file diff pane', () => {
     const spanning: ReviewDecision = {
       ...decision(null),
       id: fileHunks[0].decisionId,
-      hunks: fileHunks.map((hunk) => ({ id: hunk.decisionId, filePath: 'src/example.ts', editorUrl: null, hunkRange: hunk.range, location: hunk.location, lines: [], additions: 1, deletions: 1, state: null, note: null })),
+      hunks: fileHunks.map((hunk) => ({ id: hunk.decisionId, filePath: 'src/example.ts', fileStatus: 'modified', editorUrl: null, hunkRange: hunk.range, location: hunk.location, lines: [], additions: 1, deletions: 1, state: null, note: null })),
     };
 
     // jsdom reports no geometry, so the pane and its two blocks are given the

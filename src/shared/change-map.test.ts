@@ -18,6 +18,7 @@ function decision(filePath: string, lines: string[], subject: string | null = nu
     hunks: [{
       id: `${id}-hunk`,
       filePath,
+      fileStatus: 'modified' as const,
       editorUrl: null,
       hunkRange: '@@ -1,1 +1,1 @@',
       location: filePath,

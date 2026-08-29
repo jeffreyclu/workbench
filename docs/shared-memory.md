@@ -176,3 +176,21 @@ Prompt-construction and validation layers are the usual offenders: they are subs
 renders nothing. Say so up front rather than letting an unqualified "done and wired" imply pixels.
 When the surface is gated (needs a linked work item, a specific pane, a non-PR source), the gate is
 part of the report, not a detail to discover later.
+
+## A heuristic Jeffrey cannot read on screen has not been delivered (2026-08-29)
+
+The prior entry told me to *say* when a layer has no UI. Jeffrey's next reply made clear that saying
+so is not the fix he wants: "the whole point is for me to SEE THE FUCKING HEURISTIC, SO I CAN
+UNDERSTAND THE CODE." Honest reporting about an invisible layer is still an invisible layer.
+
+The standing rule: when I build a heuristic, classifier, scorer, audit, or any deterministic rule
+set, the default deliverable includes a surface that shows its actual reasoning to a reader — the
+measurements it took, the rules it evaluated in order, which rule fired, and which were never
+reached. Shipping it only as prompt text, a validation gate, or a one-word label is incomplete work,
+not a design choice to defend. Jeffrey reads these surfaces to understand the codebase, so their
+audience is him, not the model.
+
+Build the visible trace out of the same code path that produces the verdict — make the classifier a
+projection of its own explainer — so the explanation cannot drift from the behaviour. A trace
+reconstructed alongside the real logic is worse than none, because it explains a verdict the
+pipeline never reached.

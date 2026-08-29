@@ -4,8 +4,12 @@ import type { ChangeMap } from '../../../shared/change-map.js';
 // same decisions, with the same ids, as the queue the reviewer is reading.
 export { REVIEW_RISK_SIGNALS, buildReviewDecisions, reviewAssistDecisionPayload, reviewStateLabel, reviewStateShortLabel } from '../../../shared/review-decisions.js';
 export type { ReviewDecision, ReviewDecisionHunk, ReviewRiskSignal } from '../../../shared/review-decisions.js';
-export { REVIEW_CHANGE_TYPES, changeTypeLabel } from '../../../shared/change-type.js';
-export type { ReviewChangeType } from '../../../shared/change-type.js';
+export { REVIEW_CHANGE_TYPES, changeTypeLabel, explainChangeType } from '../../../shared/change-type.js';
+export type { ChangeTypeExplanation, ChangeTypeFacts, ChangeTypeRule, ChangeTypeRuleOutcome, ReviewChangeType } from '../../../shared/change-type.js';
+export { PARITY_AXES, PARITY_DIRECTIVE, parityTableApplies } from '../../../shared/parity-table.js';
+export type { ParityAxis } from '../../../shared/parity-table.js';
+export { buildCoverageEvidence, buildReferenceEvidence } from '../../../shared/coverage-evidence.js';
+export type { CoverageEvidence, ReferenceEvidence } from '../../../shared/coverage-evidence.js';
 import { countChangedLines, hunkLocation, splitPatchHunks } from '../../../shared/review-decisions.js';
 import type { ReviewDecision, ReviewRiskSignal } from '../../../shared/review-decisions.js';
 

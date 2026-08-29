@@ -2,6 +2,7 @@ import { memo, useState, type ReactNode } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { sourceClient } from '../../data/source-client.js';
 import { changeTypeLabel } from './logic.js';
+import { DiffReviewHeuristicPanel } from './heuristic-panel.js';
 import type { ReviewDecision } from './logic.js';
 import { aiRiskBand, parseAiRiskScore, reviewAssistDecisionPayload } from './logic.js';
 import type { AutoScoreResult } from './auto-score.js';
@@ -77,6 +78,13 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
         <h3 id={titleId}>{decision.behavior}</h3>
       </div>
     </header>
+    {/* The deterministic layer sits above the AI panel because it constrains
+      * it: the change type selects the obligations the assist prompt carries,
+      * and the evidence packs are what any coverage or call-site claim is
+      * allowed to rest on. Collapsed by default, because a reviewer only opens
+      * it when the verdict looks wrong — which is exactly when a description
+      * of the heuristic would be useless and the trace is not. */}
+    <DiffReviewHeuristicPanel decision={decision} decisions={decisions} />
     <section className="diff-review-ai-risk" aria-labelledby="diff-review-risk-title">
       {/* The score action lives beside the number it produces, not in the assist
         * row: it answers a different question, and its label swaps width once a

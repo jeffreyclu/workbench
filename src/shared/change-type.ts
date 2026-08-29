@@ -115,63 +115,206 @@ const REFACTOR_SIMILARITY = 0.8;
  * insertion, so an exact zero-deletion test would almost never fire. */
 const EXTENSION_ADDITION_RATIO = 4;
 
-function classifyProduction(hunks: ChangeTypeHunk[]): ReviewChangeType {
+/** How one rule in the classifier turned out.
+ *
+ * `fired` is the rule that decided the type; `passed` was evaluated and did not
+ * hold; `not_reached` was never asked, because an earlier rule already decided.
+ * Keeping all three distinct is the whole point — a reviewer who cannot tell
+ * "we checked and it wasn't a move" from "we never checked" cannot audit the
+ * verdict. */
+export type ChangeTypeRuleOutcome = 'fired' | 'passed' | 'not_reached';
+
+export interface ChangeTypeRule {
+  /** Stable id, matching the order the classifier evaluates rules in. */
+  id: string;
+  /** The question the rule asks, in the reviewer's language. */
+  question: string;
+  /** What this diff actually measured against that question. */
+  observed: string;
+  /** The type this rule assigns when it holds. */
+  verdict: ReviewChangeType;
+  outcome: ChangeTypeRuleOutcome;
+}
+
+/** Every measurement the rules read from, computed once so the trace and the
+ * verdict can never disagree about what the diff contained. */
+export interface ChangeTypeFacts {
+  files: Array<{ path: string; status: WorkspaceDiffFile['status']; bucket: 'generated' | 'test' | 'docs' | 'config' | 'production' }>;
+  addedLines: number;
+  removedLines: number;
+  /** Counted over production files only, which is what the second pass sees. */
+  productionAddedLines: number;
+  productionRemovedLines: number;
+  declarationsAdded: string[];
+  declarationsRemoved: string[];
+  /** Removed and never re-added: the quietly-dropped function. */
+  droppedDeclarations: string[];
+  /** Added and not previously present. */
+  introducedDeclarations: string[];
+  /** Removed and added back under the same name: a rewrite in place. */
+  reintroducedDeclarations: string[];
+  /** Sørensen–Dice over removed vs added production tokens; null when nothing
+   * was removed, so there is no rewrite to measure. */
+  rewriteSimilarity: number | null;
+  commentOnly: boolean;
+}
+
+export interface ChangeTypeExplanation extends ChangeTypeClassification {
+  facts: ChangeTypeFacts;
+  /** The path-bucket pass, in evaluation order. */
+  fileRules: ChangeTypeRule[];
+  /** The production-code pass. Empty when the file pass already decided. */
+  productionRules: ChangeTypeRule[];
+  /** Why each secondary type is attached. Secondaries are additive, not
+   * short-circuiting, so they carry a reason instead of an outcome. */
+  secondaryReasons: Array<{ type: ReviewChangeType; reason: string }>;
+}
+
+/** Accumulates rules in evaluation order and short-circuits like the original
+ * `if` chain did, so the trace is the control flow rather than a description
+ * of it. */
+class RuleTrace {
+  readonly rules: ChangeTypeRule[] = [];
+  verdict: ReviewChangeType | null = null;
+  check(id: string, question: string, observed: string, verdict: ReviewChangeType, holds: boolean): void {
+    if (this.verdict !== null) { this.rules.push({ id, question, observed, verdict, outcome: 'not_reached' }); return; }
+    if (holds) this.verdict = verdict;
+    this.rules.push({ id, question, observed, verdict, outcome: holds ? 'fired' : 'passed' });
+  }
+}
+
+const list = (names: string[]) => (names.length === 0 ? 'none' : names.join(', '));
+const pct = (value: number) => `${Math.round(value * 100)}%`;
+
+function explainProduction(hunks: ChangeTypeHunk[]): { rules: ChangeTypeRule[]; type: ReviewChangeType } {
   const all = hunks.flatMap((hunk) => hunk.lines);
   const { added, removed } = splitChangedLines(all);
   const addedNames = declaredNames(added);
   const removedNames = declaredNames(removed);
   const readdedNames = [...removedNames].filter((name) => addedNames.has(name));
+  const rewriteSimilarity = removed.length > 0 ? similarity(tokens(removed), tokens(added)) : 0;
+  const ratio = `${added.length} added vs ${removed.length} removed`;
 
-  if (isMoveAcrossFiles(hunks)) return 'move_rename';
-  if (hunks.every((hunk) => hunk.fileStatus === 'removed')) return 'deletion';
-  if (added.length === 0 && removed.length > 0) return 'deletion';
-  if (readdedNames.length > 0) return 'replacement';
-  if (removed.length > 0 && similarity(tokens(removed), tokens(added)) >= REFACTOR_SIMILARITY) return 'refactor_pure';
-  if (hunks.some((hunk) => hunk.fileStatus === 'added')) return 'new_code';
-  if (addedNames.size > 0 && removedNames.size === 0 && added.length > removed.length * EXTENSION_ADDITION_RATIO) return 'new_code';
-  if (removedNames.size === 0 && added.length > removed.length * EXTENSION_ADDITION_RATIO) return 'extension';
-  return 'behavior_edit';
+  const trace = new RuleTrace();
+  trace.check('move_rename', 'Did this code move between files, or is a file renamed?',
+    hunks.some((hunk) => hunk.fileStatus === 'renamed')
+      ? 'a file in this decision is marked renamed'
+      : `no rename; no removed block matches an added block in another file at ≥90% token similarity`,
+    'move_rename', isMoveAcrossFiles(hunks));
+  trace.check('deleted_files', 'Were every one of these files deleted outright?',
+    `${hunks.filter((hunk) => hunk.fileStatus === 'removed').length} of ${hunks.length} hunks are in deleted files`,
+    'deletion', hunks.every((hunk) => hunk.fileStatus === 'removed'));
+  trace.check('removal_only', 'Does this only remove lines?', ratio,
+    'deletion', added.length === 0 && removed.length > 0);
+  trace.check('readded_names', 'Is a declaration removed and added back under the same name?',
+    `re-added: ${list(readdedNames)}`, 'replacement', readdedNames.length > 0);
+  trace.check('rewrite_similarity', `Do the removed and added lines share ≥${pct(REFACTOR_SIMILARITY)} of their tokens?`,
+    removed.length === 0 ? 'nothing removed, so there is no rewrite to measure' : `Sørensen–Dice similarity ${pct(rewriteSimilarity)}`,
+    'refactor_pure', removed.length > 0 && rewriteSimilarity >= REFACTOR_SIMILARITY);
+  trace.check('added_files', 'Is any of this in a newly added file?',
+    `${hunks.filter((hunk) => hunk.fileStatus === 'added').length} of ${hunks.length} hunks are in added files`,
+    'new_code', hunks.some((hunk) => hunk.fileStatus === 'added'));
+  trace.check('new_declarations', `Does it declare something new, remove no declarations, and add >${EXTENSION_ADDITION_RATIO}× what it removes?`,
+    `declares ${list([...addedNames])}; removes ${list([...removedNames])}; ${ratio}`,
+    'new_code', addedNames.size > 0 && removedNames.size === 0 && added.length > removed.length * EXTENSION_ADDITION_RATIO);
+  trace.check('mostly_additive', `Does it remove no declarations and add >${EXTENSION_ADDITION_RATIO}× what it removes?`,
+    `removes ${list([...removedNames])}; ${ratio}`,
+    'extension', removedNames.size === 0 && added.length > removed.length * EXTENSION_ADDITION_RATIO);
+  trace.check('residual', 'Nothing above held, so this edits existing behaviour.', ratio,
+    'behavior_edit', true);
+  return { rules: trace.rules, type: trace.verdict ?? 'behavior_edit' };
 }
 
-export function classifyChangeType(hunks: ChangeTypeHunk[]): ChangeTypeClassification {
-  if (hunks.length === 0) return { primary: 'behavior_edit', secondary: [] };
+function classifyProduction(hunks: ChangeTypeHunk[]): ReviewChangeType {
+  return explainProduction(hunks).type;
+}
 
+/** The classifier and its own explanation, from one pass. `classifyChangeType`
+ * is a projection of this, so the trace a reviewer reads is by construction the
+ * trace that produced the verdict. */
+export function explainChangeType(hunks: ChangeTypeHunk[]): ChangeTypeExplanation {
   const isGenerated = (hunk: ChangeTypeHunk) => GENERATED_PATH.test(hunk.filePath);
   const isTest = (hunk: ChangeTypeHunk) => TEST_PATH.test(hunk.filePath);
   const isDocs = (hunk: ChangeTypeHunk) => DOCS_PATH.test(hunk.filePath);
   const isConfig = (hunk: ChangeTypeHunk) => CONFIG_PATH.test(hunk.filePath);
+  const bucket = (hunk: ChangeTypeHunk): ChangeTypeFacts['files'][number]['bucket'] =>
+    isGenerated(hunk) ? 'generated' : isTest(hunk) ? 'test' : isDocs(hunk) ? 'docs' : isConfig(hunk) ? 'config' : 'production';
 
   const changed = splitChangedLines(hunks.flatMap((hunk) => hunk.lines));
+  const production = hunks.filter((hunk) => bucket(hunk) === 'production');
+  const productionChanged = splitChangedLines(production.flatMap((hunk) => hunk.lines));
+  const addedNames = declaredNames(productionChanged.added);
+  const removedNames = declaredNames(productionChanged.removed);
+
+  const seen = new Map<string, ChangeTypeFacts['files'][number]>();
+  for (const hunk of hunks) if (!seen.has(hunk.filePath)) seen.set(hunk.filePath, { path: hunk.filePath, status: hunk.fileStatus, bucket: bucket(hunk) });
+
   const changedCode = [...changed.added, ...changed.removed].filter((line) => line.length > 0);
   const commentOnly = changedCode.length > 0 && changedCode.every((line) => COMMENT_LINE.test(line));
 
-  const production = hunks.filter((hunk) => !isGenerated(hunk) && !isTest(hunk) && !isDocs(hunk) && !isConfig(hunk));
+  const facts: ChangeTypeFacts = {
+    files: [...seen.values()],
+    addedLines: changed.added.length,
+    removedLines: changed.removed.length,
+    productionAddedLines: productionChanged.added.length,
+    productionRemovedLines: productionChanged.removed.length,
+    declarationsAdded: [...addedNames],
+    declarationsRemoved: [...removedNames],
+    droppedDeclarations: [...removedNames].filter((name) => !addedNames.has(name)),
+    introducedDeclarations: [...addedNames].filter((name) => !removedNames.has(name)),
+    reintroducedDeclarations: [...removedNames].filter((name) => addedNames.has(name)),
+    rewriteSimilarity: productionChanged.removed.length > 0
+      ? similarity(tokens(productionChanged.removed), tokens(productionChanged.added))
+      : null,
+    commentOnly,
+  };
 
-  const primary: ReviewChangeType = hunks.every(isGenerated) ? 'generated'
-    : hunks.every(isDocs) || commentOnly ? 'docs_comment'
-      : hunks.every(isConfig) ? 'config_dep'
-        : hunks.every(isTest) ? 'test_only'
-          : production.length === 0
-            ? (hunks.some(isTest) ? 'test_only' : hunks.some(isConfig) ? 'config_dep' : hunks.some(isDocs) ? 'docs_comment' : 'generated')
-            : classifyProduction(production);
-
-  const secondary: ReviewChangeType[] = [];
-  if (primary !== 'test_only' && hunks.some(isTest)) secondary.push('test_only');
-  if (primary !== 'config_dep' && hunks.some(isConfig)) secondary.push('config_dep');
-  if (primary !== 'docs_comment' && !commentOnly && hunks.some(isDocs)) secondary.push('docs_comment');
-
-  if (production.length > 0) {
-    const { added, removed } = splitChangedLines(production.flatMap((hunk) => hunk.lines));
-    const addedNames = declaredNames(added);
-    const removedNames = declaredNames(removed);
-    // A declaration that is removed and never re-added is a deletion no matter
-    // what the decision is called overall. This is the "refactor that quietly
-    // drops a function" case, and it is exactly the one worth surfacing.
-    const dropped = [...removedNames].filter((name) => !addedNames.has(name));
-    const introduced = [...addedNames].filter((name) => !removedNames.has(name));
-    if (primary !== 'deletion' && primary !== 'move_rename' && dropped.length > 0) secondary.push('deletion');
-    if (primary !== 'new_code' && primary !== 'move_rename' && introduced.length > 0) secondary.push('new_code');
+  if (hunks.length === 0) {
+    return { primary: 'behavior_edit', secondary: [], facts, fileRules: [], productionRules: [], secondaryReasons: [] };
   }
+
+  const count = (predicate: (hunk: ChangeTypeHunk) => boolean) => `${hunks.filter(predicate).length} of ${hunks.length} hunks`;
+  const trace = new RuleTrace();
+  trace.check('all_generated', 'Is every hunk in generated or vendored output?', count(isGenerated), 'generated', hunks.every(isGenerated));
+  trace.check('all_docs', 'Is every hunk in documentation?', count(isDocs), 'docs_comment', hunks.every(isDocs));
+  trace.check('comment_only', 'Is every changed line a comment?',
+    changedCode.length === 0 ? 'no non-blank changed lines' : `${changedCode.filter((line) => COMMENT_LINE.test(line)).length} of ${changedCode.length} changed lines are comments`,
+    'docs_comment', commentOnly);
+  trace.check('all_config', 'Is every hunk in config or dependency manifests?', count(isConfig), 'config_dep', hunks.every(isConfig));
+  trace.check('all_tests', 'Is every hunk in test code?', count(isTest), 'test_only', hunks.every(isTest));
+  trace.check('no_production', 'Is there no production code left at all, so the largest non-production bucket wins?',
+    `${production.length} of ${hunks.length} hunks are production code`,
+    production.length === 0 ? (hunks.some(isTest) ? 'test_only' : hunks.some(isConfig) ? 'config_dep' : hunks.some(isDocs) ? 'docs_comment' : 'generated') : 'test_only',
+    production.length === 0);
+
+  const productionRules = trace.verdict === null ? explainProduction(production) : null;
+  const primary = trace.verdict ?? productionRules?.type ?? 'behavior_edit';
+
+  const secondaryReasons: Array<{ type: ReviewChangeType; reason: string }> = [];
+  if (primary !== 'test_only' && hunks.some(isTest)) secondaryReasons.push({ type: 'test_only', reason: `${count(isTest)} are test code, so this change ships with its own tests.` });
+  if (primary !== 'config_dep' && hunks.some(isConfig)) secondaryReasons.push({ type: 'config_dep', reason: `${count(isConfig)} touch config or dependency manifests.` });
+  if (primary !== 'docs_comment' && !commentOnly && hunks.some(isDocs)) secondaryReasons.push({ type: 'docs_comment', reason: `${count(isDocs)} touch documentation.` });
+  if (production.length > 0) {
+    if (primary !== 'deletion' && primary !== 'move_rename' && facts.droppedDeclarations.length > 0) {
+      secondaryReasons.push({ type: 'deletion', reason: `Removed and never re-added: ${list(facts.droppedDeclarations)}. A ${changeTypeLabel(primary).toLowerCase()} that drops a declaration is still a deletion.` });
+    }
+    if (primary !== 'new_code' && primary !== 'move_rename' && facts.introducedDeclarations.length > 0) {
+      secondaryReasons.push({ type: 'new_code', reason: `Newly declared: ${list(facts.introducedDeclarations)}.` });
+    }
+  }
+
+  return {
+    primary,
+    secondary: secondaryReasons.map((entry) => entry.type),
+    facts,
+    fileRules: trace.rules,
+    productionRules: productionRules?.rules ?? [],
+    secondaryReasons,
+  };
+}
+
+export function classifyChangeType(hunks: ChangeTypeHunk[]): ChangeTypeClassification {
+  const { primary, secondary } = explainChangeType(hunks);
   return { primary, secondary };
 }
 
