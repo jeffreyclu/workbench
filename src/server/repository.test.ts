@@ -1291,6 +1291,26 @@ describe('WorkItemRepository', () => {
     }
   });
 
+  it('uses a manually selected execution type before dispatching a standalone reply', async () => {
+    const conversation = repository.createConversation('New standalone thread');
+    repository.createSharedMessage('jeffrey', 'Explain the implementation.', 'queued', conversation.id, [], 'claude', null, null, null, 'review');
+    const previousPath = process.env.PATH;
+    const { directory } = fakeAgentDirectory("printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'", "printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'");
+    try {
+      const replies = dispatchNextSharedTurn(repository, conversation.id);
+      expect(replies).toHaveLength(1);
+      expect(replies[0].kind).toBe('review');
+      const deadline = Date.now() + 2_000;
+      while (repository.listAllSharedMessages(conversation.id).some((message) => message.status === 'running')) {
+        if (Date.now() > deadline) throw new Error('Timed out waiting for reply.');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('does not dispatch or cancel a queued turn while the same agent is active', () => {
     const conversation = repository.createConversation('Busy thread');
     const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);

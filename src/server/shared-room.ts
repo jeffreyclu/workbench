@@ -847,7 +847,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   // the supervisor-resolved objective override that routing. This matters for
   // terse continuations: "continue" must retain the execute/review kind of the
   // concrete request it resumes instead of silently degrading to analysis.
-  const taskKind = sharedTurnKindForMessage(repository, linkedItem, fallbackGrounding.objective);
+  const taskKind = queued.message.kind ?? sharedTurnKindForMessage(repository, linkedItem, fallbackGrounding.objective);
   const resolvedAgents = resolveAgents(taskKind, queued.dispatchTarget);
   const agents = queued.dispatchTarget === 'auto'
     ? [repository.selectBalancedAgent(resolvedAgents[0])]

@@ -380,7 +380,7 @@ export function createConversationRouter({ repository, database, capabilities, a
     const agents = input.dispatchTo === 'both' ? ['codex', 'claude'] as const
       : input.dispatchTo === 'none' ? [] : [input.dispatchTo];
     if (agents.length) unpinConversationAndLinkedItem(input.conversationId);
-    const message = repository.createSharedMessage('jeffrey', input.body, agents.length ? 'queued' : 'completed', input.conversationId, attachments, input.dispatchTo, input.executionProfile, input.accountProfile ?? null);
+    const message = repository.createSharedMessage('jeffrey', input.body, agents.length ? 'queued' : 'completed', input.conversationId, attachments, input.dispatchTo, input.executionProfile, input.accountProfile ?? null, null, input.executionKind ?? null);
     const replies = agents.length ? dispatchNextSharedTurn(repository, input.conversationId) : [];
     // Dispatch claims the queued human turn synchronously. Return the
     // persisted post-dispatch state rather than the pre-claim object; callers

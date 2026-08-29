@@ -358,6 +358,15 @@ agent and model choice recorded in that conversation; it must never inherit a
 load-balancing fallback or a choice from another conversation. A genuinely empty
 new conversation starts with **Ask both** and model **Auto**.
 
+### Empty conversations expose execution type before the first reply
+
+*Decision from Jeffrey, 2026-08-29.*
+
+The robot execution-type control belongs in the header of a brand-new standalone
+conversation, before any agent response exists. Its selected type must be sent
+with the first message and used by dispatch; it is not only a label added after
+the classifier has already launched an agent.
+
 ### Creating a conversation opens it immediately
 
 *Decision from Jeffrey, 2026-08-25.*

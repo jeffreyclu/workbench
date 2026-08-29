@@ -1829,9 +1829,32 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     await screen.findByRole('heading', { name: 'New conversation' });
+    expect(screen.getByRole('button', { name: 'Execution type: Execute' })).toBeInTheDocument();
     await waitFor(() => expect((screen.getByLabelText('Who should respond') as HTMLSelectElement).value).toBe('both'));
     expect((screen.getByLabelText('Account profile') as HTMLSelectElement).value).toBe('default');
     expect((screen.getByLabelText('Model choice') as HTMLSelectElement).value).toBe('auto');
+  });
+
+  it('sends the execution type selected before the first response', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000042';
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/shared/messages' && init?.method === 'POST') return new Response(JSON.stringify({ message: { status: 'completed' }, replies: [] }), { status: 202, headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'New conversation', workItemId: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Execution type: Execute' }));
+    fireEvent.change(screen.getByLabelText('Execution type'), { target: { value: 'review' } });
+    const attachmentInput = document.querySelector('#conversation-composer input[type="file"]') as HTMLInputElement;
+    fireEvent.change(attachmentInput, { target: { files: [new File(['review'], 'change.txt', { type: 'text/plain' })] } });
+    fireEvent.submit(screen.getByLabelText('Message Codex or Claude').closest('form')!);
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === '/api/shared/messages' && init?.method === 'POST' && JSON.parse(String(init.body)).executionKind === 'review')).toBe(true));
   });
 
   it('keeps retry available for each failed parallel agent reply', async () => {

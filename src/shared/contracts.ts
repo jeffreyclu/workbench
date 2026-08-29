@@ -1023,6 +1023,7 @@ export const createSharedMessageSchema = z.object({
   conversationId: z.string().uuid(),
   body: z.string().trim().max(50_000).default(''),
   dispatchTo: z.enum(['auto', 'both', 'codex', 'claude', 'none']).default('auto'),
+  executionKind: runKindSchema.optional(),
   executionProfile: executionProfileOverrideSchema,
   // A room turn can be unlinked from a task, so it needs the same explicit
   // account choice as task execution instead of inheriting a hidden server
@@ -1039,7 +1040,10 @@ export const createSharedMessageSchema = z.object({
 export const createSharedConversationSchema = z.object({ title: z.string().trim().min(1).max(200).default('New conversation') });
 
 export const updateSharedMessageSchema = z.object({
-  pinned: z.boolean(),
+  pinned: z.boolean().optional(),
+  kind: runKindSchema.optional(),
+}).refine((input) => input.pinned !== undefined || input.kind !== undefined, {
+  message: 'Message update required.',
 });
 
 // --- Diagnostics and insights -----------------------------------------------

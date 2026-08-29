@@ -102,9 +102,10 @@ Review the code as a **principal frontend engineer** would. Do not run the tests
 app, do not install dependencies, do not chase CI. Read the diff and the surrounding files that the
 diff actually interacts with — that is enough to review.
 
-Testing is deliberately **out of scope for the first pass**. After Jeffrey has read the review, he
-will open reviewing the tests as a separate executable task in Workbench. Do not fold test quality
-into the initial review.
+Executing tests is deliberately **out of scope for the first pass**. Static test review is in scope:
+the reviewer must map changed production logic to the exact test cases and assertions that exercise
+it, and identify uncovered branches or behavior. Running those tests or doing runtime validation
+remains a separate Workbench executable.
 
 #### The minimum bar for approval or rejection
 
@@ -135,6 +136,99 @@ correct approach is available, say so.
 Every point, risk, piece of feedback, or criticism must be labeled **blocking** or **non-blocking**.
 Jeffrey uses that label to decide what actually gates the merge, so an unlabeled finding is an
 incomplete one.
+
+#### Change-type review heuristics
+
+*Decision from Jeffrey, 2026-08-29.* A review must classify the diff by the **type of change being
+made**, then apply evidence requirements specific to that type. Do not label an entire PR with one
+type when it contains several independent changes; classify each meaningful change unit separately.
+
+Every unit starts with the same evidence header:
+
+- **Intent:** the task, PR statement, or established behavior that explains why this change exists.
+- **Implementation:** exact `file:line` citations for the changed logic.
+- **Blast radius:** direct callers, consumers, public contracts, stored data, and operational paths
+  affected by the change, each with citations. State when a repository-wide search found no other
+  call sites; do not silently assume there are none.
+- **Verification map:** each behavior or branch mapped to the exact test case and assertion that
+  covers it. Cite both sides, for example `parser.ts:42-49 -> parser.test.ts:88-101`. Mark logic with
+  no mapped test explicitly. Test presence or aggregate coverage percentage is not proof.
+- **Quality:** correctness first, then readability, maintainability, performance, scalability,
+  security, and reliability. Discuss only material issues; do not manufacture one comment per lens.
+
+Apply the following type-specific questions:
+
+1. **New behavior / new code**
+   - Does it fulfill the stated intent and follow existing repository patterns?
+   - Does the verification map cover the happy path, each material branch, boundaries, failures,
+     and externally visible side effects?
+   - Is the algorithm and data access proportional to expected input size and request frequency?
+   - Is the API narrow, the naming readable, and the ownership/lifecycle clear?
+
+2. **Behavioral modification / bug fix**
+   - What behavior changed, and what behavior must remain unchanged?
+   - Does a regression test reproduce the old failure and prove the new result at the correct
+     observable boundary?
+   - Could unchanged callers depend on the prior behavior, error shape, timing, or side effects?
+   - Does the fix address the root cause rather than only the reported example?
+
+3. **Refactor**
+   - State the claimed invariant: what observable behavior must stay identical?
+   - Compare old and new code apples-to-apples across inputs, outputs, errors, side effects,
+     ordering, timing, and complexity. Cite both sides of each meaningful comparison.
+   - Identify every call site and show whether it is unchanged, mechanically updated, or
+     intentionally behavior-changing.
+   - Reject a “refactor” label when the diff also changes behavior; split that portion into a
+     behavioral-modification review.
+
+4. **Replacement / migration**
+   - State why the old implementation is being replaced and the intended advantage of the new one.
+   - Build a parity table for the old and new paths: supported cases, outputs, failures, side
+     effects, performance characteristics, and operational requirements.
+   - Account for every caller, compatibility shim, feature flag, rollout path, and rollback path.
+   - Confirm the old path is no longer reachable before accepting its removal; flag partial dual
+     ownership or two sources of truth.
+
+5. **Deletion**
+   - State why the code is now unnecessary: dead, superseded, obsolete requirement, unsafe, or
+     intentionally unsupported. “Unused” needs search evidence.
+   - Check direct and indirect references, dynamic registration, configuration, public exports,
+     persisted data, documentation, tests, telemetry, and fallback/rollback paths.
+   - Explain which tests should disappear because the behavior disappeared and which tests must
+     remain because they protect adjacent behavior.
+   - Identify any cleanup deliberately deferred; deletion is incomplete when it leaves reachable
+     callers, stale flags, or misleading contracts.
+
+6. **Contract / schema / configuration / dependency change**
+   - Name the compatibility boundary: API, type, event, database, environment, build, or package.
+   - Identify producers and consumers, version skew, defaults, failure mode, and rollback behavior.
+   - For schemas and migrations, require a forward-only upgrade path and an upgrade test beginning
+     from the preceding released migration set; fresh-install coverage alone is insufficient.
+   - For dependency changes, distinguish lockfile-only churn from runtime or build behavior, and
+     cite the code path that uses any added or upgraded capability.
+
+7. **Test-only change**
+   - State whether coverage is added, tightened, reorganized, or weakened.
+   - Map the assertion to the production behavior it proves. A snapshot or assertion rewrite must
+     explain why the new expectation is correct.
+   - Flag deleted assertions, broader mocks, reduced boundaries, or implementation-coupled tests
+     that can pass while user-visible behavior is broken.
+
+8. **Mechanical / generated change**
+   - Prove the generating source or deterministic transformation and separate any hand-edited
+     semantic changes from the generated churn.
+   - Review the source-of-truth change, not every generated line, while checking that generated
+     artifacts are complete and no unrelated output changed.
+
+The review output should mirror this reasoning rather than return a generic checklist:
+
+1. **Change inventory:** each unit, its type, its intent, and cited implementation lines.
+2. **Evidence tables:** verification maps for new/changed behavior; parity tables for refactors and
+   replacements; reachability evidence for deletions.
+3. **Findings:** only concrete issues, each labeled Blocking or Non-blocking and anchored to an exact
+   changed line whenever possible.
+4. **Verdict:** approve or reject based on task fulfillment and blocking findings, plus explicit
+   residual uncertainty where evidence was unavailable.
 
 #### Who performs reviews — routing
 

@@ -580,7 +580,9 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const manualConversationExecutionMessage = selectedConversation?.workItemId
     ? null
     : latestConversationAgentMessage(allConversationMessages);
-  const manualConversationExecutionKind = manualConversationExecutionMessage?.kind ?? null;
+  const [newConversationExecutionKinds, setNewConversationExecutionKinds] = useState<Record<string, AgentRun['kind']>>({});
+  const newConversationExecutionKind = conversationId ? newConversationExecutionKinds[conversationId] ?? 'execute' : 'execute';
+  const manualConversationExecutionKind = manualConversationExecutionMessage?.kind ?? newConversationExecutionKind;
   // A pasted pull-request link is enough to review it: resolving one must not
   // require the conversation to be linked to a work item first.
   const githubCandidateUrls = useMemo(() => pullRequestUrls([
@@ -657,7 +659,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           const reader = new FileReader(); reader.onerror = () => reject(reader.error); reader.onload = () => resolveValue(String(reader.result).split(',')[1] ?? ''); reader.readAsDataURL(file);
         }),
       })));
-      const created = await api.createSharedMessage(conversationId!, body, composerSelection.dispatchTarget, attachments, composerSelection.executionProfile, composerSelection.accountProfile);
+      const executionKind = !selectedConversation?.workItemId && !manualConversationExecutionMessage ? newConversationExecutionKind : undefined;
+      const created = await api.createSharedMessage(conversationId!, body, composerSelection.dispatchTarget, attachments, composerSelection.executionProfile, composerSelection.accountProfile, executionKind);
       // A normal send can be dispatched synchronously by the create endpoint.
       // `replies` is definitive even if a stale API response labels the human
       // turn queued, so never try to interject a turn that is already claimed.
@@ -765,15 +768,15 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     onError: (error) => toastError('Could not update the execution type.', error),
   });
   const [manualExecutionKindOpen, setManualExecutionKindOpen] = useState(false);
-  const renderManualExecutionKindControl = () => manualConversationExecutionMessage && (
+  const renderManualExecutionKindControl = () => selectedConversation && !selectedConversation.workItemId && (
     <span className="card-classification-control disclosure" onClick={(event) => event.stopPropagation()}>
       {manualExecutionKindOpen
         ? <span className="card-classification-popover">
           <span className="card-classification"><Bot size={10} /> Execution type</span>
-          <select className="card-classification-select" aria-label="Execution type" autoFocus value={manualConversationExecutionKind ?? 'execute'} onChange={(event) => { setManualConversationExecutionKind.mutate(event.target.value as AgentRun['kind']); setManualExecutionKindOpen(false); }} onBlur={() => setManualExecutionKindOpen(false)} disabled={setManualConversationExecutionKind.isPending}><option value="research">Research</option><option value="analysis">Analysis</option><option value="strategy">Strategy</option><option value="execute">Execute</option><option value="review">Review</option><option value="bugfix">Bug fix</option></select>
+          <select className="card-classification-select" aria-label="Execution type" autoFocus value={manualConversationExecutionKind} onChange={(event) => { const kind = event.target.value as AgentRun['kind']; if (manualConversationExecutionMessage) setManualConversationExecutionKind.mutate(kind); else if (conversationId) setNewConversationExecutionKinds((current) => ({ ...current, [conversationId]: kind })); setManualExecutionKindOpen(false); }} onBlur={() => setManualExecutionKindOpen(false)} disabled={setManualConversationExecutionKind.isPending}><option value="research">Research</option><option value="analysis">Analysis</option><option value="strategy">Strategy</option><option value="execute">Execute</option><option value="review">Review</option><option value="bugfix">Bug fix</option></select>
           {setManualConversationExecutionKind.isPending && <LoaderCircle className="spin card-classification-spinner" size={10} />}
         </span>
-        : <button type="button" className="icon-button" aria-expanded={manualExecutionKindOpen} aria-label={`Execution type: ${MANUAL_EXECUTION_KIND_LABELS[manualConversationExecutionKind ?? 'execute']}`} title={`Execution type: ${MANUAL_EXECUTION_KIND_LABELS[manualConversationExecutionKind ?? 'execute']}`} onClick={() => setManualExecutionKindOpen(true)}><Bot size={13} /></button>}
+        : <button type="button" className="icon-button" aria-expanded={manualExecutionKindOpen} aria-label={`Execution type: ${MANUAL_EXECUTION_KIND_LABELS[manualConversationExecutionKind]}`} title={`Execution type: ${MANUAL_EXECUTION_KIND_LABELS[manualConversationExecutionKind]}`} onClick={() => setManualExecutionKindOpen(true)}><Bot size={13} /></button>}
     </span>
   );
   const deleteConversation = useMutation({
