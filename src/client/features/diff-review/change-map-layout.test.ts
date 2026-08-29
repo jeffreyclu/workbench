@@ -5,12 +5,13 @@ import { CHANGE_MAP_NODE_HEIGHT, CHANGE_MAP_NODE_WIDTH, layoutChangeMap } from '
 function node(id: string, ordinal: number, degree = 1): ChangeMapNode {
   return {
     id, ordinal, label: id, degree, subject: id, filePath: `src/${id}.ts`, fileCount: 1,
+    filePaths: [`src/${id}.ts`], symbols: [], signatureChanges: [],
     behavior: `Changes ${id}.`, additions: 1, deletions: 0, state: null, riskSignals: [],
   };
 }
 
 function edge(fromId: string, toId: string, relation: ChangeMapEdge['relation'] = 'calls'): ChangeMapEdge {
-  return { id: `${fromId}->${toId}`, fromId, toId, relation, symbols: [], explanation: `${fromId} to ${toId}` };
+  return { id: `${fromId}->${toId}`, fromId, toId, relation, change: 'added', symbols: [], explanation: `${fromId} to ${toId}` };
 }
 
 /** A chain a → b → c plus the long edge a → c that skips a column, which is the

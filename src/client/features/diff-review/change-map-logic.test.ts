@@ -5,12 +5,13 @@ import { selectChangeConnections, selectFocusedChangeMap } from './change-map-lo
 function node(id: string, ordinal: number): ChangeMapNode {
   return {
     id, ordinal, label: id, degree: 1, subject: id, filePath: `src/${id}.ts`, fileCount: 1,
+    filePaths: [`src/${id}.ts`], symbols: [], signatureChanges: [],
     behavior: `Changes ${id}.`, additions: 1, deletions: 0, state: null, riskSignals: [],
   };
 }
 
 function edge(fromId: string, toId: string, relation: ChangeMapEdge['relation'] = 'calls'): ChangeMapEdge {
-  return { id: `${fromId}->${toId}`, fromId, toId, relation, symbols: [], explanation: `${fromId} to ${toId}` };
+  return { id: `${fromId}->${toId}`, fromId, toId, relation, change: 'added', symbols: [], explanation: `${fromId} to ${toId}` };
 }
 
 const nodes = [node('root', 1), ...Array.from({ length: 6 }, (_, index) => node(`up-${index + 1}`, index + 2)), ...Array.from({ length: 6 }, (_, index) => node(`down-${index + 1}`, index + 8))];

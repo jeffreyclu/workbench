@@ -20,6 +20,7 @@ const map: ChangeMap = {
   nodes: [node('type', 1, 'WorkspaceRef', 1), node('consumer', 2, 'renderWorkspace', 1), node('isolated', 3, 'formatDate', 0)],
   edges: [{
     id: 'type->consumer', fromId: 'type', toId: 'consumer', relation: 'references-type', symbols: ['WorkspaceRef'],
+    change: 'added',
     explanation: 'Decision 2 references the changed type WorkspaceRef from decision 1.',
   }],
   omittedEdges: 0,
