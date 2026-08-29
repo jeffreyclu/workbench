@@ -56,9 +56,7 @@ Durable context recall: use the Workbench MCP \`recall_context\` tool when prior
 
 For an approved artifact publication, use the Workbench MCP \`publish_artifact\` tool; do not curl the Workbench UI. Publishing remains limited to a supervisor-issued capability for this one turn.
 
-Workspace isolation: the task workspace is a project workspace, not a place for Workbench bookkeeping. Never create or update \`docs/shared-memory*\`, Workbench operating notes, or other Workbench-internal files there. Use Workbench's shared conversation and activity state for handoffs. Create or edit project documentation only when Jeffrey explicitly asks for that project documentation.
-
-Repository residency: when the resolved workspace is the Workbench repository, stay on \`main\` and change only Workbench code, tests, or documentation. Writer or any other project work must run in that project's linked workspace, never in the Workbench checkout. Do not create or switch branches in the Workbench repository.
+Workspace isolation: a task does not need a linked repository. The resolved working directory is execution context, not proof that the task belongs to that repository. Never create or update \`docs/shared-memory*\`, Workbench operating notes, or other Workbench-internal files in another project. Use Workbench's shared conversation and activity state for handoffs. Create or edit project files only when Jeffrey explicitly asks for work in that project.
 
 Writer test-suite safety: in every Writer repository, full-suite commands are forbidden. Never run \`npm test\`, \`pnpm test\`, \`yarn test\`, unscoped \`vitest\`/\`jest\`, or \`vitest run -- <test-name>\` because that discovers the repository suite. Run only an explicit, directly relevant test-file path (for example \`vitest run src/path/feature.test.ts\`). If that is insufficient, report the verification gap instead of broadening the command.
 
@@ -386,13 +384,6 @@ ${item.attachments?.length
 ${externalActionContract}`;
 }
 
-function enforceWorkbenchWorkspaceBoundary(item: WorkItem, workspace: string): string {
-  const resolvedWorkspace = resolve(workspace);
-  if (resolvedWorkspace !== resolve(process.cwd())) return resolvedWorkspace;
-  if (isWorkbenchProject(item.projectName)) return resolvedWorkspace;
-  throw new Error(`Non-Workbench task "${item.title}" has no external project workspace. Link the task to its repository before running an agent; the Workbench checkout accepts Workbench work only.`);
-}
-
 /**
  * Saved workspace paths can outlive a refactor (for example, a deleted source
  * directory). Recover the enclosing repository root instead of starting a
@@ -420,10 +411,10 @@ function repositoryRootForSavedPath(savedPath: string): string | null {
 export function resolveWorkingDirectory(item: WorkItem): string {
   if (item.workspacePath) {
     const recovered = repositoryRootForSavedPath(item.workspacePath);
-    if (recovered) return enforceWorkbenchWorkspaceBoundary(item, recovered);
+    if (recovered) return resolve(recovered);
     // Workbench task paths are occasionally persisted as a source directory
-    // that disappears during a refactor. The server checkout is the only safe
-    // fallback for Workbench work; external projects must still be linked.
+    // that disappears during a refactor. Only explicitly identified Workbench
+    // work falls back to the server checkout when no saved repository remains.
     if (isWorkbenchProject(item.projectName)) return process.cwd();
   }
 
@@ -436,7 +427,7 @@ export function resolveWorkingDirectory(item: WorkItem): string {
     const segments = referencedDirectories.map((path) => resolve(path).split('/'));
     const common = segments[0].filter((segment, index) => segments.every((parts) => parts[index] === segment));
     const referencedWorkspace = common.join('/') || '/';
-    if (referencedWorkspace !== '/') return enforceWorkbenchWorkspaceBoundary(item, referencedWorkspace);
+    if (referencedWorkspace !== '/') return resolve(referencedWorkspace);
   }
 
   const workspaceRoot = dirname(current);
@@ -444,7 +435,7 @@ export function resolveWorkingDirectory(item: WorkItem): string {
     .filter((entry) => entry.isDirectory())
     .map((entry) => join(workspaceRoot, entry.name))
     .filter((path) => existsSync(join(path, '.git')) || existsSync(join(path, 'package.json')) || existsSync(join(path, 'AGENTS.md')));
-  if (!candidates.length) return enforceWorkbenchWorkspaceBoundary(item, current);
+  if (!candidates.length) return resolve(current);
 
   const context = `${item.title}\n${item.description}\n${item.projectName ?? ''}\n${item.sourceUrl ?? ''}`.toLowerCase();
   let sourceRepository = '';
@@ -461,12 +452,12 @@ export function resolveWorkingDirectory(item: WorkItem): string {
     if (item.source === 'linear' && name === 'writer-monorepo') score += 20;
     return { path, score };
   }).sort((left, right) => right.score - left.score);
-  if (scored[0]?.score) return enforceWorkbenchWorkspaceBoundary(item, scored[0].path);
-  if (candidates.length === 1) return enforceWorkbenchWorkspaceBoundary(item, candidates[0]);
+  if (scored[0]?.score) return resolve(scored[0].path);
+  if (candidates.length === 1) return resolve(candidates[0]);
   const writerWorkspace = candidates.find((path) => basename(path).toLowerCase() === 'writer-monorepo');
-  if (writerWorkspace && !context.includes('workbench')) return enforceWorkbenchWorkspaceBoundary(item, writerWorkspace);
-  if (candidates.includes(current)) return enforceWorkbenchWorkspaceBoundary(item, current);
-  return enforceWorkbenchWorkspaceBoundary(item, workspaceRoot);
+  if (writerWorkspace && !context.includes('workbench')) return resolve(writerWorkspace);
+  if (candidates.includes(current)) return resolve(current);
+  return resolve(workspaceRoot);
 }
 
 export type ExecutionProfile = 'economy' | 'standard' | 'deep';

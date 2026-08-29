@@ -732,9 +732,17 @@ describe('classifyExecution', () => {
       .toBe(join(homedir(), 'notes/knowledge'));
   });
 
-  it('refuses to run a non-Workbench task inside the Workbench checkout', () => {
-    expect(() => resolveWorkingDirectory({ ...item('Fix Writer connectors'), projectName: 'Writer', workspacePath: process.cwd() }))
-      .toThrow(/Non-Workbench task.*Link the task to its repository/);
+  it('allows an unlinked task resolved to the Workbench checkout to run there', () => {
+    expect(resolveWorkingDirectory({ ...item('Fix Writer connectors'), projectName: 'Writer', workspacePath: process.cwd() }))
+      .toBe(process.cwd());
+  });
+
+  it('allows a task to run from an explicit non-repository directory', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-repositoryless-task-'));
+    temporaryDirectories.push(directory);
+
+    expect(resolveWorkingDirectory({ ...item('Research Palmyra access'), projectName: null, workspacePath: directory }))
+      .toBe(directory);
   });
 
   it('recovers a deleted Workbench subdirectory to the repository root', () => {
@@ -869,8 +877,6 @@ describe('classifyExecution', () => {
     expect(buildPrompt(item('Build it'), run, 'jeffrey: Prefer small React components.'))
       .toContain('Shared context available to every agent:\njeffrey: Prefer small React components.');
     expect(buildPrompt(item('Build it'), run)).toContain('no permission prompts or dialogs exist to approve');
-    expect(buildPrompt(item('Build it'), run)).toContain('Do not create or switch branches in the Workbench repository');
-    expect(buildPrompt(item('Build it'), run)).toContain('change only Workbench code, tests, or documentation');
   });
 
   it('makes durable recall frequent but non-mandatory for context-heavy task types', () => {

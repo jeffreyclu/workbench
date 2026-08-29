@@ -1,5 +1,14 @@
 ## Workbench operating practices
 
+### Workspace resolution is authoritative for task execution (2026-08-29)
+
+Jeffrey explicitly disabled every guard that requires a task to have an internal or external
+repository. A task may run with no `project_name`, no linked workspace, or an explicit non-Git scratch
+directory. Workspace resolution provides a process working directory; it is not a prerequisite and
+does not prove that the task belongs to that repository. Missing project or repository metadata must
+never block agent execution. Agents must still avoid editing an unrelated repository merely because
+it is their process working directory.
+
 ### Keep workbench executions short
 
 *Jeffrey's main complaint about Workbench task executions is that they take too long — bound the run, don't expand it*
