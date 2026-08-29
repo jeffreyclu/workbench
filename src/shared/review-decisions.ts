@@ -1,4 +1,11 @@
-import type { DiffHunkReview, DiffHunkReviewState, WorkspaceDiffFile } from './contracts.js';
+import {
+  REVIEW_ASSIST_MAX_HUNKS,
+  REVIEW_ASSIST_MAX_LINES_PER_HUNK,
+  REVIEW_ASSIST_MAX_LINE_LENGTH,
+  type DiffHunkReview,
+  type DiffHunkReviewState,
+  type WorkspaceDiffFile,
+} from './contracts.js';
 import { buildCoverageEvidence, buildReferenceEvidence, type CoverageEvidence, type ReferenceEvidence } from './coverage-evidence.js';
 import { classifyChangeType, type ReviewChangeType } from './change-type.js';
 
@@ -329,7 +336,23 @@ export function reviewAssistDecisionPayload(decision: ReviewDecision, allDecisio
   coverageEvidence: CoverageEvidence;
   referenceEvidence: ReferenceEvidence;
 } {
-  const hunks = decision.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines }));
+  const boundLines = (lines: string[]): string[] => {
+    const bounded = lines.length <= REVIEW_ASSIST_MAX_LINES_PER_HUNK
+      ? lines
+      : [
+        ...lines.slice(0, Math.floor((REVIEW_ASSIST_MAX_LINES_PER_HUNK - 1) / 2)),
+        `... ${lines.length - REVIEW_ASSIST_MAX_LINES_PER_HUNK + 1} diff lines omitted ...`,
+        ...lines.slice(-(REVIEW_ASSIST_MAX_LINES_PER_HUNK - Math.floor((REVIEW_ASSIST_MAX_LINES_PER_HUNK - 1) / 2) - 1)),
+      ];
+    return bounded.map((line) => line.slice(0, REVIEW_ASSIST_MAX_LINE_LENGTH));
+  };
+  const boundHunk = <T extends { filePath: string; location: string; lines: string[] }>(hunk: T): T => ({
+    ...hunk,
+    filePath: hunk.filePath.slice(0, 2_000),
+    location: hunk.location.slice(0, 200),
+    lines: boundLines(hunk.lines),
+  });
+  const hunks = decision.hunks.slice(0, REVIEW_ASSIST_MAX_HUNKS).map((hunk) => boundHunk({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines }));
   // Siblings come from the whole review, not just neighbouring decisions: a new
   // function and the test that exercises it land in different files and are
   // therefore always split into different decisions. Without this the assist
@@ -338,13 +361,15 @@ export function reviewAssistDecisionPayload(decision: ReviewDecision, allDecisio
   const siblings = allDecisions
     .filter((other) => other.id !== decision.id)
     .flatMap((other) => other.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines })));
+  const coverageEvidence = buildCoverageEvidence(hunks, siblings);
+  const referenceEvidence = buildReferenceEvidence(hunks, siblings);
   return {
-    behavior: decision.behavior,
+    behavior: decision.behavior.slice(0, 2_000),
     state: reviewStateLabel(decision.state),
     changeType: decision.changeType,
     secondaryChangeTypes: decision.secondaryChangeTypes,
     hunks,
-    coverageEvidence: buildCoverageEvidence(hunks, siblings),
-    referenceEvidence: buildReferenceEvidence(hunks, siblings),
+    coverageEvidence: { ...coverageEvidence, hunks: coverageEvidence.hunks.map(boundHunk) },
+    referenceEvidence: { ...referenceEvidence, hunks: referenceEvidence.hunks.map(boundHunk) },
   };
 }

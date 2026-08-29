@@ -42,6 +42,10 @@ export function useCachedReviewAssistAnswers(decision: ReviewDecision | null, ta
   return useQuery({
     queryKey: cacheKey(decision?.id ?? '', taskIntent),
     enabled: Boolean(decisionPayload),
+    // A cache lookup is cheap and is automatically repeated when the decision
+    // or diff changes. Retrying a deterministic 4xx four times only hammers the
+    // API and leaves a stale panel looking like background work is progressing.
+    retry: false,
     queryFn: async () => {
       if (!decisionPayload) return {} as CachedAssistAnswers;
       const results = await Promise.all(ASSIST_ACTIONS.map((action) => sourceClient.lookupReviewAssist({ action, decision: decisionPayload, taskIntent }).then((response) => [action, response.answer] as const)));

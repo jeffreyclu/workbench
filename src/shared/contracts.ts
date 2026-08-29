@@ -315,6 +315,13 @@ export const diffConfidenceRequestSchema = z.object({
  * has open rather than ambiently for every hunk in the diff. Every request here
  * is explicit and its failure is reported to the reviewer rather than silently
  * downgraded. */
+/** Wire limits shared by the schema and the one payload builder used by both
+ * foreground assist and background scoring. Keeping them exported prevents a
+ * large diff from becoming a client/server contract mismatch. */
+export const REVIEW_ASSIST_MAX_HUNKS = 50;
+export const REVIEW_ASSIST_MAX_LINES_PER_HUNK = 200;
+export const REVIEW_ASSIST_MAX_LINE_LENGTH = 4_000;
+
 export const reviewAssistRequestSchema = z.object({
   action: z.enum(['explain', 'what_could_break', 'compare_task_intent', 'score_risk']),
   decision: z.object({
@@ -328,8 +335,8 @@ export const reviewAssistRequestSchema = z.object({
     hunks: z.array(z.object({
       filePath: z.string().min(1).max(2_000),
       location: z.string().min(1).max(200),
-      lines: z.array(z.string().max(4_000)).max(200),
-    })).min(1).max(50),
+      lines: z.array(z.string().max(REVIEW_ASSIST_MAX_LINE_LENGTH)).max(REVIEW_ASSIST_MAX_LINES_PER_HUNK),
+    })).min(1).max(REVIEW_ASSIST_MAX_HUNKS),
     // Defaulted for the same reason as `changeType`: a tab opened before this
     // field existed still posts the old payload, and answering without the
     // coverage pack is strictly better than rejecting the request.
@@ -338,7 +345,7 @@ export const reviewAssistRequestSchema = z.object({
       hunks: z.array(z.object({
         filePath: z.string().min(1).max(2_000),
         location: z.string().min(1).max(200),
-        lines: z.array(z.string().max(4_000)).max(200),
+        lines: z.array(z.string().max(REVIEW_ASSIST_MAX_LINE_LENGTH)).max(REVIEW_ASSIST_MAX_LINES_PER_HUNK),
         symbols: z.array(z.string().min(1).max(200)).max(12),
       })).max(4),
       uncitedSymbols: z.array(z.string().min(1).max(200)).max(12),
@@ -349,7 +356,7 @@ export const reviewAssistRequestSchema = z.object({
       hunks: z.array(z.object({
         filePath: z.string().min(1).max(2_000),
         location: z.string().min(1).max(200),
-        lines: z.array(z.string().max(4_000)).max(200),
+        lines: z.array(z.string().max(REVIEW_ASSIST_MAX_LINE_LENGTH)).max(REVIEW_ASSIST_MAX_LINES_PER_HUNK),
         symbols: z.array(z.string().min(1).max(200)).max(12),
         kind: z.enum(['residual', 'updated']),
       })).max(3),
