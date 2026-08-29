@@ -1041,6 +1041,16 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     setMobileComposerOpen(false);
   }, [conversationId]);
   useEffect(() => {
+    // Message count and body length can be identical across conversations, so
+    // the streaming-follow effect does not reliably run for a newly opened
+    // thread. Wait for that conversation's messages, then land at the latest
+    // content without animating through its history.
+    if (!conversationId || messages.isLoading) return;
+    isNearThreadBottomRef.current = true;
+    setHasNewActivityBelow(false);
+    scrollThreadToLatest('auto');
+  }, [conversationId, messages.isLoading]);
+  useEffect(() => {
     const container = threadScrollRef.current;
     if (!container) return;
     const nearBottomThreshold = 120;
@@ -1346,8 +1356,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           {createTasks.isPending && createTasks.variables?.conversationId === conversationId && <div className="finding-progress"><LoaderCircle className="spin" size={15} /><span><strong>Turning findings into tasks</strong><small>Reading the report and producing self-contained queue items…</small></span></div>}
           {createTasks.error && createTasks.variables?.conversationId === conversationId && <div className="finding-progress error-message"><X size={15} /><span><strong>Could not create tasks</strong><small>{createTasks.error.message}</small></span></div>}
           <div ref={endRef} />
-          {hasNewActivityBelow && <button type="button" className="jump-to-latest-button" onClick={jumpToLatest}><ArrowDown size={13} /> New activity · Jump to latest</button>}
         </div>
+        {hasNewActivityBelow && <button type="button" className="jump-to-latest-button" onClick={jumpToLatest}><ArrowDown size={13} /> New activity · Jump to latest</button>}
         {conversationDetail.isLoading ? <ConversationComposerSkeleton /> : conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <>{isPhoneChrome && mobileComposerOpen && <button type="button" className="mobile-composer-backdrop" aria-label="Dismiss composer" onClick={() => setMobileComposerOpen(false)} />}<form id="conversation-composer" className={`shared-composer${mobileComposerOpen ? ' mobile-composer-sheet' : ' is-mobile-composer-collapsed'}`} onSubmit={submit}>
           {isPhoneChrome && mobileComposerOpen && <button type="button" className="mobile-composer-handle" aria-label="Collapse composer" title="Collapse composer" onPointerDown={(event) => { mobileComposerDragStartY.current = event.clientY; }} onPointerUp={(event) => { if (mobileComposerDragStartY.current !== null && event.clientY - mobileComposerDragStartY.current >= 36) setMobileComposerOpen(false); mobileComposerDragStartY.current = null; }} onPointerCancel={() => { mobileComposerDragStartY.current = null; }} onClick={() => setMobileComposerOpen(false)}><span /></button>}
           {files.length > 0 && <div className="pending-files">{files.map((file) => <button type="button" key={`${file.name}-${file.size}`} onClick={() => setFiles((current) => current.filter((item) => item !== file))}><Paperclip size={11} /> {file.name} <X size={10} /></button>)}</div>}

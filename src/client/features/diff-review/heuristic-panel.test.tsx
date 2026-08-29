@@ -24,57 +24,55 @@ function open(subject: ReviewDecision, all: ReviewDecision[] = []) {
   fireEvent.click(screen.getByRole('button'));
 }
 
+const summaryWords = () => document.querySelector('.diff-review-heuristic-summary')!
+  .textContent!.trim().split(/\s+/).filter(Boolean).length;
+
 describe('diff review heuristic panel', () => {
-  it('names the rule that decided the type, so the verdict can be checked rather than trusted', () => {
+  it('opens with a plain sentence saying what the change is and how big it is', () => {
     open(decision({
       changeType: 'new_code',
       hunks: [hunk({ filePath: 'src/added.ts', fileStatus: 'added', lines: ['+export function created() { return 1; }'] })],
     }));
-    const fired = document.querySelector('.outcome-fired');
-    expect(fired).toHaveTextContent('Is any of this in a newly added file?');
-    expect(fired).toHaveTextContent('New code');
+    expect(screen.getByText(/Adds new code — \+1\/−0 lines in 1 file\./)).toBeInTheDocument();
   });
 
-  it('distinguishes a rule that was checked and did not hold from one that was never reached', () => {
+  it('stays under the word budget even when every warning applies at once', () => {
     open(decision({
       changeType: 'docs_comment',
-      hunks: [hunk({ filePath: 'docs/guide.md', lines: ['+Some prose.'] })],
+      hunks: [hunk({
+        filePath: 'src/thing.ts',
+        lines: [
+          '-export function alpha() { return 1; }', '-export function beta() { return 2; }',
+          '-export function gamma() { return 3; }', '-export function delta() { return 4; }',
+          '+export function alpha() { return compute(); }', '+export function created() { return alpha() + beta(); }',
+        ],
+      })],
     }));
-    // Documentation is decided in the file pass, so every later rule is
-    // short-circuited — and says so instead of reading as a negative finding.
-    expect(document.querySelectorAll('.outcome-not_reached').length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Not reached/)[0]).toBeInTheDocument();
+    expect(summaryWords()).toBeLessThanOrEqual(100);
+    expect(summaryWords()).toBeGreaterThan(0);
   });
 
-  it('shows the measurement each rule read, including the similarity score behind a refactor call', () => {
-    open(decision({
-      changeType: 'refactor_pure',
-      hunks: [hunk({ filePath: 'src/thing.ts', lines: ['-const total = a + b;', '+const total = a + b + 0;'] })],
-    }));
-    expect(screen.getByText(/Sørensen–Dice similarity \d+%/)).toBeInTheDocument();
-  });
-
-  it('reports a declaration the change drops even when the change reads as something else', () => {
+  it('never drops a warning to make room, because the warnings are the reason to read it', () => {
     open(decision({
       hunks: [hunk({ filePath: 'src/thing.ts', lines: ['-export function removed() {}', '+const kept = 1;'] })],
     }));
-    expect(screen.getByText('Dropped')).toBeInTheDocument();
-    expect(document.querySelector('.diff-review-heuristic-flag')).toHaveTextContent('removed');
+    expect(document.querySelector('.diff-review-heuristic-warn')).toHaveTextContent('Drops removed with nothing put back.');
   });
 
-  it('explains why the parity table does not apply to a change that is meant to differ', () => {
-    open(decision({ changeType: 'behavior_edit', hunks: [hunk({ filePath: 'src/thing.ts', lines: ['-const a = 1;', '+const b = 2;'] })] }));
-    expect(screen.getByText(/would report every intended change as a difference/)).toBeInTheDocument();
-  });
-
-  it('requires the parity axes on a replacement, and lists them', () => {
+  it('says a stored verdict is stale in one sentence instead of a disagreement table', () => {
     open(decision({
-      changeType: 'replacement',
-      hunks: [hunk({ filePath: 'src/thing.ts', lines: ['-export function run() { return 1; }', '+export function run() { return compute(); }'] })],
+      changeType: 'docs_comment',
+      hunks: [hunk({ filePath: 'src/thing.ts', fileStatus: 'added', lines: ['+export function created() { return 1; }'] })],
     }));
-    for (const axis of ['SIGNATURE', 'ERROR HANDLING', 'ORDERING', 'COMPLEXITY']) {
-      expect(screen.getByText(axis)).toBeInTheDocument();
-    }
+    expect(screen.getByText('Saved as Docs, which no longer matches.')).toBeInTheDocument();
+  });
+
+  it('says when a new declaration is named by no test anywhere in the review', () => {
+    open(decision({
+      changeType: 'new_code',
+      hunks: [hunk({ filePath: 'src/created.ts', fileStatus: 'added', lines: ['+export function uncovered() { return 1; }'] })],
+    }));
+    expect(screen.getByText(/No test in this review touches uncovered\./)).toBeInTheDocument();
   });
 
   it('finds the covering test in a sibling decision, because a test never shares a decision with the code it covers', () => {
@@ -87,28 +85,25 @@ describe('diff review heuristic panel', () => {
       hunks: [hunk({ id: 'test-hunk', filePath: 'src/created.test.ts', fileStatus: 'added', lines: ["+it('works', () => expect(created()).toBe(1));"] })],
     });
     open(subject, [subject, test]);
-    expect(screen.getByText(/src\/created\.test\.ts/)).toBeInTheDocument();
+    expect(screen.getByText(/Covered by src\/created\.test\.ts\./)).toBeInTheDocument();
   });
 
-  it('says when a new declaration is named by no test anywhere in the review', () => {
+  it('reduces the parity requirement to the one question it actually asks', () => {
     open(decision({
-      changeType: 'new_code',
-      hunks: [hunk({ filePath: 'src/created.ts', fileStatus: 'added', lines: ['+export function uncovered() { return 1; }'] })],
+      changeType: 'replacement',
+      hunks: [hunk({ filePath: 'src/thing.ts', lines: ['-export function run() { return 1; }', '+export function run() { return compute(); }'] })],
     }));
-    expect(screen.getByText(/No test hunk anywhere in this diff mentions uncovered/)).toBeInTheDocument();
-  });
-
-  it('flags a stored verdict that no longer matches what the classifier produces', () => {
-    open(decision({
-      changeType: 'docs_comment',
-      hunks: [hunk({ filePath: 'src/thing.ts', fileStatus: 'added', lines: ['+export function created() { return 1; }'] })],
-    }));
-    expect(screen.getByText(/Stored verdict is Docs; recomputing here gives New code/)).toBeInTheDocument();
+    expect(screen.getByText(/It claims behaviour is unchanged/)).toBeInTheDocument();
+    // A change meant to differ gets no parity line at all, rather than a
+    // paragraph explaining why the table does not apply.
+    cleanup();
+    open(decision({ changeType: 'behavior_edit', hunks: [hunk({ filePath: 'src/thing.ts', lines: ['-const a = 1;', '+const b = 2;'] })] }));
+    expect(screen.queryByText(/claims behaviour is unchanged/)).not.toBeInTheDocument();
   });
 
   it('stays collapsed until asked, so it does not compete with the diff for attention', () => {
     render(<DiffReviewHeuristicPanel decision={decision({ hunks: [hunk({ filePath: 'src/thing.ts', lines: ['+const a = 1;'] })] })} />);
-    expect(screen.queryByText('Rules, in the order they ran')).not.toBeInTheDocument();
+    expect(document.querySelector('.diff-review-heuristic-summary')).toBeNull();
     expect(screen.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
   });
 });

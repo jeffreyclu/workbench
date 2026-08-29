@@ -194,3 +194,20 @@ Build the visible trace out of the same code path that produces the verdict — 
 projection of its own explainer — so the explanation cannot drift from the behaviour. A trace
 reconstructed alongside the real logic is worse than none, because it explains a verdict the
 pipeline never reached.
+
+## Visible means readable in under 100 words (2026-08-29)
+
+The entry above is right that a heuristic needs a surface, and I over-corrected on it: I shipped the
+full trace — line counts, path buckets, every rule in evaluation order, evidence hunks, the parity
+axes — and Jeffrey's verdict was "this shit is not human readable. the whole point of this is for me
+to able to quickly understand changes. like it can't be more than 100 words."
+
+So the two entries compose into one rule rather than fighting: the deterministic layer must reach the
+screen, and what reaches the screen must be plain-language prose a person absorbs in one glance.
+Roughly 100 words is the ceiling Jeffrey named, and he meant it as a cap, not a target. When there is
+more to say than fits, drop the lowest-priority sentences and keep the warnings — the reason to read
+a summary at all is the part that says something is wrong. Completeness is not the goal; a complete
+surface nobody reads carries no information.
+
+This generalises past this one panel: for any explanation surface I build, prefer a few short
+sentences over a table of measurements, and reach for the raw trace only when Jeffrey asks for it.

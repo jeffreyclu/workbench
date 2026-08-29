@@ -1456,9 +1456,6 @@ nav { display: grid; gap: 3px; }
   .mobile-composer-handle:focus-visible { outline: 2px solid var(--acid); outline-offset: -6px; }
   .agent-console .shared-thread { padding: 68px 14px 28px; }
   .agent-console:has(.agent-console-header:not(.is-mobile-header-collapsed)) .shared-thread { padding-top: 140px; }
-  .agent-console .shared-thread .jump-to-latest-button {
-    position: sticky; bottom: 12px; left: 50%; z-index: 5; margin: 12px 0;
-  }
   /* Chrome lives over the surface, never in front of it in document flow. */
   .agent-console-header { position: absolute; inset: 0; z-index: 6; flex: 0 0 0; min-height: 0; height: 0; padding: 0; overflow: visible; border: 0; }
   /* The compact control opens a single conversation tray. It owns the action
@@ -1786,46 +1783,13 @@ nav { display: grid; gap: 3px; }
 .project-outcome strong { color: #c4c3bc; }
 .project-outcome.new { color: #6c6b65; }
 
-/* Heuristic panel: the deterministic review layer, made readable. Dense on
- * purpose — it is a trace, not a summary, and truncating it would defeat the
- * reason it is on screen. */
+/* Heuristic panel: the deterministic review layer, said in plain English and
+ * capped at 100 words by the component. Styled to be read in one glance, so
+ * nothing here reintroduces the dense trace this replaced. */
 .diff-review-heuristic { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 .diff-review-heuristic-toggle { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; color: #a9a89f; border: 0; border-radius: 8px; background: transparent; cursor: pointer; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
 .diff-review-heuristic-toggle:hover, .diff-review-heuristic-toggle:focus-visible { color: var(--acid); outline: 0; }
-.diff-review-heuristic-body { display: grid; gap: 6px; padding: 0 10px 10px; }
-.diff-review-heuristic-body h5 { margin: 8px 0 0; color: #85847d; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
-.diff-review-heuristic-body p, .diff-review-heuristic-body li, .diff-review-heuristic-body dd, .diff-review-heuristic-body dt { margin: 0; color: #a9a89f; font-size: 11px; line-height: 1.5; }
-.diff-review-heuristic-body code { color: var(--soft); font-family: var(--code-font); font-size: 10px; }
-.diff-review-heuristic-note { color: #85847d !important; }
-.diff-review-heuristic-warn { color: #e1a68f !important; }
-.diff-review-heuristic-flag { color: #e1a68f !important; }
-
-.diff-review-heuristic-facts { display: grid; gap: 2px; margin: 0; }
-.diff-review-heuristic-facts > div { display: flex; gap: 8px; }
-.diff-review-heuristic-facts dt { flex: 0 0 108px; color: #6f6e68 !important; font: 700 9px 'DM Mono'; letter-spacing: .06em; text-transform: uppercase; padding-top: 2px; }
-.diff-review-heuristic-facts dd { min-width: 0; word-break: break-word; }
-
-.diff-review-heuristic-files { display: grid; gap: 2px; margin: 4px 0 0; padding: 0; list-style: none; }
-.diff-review-heuristic-files li { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.diff-review-heuristic-files code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.diff-review-heuristic-status { flex: 0 0 auto; color: #6f6e68; font: 700 9px 'DM Mono'; text-transform: uppercase; }
-.diff-review-heuristic-bucket { flex: 0 0 auto; padding: 1px 6px; border: 1px solid #3b3a35; border-radius: 999px; color: #85847d; font: 700 9px 'DM Mono'; letter-spacing: .06em; text-transform: uppercase; }
-.diff-review-heuristic-bucket.bucket-production { color: var(--acid); border-color: #596234; }
-
-/* The trace. A rule that was evaluated and a rule that was never reached read
- * differently on purpose: only one of them tells you anything about the diff. */
-.diff-review-heuristic-rules { display: grid; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; counter-reset: rule; }
-.diff-review-heuristic-rules li { display: flex; gap: 8px; padding: 4px 6px; border-left: 2px solid #2a2a27; }
-.diff-review-heuristic-rules li > span:last-child { display: grid; gap: 1px; min-width: 0; }
-.diff-review-heuristic-rules li.outcome-fired { border-left-color: var(--acid); background: #1a1c12; }
-.diff-review-heuristic-rules li.outcome-not_reached { opacity: .45; }
-.diff-review-heuristic-outcome { flex: 0 0 16px; color: #56554e; font: 700 10px 'DM Mono'; text-align: center; }
-.diff-review-heuristic-rules li.outcome-fired .diff-review-heuristic-outcome { color: var(--acid); }
-.diff-review-heuristic-question { color: var(--soft); font-size: 11px; }
-.diff-review-heuristic-observed { color: #6f6e68; font-family: var(--code-font); font-size: 10px; word-break: break-word; }
-.diff-review-heuristic-verdict { color: var(--acid); font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
-
-.diff-review-heuristic-reasons, .diff-review-heuristic-evidence, .diff-review-heuristic-axes { display: grid; gap: 3px; margin: 4px 0 0; padding: 0 0 0 14px; }
-.diff-review-heuristic-reasons strong { color: var(--soft); }
-.diff-review-heuristic-axes { grid-auto-flow: column; justify-content: start; gap: 6px; padding: 0; list-style: none; }
-.diff-review-heuristic-axes li { padding: 1px 6px; border: 1px solid #3b3a35; border-radius: 999px; font: 700 9px 'DM Mono'; letter-spacing: .06em; }
+.diff-review-heuristic-summary { display: grid; gap: 5px; margin: 0; padding: 0 10px 10px; list-style: none; }
+.diff-review-heuristic-summary li { color: #a9a89f; font-size: 12px; line-height: 1.5; }
+.diff-review-heuristic-summary li:first-child { color: var(--soft); }
+.diff-review-heuristic-warn { color: #e1a68f; }

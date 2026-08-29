@@ -1692,8 +1692,9 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
-    await screen.findByText('chunk x');
-    expect(scrollTo.mock.calls.length).toBeGreaterThan(0);
+    await screen.findByRole('heading', { name: 'Streaming thread' });
+    await waitFor(() => expect(pollCount).toBeGreaterThan(0));
+    await waitFor(() => expect(scrollTo.mock.calls.length).toBeGreaterThan(0));
     expect(scrollIntoView).not.toHaveBeenCalled();
 
     const container = document.querySelector('.shared-thread') as HTMLElement;
@@ -1705,15 +1706,48 @@ describe('shared room', () => {
 
     const pollBeforeScrollAway = pollCount;
     await waitFor(() => expect(pollCount).toBeGreaterThan(pollBeforeScrollAway), { timeout: 2000 });
-    await waitFor(() => expect(screen.getByText(/^chunk x+$/).textContent).toBe(`chunk ${'x'.repeat(pollCount)}`));
     expect(scrollTo).not.toHaveBeenCalled();
+    const jumpToLatest = screen.getByRole('button', { name: /New activity · Jump to latest/i });
+    expect(jumpToLatest.parentElement).toHaveClass('conversation-thread-pane');
 
-    (container as unknown as { scrollTop: number }).scrollTop = 1650;
-    fireEvent.scroll(container);
-    const pollBeforeResume = pollCount;
-    await waitFor(() => expect(pollCount).toBeGreaterThan(pollBeforeResume), { timeout: 2000 });
-    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    fireEvent.click(jumpToLatest);
+    expect(scrollTo).toHaveBeenCalledWith({ top: 2000, behavior: 'smooth' });
+    expect(screen.queryByRole('button', { name: /New activity · Jump to latest/i })).toBeNull();
     expect(scrollIntoView).not.toHaveBeenCalled();
+    if (scrollToDescriptor) Object.defineProperty(HTMLElement.prototype, 'scrollTo', scrollToDescriptor);
+    else delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
+  });
+
+  it('autoscrolls after opening another conversation with the same message shape', async () => {
+    const scrollTo = vi.fn();
+    const scrollToDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo');
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo });
+    const firstConversationId = '00000000-0000-4000-8000-000000000032';
+    const secondConversationId = '00000000-0000-4000-8000-000000000033';
+    const conversations = [
+      { id: firstConversationId, title: 'First same-size thread', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+      { id: secondConversationId, title: 'Second same-size thread', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations, nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages')) {
+        const conversationId = url.includes(secondConversationId) ? secondConversationId : firstConversationId;
+        return new Response(JSON.stringify({ messages: [{ id: `message-${conversationId}`, conversationId, author: 'codex', body: 'same length', pinned: false, status: 'completed', error: '', createdAt: '2026-01-01T00:00:00Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'none' }] }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={firstConversationId} /></QueryClientProvider>);
+
+    await screen.findByRole('heading', { name: 'First same-size thread' });
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' })));
+    scrollTo.mockClear();
+
+    fireEvent.click(screen.getByText('Second same-size thread').closest('button')!);
+
+    await screen.findByRole('heading', { name: 'Second same-size thread' });
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' })));
     if (scrollToDescriptor) Object.defineProperty(HTMLElement.prototype, 'scrollTo', scrollToDescriptor);
     else delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
   });
