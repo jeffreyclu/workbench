@@ -211,3 +211,23 @@ surface nobody reads carries no information.
 
 This generalises past this one panel: for any explanation surface I build, prefer a few short
 sentences over a table of measurements, and reach for the raw trace only when Jeffrey asks for it.
+
+## The heuristic panel exists to price review time, not to describe the diff (2026-08-29)
+
+Jeffrey stated the panel's purpose outright: "remember this is help me decide how much time to
+dedicate to reviewing the block." That is the acceptance test for every sentence it renders. A fact
+earns its place only if knowing it would change how long he spends on the block; if it would not, it
+is padding no matter how accurate it is.
+
+This supersedes the earlier instinct to spend a word budget. Filling 100 words with restatements of
+the same measurement — total lines, then the file list, then the production/non-production split,
+then "N of M hunks touch docs" — reads as repetition because it is one fact said four times, and
+none of the four changes the time estimate. His correction was "very repetitive. i want CRITICAL
+information only, with thorough explanations": fewer items, each explained deeply enough to act on,
+rather than more items each stated shallowly.
+
+The general rule for triage surfaces: state each measurement at most once, lead with the attention
+call, and follow it only with findings that raise or lower the cost of reviewing — a stale verdict, a
+dropped declaration, a still-referenced removal, a risk flag, an untested new symbol. When nothing
+raises the cost, say that explicitly and name the checks that came back clean; "cheap to review" is
+itself a critical answer.

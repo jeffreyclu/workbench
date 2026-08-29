@@ -36,7 +36,7 @@ describe('diff review heuristic panel', () => {
     expect(screen.getByText(/Adds new code — \+1\/−0 lines in 1 file\./)).toBeInTheDocument();
   });
 
-  it('stays under the word budget even when every warning applies at once', () => {
+  it('stays under the word cap even when every warning applies at once', () => {
     open(decision({
       changeType: 'docs_comment',
       hunks: [hunk({
@@ -48,7 +48,9 @@ describe('diff review heuristic panel', () => {
         ],
       })],
     }));
-    expect(summaryWords()).toBeLessThanOrEqual(100);
+    // The cap is on explanations. The one-clause overflow line rides above it,
+    // because a warning nobody is told about is worse than a longer summary.
+    expect(summaryWords()).toBeLessThanOrEqual(150);
     expect(summaryWords()).toBeGreaterThan(0);
   });
 
@@ -56,7 +58,8 @@ describe('diff review heuristic panel', () => {
     open(decision({
       hunks: [hunk({ filePath: 'src/thing.ts', lines: ['-export function removed() {}', '+const kept = 1;'] })],
     }));
-    expect(document.querySelector('.diff-review-heuristic-warn')).toHaveTextContent('Drops removed with nothing put back.');
+    expect(document.querySelector('.diff-review-heuristic-warn'))
+      .toHaveTextContent(/removed is removed with nothing put back under the same name/);
   });
 
   it('says a stored verdict is stale in one sentence instead of a disagreement table', () => {
@@ -64,7 +67,7 @@ describe('diff review heuristic panel', () => {
       changeType: 'docs_comment',
       hunks: [hunk({ filePath: 'src/thing.ts', fileStatus: 'added', lines: ['+export function created() { return 1; }'] })],
     }));
-    expect(screen.getByText('Saved as Docs, which no longer matches.')).toBeInTheDocument();
+    expect(screen.getByText(/saved as Docs, but classifying these exact hunks now gives/)).toBeInTheDocument();
   });
 
   it('says when a new declaration is named by no test anywhere in the review', () => {
@@ -75,7 +78,7 @@ describe('diff review heuristic panel', () => {
     expect(screen.getByText(/No test in this review touches uncovered\./)).toBeInTheDocument();
   });
 
-  it('finds the covering test in a sibling decision, because a test never shares a decision with the code it covers', () => {
+  it('clears the untested warning from a sibling decision, because a test never shares a decision with the code it covers', () => {
     const subject = decision({
       id: 'code', changeType: 'new_code',
       hunks: [hunk({ id: 'code-hunk', filePath: 'src/created.ts', fileStatus: 'added', lines: ['+export function created() { return 1; }'] })],
@@ -85,23 +88,28 @@ describe('diff review heuristic panel', () => {
       hunks: [hunk({ id: 'test-hunk', filePath: 'src/created.test.ts', fileStatus: 'added', lines: ["+it('works', () => expect(created()).toBe(1));"] })],
     });
     open(subject, [subject, test]);
-    expect(screen.getByText(/Covered by src\/created\.test\.ts\./)).toBeInTheDocument();
+    // The covering hunk is not worth a sentence of its own — it lowers the cost
+    // of the block, and the way it does that is by removing the warning.
+    expect(screen.queryByText(/No test in this review touches/)).not.toBeInTheDocument();
   });
 
-  it('reduces the parity requirement to the one question it actually asks', () => {
+  it('asks the parity question once, folded into the rewrite it applies to', () => {
     open(decision({
       changeType: 'replacement',
       hunks: [hunk({ filePath: 'src/thing.ts', lines: ['-export function run() { return 1; }', '+export function run() { return compute(); }'] })],
     }));
-    expect(screen.getByText(/It claims behaviour is unchanged/)).toBeInTheDocument();
+    expect(screen.getByText(/signature, error handling, ordering and cost/)).toBeInTheDocument();
+    // The standalone parity sentence and the rewrite sentence make the same
+    // request, so a rewrite in place gets one of them, never both.
+    expect(screen.queryByText(/It claims behaviour is unchanged/)).not.toBeInTheDocument();
     // A change meant to differ gets no parity line at all, rather than a
     // paragraph explaining why the table does not apply.
     cleanup();
     open(decision({ changeType: 'behavior_edit', hunks: [hunk({ filePath: 'src/thing.ts', lines: ['-const a = 1;', '+const b = 2;'] })] }));
-    expect(screen.queryByText(/claims behaviour is unchanged/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/signature, error handling, ordering and cost/)).not.toBeInTheDocument();
   });
 
-  it('spends the budget instead of stopping at the verdict, because one line is the label the reviewer already had', () => {
+  it('explains rather than enumerates: no measurement is restated in a second form', () => {
     open(decision({
       changeType: 'behavior_edit',
       hunks: [
@@ -117,7 +125,46 @@ describe('diff review heuristic panel', () => {
       ],
     }));
     expect(summaryWords()).toBeGreaterThanOrEqual(40);
-    expect(summaryWords()).toBeLessThanOrEqual(100);
+    expect(summaryWords()).toBeLessThanOrEqual(130);
+    const summary = document.querySelector('.diff-review-heuristic-summary')!.textContent!;
+    // The size is stated once. The file list, the bucket mix and the
+    // production-only split are the same fact in other words, so they are gone.
+    expect(summary.match(/\+3\/−1/g)).toHaveLength(1);
+    expect(summary).not.toMatch(/docs\/thing\.md/);
+    expect(summary).not.toMatch(/production/);
+  });
+
+  it('leads with how much time the block is worth, not with the change type', () => {
+    open(decision({
+      changeType: 'behavior_edit', riskSignals: ['auth'],
+      hunks: [hunk({ filePath: 'src/thing.ts', lines: ['-const a = 1;', '+const b = 2;'] })],
+    }));
+    expect(screen.getByRole('button')).toHaveTextContent('Heuristic · Read closely');
+    expect(screen.getByText(/^Read closely\./)).toBeInTheDocument();
+  });
+
+  it('names a warning it had no room to explain, instead of dropping it', () => {
+    open(decision({
+      changeType: 'docs_comment', riskSignals: ['auth'],
+      hunks: [hunk({
+        filePath: 'src/thing.ts',
+        lines: [
+          '-export function alpha() { return 1; }', '-export function beta() { return 2; }',
+          '+export function alpha() { return compute(); }', '+export function created() { return alpha(); }',
+        ],
+      })],
+    }));
+    expect(screen.getByText(/Also outstanding, with no room to explain here:.*saved under the wrong change type/))
+      .toBeInTheDocument();
+  });
+
+  it('says a quiet block is cheap and names the checks that made it cheap', () => {
+    open(decision({
+      changeType: 'docs_comment',
+      hunks: [hunk({ filePath: 'docs/thing.md', lines: ['+Documented.'] })],
+    }));
+    expect(screen.getByRole('button')).toHaveTextContent('Heuristic · Skim');
+    expect(screen.getByText(/Everything that would argue for more time came back clean/)).toBeInTheDocument();
   });
 
   it('says why the verdict came out that way, in words rather than the rule trace', () => {
