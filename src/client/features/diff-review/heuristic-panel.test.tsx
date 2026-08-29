@@ -101,6 +101,36 @@ describe('diff review heuristic panel', () => {
     expect(screen.queryByText(/claims behaviour is unchanged/)).not.toBeInTheDocument();
   });
 
+  it('spends the budget instead of stopping at the verdict, because one line is the label the reviewer already had', () => {
+    open(decision({
+      changeType: 'behavior_edit',
+      hunks: [
+        hunk({
+          filePath: 'src/thing.ts',
+          lines: [
+            '-export function parseHeader(raw) { return raw.split(":"); }',
+            '+export function parseHeader(raw) { return raw.split(":", 2); }',
+            '+export function parseTrailer(raw) { return raw.trim(); }',
+          ],
+        }),
+        hunk({ filePath: 'docs/thing.md', lines: ['+Documented.'] }),
+      ],
+    }));
+    expect(summaryWords()).toBeGreaterThanOrEqual(40);
+    expect(summaryWords()).toBeLessThanOrEqual(100);
+  });
+
+  it('says why the verdict came out that way, in words rather than the rule trace', () => {
+    open(decision({
+      changeType: 'refactor_pure',
+      hunks: [hunk({
+        filePath: 'src/thing.ts',
+        lines: ['-export function run() { return compute(a, b); }', '+export function run() { return compute(a, b, c); }'],
+      })],
+    }));
+    expect(screen.getByText(/removed and added back under the same name/)).toBeInTheDocument();
+  });
+
   it('stays collapsed until asked, so it does not compete with the diff for attention', () => {
     render(<DiffReviewHeuristicPanel decision={decision({ hunks: [hunk({ filePath: 'src/thing.ts', lines: ['+const a = 1;'] })] })} />);
     expect(document.querySelector('.diff-review-heuristic-summary')).toBeNull();

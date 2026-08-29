@@ -476,15 +476,6 @@ nav { display: grid; gap: 3px; }
 .change-map-edge.relation-imports, .change-map-arrow.relation-imports, .change-map-legend li.relation-imports { --relation-tone: #6f9f8c; }
 .change-map-edge.relation-calls, .change-map-arrow.relation-calls, .change-map-legend li.relation-calls { --relation-tone: #8bbd75; }
 .change-map-edge.relation-uses, .change-map-arrow.relation-uses, .change-map-legend li.relation-uses { --relation-tone: #77766f; }
-.relation-drops-parameter { --relation-tone: #d68a7a; }
-.change-map-edge.relation-drops-parameter, .change-map-arrow.relation-drops-parameter, .change-map-legend li.relation-drops-parameter { --relation-tone: #d68a7a; }
-/* A relationship the patch deletes: drawn, because the reviewer has to see the
-   caller that went away, but drawn as the ghost it is so it never reads as a
-   dependency that still exists. */
-.change-map-edge.removed .change-map-edge-line { stroke-dasharray: 3 4; opacity: 0.5; }
-.change-map-edge.removed .change-map-edge-label { opacity: 0.7; font-style: italic; }
-.change-map-node-symbols { fill: #8f8d85; font-family: var(--mono, ui-monospace, monospace); font-size: 10px; }
-.change-map-node.selected .change-map-node-symbols { fill: #c9c6bc; }
 .change-map-arrow path { fill: var(--relation-tone); }
 .change-map-edge-line { fill: none; stroke: var(--relation-tone); stroke-width: 1.4; opacity: 0.7; }
 .change-map-edge.backward .change-map-edge-line { stroke-dasharray: 4 3; }
@@ -1798,7 +1789,7 @@ nav { display: grid; gap: 3px; }
 .diff-review-heuristic { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 .diff-review-heuristic-toggle { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; color: #a9a89f; border: 0; border-radius: 8px; background: transparent; cursor: pointer; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
 .diff-review-heuristic-toggle:hover, .diff-review-heuristic-toggle:focus-visible { color: var(--acid); outline: 0; }
-.diff-review-heuristic-summary { display: grid; gap: 5px; margin: 0; padding: 0 10px 10px; list-style: none; }
-.diff-review-heuristic-summary li { color: #a9a89f; font-size: 12px; line-height: 1.5; }
-.diff-review-heuristic-summary li:first-child { color: var(--soft); }
+.diff-review-heuristic-summary { display: grid; gap: 8px; margin: 0; padding: 0 10px 10px; }
+.diff-review-heuristic-summary p { margin: 0; color: #a9a89f; font-size: 12px; line-height: 1.55; }
+.diff-review-heuristic-summary p:first-child { color: var(--soft); }
 .diff-review-heuristic-warn { color: #e1a68f; }

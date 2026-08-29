@@ -350,6 +350,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const conversationScrollRef = useRef<HTMLDivElement>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
   const isNearThreadBottomRef = useRef(true);
+  const pendingInitialThreadScrollRef = useRef<string | null>(null);
   // Phone conversations open directly onto the thread; header and composer
   // start collapsed into small toggle buttons to keep the thread the
   // dominant surface, and expand on tap rather than on scroll direction.
@@ -1035,21 +1036,33 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   useEffect(() => {
     // Switching conversations always lands the reader at the newest message.
     isNearThreadBottomRef.current = true;
+    pendingInitialThreadScrollRef.current = conversationId;
     setOlderMessagePages([]);
     setHasNewActivityBelow(false);
     setMobileHeaderOpen(false);
     setMobileComposerOpen(false);
   }, [conversationId]);
   useEffect(() => {
-    // Message count and body length can be identical across conversations, so
-    // the streaming-follow effect does not reliably run for a newly opened
-    // thread. Wait for that conversation's messages, then land at the latest
-    // content without animating through its history.
-    if (!conversationId || messages.isLoading) return;
-    isNearThreadBottomRef.current = true;
-    setHasNewActivityBelow(false);
-    scrollThreadToLatest('auto');
-  }, [conversationId, messages.isLoading]);
+    // The query can expose cached data before the newly selected thread has
+    // been laid out. An immediate scroll then targets the old/zero height and
+    // still leaves the conversation at the top. Wait for the virtual rows to
+    // commit and be measured before consuming this conversation's one initial
+    // scroll. Later polling must not pull a reader back down after they scroll.
+    if (!conversationId || !messages.isSuccess || pendingInitialThreadScrollRef.current !== conversationId) return;
+    let finalFrame = 0;
+    const measureFrame = window.requestAnimationFrame(() => {
+      threadVirtualizer.measure();
+      finalFrame = window.requestAnimationFrame(() => {
+        if (pendingInitialThreadScrollRef.current !== conversationId) return;
+        scrollThreadToLatest('auto');
+        pendingInitialThreadScrollRef.current = null;
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(measureFrame);
+      if (finalFrame) window.cancelAnimationFrame(finalFrame);
+    };
+  }, [conversationId, messages.isSuccess, messages.dataUpdatedAt, conversationRenderRows.length]);
   useEffect(() => {
     const container = threadScrollRef.current;
     if (!container) return;

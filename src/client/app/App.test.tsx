@@ -1694,7 +1694,7 @@ describe('shared room', () => {
 
     await screen.findByRole('heading', { name: 'Streaming thread' });
     await waitFor(() => expect(pollCount).toBeGreaterThan(0));
-    await waitFor(() => expect(scrollTo.mock.calls.length).toBeGreaterThan(0));
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' })));
     expect(scrollIntoView).not.toHaveBeenCalled();
 
     const container = document.querySelector('.shared-thread') as HTMLElement;
@@ -1719,7 +1719,10 @@ describe('shared room', () => {
   });
 
   it('autoscrolls after opening another conversation with the same message shape', async () => {
-    const scrollTo = vi.fn();
+    const scrollTo = vi.fn(function (this: HTMLElement, options: ScrollToOptions) {
+      const requestedTop = typeof options.top === 'number' ? options.top : this.scrollTop;
+      this.scrollTop = Math.min(requestedTop, Math.max(0, this.scrollHeight - this.clientHeight));
+    });
     const scrollToDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo');
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo });
     const firstConversationId = '00000000-0000-4000-8000-000000000032';
@@ -1742,12 +1745,17 @@ describe('shared room', () => {
 
     await screen.findByRole('heading', { name: 'First same-size thread' });
     await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' })));
+    const container = document.querySelector('.shared-thread') as HTMLElement;
+    Object.defineProperty(container, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(container, 'scrollHeight', { configurable: true, value: 400, writable: true });
+    Object.defineProperty(container, 'scrollTop', { configurable: true, value: 0, writable: true });
     scrollTo.mockClear();
 
     fireEvent.click(screen.getByText('Second same-size thread').closest('button')!);
+    (container as unknown as { scrollHeight: number }).scrollHeight = 2000;
 
     await screen.findByRole('heading', { name: 'Second same-size thread' });
-    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' })));
+    await waitFor(() => expect(container.scrollTop).toBe(1600));
     if (scrollToDescriptor) Object.defineProperty(HTMLElement.prototype, 'scrollTo', scrollToDescriptor);
     else delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
   });
