@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, toolCallLimitFor } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -277,22 +277,25 @@ describe('classifyExecution', () => {
     expect(CLAUDE_EXECUTION_CONTRACT).toContain('Report a command as passing only if it ran in this run');
   });
 
-  it('gives Codex and Claude the same finite tool-call budget without a cached-input kill switch', () => {
+  it('gives Codex and Claude the same execution contract without a cached-input kill switch', () => {
     expect(CLAUDE_EXECUTION_CONTRACT).toBe(AGENT_EXECUTION_CONTRACT);
-    expect(toolCallLimitFor('economy')).toBe(12);
-    expect(toolCallLimitFor('standard')).toBe(24);
-    expect(toolCallLimitFor('deep')).toBe(40);
     expect(AGENT_EXECUTION_CONTRACT).not.toContain('cached-input budgets');
   });
 
-  it.each(['codex', 'claude'] as const)('stops %s after the same economy tool-call ceiling', async (agent) => {
+  it.each(['codex', 'claude'] as const)('lets %s complete after more than the former economy tool-call ceiling', async (agent) => {
     const event = agent === 'codex'
       ? { type: 'item.started', item: { type: 'command_execution', command: 'rg pattern src' } }
       : { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'src/app.ts' } }] } };
-    const body = Array.from({ length: toolCallLimitFor('economy') + 1 }, () => `printf '%s\\n' '${JSON.stringify(event)}'`).join('\n');
+    const finalEvent = agent === 'codex'
+      ? { type: 'item.completed', item: { type: 'agent_message', text: 'Finished after 13 tool calls.' } }
+      : { type: 'result', result: 'Finished after 13 tool calls.' };
+    const body = [...Array.from({ length: 13 }, () => event), finalEvent]
+      .map((item) => `printf '%s\\n' '${JSON.stringify(item)}'`).join('\n');
     const fixture = fakeAgentDirectory(agent === 'codex' ? body : 'exit 1', agent === 'claude' ? body : 'exit 1');
 
-    await expect(runAgentCommandWithFallback(agent, fixture.directory, 'Verify the change.', undefined, undefined, undefined, 'economy')).rejects.toThrow('tool-call limit (12)');
+    const result = await runAgentCommandWithFallback(agent, fixture.directory, 'Verify the change.', undefined, undefined, undefined, 'economy');
+
+    expect(result.output).toBe('Finished after 13 tool calls.');
   });
 
   it.each(['codex', 'claude'] as const)('lets %s finish after reporting more than the former deep cached-input ceiling', async (agent) => {

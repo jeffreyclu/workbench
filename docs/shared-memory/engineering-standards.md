@@ -331,9 +331,8 @@ primary invariant; usage telemetry remains for diagnosis, not termination.
 On 2026-08-28, after economy, standard, and deep runs repeatedly hit the
 500k/1M/1.5M cached-input ceilings, Jeffrey explicitly removed the cached-input
 kill switch for both Codex and Claude. Cached-input totals remain visible as
-telemetry. Autocompaction, per-profile tool-call limits, and the 30-minute run
-timeout remain the controls for runaway turns; do not restore a cache-token
-termination threshold.
+telemetry. Autocompaction and bounded context remain the controls for runaway
+turns; do not restore a cache-token termination threshold.
 
 On 2026-08-28, Jeffrey approved a non-fatal replacement: a completed turn that
 reports at least 500k cache-read tokens retires its resumable provider session
@@ -348,6 +347,15 @@ deduplicated cache-read tokens during an interactive run, Workbench must ask the
 agent to finish only its in-flight operation, emit a checkpoint, and automatically
 continue the unfinished request in a fresh compact provider session. This is a
 cooperative between-operation handoff, not SIGTERM/SIGKILL and not a failed run.
+
+On 2026-08-28, after that cooperative handoff was live, Jeffrey removed the
+remaining arbitrary work-termination caps. Do not kill a healthy foreground
+agent because it crossed a profile-specific tool-call count or a fixed wall-clock
+duration. Long work continues through cooperative cache checkpoints until it
+finishes or Jeffrey cancels it. Command-safety blocks, provider-side failures,
+manual cancellation, bounded prompt/retrieval/tool output, and Claude's
+non-fatal provider autocompaction remain in force; they are not arbitrary
+completion caps.
 
 ### Cache-read reduction: dual-agent dispatch stays, other levers are the approved path
 
@@ -470,8 +478,11 @@ the exact same promise/result. A human-only deterministic fallback is mandatory 
 unavailable. The prompt labels history, memory, prior implementations, and agent narration as
 reference evidence only, and repeats that the grounded objective is the instruction source.
 
-Grounding is bound to the human message's dispatch-group ID. A retry must therefore use the same
-historical cutoff and cannot silently adopt a newer queued request. Exact continuation messages use
-the preceding concrete human instruction for their fallback objective and retain that objective's
-execution kind. Future prompt work must preserve these properties: latest correction wins, agent
-narration never becomes user intent, Ask Both has parity, and retries cannot drift across turns.
+Grounding is durably stored per human dispatch message in `shared_turn_groundings`. A retry loads that
+exact snapshot and cannot silently adopt a newer queued request. A continuation reuses the preceding
+stored objective without another model call; legacy conversations without a snapshot walk backward
+through chains of “continue”, “???”, and urgency-only messages until they reach the concrete unresolved
+human request. The Haiku worker is primed off the request path, and queued classification deadlines
+start only when the request actually reaches the model—not while it waits behind warm-up. Future prompt
+work must preserve these properties: latest correction wins, agent narration never becomes user intent,
+Ask Both has parity, continuations are instant, and retries cannot drift across turns.

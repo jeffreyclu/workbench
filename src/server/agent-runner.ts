@@ -713,11 +713,6 @@ export function effortFor(profile: ExecutionProfile): 'low' | 'medium' | 'high' 
   return profile === 'economy' ? 'low' : profile === 'standard' ? 'medium' : 'high';
 }
 
-/** Provider-neutral upper bound on tool calls in one foreground turn. */
-export function toolCallLimitFor(profile: ExecutionProfile): number {
-  return profile === 'economy' ? 12 : profile === 'standard' ? 24 : 40;
-}
-
 /**
  * In-run context ceiling handed to `--autocompact`.
  *
@@ -1195,7 +1190,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
     let progress = '';
     let finalOutput = '';
     let terminalError = '';
-    let toolCallCount = 0;
     let lastProgressEvent = '';
     // Codex emits an `item.completed` event for every visible agent message,
     // including its live status updates. The last non-debugger message is the
@@ -1262,10 +1256,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
         void steerAgentInput(CACHE_HANDOFF_INSTRUCTION);
       }
     };
-    const timeout = setTimeout(() => {
-      terminationError = new Error('Agent run timed out after 30 minutes.');
-      stopProcessTree();
-    }, 30 * 60 * 1000);
     // Silence is the failure Jeffrey actually feels: a long tool loop or a long
     // thinking block can pass minutes without a single stream event, and the run
     // looks hung. The elapsed marker is appended at emit time and never stored
@@ -1330,16 +1320,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
         terminalError ||= terminalAgentError(agent, line) ?? '';
         try { const usage = usageFromEvent(agent, JSON.parse(line)); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
         const event = readableAgentEvent(agent, line, eventContext);
-        // Count tool starts, not their later completion/result events. Claude
-        // and Codex emit different wire formats, but both normalize to audit
-        // entries without `command` at the moment a tool begins.
-        toolCallCount += event.audit.filter((entry) => entry.streamKind !== 'decision' && entry.command === undefined).length;
-        const toolCallLimit = toolCallLimitFor(profile);
-        if (toolCallCount > toolCallLimit && !stopping) {
-          terminationError = new Error(`Agent exceeded the ${profile} tool-call limit (${toolCallLimit}) without completing. Verification must stay focused and terminate.`);
-          progress += `${progress ? '\n\n' : ''}● Stopped after ${toolCallLimit} tool calls without a final answer.`;
-          stopProcessTree();
-        }
         // A new text block starting mid-stream needs its own line — without
         // this, its first delta glues directly onto whatever progress line
         // (e.g. a tool-use marker) came right before it.
@@ -1383,7 +1363,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
     });
     child.on('close', (code) => {
       unregisterProcess();
-      clearTimeout(timeout);
       clearInterval(heartbeat);
       if (pendingFlush) clearTimeout(pendingFlush);
       if (forceKillTimer) clearTimeout(forceKillTimer);
