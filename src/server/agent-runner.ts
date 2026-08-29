@@ -38,7 +38,7 @@ export const CANCEL_FORCE_KILL_DELAY_MS = 3_000;
 /** One foreground agent owns each Workbench run. This keeps Claude's cache
  * footprint proportional to the actual task rather than multiplying it across
  * fresh subagent contexts. */
-export const AGENT_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Do not broaden a source-code verification into deployed-runtime, cache, database, process, or asset inspection unless the user explicitly asked for runtime diagnosis or the focused verification produced direct evidence of such a problem. A user's observed live failure is authoritative evidence: static wiring, source inspection, and isolated unit tests cannot prove that behavior is already fixed. Reproduce it at the relevant mounted or integration surface or make the focused change; never dismiss the report solely because the code path appears connected. Run worktrees already receive the primary checkout's dependencies: do not check for node_modules or bootstrap dependencies there. Never install dependencies merely to verify a change; use dependencies already available to the workspace or report the exact verification gap. Workbench supervises progress and cache use; when it asks for a checkpoint, stop starting tools and return that checkpoint immediately. Report a command as passing only if it ran in this run and its output was observed.`;
+export const AGENT_EXECUTION_CONTRACT = `The user's explicit request is the authoritative command. Carry it out directly unless a concrete tool error or an explicit safety boundary prevents it. Never debate, reinterpret, downgrade, or substitute a different task. If the user corrects your prior answer, says it is wrong, or supplies a different screenshot/reference, treat that correction as authoritative: compare the actual requested outcome against the reference, make the literal requested change, and verify it at the relevant surface. Do not defend the prior implementation, declare that inputs are equivalent, or say "nothing to fix" unless you have fulfilled the corrected request. Work directly in this foreground run; do not delegate to subagents. Use the shortest tool path that can complete the requested work correctly. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Do not broaden a source-code verification into deployed-runtime, cache, database, process, or asset inspection unless the user explicitly asked for runtime diagnosis or the focused verification produced direct evidence of such a problem. A user's observed live failure is authoritative evidence: static wiring, source inspection, and isolated unit tests cannot prove that behavior is already fixed. Reproduce it at the relevant mounted or integration surface or make the focused change; never dismiss the report solely because the code path appears connected. Run worktrees already receive the primary checkout's dependencies: do not check for node_modules or bootstrap dependencies there. Never install dependencies merely to verify a change; use dependencies already available to the workspace or report the exact verification gap. Workbench supervises progress and cache use; when it asks for a checkpoint, stop starting tools and return that checkpoint immediately. Report a command as passing only if it ran in this run and its output was observed.`;
 // Kept as an exported alias for callers/tests that used the old provider-specific name.
 export const CLAUDE_EXECUTION_CONTRACT = AGENT_EXECUTION_CONTRACT;
 export const TOOL_OUTPUT_CONTRACT = `Tool-output discipline: keep every command and file read bounded to the lines needed for the decision. Never read an entire unknown-size file, directory, diff, log, or search result: start with at most 200 lines or 20 matches, then reopen an exact range if needed. Do not paste, summarize verbatim, or carry raw command output into later turns. Record only the command, relevant paths, and the decisive finding; reopen an exact path/range when needed.`;
@@ -355,6 +355,10 @@ Execution mode: ${readOnly
 Additional instructions:
 ${compactPromptSection(run.instructions || 'Use your judgment and return a concise, actionable result.', 1_500)}
 
+${run.attempt > 0 && /aggregate cached-input ceiling/i.test(run.error)
+    ? cacheBudgetRetryPrompt(run.output)
+    : ''}
+
 Shared context available to every agent:
 ${compactPromptSection(sharedContext || 'No shared context yet.', 700)}
 
@@ -588,6 +592,14 @@ export function cacheReadHardLimitExceeded(usage: AgentUsage): boolean {
 
 export const CACHE_HANDOFF_MARKER = 'WORKBENCH_CACHE_HANDOFF:';
 export const CACHE_HANDOFF_INSTRUCTION = `Cache soft budget reached. Finish only the operation already in flight; do not start another tool or model cycle in this provider session. Preserve all completed work, then return a concise checkpoint beginning exactly \`${CACHE_HANDOFF_MARKER}\` with what changed, what remains, and verification already observed. Workbench will continue the task automatically in a fresh compact session.`;
+/** A hard cache stop is recoverable once, including write-capable work: the
+ * workspace is preserved and the next attempt starts fresh. A second hard stop
+ * remains visible instead of silently compounding spend indefinitely. */
+export const CACHE_BUDGET_AUTO_RETRY_LIMIT = 1;
+
+export function shouldAutoRetryCacheBudget(run: Pick<AgentRun, 'attempt'>, error: unknown): boolean {
+  return error instanceof AgentCacheBudgetExceededError && run.attempt < CACHE_BUDGET_AUTO_RETRY_LIMIT;
+}
 
 export function hasCacheHandoff(output: string): boolean {
   return output.includes(CACHE_HANDOFF_MARKER);
@@ -611,6 +623,10 @@ export function executionProgressSteer(toolStarts: number, cacheHandoffRequested
 
 export function cacheContinuationPrompt(originalPrompt: string, checkpoint: string): string {
   return `Continue the original request in a fresh provider session after a cache-budget checkpoint. Treat the checkpoint as progress evidence, inspect only what is needed to finish, and return the final user-facing answer. Do not repeat the checkpoint marker unless this new session receives another cache-budget instruction.\n\nOriginal request:\n${compactPromptSection(originalPrompt, 12_000)}\n\nCompleted segment checkpoint:\n${compactPromptSection(checkpoint, 8_000)}`;
+}
+
+export function cacheBudgetRetryPrompt(checkpoint: string): string {
+  return `\n\nAutomatic cache-budget continuation: the previous provider session reached Workbench's hard cache ceiling after preserving the work below. Continue the user's original request from this checkpoint in the existing workspace. Do not restart broad discovery, debate the request, or repeat completed verification. Finish the smallest remaining action and report the observed result.\n\nPrior checkpoint:\n${compactPromptSection(checkpoint, 8_000)}`;
 }
 
 export function addUsage(left: AgentUsage, right: AgentUsage): AgentUsage {
@@ -1925,6 +1941,23 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const message = error instanceof Error ? error.message : 'Agent run failed.';
     const terminalCheckpoint = error instanceof AgentTerminalWarningError ? error.checkpoint.trim() : '';
     const activeAgent = repository.getRun(run.id)?.agent ?? run.agent;
+    // A cache ceiling is a controlled checkpoint, not a task failure. Resume
+    // the exact run once—even for execute—so filesystem edits and the user's
+    // request survive without requiring a Retry click. Persist its reason and
+    // checkpoint before requeueing so the fresh provider session gets a
+    // targeted continuation instead of repeating discovery.
+    if (shouldAutoRetryCacheBudget(run, error)) {
+      repository.updateRun(run.id, { error: message, ...(terminalCheckpoint ? { output: terminalCheckpoint } : {}) });
+      if (repository.scheduleRunRetry(run.id, ownerId, backoffDelayMs(run.attempt + 1))) {
+        if (run.messageId) repository.updateSharedMessage(run.messageId, {
+          body: '● Cache budget reached. Continuing automatically in a fresh session…',
+          status: 'queued',
+        });
+        repository.addActivity(item.id, activeAgent, 'progress', `${run.kind} reached the cache budget; continuing automatically once in a fresh session.`);
+        publishRealtimeEvent('work-items', 'shared', 'insights');
+        return;
+      }
+    }
     if (RETRYABLE_KINDS.has(run.kind) && isTransientAgentError(error) && repository.scheduleRunRetry(run.id, ownerId, backoffDelayMs((repository.getRun(run.id)?.attempt ?? 0) + 1))) {
       repository.addActivity(item.id, activeAgent, 'progress', `${run.kind} hit a transient error and was scheduled for retry: ${message.slice(0, 240)}`);
       // Do not call notifyAgentRunFinished here: a retry is not a final outcome, and

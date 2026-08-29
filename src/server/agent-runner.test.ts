@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CACHE_READ_HARD_LIMIT_TOKENS, CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, cacheReadHardLimitExceeded, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, executionProgressSteer, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, AgentCacheBudgetExceededError, CACHE_BUDGET_AUTO_RETRY_LIMIT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, cacheReadHardLimitExceeded, checkpointActivityDetail, shouldAutoRetryCacheBudget, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, executionProgressSteer, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -281,6 +281,22 @@ describe('classifyExecution', () => {
     expect(CLAUDE_EXECUTION_CONTRACT).toBe(AGENT_EXECUTION_CONTRACT);
     expect(AGENT_EXECUTION_CONTRACT).not.toContain('cached-input budgets');
     expect(AGENT_EXECUTION_CONTRACT).toContain("A user's observed live failure is authoritative evidence");
+    expect(AGENT_EXECUTION_CONTRACT).toContain("The user's explicit request is the authoritative command");
+    expect(AGENT_EXECUTION_CONTRACT).toContain('Never debate, reinterpret, downgrade, or substitute a different task');
+  });
+
+  it('automatically continues exactly one hard cache-budget stop with its checkpoint', () => {
+    const cacheError = new AgentCacheBudgetExceededError('Edited the button; visual verification remains.');
+    expect(CACHE_BUDGET_AUTO_RETRY_LIMIT).toBe(1);
+    const prompt = buildPrompt(item('Fix the button'), {
+      agent: 'claude', kind: 'execute', attempt: 1,
+      error: 'Agent reached Workbench\'s 700K aggregate cached-input ceiling.',
+      output: 'Edited the button; visual verification remains.', instructions: '',
+    } as AgentRun);
+    expect(prompt).toContain('Automatic cache-budget continuation');
+    expect(prompt).toContain('Edited the button; visual verification remains.');
+    expect(shouldAutoRetryCacheBudget({ attempt: 0 }, cacheError)).toBe(true);
+    expect(shouldAutoRetryCacheBudget({ attempt: CACHE_BUDGET_AUTO_RETRY_LIMIT }, cacheError)).toBe(false);
   });
 
   it('uses one provider-neutral progress supervisor for action and cache handoff reminders', () => {
