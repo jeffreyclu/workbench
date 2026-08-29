@@ -26,7 +26,20 @@ export function previewReadOnlyPlugin(enabled: boolean): Plugin {
     configureServer(server) {
       if (!enabled) return;
       server.middlewares.use((request, response, next) => {
-        if (!request.url?.startsWith('/api/') || ['GET', 'HEAD', 'OPTIONS'].includes(request.method ?? 'GET')) return next();
+        const method = request.method ?? 'GET';
+        const pathname = request.url?.split('?')[0] ?? '';
+        // Review AI writes only replaceable derived cache entries. It does not
+        // mutate tasks, conversations, repositories, or external services, so
+        // preview must be able to compute it just as it can perform a GET.
+        const derivedAssist = method === 'POST' && [
+          '/api/review-assist',
+          '/api/review-assist/stream',
+          '/api/review-assist/lookup',
+          '/api/diff-confidence',
+          '/api/diff-confidence/stream',
+          '/api/diff-confidence/lookup',
+        ].includes(pathname);
+        if (!pathname.startsWith('/api/') || ['GET', 'HEAD', 'OPTIONS'].includes(method) || derivedAssist) return next();
         response.statusCode = 403;
         response.setHeader('Content-Type', 'application/json');
         response.end(JSON.stringify({ error: 'Preview mirrors live data and is read-only. Run this action from production.', code: 'PREVIEW_READ_ONLY' }));

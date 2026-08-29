@@ -39,6 +39,13 @@ export function useAutoReviewScores(scope: { workItemId: string | null; conversa
     ),
     enabled: Boolean(revision) && Boolean(workItemId || conversationId),
     staleTime: 30_000,
+    // This GET only observes durable cache/job state and asynchronously nudges
+    // a missing pass server-side. Poll only until that pass exists and settles;
+    // individual scores still arrive immediately over WebSocket.
+    refetchInterval: (query) => {
+      const current = query.state.data?.snapshot;
+      return !current || current.running ? 2_000 : false;
+    },
   });
 
   useEffect(() => {

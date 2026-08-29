@@ -18,7 +18,7 @@ vi.mock('./realtime.js', () => ({
   publishRealtimeReviewScore: (score: unknown) => publishRealtimeReviewScore(score),
 }));
 
-const { orderDecisionsForAutoScore, resetReviewAutoScore, reviewAutoScoreSnapshot, reviewAutoScoreView, scheduleReviewAutoScore } = await import('./review-auto-score.js');
+const { ensureReviewAutoScore, orderDecisionsForAutoScore, resetReviewAutoScore, reviewAutoScoreSnapshot, reviewAutoScoreView, scheduleReviewAutoScore } = await import('./review-auto-score.js');
 
 function diffWith(files: number) {
   return {
@@ -122,15 +122,48 @@ describe('background review scoring', () => {
     expect(reviewAutoScoreSnapshot({ workItemId: 'conv-1' }, 'rev-1')).toBeNull();
   });
 
-  it('caps a very large diff and reports what it did not score', async () => {
+  it('scores every decision in a large diff instead of leaving a silent tail', async () => {
     const repository = newRepository();
     getWorkspaceDiff.mockResolvedValue(diffWith(45));
     requestReviewAssist.mockResolvedValue('SCORE: 5\nfine');
 
     await scheduleReviewAutoScore(repository, { workItemId: 'item-5' }, process.cwd());
 
-    expect(requestReviewAssist).toHaveBeenCalledTimes(40);
-    expect(reviewAutoScoreSnapshot({ workItemId: 'item-5' }, 'rev-1')).toMatchObject({ total: 40, skipped: 5 });
+    expect(requestReviewAssist).toHaveBeenCalledTimes(45);
+    expect(reviewAutoScoreSnapshot({ workItemId: 'item-5' }, 'rev-1')).toMatchObject({ total: 45, skipped: 0 });
+  });
+
+  it('scores with bounded parallelism and streams each result as it settles', async () => {
+    const repository = newRepository();
+    getWorkspaceDiff.mockResolvedValue(diffWith(4));
+    let active = 0;
+    let peak = 0;
+    requestReviewAssist.mockImplementation(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      return 'SCORE: 25\nBounded.';
+    });
+
+    await scheduleReviewAutoScore(repository, { workItemId: 'parallel' }, process.cwd());
+
+    expect(peak).toBe(2);
+    expect(publishRealtimeReviewScore).toHaveBeenCalledTimes(4);
+  });
+
+  it('starts a missing revision asynchronously when a Changes pane observes it', async () => {
+    const repository = newRepository();
+    const item = repository.create({ title: 'Observed review', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: process.cwd(), dueDate: null });
+    repository.database.prepare('INSERT INTO work_item_workspace_selection (work_item_id, workspace_path, updated_at) VALUES (?, ?, ?)')
+      .run(item.id, process.cwd(), new Date().toISOString());
+    getWorkspaceDiff.mockResolvedValue(diffWith(1));
+    requestReviewAssist.mockResolvedValue('SCORE: 20\nLow risk.');
+
+    ensureReviewAutoScore(repository, { workItemId: item.id }, 'rev-1');
+
+    await vi.waitFor(() => expect(reviewAutoScoreSnapshot({ workItemId: item.id }, 'rev-1')?.running).toBe(false));
+    expect(requestReviewAssist).toHaveBeenCalledTimes(1);
   });
 
   it('serves scores already persisted for the current diff without spending a model turn', async () => {

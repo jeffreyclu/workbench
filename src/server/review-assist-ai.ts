@@ -258,6 +258,7 @@ const POOL_TARGET = 2;
 
 const idlePool: AssistWorker[] = [];
 const liveWorkers = new Set<AssistWorker>();
+const inFlightRequests = new Map<string, Promise<string>>();
 
 function writeTurn(worker: AssistWorker, prompt: string): void {
   worker.child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } })}\n`);
@@ -294,7 +295,8 @@ function handleWorkerLine(worker: AssistWorker, line: string): void {
   const pending = worker.active;
   worker.active = null;
   if (pending.timeout) clearTimeout(pending.timeout);
-  if (event.is_error || typeof event.result !== 'string' || !event.result.trim()) pending.reject(new Error('AI review assist returned no answer.'));
+  if (event.is_error) pending.reject(new Error(typeof event.result === 'string' && event.result.trim() ? event.result.trim() : 'AI review assist returned no answer.'));
+  else if (typeof event.result !== 'string' || !event.result.trim()) pending.reject(new Error('AI review assist returned no answer.'));
   else pending.resolve(event.result.trim());
   // Retire the session rather than reusing it, so no decision's diff leaks
   // into the next reviewer question. The warm replacement was already started
@@ -460,10 +462,22 @@ export async function requestReviewAssist(
   const hash = hashRequest(action, decision, taskIntent);
   const cached = readCached(database, hash);
   if (cached) return cached;
-  const raw = await runTurn(buildPrompt(action, decision, taskIntent), onDelta);
-  const answer = withAnswerAudits(action, decision, raw);
-  writeCached(database, hash, answer);
-  return answer;
+  // Task and conversation scopes intentionally score the same diff at the
+  // same time. Coalesce identical misses before either reaches Claude, or the
+  // background scheduler doubles both spend and pool pressure.
+  const existing = inFlightRequests.get(hash);
+  if (existing) return existing;
+  const request = (async () => {
+    const raw = await runTurn(buildPrompt(action, decision, taskIntent), onDelta);
+    const answer = withAnswerAudits(action, decision, raw);
+    writeCached(database, hash, answer);
+    return answer;
+  })();
+  inFlightRequests.set(hash, request);
+  try { return await request; }
+  finally {
+    if (inFlightRequests.get(hash) === request) inFlightRequests.delete(hash);
+  }
 }
 
 /** Start and prime the warm Changes agents during server boot, before a

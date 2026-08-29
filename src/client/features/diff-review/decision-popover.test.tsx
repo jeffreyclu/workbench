@@ -127,9 +127,10 @@ describe('decision popover', () => {
     const [panelBody, aside] = [dialog.querySelector('.decision-popover-panel'), dialog.querySelector('.decision-popover-aside')];
     expect(panelBody).toBeInTheDocument();
     expect(aside).toHaveTextContent('Diagram');
+    if (!panelBody || !aside) throw new Error('Expected the decision panel and related-changes diagram.');
     // Right of the panel, not below it: the pair lays out in a row, so DOM
     // order is what puts the diagram on the reading side of the decision.
-    expect(panelBody?.compareDocumentPosition(aside!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(panelBody.compareDocumentPosition(aside) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // The panel and its diagram are measured as one unit, so the popover
     // reserves both widths and the pair flips together at the viewport edge.
     expect(dialog).toHaveClass('with-aside');

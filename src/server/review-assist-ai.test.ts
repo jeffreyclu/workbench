@@ -66,6 +66,23 @@ describe('requestReviewAssist caching', () => {
     expect(spawn.mock.calls.length).toBe(spawnCountAfterFirstTurn);
   });
 
+  it('coalesces concurrent cache misses for the same decision into one model turn', async () => {
+    vi.resetModules();
+    const writes: string[] = [];
+    const spawn = mockStreamingWorker('SCORE: 25\nBounded change.', [], writes);
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { requestReviewAssist } = await import('./review-assist-ai.js');
+    const database = openDatabase(':memory:');
+
+    const [first, second] = await Promise.all([
+      requestReviewAssist(database, 'score_risk', decision, null),
+      requestReviewAssist(database, 'score_risk', decision, null),
+    ]);
+
+    expect(first).toBe(second);
+    expect(writes.filter((write) => write.includes('rate how risky this change is'))).toHaveLength(1);
+  });
+
   it('keys a score on the decision alone, so a background-computed score survives any task intent', async () => {
     vi.resetModules();
     const spawn = mockStreamingWorker('SCORE: 30\nNarrow change.');

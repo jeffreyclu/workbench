@@ -21,10 +21,11 @@ export type ReviewAutoScoreSnapshot = {
   entries: ReviewScoreEntry[];
 };
 
-/** A diff large enough to exceed this is one no reviewer reads in a sitting,
- * and scoring all of it would hold the assist pool for minutes. The remainder
- * stays available on demand from each decision's own Score risk button. */
-const MAX_AUTO_SCORED_DECISIONS = 40;
+/** Two independent Haiku turns keep a large review moving without turning an
+ * unbounded diff into an unbounded process storm. Identical task/conversation
+ * requests are coalesced again in review-assist-ai. */
+const AUTO_SCORE_CONCURRENCY = 2;
+const AUTO_SCORE_ATTEMPTS = 3;
 
 /** Which decisions the capped background budget is spent on first. When the cap
  * bites it should drop the scores a reviewer can already guess — docs,
@@ -88,37 +89,44 @@ async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreSco
     return;
   }
   const decisions = buildReviewDecisions(diff.files, repository.listDiffHunkReviews(scope, diff.revision));
-  const scoreable = orderDecisionsForAutoScore(decisions).slice(0, MAX_AUTO_SCORED_DECISIONS);
+  const scoreable = orderDecisionsForAutoScore(decisions);
   const job: ScoreJob = {
     scope,
     revision: diff.revision,
     total: scoreable.length,
-    skipped: decisions.length - scoreable.length,
+    skipped: 0,
     running: true,
     completed: 0,
     entries: new Map(),
   };
   jobs.set(key, job);
   try {
-    // Serial on purpose. The warm assist pool holds two sessions; taking both
-    // for background work would make a reviewer's own click pay a cold start,
-    // which is the exact cost the pool exists to avoid.
-    for (const decision of scoreable) {
+    let cursor = 0;
+    const scoreNext = async (): Promise<void> => {
+      const index = cursor;
+      cursor += 1;
+      if (index >= scoreable.length) return;
+      const decision = scoreable[index];
       let answer: string | null = null;
       let error: string | null = null;
-      try {
-        answer = await requestReviewAssist(repository.database, 'score_risk', reviewAssistDecisionPayload(decision, decisions), null);
-      } catch (failure) {
-        // A failed turn is reported as a failure the reviewer can retry from
-        // the panel, never as an absent or neutral score.
-        error = failure instanceof Error ? failure.message : 'Background risk scoring failed.';
+      for (let attempt = 1; attempt <= AUTO_SCORE_ATTEMPTS; attempt += 1) {
+        try {
+          answer = await requestReviewAssist(repository.database, 'score_risk', reviewAssistDecisionPayload(decision, decisions), null);
+          error = null;
+          break;
+        } catch (failure) {
+          error = failure instanceof Error ? failure.message : 'Background risk scoring failed.';
+          if (attempt < AUTO_SCORE_ATTEMPTS) await new Promise((resolveRetry) => setTimeout(resolveRetry, attempt * 500));
+        }
       }
       job.completed += 1;
       job.entries.set(decision.id, { decisionId: decision.id, ordinal: decision.ordinal, answer, error });
       publishRealtimeReviewScore({
         scope, revision: job.revision, decisionId: decision.id, answer, error, completed: job.completed, total: job.total,
       });
-    }
+      await scoreNext();
+    };
+    await Promise.all(Array.from({ length: Math.min(AUTO_SCORE_CONCURRENCY, scoreable.length) }, () => scoreNext()));
   } finally {
     job.running = false;
   }
@@ -154,6 +162,16 @@ export function scheduleReviewAutoScore(repository: WorkItemRepository, scope: R
     });
   inFlight.set(key, promise);
   return promise;
+}
+
+/** A Changes pane is itself durable evidence that this revision should be
+ * scored. This recovers work after restarts and covers manual conversations
+ * that did not pass through the task-run completion hook. It never blocks the
+ * request and never restarts a completed pass for the same revision. */
+export function ensureReviewAutoScore(repository: WorkItemRepository, scope: ReviewScoreScope, revision: string): void {
+  const current = jobs.get(scopeKey(scope));
+  if (current?.revision === revision && (current.running || (current.completed === current.total && current.skipped === 0))) return;
+  void scheduleReviewAutoScore(repository, scope, null);
 }
 
 /** Replay for a pane that opened after — or in the middle of — a job, since

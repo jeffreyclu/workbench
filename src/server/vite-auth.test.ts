@@ -50,5 +50,13 @@ describe('Vite preview read-only gate', () => {
     middleware?.({ url: '/api/work-items', method: 'POST' }, response, () => { nexted = true; });
     expect(nexted).toBe(false);
     expect(response.statusCode).toBe(403);
+
+    nexted = false;
+    middleware?.({ url: '/api/review-assist/stream', method: 'POST' }, response, () => { nexted = true; });
+    expect(nexted).toBe(true);
+
+    nexted = false;
+    middleware?.({ url: '/api/diff-confidence/lookup?revision=abc', method: 'POST' }, response, () => { nexted = true; });
+    expect(nexted).toBe(true);
   });
 });

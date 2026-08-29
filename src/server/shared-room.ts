@@ -13,6 +13,7 @@ import { agentAccountEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
 import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
 import { groundTurnWithHaiku } from './turn-grounding-ai.js';
+import { scheduleReviewAutoScore } from './review-auto-score.js';
 
 const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
@@ -1239,6 +1240,12 @@ export async function replyInSharedRoom(
     repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'completed', ...telemetry });
     repository.recordAgentHandoff(target.conversationId, messageId, result.agent, result.output);
     if (runId) repository.updateRun(runId, { agent: result.agent, output: result.output, status: 'completed', completedAt: new Date().toISOString(), ...telemetry });
+    if (linkedRun && linkedItem && MUTATING_RUN_KINDS.has(linkedRun.kind)) {
+      // Shared-room executions bypass executeAgentRun, so they need the same
+      // settle hook here. Fire-and-forget: scoring never delays completion.
+      void scheduleReviewAutoScore(repository, { workItemId: linkedItem.id }, sourceCwd);
+      void scheduleReviewAutoScore(repository, { conversationId: target.conversationId }, sourceCwd);
+    }
   } catch (error) {
     if (controller.signal.aborted) {
       repository.updateSharedMessage(messageId, { status: 'canceled' });

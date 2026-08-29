@@ -33,7 +33,7 @@ import { resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { generateFastAiTaskDraft } from '../fast-task-draft-ai.js';
 import { assessDiffBlocks, lookupDiffConfidenceBlocks } from '../diff-confidence-ai.js';
 import { lookupReviewAssist, requestReviewAssist } from '../review-assist-ai.js';
-import { reviewAutoScoreView } from '../review-auto-score.js';
+import { ensureReviewAutoScore, reviewAutoScoreView } from '../review-auto-score.js';
 import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
@@ -138,6 +138,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       }).refine((value) => Boolean(value.workItemId) !== Boolean(value.conversationId), 'Provide exactly one of workItemId or conversationId.')
         .parse(request.query);
       const scope = query.workItemId ? { workItemId: query.workItemId } : { conversationId: query.conversationId! };
+      ensureReviewAutoScore(repository, scope, query.revision);
       response.json({ snapshot: await reviewAutoScoreView(repository, scope, query.revision) });
     } catch (error) { next(error); }
   });
