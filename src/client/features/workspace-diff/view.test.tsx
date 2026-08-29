@@ -72,6 +72,24 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(screen.queryByRole('dialog', { name: 'Decision details' })).toBeNull();
   });
 
+  it('keeps the agentic handoff button visible without a linked run', async () => {
+    const file: WorkspaceDiffFile = { path: 'src/app.ts', previousPath: null, status: 'modified', additions: 1, deletions: 0, isBinary: false, patch: '@@ -1 +1 @@\n+after' };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file]) });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock, false, null);
+
+    const trigger = await screen.findByRole('button', { name: 'Agentic handoff' });
+    fireEvent.click(trigger);
+    const handoff = screen.getByRole('dialog', { name: 'Agentic handoff' });
+    expect(within(handoff).getByText('No handoff recorded')).toBeInTheDocument();
+  });
+
   it('opens the styled agentic handoff modal on demand', async () => {
     const files: WorkspaceDiffFile[] = [{ path: 'src/app.ts', editorUrl: null, previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }];
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

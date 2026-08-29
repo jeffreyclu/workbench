@@ -160,3 +160,19 @@ Read-only GitHub calls used to establish those anchors (`gh api .../pulls/<n>/fi
 forbidden is any write: `gh pr review`, `gh pr comment`, `gh api -X POST` against a comments
 endpoint. Anchor findings on lines that are actually part of the diff whenever possible, because a
 line outside every hunk forces Jeffrey to expand context before GitHub will let him comment there.
+
+## Every "done" report must say where Jeffrey can see it — or that there is nothing to see (2026-08-29)
+
+Jeffrey has twice rejected a completion report on the same grounds: "where am i supposed to see
+these changes??" and "i don't see any of this implemented in the UI." Both times the work was real
+and correctly wired, but the report described code layers instead of observable surfaces, so he went
+looking in the app for something that either lived only on the server or sat behind a gate his
+screen never reached.
+
+The rule: a change is not reported as done until the report names the concrete surface — the screen,
+the tab, the button, the exact preconditions to reach it — or states plainly that the change has no
+UI surface at all and explains what it affects instead (prompt text, audit output, API response).
+Prompt-construction and validation layers are the usual offenders: they are substantial work that
+renders nothing. Say so up front rather than letting an unqualified "done and wired" imply pixels.
+When the surface is gated (needs a linked work item, a specific pane, a non-PR source), the gate is
+part of the report, not a detail to discover later.

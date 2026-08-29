@@ -42,6 +42,11 @@ maintaining separate provider logins. Only a verified OAuth error may move a sou
 `reauth_required`; an ordinary search or connector failure keeps the source connected but unhealthy
 and retries through normal background scanning.
 
+Workbench's MCP surface exposes `search_external_sources` and `resolve_external_source` so dispatched
+agents can make read-only external calls through those same Workbench-owned connections when prompt
+prefetching is insufficient. These tools are open-world but read-only: credentials remain server-side,
+results are normalized by the connection broker, and no external mutation capability is implied.
+
 ### No personal phone on corporate tailnet
 
 *Jeffrey will not enroll his personal phone in the Writer corporate Tailscale tailnet, so mobile access to local dev servers must use a transport that requires nothing installed on the phone.*

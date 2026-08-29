@@ -39,6 +39,8 @@ describe('Workbench MCP', () => {
       runDiscoveryScan: record('runDiscoveryScan'),
       promoteRuntime: record('promoteRuntime'),
       listSourceConnections: record('listSourceConnections'),
+      searchExternalSources: record('searchExternalSources'),
+      resolveExternalSource: record('resolveExternalSource'),
       authorizeSource: record('authorizeSource'),
       setFigmaScope: record('setFigmaScope'),
       disconnectSource: record('disconnectSource'),
@@ -72,7 +74,7 @@ describe('Workbench MCP', () => {
     return (result.structuredContent as { data: T }).data;
   }
 
-  it('advertises the local Workbench admin surface without external-provider actions', async () => {
+  it('advertises Workbench-owned operations, including read-only external source access', async () => {
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
       'add_activity',
@@ -109,7 +111,9 @@ describe('Workbench MCP', () => {
       'reorder_stack',
       'resolve_discovery',
       'resolve_execution_plan',
+      'resolve_external_source',
       'retry_agent_run',
+      'search_external_sources',
       'set_figma_discovery_scope',
       'set_work_item_lifecycle',
       'unblock_work_item',
@@ -303,6 +307,20 @@ describe('Workbench MCP', () => {
       { method: 'configureLinearProvider', args: [['team-1'], ['project-1']] },
       { method: 'queueLinearWorkItem', args: ['00000000-0000-4000-8000-000000000001'] },
     ]);
+  });
+
+  it('routes read-only external source calls through Workbench-owned connections', async () => {
+    await callData('search_external_sources', { query: 'MCP reconnect', sources: ['figma', 'atlassian'] });
+    await callData('resolve_external_source', { url: 'https://writerai.atlassian.net/wiki/spaces/ENG/pages/123' });
+
+    expect(calls.slice(-2)).toEqual([
+      { method: 'searchExternalSources', args: ['MCP reconnect', ['figma', 'atlassian']] },
+      { method: 'resolveExternalSource', args: ['https://writerai.atlassian.net/wiki/spaces/ENG/pages/123'] },
+    ]);
+    const tools = await client.listTools();
+    for (const name of ['search_external_sources', 'resolve_external_source']) {
+      expect(tools.tools.find((tool) => tool.name === name)?.annotations).toEqual(expect.objectContaining({ readOnlyHint: true, openWorldHint: true }));
+    }
   });
 
   it('routes an authorized artifact publication through the Workbench service', async () => {

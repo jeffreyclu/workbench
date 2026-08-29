@@ -11,7 +11,9 @@ import {
   calendarDateSchema,
   executionProfileOverrideSchema,
   figmaScopeSchema,
+  resolveSourceUrlSchema,
   runKindSchema,
+  searchSourcesSchema,
   workItemFilterSchema,
   workItemReferenceTypeSchema,
 } from '../shared/contracts.js';
@@ -38,6 +40,11 @@ const readOnlyAnnotations = {
   destructiveHint: false,
   idempotentHint: true,
   openWorldHint: false,
+} as const;
+
+const externalReadOnlyAnnotations = {
+  ...readOnlyAnnotations,
+  openWorldHint: true,
 } as const;
 
 const mutationAnnotations = (idempotentHint = false) => ({
@@ -122,7 +129,9 @@ export interface WorkbenchAdminActions {
   runDiscoveryScan(): Promise<unknown>;
   promoteRuntime(conversationId: string): unknown;
   listSourceConnections(): unknown;
-  authorizeSource(input: { provider: 'confluence' | 'slack' | 'figma' | 'grafana' | 'gmail'; mode: 'remote' | 'managed'; serverUrl?: string }): Promise<unknown>;
+  searchExternalSources(query: string, sources: z.infer<typeof searchSourcesSchema>['sources']): Promise<unknown>;
+  resolveExternalSource(url: string): Promise<unknown>;
+  authorizeSource(input: { provider: 'confluence' | 'slack' | 'figma' | 'grafana' | 'gmail'; serverUrl?: string }): Promise<unknown>;
   setFigmaScope(roots: string[]): unknown;
   disconnectSource(provider: 'github' | 'slack' | 'figma' | 'confluence' | 'grafana' | 'gmail', actor: 'codex' | 'claude'): unknown;
   getLinearProvider(teamId?: string): Promise<unknown>;
@@ -734,6 +743,20 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     inputSchema: {},
     annotations: readOnlyAnnotations,
   }, async () => runTool('list_source_connections', () => admin.listSourceConnections()));
+
+  server.registerTool('search_external_sources', {
+    title: 'Search Workbench external sources',
+    description: 'Searches the selected external sources through Workbench-owned connections. Credentials remain server-side. This tool is read-only and cannot mutate an external provider.',
+    inputSchema: searchSourcesSchema.shape,
+    annotations: externalReadOnlyAnnotations,
+  }, async ({ query, sources }) => runTool('search_external_sources', () => admin.searchExternalSources(query, sources)));
+
+  server.registerTool('resolve_external_source', {
+    title: 'Resolve an external source URL',
+    description: 'Resolves one supported external URL through Workbench-owned connections and returns a normalized task draft. Credentials remain server-side and no provider state is changed.',
+    inputSchema: resolveSourceUrlSchema.shape,
+    annotations: externalReadOnlyAnnotations,
+  }, async ({ url }) => runTool('resolve_external_source', () => admin.resolveExternalSource(url)));
 
   server.registerTool('set_figma_discovery_scope', {
     title: 'Set Figma discovery scope',

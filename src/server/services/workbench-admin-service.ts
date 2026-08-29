@@ -7,13 +7,14 @@ import {
   SELF_ASSIGNED_EXECUTION_MESSAGE,
   type sourceProviderSchema,
   grafanaConnectionSchema,
+  type BrokerSourceId,
 } from '../../shared/contracts.js';
 import type { Activity, AgentRun, WorkItem } from '../../shared/contracts.js';
 import type { ActionFailure } from '../action-result.js';
 import { isActionFailure } from '../action-result.js';
 import { CANCEL_FORCE_KILL_DELAY_MS, cancelAgentRun, classifyExecutionRobust, executeAgentRun, resolveAgents } from '../agent-runner.js';
 import { describeExecutionRouting } from '../activity-log.js';
-import { contextForPrompt, listBrokerConnections } from '../connection-broker.js';
+import { contextForPrompt, listBrokerConnections, resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { scanSource } from '../source-scanner.js';
 import { LinearProvider } from '../providers/linear.js';
 import { startRemoteMcpOAuth } from '../remote-mcp.js';
@@ -206,6 +207,10 @@ export class WorkbenchAdminService {
 
   listSourceConnections = () => ({ connections: listBrokerConnections(this.repository) });
 
+  searchExternalSources = (query: string, sources: BrokerSourceId[]) => searchBrokerSources(this.repository, query, sources);
+
+  resolveExternalSource = (url: string) => resolveBrokerUrl(this.repository, url);
+
   setFigmaScope(roots: string[]): ActionFailure | { roots: string[] } {
     const settings = this.repository.getSourceSettings('figma');
     if (!settings) return { status: 404, body: { error: 'Figma is not connected.' } };
@@ -312,6 +317,8 @@ export class WorkbenchAdminService {
         return { message: reply };
       },
       listSourceConnections: this.listSourceConnections,
+      searchExternalSources: this.searchExternalSources,
+      resolveExternalSource: this.resolveExternalSource,
       authorizeSource: (input) => this.authorizeSource(input),
       setFigmaScope: (roots) => this.setFigmaScope(roots),
       disconnectSource: (provider, actor) => this.disconnectSource(provider, actor),

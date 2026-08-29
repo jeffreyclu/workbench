@@ -102,10 +102,6 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // the reviewer had scrolled it. Counting selections gives the diff pane a
   // signal for every click, not only the ones that change the decision.
   const [selectionTick, setSelectionTick] = useState(0);
-  // Following a relationship moves the reviewer somewhere they did not choose
-  // from the queue, so the diagram keeps the change they left. Without it the
-  // trail back is invisible the moment the diff re-anchors.
-  const [cameFromDecisionId, setCameFromDecisionId] = useState<string | null>(null);
   // The desktop decision detail is popover content opened from a block's gutter
   // marker, so the open state has to carry the marker that opened it: the
   // popover positions itself off that element's rect.
@@ -245,9 +241,6 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     const nextId = nextPendingDecisionId(orderedDecisions, decision.id, changeMap);
     try {
       await recordDecisionState(decision, state);
-      // The queue advances on its own, so the change just decided is exactly
-      // the one the reviewer came from.
-      setCameFromDecisionId(decision.id);
       setSelectedDecisionId(nextId);
       setDetailAnchor(null);
     } catch {
@@ -260,9 +253,6 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   };
 
   const selectDecision = (decisionId: string) => {
-    // Re-picking the change already open is not a jump, so it must not erase
-    // the origin the reviewer still needs to get back to.
-    if (selectedDecision && selectedDecision.id !== decisionId) setCameFromDecisionId(selectedDecision.id);
     setSelectedDecisionId(decisionId);
     // Selecting elsewhere closes an open popover, but the marker selects its own
     // decision before it opens, so keep the anchor when the id is unchanged —
@@ -343,17 +333,19 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
         {reviewSource === 'workspace' && (conversationId || workItemId) && workspaces.length > 0 && <label className="workspace-repository-picker"><span>Workspace</span><select value={explorer.data?.selectedPath ?? ''} onChange={(event) => selectSource(event.target.value)} disabled={selectWorkspace.isPending}><option value="" disabled>Select workspace</option>{workspaces.map((workspace) => <option key={workspace.path} value={workspace.path}>{workspace.label}</option>)}</select></label>}
         {reviewSource === 'history' && snapshots.length > 0 && <label className="workspace-diff-timeline"><History size={13} /><span className="visually-hidden">Workspace diff history</span><select value={selectedSnapshotId ?? selectedSnapshot?.id ?? ''} onChange={(event) => { setSelectedSnapshotId(event.target.value); setSelectedDecisionId(null); writeWorkspaceDiffSource(preferenceScope, `history:${event.target.value}`); }}><option value="">Latest recorded version</option>{snapshots.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{new Date(snapshot.capturedAt).toLocaleString()} · {snapshot.diff.changedFiles} files</option>)}</select></label>}
         {reviewSource === 'pull-request' && <div className="workspace-pr-source"><form onSubmit={submitPullRequestUrl}><label><span className="visually-hidden">Pull request URL</span><input aria-label="Pull request URL" value={pullRequestUrlDraft} onChange={(event) => setPullRequestUrlDraft(event.target.value)} placeholder="Paste GitHub PR URL" /></label><button type="submit">Review PR</button></form>{availablePullRequests.length > 0 && <label className="workspace-repository-picker"><span>PR</span><select aria-label="Pull request" value={selectedPullRequestUrl ?? ''} onChange={(event) => selectSource(event.target.value)}><option value="" disabled>Select pull request</option>{availablePullRequests.map((url) => <option key={url} value={url}>{pullRequestLabel(url)}</option>)}</select></label>}{pullRequestUrlError && <small role="alert">{pullRequestUrlError}</small>}</div>}
-        {!isPullRequestSource && reviewHandoff && <button className="workspace-diff-handoff" type="button" onClick={() => setIsHandoffOpen(true)}><ClipboardCheck size={14} />Agentic handoff</button>}
+        {!isPullRequestSource && <button className="workspace-diff-handoff" type="button" onClick={() => setIsHandoffOpen(true)}><ClipboardCheck size={14} />Agentic handoff</button>}
         <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={refreshSource} disabled={isRefreshing}><RefreshCw size={13} className={isRefreshing ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>
       </div>
     </header>
-    {isHandoffOpen && reviewHandoff && <ModalDialog className="review-handoff-dialog" labelledBy="review-handoff-dialog-title" onClose={() => setIsHandoffOpen(false)}>
+    {isHandoffOpen && <ModalDialog className="review-handoff-dialog" labelledBy="review-handoff-dialog-title" onClose={() => setIsHandoffOpen(false)}>
       <header className="review-handoff-dialog-header">
         <div className="review-handoff-dialog-icon"><ClipboardCheck size={20} /></div>
-        <div><span>Run evidence</span><h2 id="review-handoff-dialog-title">Agentic handoff</h2><small>Captured {new Date(reviewHandoff.createdAt).toLocaleString()}</small></div>
+        <div><span>Run evidence</span><h2 id="review-handoff-dialog-title">Agentic handoff</h2>{reviewHandoff && <small>Captured {new Date(reviewHandoff.createdAt).toLocaleString()}</small>}</div>
         <button type="button" onClick={() => setIsHandoffOpen(false)} aria-label="Close agentic handoff"><X size={17} /></button>
       </header>
-      <AgentRunReviewHandoffCard handoff={reviewHandoff} />
+      {reviewHandoff
+        ? <AgentRunReviewHandoffCard handoff={reviewHandoff} />
+        : <div className="review-handoff-empty"><ClipboardCheck size={24} /><strong>No handoff recorded</strong><p>This review is not linked to a completed agent run with handoff evidence.</p></div>}
     </ModalDialog>}
     {isPullRequestSource && pullRequestQuery.isLoading ? <DiffSkeleton />
       : isPullRequestSource && pullRequestQuery.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load this pull-request diff.</strong><p>{pullRequestQuery.error.message}</p><button type="button" className="button secondary compact" onClick={() => void pullRequestQuery.refetch()} disabled={pullRequestQuery.isFetching}>Retry</button></section>
@@ -362,7 +354,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
             : hunkReviews.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load review decisions.</strong><p>{hunkReviews.error.message}</p><button type="button" className="button secondary compact" onClick={() => void hunkReviews.refetch()} disabled={hunkReviews.isFetching}>Retry</button></section>
               : <div className="workspace-diff-layout diff-review-layout">
                 <DiffReviewSummaryView decisions={decisions} />
-                <DiffReviewChangeMap map={changeMap} selectedId={selectedDecision?.id ?? null} cameFromId={cameFromDecisionId} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={(decisionId, anchor) => openDecisionDetail(decisionId, anchor, 'data-change-map-node')} />
+                <DiffReviewChangeMap map={changeMap} selectedId={selectedDecision?.id ?? null} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={(decisionId, anchor) => openDecisionDetail(decisionId, anchor, 'data-change-map-node')} />
                 {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
                 {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
                 {selectedDecision && <>

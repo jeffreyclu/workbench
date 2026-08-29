@@ -430,6 +430,7 @@ nav { display: grid; gap: 3px; }
 .review-handoff-dialog-header > div:nth-child(2) { display: grid; gap: 3px; min-width: 0; }.review-handoff-dialog-header span { color: #a7ba6d; font: 700 9px 'DM Mono'; letter-spacing: .1em; text-transform: uppercase; }.review-handoff-dialog-header h2 { margin: 0; color: #eff0e8; font-size: 19px; }.review-handoff-dialog-header small { color: #85877b; font: 10px 'DM Mono'; }
 .review-handoff-dialog-header > button { display: grid; width: 36px; height: 36px; place-items: center; padding: 0; color: #aaa9a2; border: 1px solid #45483d; border-radius: 8px; background: #20211d; cursor: pointer; }.review-handoff-dialog-header > button:hover, .review-handoff-dialog-header > button:focus-visible { color: #eef0e8; border-color: #6b744d; background: #292b24; outline: 0; }
 .review-handoff-card { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; max-height: calc(100dvh - 190px); padding: 16px 18px 20px; overflow-y: auto; }
+.review-handoff-empty { display: grid; min-height: 210px; place-content: center; justify-items: center; padding: 28px; color: #7f8f58; text-align: center; }.review-handoff-empty strong { margin-top: 12px; color: #dedfd7; font-size: 13px; }.review-handoff-empty p { max-width: 360px; margin: 6px 0 0; color: #85877d; font-size: 11px; line-height: 1.55; }
 .review-handoff-section { min-width: 0; overflow: hidden; border: 1px solid #34362e; border-radius: 9px; background: #1b1c18; transition: border-color var(--motion-fast) var(--motion-ease), background var(--motion-fast) var(--motion-ease); }.review-handoff-section[open] { grid-column: 1 / -1; border-color: #4d5836; background: #1d2018; }
 .review-handoff-section summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; padding: 11px 13px; color: #c7c7be; cursor: pointer; list-style: none; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }.review-handoff-section summary::-webkit-details-marker { display: none; }.review-handoff-section summary::after { content: '+'; display: grid; flex: 0 0 22px; width: 22px; height: 22px; place-items: center; color: #aabd70; border: 1px solid #454a38; border-radius: 6px; background: #24271f; font: 14px/1 'DM Mono'; }.review-handoff-section[open] summary::after { content: '−'; }.review-handoff-section summary:hover { color: #eff0e8; background: #22241e; }.review-handoff-section summary:focus-visible { outline: 2px solid var(--acid); outline-offset: -2px; }
 .review-handoff-section p { margin: 0; padding: 0 13px 12px; color: #d8d8cf; font-size: 12px; line-height: 1.55; }.review-handoff-section ul { display: grid; gap: 7px; margin: 0; padding: 0 16px 14px 30px; color: #b8b8af; font-size: 11px; line-height: 1.5; }.review-handoff-section code { overflow-wrap: anywhere; color: #e0e0d8; font: 10px 'DM Mono'; }.review-handoff-section > small { display: block; padding: 0 13px 13px; color: #85877d; font: 10px 'DM Mono'; }.review-handoff-verification-passed { color: #9bc985; }.review-handoff-verification-failed { color: #e1a68f; }
@@ -464,19 +465,6 @@ nav { display: grid; gap: 3px; }
 .change-map-node:focus-visible .change-map-node-body { stroke: var(--acid); stroke-width: 2; }
 .change-map-node.dimmed { opacity: 0.38; }
 .change-map-node.isolated .change-map-node-body { stroke-dasharray: 3 3; }
-/* Where the reviewer jumped from, and what they have already decided: the two
-   things a static diagram cannot show but a moving reviewer needs. */
-.change-map-node.came-from .change-map-node-body { fill: #24201a; stroke: #e5b769; stroke-dasharray: 4 3; }
-.change-map-node.came-from.dimmed { opacity: 1; }
-.change-map-node-trail { fill: #e5b769; font: 8px 'DM Mono'; letter-spacing: 0.04em; }
-.change-map-node.reviewed .change-map-node-body { fill: #1a1f18; stroke: #3f5238; }
-.change-map-node.reviewed .change-map-node-title { fill: #9aa893; }
-.change-map-node.reviewed.selected .change-map-node-body { stroke: var(--acid); }
-.change-map-progress-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 4px; list-style: none; }
-.change-map-progress-legend li { display: inline-flex; align-items: center; gap: 6px; color: #85847d; font: 9px 'DM Mono'; }
-.change-map-progress-legend li span { width: 10px; height: 10px; border-radius: 3px; border: 1px solid; }
-.change-map-progress-legend li.came-from span { background: #24201a; border-color: #e5b769; }
-.change-map-progress-legend li.reviewed span { background: #1a1f18; border-color: #3f5238; }
 .change-map-node-rail { fill: var(--state-tone); }
 .change-map-node-title { fill: #deddd6; font: 12px 'DM Mono'; }
 .change-map-node-file { fill: #85847d; font: 10px 'DM Mono'; }
