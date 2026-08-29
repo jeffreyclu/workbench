@@ -4,6 +4,7 @@ import { CHANGE_RELATIONS, CHANGE_RELATION_LABELS, type ChangeMap, type ChangeRe
 import { layoutChangeMap } from './change-map-layout.js';
 import { plainRelationText, selectFocusedChangeMap } from './change-map-logic.js';
 import { ChangeMapCanvas } from './change-map-canvas.js';
+import { ChangeMapProgressLegend } from './change-map-progress-legend.js';
 
 /** The neighbourhood of one decision, drawn beside its open panel.
  *
@@ -15,11 +16,13 @@ import { ChangeMapCanvas } from './change-map-canvas.js';
 
 const DECISION_DIAGRAM_FOCUS_LIMIT = 3;
 
-export const DecisionRelationshipDiagram = memo(function DecisionRelationshipDiagram({ map, decisionId, riskBands, onSelect }: {
+export const DecisionRelationshipDiagram = memo(function DecisionRelationshipDiagram({ map, decisionId, cameFromId, riskBands, onSelect }: {
   map: ChangeMap;
   /** The decision the open panel is showing. This diagram belongs to that
    * panel, so it follows the panel rather than the diff-pane selection. */
   decisionId: string;
+  /** The change the reviewer followed a relationship out of to get here. */
+  cameFromId?: string | null;
   riskBands?: Map<string, string>;
   onSelect: (decisionId: string) => void;
 }) {
@@ -48,6 +51,7 @@ export const DecisionRelationshipDiagram = memo(function DecisionRelationshipDia
         <ChangeMapCanvas
           layout={layout}
           selectedId={decisionId}
+          cameFromId={cameFromId}
           riskBands={riskBands}
           selectedEdgeId={selectedEdgeId}
           label="Related changes diagram"
@@ -55,6 +59,7 @@ export const DecisionRelationshipDiagram = memo(function DecisionRelationshipDia
           onSelect={onSelect}
           onSelectEdge={setSelectedEdgeId}
         />
+        <ChangeMapProgressLegend nodes={map.nodes} cameFromId={cameFromId} />
         <p className="change-map-explanation" role="status">
           {selectedEdge
             ? plainRelationText(selectedEdge.explanation)

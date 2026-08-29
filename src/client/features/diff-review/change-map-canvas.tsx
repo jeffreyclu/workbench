@@ -18,9 +18,12 @@ function fileTail(filePath: string): string {
   return parts.length <= 2 ? filePath : `…/${parts.slice(-2).join('/')}`;
 }
 
-export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedId, riskBands, openDetailFor, selectedEdgeId, label = 'Change map diagram', nodeAttribute = 'data-change-map-node', onSelect, onOpenDetail, onSelectEdge }: {
+export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedId, cameFromId, riskBands, openDetailFor, selectedEdgeId, label = 'Change map diagram', nodeAttribute = 'data-change-map-node', onSelect, onOpenDetail, onSelectEdge }: {
   layout: ChangeMapLayout;
   selectedId: string | null;
+  /** The change the reviewer was on before following a relationship here, so
+   * the diagram shows the trail back rather than only where they landed. */
+  cameFromId?: string | null;
   riskBands?: Map<string, string>;
   openDetailFor?: string | null;
   selectedEdgeId: string | null;
@@ -75,6 +78,10 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
       })}
       {layout.nodes.map((node) => {
         const isSelected = node.id === selectedId;
+        const cameFrom = !isSelected && node.id === cameFromId;
+        // A recorded state is the reviewer's own mark on this change: whatever
+        // they decided, they have already read it.
+        const reviewed = node.state !== null;
         const dimmed = Boolean(selectedId) && !isSelected && connectedIds.size > 0 && !connectedIds.has(node.id);
         const band = riskBands?.get(node.id) ?? null;
         const openDetail = (anchor: DecisionPopoverAnchor) => {
@@ -83,7 +90,7 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
         };
         return <g
           key={node.id}
-          className={`change-map-node state-${node.state ?? 'pending'}${isSelected ? ' selected' : ''}${dimmed ? ' dimmed' : ''}${node.degree === 0 ? ' isolated' : ''}`}
+          className={`change-map-node state-${node.state ?? 'pending'}${isSelected ? ' selected' : ''}${cameFrom ? ' came-from' : ''}${reviewed ? ' reviewed' : ''}${dimmed ? ' dimmed' : ''}${node.degree === 0 ? ' isolated' : ''}`}
           role="button"
           tabIndex={0}
           aria-pressed={isSelected}
@@ -92,7 +99,7 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
           {...{ [nodeAttribute]: node.id }}
           aria-haspopup={onOpenDetail ? 'dialog' : undefined}
           aria-expanded={onOpenDetail ? openDetailFor === node.id : undefined}
-          aria-label={`Decision ${node.ordinal}: ${node.behavior} ${node.degree === 0 ? 'No related changes.' : `${node.degree} related ${node.degree === 1 ? 'change' : 'changes'}.`}${band ? ` ${band} risk.` : ''}${onOpenDetail ? ' Open decision details.' : ''}`}
+          aria-label={`Decision ${node.ordinal}: ${node.behavior} ${node.degree === 0 ? 'No related changes.' : `${node.degree} related ${node.degree === 1 ? 'change' : 'changes'}.`}${cameFrom ? ' Came from here.' : ''}${reviewed ? ' Already reviewed.' : ''}${band ? ` ${band} risk.` : ''}${onOpenDetail ? ' Open decision details.' : ''}`}
           onClick={(event) => openDetail(event.currentTarget)}
           onKeyDown={(event) => activate(event, () => openDetail(event.currentTarget))}
         >
@@ -101,6 +108,7 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
           <text className="change-map-node-title" x={node.x + 13} y={node.y + 23}>{node.ordinal}. {truncate(node.label, 20)}</text>
           <text className="change-map-node-file" x={node.x + 13} y={node.y + 39}>{truncate(fileTail(node.filePath), 26)}</text>
           <text className="change-map-node-counts" x={node.x + 13} y={node.y + 53}>+{node.additions} / -{node.deletions}{node.fileCount > 1 ? ` · ${node.fileCount} files` : ''}</text>
+          {cameFrom && <text className="change-map-node-trail" x={node.x + CHANGE_MAP_NODE_WIDTH - 9} y={node.y + CHANGE_MAP_NODE_HEIGHT - 8} textAnchor="end">came from</text>}
           {band && <circle className={`change-map-node-risk-dot band-${band}`} cx={node.x + CHANGE_MAP_NODE_WIDTH - 9} cy={node.y + 9} r="3.5" />}
         </g>;
       })}

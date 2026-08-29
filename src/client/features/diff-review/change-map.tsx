@@ -4,6 +4,7 @@ import { CHANGE_RELATIONS, CHANGE_RELATION_LABELS, type ChangeMap, type ChangeRe
 import { layoutChangeMap } from './change-map-layout.js';
 import { plainRelationText, selectFocusedChangeMap } from './change-map-logic.js';
 import { ChangeMapCanvas } from './change-map-canvas.js';
+import { ChangeMapProgressLegend } from './change-map-progress-legend.js';
 import type { DecisionPopoverAnchor } from './decision-popover.js';
 
 const CHANGE_MAP_FOCUS_LIMIT = 4;
@@ -16,9 +17,12 @@ const CHANGE_MAP_FOCUS_LIMIT = 4;
  * Relationships now read primarily as inline links inside the diff itself; the
  * diagram stays as the opt-in whole-diff view for wide refactors. */
 
-export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, selectedId, riskBands, openDetailFor, onSelect, onOpenDetail }: {
+export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, selectedId, cameFromId, riskBands, openDetailFor, onSelect, onOpenDetail }: {
   map: ChangeMap;
   selectedId: string | null;
+  /** Where the reviewer was before following a relationship into the current
+   * change, so the way back stays visible while they read. */
+  cameFromId?: string | null;
   /** Scored risk band per decision, the same map the gutter dot reads, so a
    * node carries its AI score without being opened. */
   riskBands?: Map<string, string>;
@@ -70,6 +74,7 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
       <ChangeMapCanvas
         layout={layout}
         selectedId={selectedId}
+        cameFromId={cameFromId}
         riskBands={riskBands}
         openDetailFor={openDetailFor}
         selectedEdgeId={selectedEdgeId}
@@ -84,6 +89,7 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
             ? 'Nothing in this diff references anything else in it. Each change stands alone.'
             : 'Select a line to read why two changes are related, or a box to open that decision — risk score and AI assist included.'}
       </p>
+      <ChangeMapProgressLegend nodes={map.nodes} cameFromId={cameFromId} />
       {relationsPresent.length > 0 && <ul className="change-map-legend" aria-label="Relationship types">
         {relationsPresent.map((relation: ChangeRelation) => <li key={relation} className={`relation-${relation}`}><span aria-hidden="true" />{CHANGE_RELATION_LABELS[relation]}</li>)}
       </ul>}

@@ -102,6 +102,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // the reviewer had scrolled it. Counting selections gives the diff pane a
   // signal for every click, not only the ones that change the decision.
   const [selectionTick, setSelectionTick] = useState(0);
+  // Following a relationship moves the reviewer somewhere they did not choose
+  // from the queue, so the diagram keeps the change they left. Without it the
+  // trail back is invisible the moment the diff re-anchors.
+  const [cameFromDecisionId, setCameFromDecisionId] = useState<string | null>(null);
   // The desktop decision detail is popover content opened from a block's gutter
   // marker, so the open state has to carry the marker that opened it: the
   // popover positions itself off that element's rect.
@@ -241,6 +245,9 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     const nextId = nextPendingDecisionId(orderedDecisions, decision.id, changeMap);
     try {
       await recordDecisionState(decision, state);
+      // The queue advances on its own, so the change just decided is exactly
+      // the one the reviewer came from.
+      setCameFromDecisionId(decision.id);
       setSelectedDecisionId(nextId);
       setDetailAnchor(null);
     } catch {
@@ -253,6 +260,9 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   };
 
   const selectDecision = (decisionId: string) => {
+    // Re-picking the change already open is not a jump, so it must not erase
+    // the origin the reviewer still needs to get back to.
+    if (selectedDecision && selectedDecision.id !== decisionId) setCameFromDecisionId(selectedDecision.id);
     setSelectedDecisionId(decisionId);
     // Selecting elsewhere closes an open popover, but the marker selects its own
     // decision before it opens, so keep the anchor when the id is unchanged —
@@ -352,7 +362,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
             : hunkReviews.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load review decisions.</strong><p>{hunkReviews.error.message}</p><button type="button" className="button secondary compact" onClick={() => void hunkReviews.refetch()} disabled={hunkReviews.isFetching}>Retry</button></section>
               : <div className="workspace-diff-layout diff-review-layout">
                 <DiffReviewSummaryView decisions={decisions} />
-                <DiffReviewChangeMap map={changeMap} selectedId={selectedDecision?.id ?? null} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={(decisionId, anchor) => openDecisionDetail(decisionId, anchor, 'data-change-map-node')} />
+                <DiffReviewChangeMap map={changeMap} selectedId={selectedDecision?.id ?? null} cameFromId={cameFromDecisionId} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={(decisionId, anchor) => openDecisionDetail(decisionId, anchor, 'data-change-map-node')} />
                 {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
                 {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
                 {selectedDecision && <>

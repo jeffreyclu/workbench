@@ -24,6 +24,32 @@ const map: ChangeMap = {
 };
 
 describe('diff review change navigation', () => {
+  it('marks the change the reviewer came from and the ones already reviewed', () => {
+    const reviewedMap: ChangeMap = {
+      ...map,
+      nodes: [{ ...map.nodes[0], state: 'reviewed' }, map.nodes[1], map.nodes[2]],
+    };
+    render(<DiffReviewChangeMap map={reviewedMap} selectedId="consumer" cameFromId="type" onSelect={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /Full change diagram/ }));
+
+    const origin = screen.getByRole('button', { name: /Decision 1:/ });
+    expect(origin).toHaveClass('came-from');
+    expect(origin).toHaveClass('reviewed');
+    expect(origin.getAttribute('aria-label')).toContain('Came from here.');
+    expect(origin.getAttribute('aria-label')).toContain('Already reviewed.');
+    expect(screen.getByRole('button', { name: /Decision 2:/ })).not.toHaveClass('came-from');
+    expect(screen.getByRole('button', { name: /Decision 2:/ })).not.toHaveClass('reviewed');
+
+    const legend = screen.getByRole('list', { name: 'Review progress in this diagram' });
+    expect(legend).toHaveTextContent('Came from change 1');
+    expect(legend).toHaveTextContent('1 of 3 already reviewed');
+  });
+  it('omits the progress legend while nothing has been reviewed or navigated from', () => {
+    render(<DiffReviewChangeMap map={map} selectedId="type" onSelect={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /Full change diagram/ }));
+
+    expect(screen.queryByRole('list', { name: 'Review progress in this diagram' })).toBeNull();
+  });
   it('keeps the full overview collapsed until requested', () => {
     render(<DiffReviewChangeMap map={map} selectedId="type" onSelect={() => {}} />);
 
