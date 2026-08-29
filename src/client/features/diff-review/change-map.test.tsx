@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { ChangeMap, ChangeMapNode } from '../../../shared/change-map.js';
-import { DiffReviewChangeMap, DiffReviewChangePath } from './change-map.js';
+import { DiffReviewChangeMap } from './change-map.js';
 
 afterEach(cleanup);
 
@@ -35,55 +35,6 @@ describe('diff review change navigation', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('group', { name: 'Change map diagram' })).toBeInTheDocument();
   });
-
-  it('shows the selected change path and jumps through a direct relationship', () => {
-    const onSelect = vi.fn();
-    render(<DiffReviewChangePath map={map} selectedId="type" onSelect={onSelect} />);
-
-    const path = screen.getByRole('navigation', { name: 'Related code changes' });
-    expect(path).toHaveTextContent('Change 1');
-    expect(screen.getByRole('region', { name: '1 downstream change' })).toHaveTextContent('References type');
-    expect(path).toHaveTextContent('2. renderWorkspace');
-
-    fireEvent.click(screen.getByRole('button', { name: /Jump to decision 2/ }));
-    expect(onSelect).toHaveBeenCalledWith('consumer');
-  });
-
-  it('keeps an unrelated selected hunk explicit instead of hiding the path', () => {
-    render(<DiffReviewChangePath map={map} selectedId="isolated" onSelect={() => {}} />);
-
-    expect(screen.getByRole('navigation', { name: 'Related code changes' })).toHaveTextContent('Change 3');
-    expect(screen.getByText('No direct relationships in this diff')).toBeInTheDocument();
-  });
-
-  it('bounds a dense path by direction and reveals every relationship on request', () => {
-    const denseNodes = [node('root', 1, 'root', 12), ...Array.from({ length: 12 }, (_, index) => node(`change-${index + 2}`, index + 2, `change-${index + 2}`, 1))];
-    const denseMap: ChangeMap = {
-      nodes: denseNodes,
-      edges: denseNodes.slice(1).map((item, index) => ({
-        id: `${item.id}->root`,
-        fromId: index < 6 ? item.id : 'root',
-        toId: index < 6 ? 'root' : item.id,
-        relation: 'calls',
-        symbols: [],
-        explanation: `${item.id} is directly related to root.`,
-      })),
-      omittedEdges: 0,
-    };
-
-    render(<DiffReviewChangePath map={denseMap} selectedId="root" onSelect={() => {}} />);
-
-    expect(screen.getByRole('region', { name: '6 upstream changes' }).querySelectorAll('li')).toHaveLength(3);
-    expect(screen.getByRole('region', { name: '6 downstream changes' }).querySelectorAll('li')).toHaveLength(3);
-    const showAll = screen.getByRole('button', { name: 'Show all 12' });
-    expect(showAll).toHaveAttribute('aria-expanded', 'false');
-
-    fireEvent.click(showAll);
-    expect(screen.getByRole('region', { name: '6 upstream changes' }).querySelectorAll('li')).toHaveLength(6);
-    expect(screen.getByRole('region', { name: '6 downstream changes' }).querySelectorAll('li')).toHaveLength(6);
-    expect(screen.getByRole('button', { name: 'Show fewer' })).toHaveAttribute('aria-expanded', 'true');
-  });
-
   it('opens a large overview on the selected neighborhood with an explicit full-map control', () => {
     const extraNodes = Array.from({ length: 8 }, (_, index) => node(`extra-${index}`, index + 4, `extra-${index}`, 1));
     const largeMap: ChangeMap = {

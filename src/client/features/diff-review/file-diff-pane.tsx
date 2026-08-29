@@ -1,8 +1,6 @@
 import { memo, useEffect, useRef } from 'react';
 import { ExternalLink, FileDiff } from 'lucide-react';
 import { languageFromPath, SyntaxHighlight } from '../../components/markdown/syntax-highlight.js';
-import type { ChangeMap } from '../../../shared/change-map.js';
-import { DiffReviewChangePath } from './change-map.js';
 import type { ReviewDecision, ReviewDiffHunk } from './logic.js';
 import { reviewStateLabel } from './logic.js';
 
@@ -14,12 +12,11 @@ import { reviewStateLabel } from './logic.js';
  * The whole diff of the selected file, with the active decision's block
  * highlighted and scrolled into view. A decision is judged in its surrounding
  * context, so the pane never shows a block in isolation. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, changeMap, activeDecisionId, onSelect }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, onSelect }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
   decisions: ReviewDecision[];
-  changeMap: ChangeMap;
   activeDecisionId: string;
   onSelect: (decisionId: string) => void;
 }) {
@@ -50,10 +47,6 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
       <small>{hunks.length} {hunks.length === 1 ? 'block' : 'blocks'} in this file</small>
       {editorUrl && <a href={editorUrl} aria-label={`Open ${filePath} in editor`} title="Open in editor"><ExternalLink size={13} aria-hidden="true" /></a>}
     </header>
-    {/* IDE LEGACY-AFFECTING: the semantic path is additive and shares the
-        pane's existing selection callback, so legacy hunk navigation keeps one
-        source of truth while related changes become reachable beside the code. */}
-    <DiffReviewChangePath map={changeMap} selectedId={activeDecisionId} onSelect={onSelect} />
     <div className={`diff-review-file-diff-body${spotlight ? ' spotlight' : ''}`} ref={diffBody}>
       {hunks.map((hunk) => {
         const decision = decisionByHunkId.get(hunk.decisionId);

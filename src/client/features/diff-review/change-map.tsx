@@ -1,10 +1,9 @@
 import { memo, useMemo, useState, type KeyboardEvent } from 'react';
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Network } from 'lucide-react';
+import { ChevronDown, ChevronRight, Network } from 'lucide-react';
 import { CHANGE_RELATIONS, CHANGE_RELATION_LABELS, type ChangeMap, type ChangeRelation } from '../../../shared/change-map.js';
 import { CHANGE_MAP_NODE_HEIGHT, CHANGE_MAP_NODE_WIDTH, layoutChangeMap } from './change-map-layout.js';
-import { selectChangeConnections, selectFocusedChangeMap, type ChangeMapConnection } from './change-map-logic.js';
+import { selectFocusedChangeMap } from './change-map-logic.js';
 
-const CHANGE_PATH_PREVIEW_LIMIT = 3;
 const CHANGE_MAP_FOCUS_LIMIT = 4;
 
 /** The diagram answers one question the queue cannot: which of these changes
@@ -138,68 +137,5 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
       </ul>}
       {map.omittedEdges > 0 && <p className="muted change-map-omitted">{map.omittedEdges} weaker relationships are not drawn; this diff exceeds the map limit.</p>}
     </>}
-  </section>;
-});
-
-/** Keeps the selected hunk's immediate code path attached to the code pane.
- * The full map remains useful as an overview, but review happens one decision
- * at a time; this focused path exposes the same graph without making the
- * reviewer scroll away from the code they are reading. */
-export const DiffReviewChangePath = memo(function DiffReviewChangePath({ map, selectedId, onSelect }: {
-  map: ChangeMap;
-  selectedId: string;
-  onSelect: (decisionId: string) => void;
-}) {
-  const [expandedForSelection, setExpandedForSelection] = useState<string | null>(null);
-  const { selected: selectedNode, upstream, downstream } = useMemo(() => selectChangeConnections(map, selectedId), [map, selectedId]);
-  if (!selectedNode || map.nodes.length < 2) return null;
-
-  const expanded = expandedForSelection === selectedId;
-  const totalConnections = upstream.length + downstream.length;
-  const hiddenConnections = Math.max(0, upstream.length - CHANGE_PATH_PREVIEW_LIMIT)
-    + Math.max(0, downstream.length - CHANGE_PATH_PREVIEW_LIMIT);
-  const visibleUpstream = expanded ? upstream : upstream.slice(0, CHANGE_PATH_PREVIEW_LIMIT);
-  const visibleDownstream = expanded ? downstream : downstream.slice(0, CHANGE_PATH_PREVIEW_LIMIT);
-
-  return <nav className="change-path" aria-label="Related code changes">
-    <header className="change-path-current">
-      <Network size={13} aria-hidden="true" />
-      <span>Change {selectedNode.ordinal}</span>
-      <code>{truncate(selectedNode.label, 28)}</code>
-      {hiddenConnections > 0 && <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => setExpandedForSelection(expanded ? null : selectedId)}
-      >{expanded ? 'Show fewer' : `Show all ${totalConnections}`}</button>}
-    </header>
-    {totalConnections === 0
-      ? <small>No direct relationships in this diff</small>
-      : <div className={`change-path-groups${expanded ? ' expanded' : ''}`}>
-        {upstream.length > 0 && <ChangePathGroup direction="upstream" connections={visibleUpstream} total={upstream.length} onSelect={onSelect} />}
-        {downstream.length > 0 && <ChangePathGroup direction="downstream" connections={visibleDownstream} total={downstream.length} onSelect={onSelect} />}
-      </div>}
-  </nav>;
-});
-
-const ChangePathGroup = memo(function ChangePathGroup({ direction, connections, total, onSelect }: {
-  direction: 'upstream' | 'downstream';
-  connections: ChangeMapConnection[];
-  total: number;
-  onSelect: (decisionId: string) => void;
-}) {
-  const upstream = direction === 'upstream';
-  return <section className="change-path-group" aria-label={`${total} ${direction} ${total === 1 ? 'change' : 'changes'}`}>
-    <header>
-      {upstream ? <ArrowLeft size={12} aria-hidden="true" /> : <ArrowRight size={12} aria-hidden="true" />}
-      <span>{direction}</span><small>{total}</small>
-    </header>
-    <ol>
-      {connections.map(({ edge, related }) => <li key={edge.id} className={`relation-${edge.relation}`}>
-        <button type="button" onClick={() => onSelect(related.id)} aria-label={`Jump to decision ${related.ordinal}: ${plainText(edge.explanation)}`}>
-          <b>{related.ordinal}. {truncate(related.label, 26)}</b>
-          <small>{CHANGE_RELATION_LABELS[edge.relation]} · {truncate(fileTail(related.filePath), 30)}</small>
-        </button>
-      </li>)}
-    </ol>
   </section>;
 });

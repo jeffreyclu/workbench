@@ -2,7 +2,6 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildChangeMap } from '../../../shared/change-map.js';
 import { buildFileDiffHunks, type ReviewDecision } from './logic.js';
 import { DiffReviewFileDiffPane } from './file-diff-pane.js';
 
@@ -40,7 +39,6 @@ function renderPane(activeDecisionId: string) {
     editorUrl={null}
     hunks={hunks}
     decisions={decisions}
-    changeMap={buildChangeMap(decisions)}
     activeDecisionId={activeDecisionId}
     onSelect={() => {}}
   />);
@@ -71,7 +69,6 @@ describe('review file diff pane', () => {
       editorUrl={null}
       hunks={hunks}
       decisions={decisions}
-      changeMap={buildChangeMap(decisions)}
       activeDecisionId="src/other.ts::@@ -1 +1 @@"
       onSelect={() => {}}
     />);
