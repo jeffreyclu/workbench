@@ -2,6 +2,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import { buildChangeMap } from '../../../shared/change-map.js';
 import { buildFileDiffHunks, type ReviewDecision } from './logic.js';
 import { DiffReviewFileDiffPane } from './file-diff-pane.js';
 
@@ -33,11 +34,13 @@ const decision = (state: ReviewDecision['state']): ReviewDecision => ({
 });
 
 function renderPane(activeDecisionId: string) {
+  const decisions = [decision(null)];
   return render(<DiffReviewFileDiffPane
     filePath="src/example.ts"
     editorUrl={null}
     hunks={hunks}
-    decisions={[decision(null)]}
+    decisions={decisions}
+    changeMap={buildChangeMap(decisions)}
     activeDecisionId={activeDecisionId}
     onSelect={() => {}}
   />);
@@ -62,11 +65,13 @@ describe('review file diff pane', () => {
     expect(container.querySelector('.diff-review-file-diff-body')).toHaveClass('spotlight');
     expect(container.querySelector('.diff-review-diff-block')).toHaveClass('active');
 
+    const decisions = [decision(null)];
     rerender(<DiffReviewFileDiffPane
       filePath="src/example.ts"
       editorUrl={null}
       hunks={hunks}
-      decisions={[decision(null)]}
+      decisions={decisions}
+      changeMap={buildChangeMap(decisions)}
       activeDecisionId="src/other.ts::@@ -1 +1 @@"
       onSelect={() => {}}
     />);

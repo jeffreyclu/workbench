@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
 import { ModalDialog } from '../../components/dialogs/modal-dialog.js';
 import type { AgentRunReviewHandoff, DiffHunkReviewState, WorkspaceDiffFile } from '../../../shared/contracts.js';
+import { buildChangeMap } from '../../../shared/change-map.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
@@ -200,6 +201,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const hunkReviews = useDiffHunkReviews(scope, reviewRevision);
   const upsertHunkReview = useUpsertDiffHunkReview(scope, reviewRevision);
   const decisions = useMemo(() => buildReviewDecisions(displayedDiff?.files ?? [], hunkReviews.data?.reviews ?? []), [displayedDiff?.files, hunkReviews.data?.reviews]);
+  const changeMap = useMemo(() => buildChangeMap(decisions), [decisions]);
   const orderedDecisions = useMemo(() => orderReviewDecisions(decisions), [decisions]);
   // Scores computed by the background pass that starts when an agent comes to
   // rest. Nothing here requests them; they stream in and populate whichever
@@ -346,7 +348,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
               : <div className="workspace-diff-layout diff-review-layout">
                 {!isPullRequestSource && reviewHandoff && <AgentRunReviewHandoffCard handoff={reviewHandoff} />}
                 <DiffReviewSummaryView decisions={decisions} />
-                <DiffReviewChangeMap decisions={decisions} selectedId={selectedDecision?.id ?? null} onSelect={selectDecision} />
+                <DiffReviewChangeMap map={changeMap} selectedId={selectedDecision?.id ?? null} onSelect={selectDecision} />
                 {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
                 {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
                 {selectedDecision && <>
@@ -359,7 +361,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                   <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">
-                    {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={selectDecision} />}
+                    {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} changeMap={changeMap} activeDecisionId={selectedDecision.id} onSelect={selectDecision} />}
                     {!isPhoneReview && <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
                       <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
                     </DiffReviewDecisionDetailCard></div>}

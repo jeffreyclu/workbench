@@ -1,7 +1,6 @@
 import { memo, useMemo, useState, type KeyboardEvent } from 'react';
-import { ChevronDown, ChevronRight, Network } from 'lucide-react';
-import { CHANGE_RELATIONS, CHANGE_RELATION_LABELS, buildChangeMap, type ChangeRelation } from '../../../shared/change-map.js';
-import type { ReviewDecision } from './logic.js';
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Network } from 'lucide-react';
+import { CHANGE_RELATIONS, CHANGE_RELATION_LABELS, type ChangeMap, type ChangeRelation } from '../../../shared/change-map.js';
 import { CHANGE_MAP_NODE_HEIGHT, CHANGE_MAP_NODE_WIDTH, layoutChangeMap } from './change-map-layout.js';
 
 /** The diagram answers one question the queue cannot: which of these changes
@@ -25,19 +24,18 @@ function fileTail(filePath: string): string {
   return parts.length <= 2 ? filePath : `…/${parts.slice(-2).join('/')}`;
 }
 
-export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ decisions, selectedId, onSelect }: {
-  decisions: ReviewDecision[];
+export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, selectedId, onSelect }: {
+  map: ChangeMap;
   selectedId: string | null;
   onSelect: (decisionId: string) => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const map = useMemo(() => buildChangeMap(decisions), [decisions]);
   const layout = useMemo(() => layoutChangeMap(map), [map]);
 
   // One change has nothing to relate to, and a map of it would only take space
   // away from the diff.
-  if (decisions.length < 2) return null;
+  if (map.nodes.length < 2) return null;
 
   const selectedEdge = layout.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
   const connectedIds = new Set(layout.edges
@@ -123,4 +121,47 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ decisions
       {map.omittedEdges > 0 && <p className="muted change-map-omitted">{map.omittedEdges} weaker relationships are not drawn; this diff exceeds the map limit.</p>}
     </>}
   </section>;
+});
+
+/** Keeps the selected hunk's immediate code path attached to the code pane.
+ * The full map remains useful as an overview, but review happens one decision
+ * at a time; this focused path exposes the same graph without making the
+ * reviewer scroll away from the code they are reading. */
+export const DiffReviewChangePath = memo(function DiffReviewChangePath({ map, selectedId, onSelect }: {
+  map: ChangeMap;
+  selectedId: string;
+  onSelect: (decisionId: string) => void;
+}) {
+  const selectedNode = map.nodes.find((node) => node.id === selectedId);
+  if (!selectedNode || map.nodes.length < 2) return null;
+
+  const nodesById = new Map(map.nodes.map((node) => [node.id, node]));
+  const connections = map.edges.flatMap((edge) => {
+    if (edge.fromId !== selectedId && edge.toId !== selectedId) return [];
+    const outgoing = edge.fromId === selectedId;
+    const related = nodesById.get(outgoing ? edge.toId : edge.fromId);
+    return related ? [{ edge, related, outgoing }] : [];
+  }).sort((left, right) => left.related.ordinal - right.related.ordinal);
+
+  return <nav className="change-path" aria-label="Related code changes">
+    <div className="change-path-current">
+      <Network size={13} aria-hidden="true" />
+      <span>Change {selectedNode.ordinal}</span>
+      <code>{truncate(selectedNode.label, 28)}</code>
+    </div>
+    {connections.length === 0
+      ? <small>No direct relationships in this diff</small>
+      : <ol>
+        {connections.map(({ edge, related, outgoing }) => <li key={edge.id} className={`relation-${edge.relation}`}>
+          <button
+            type="button"
+            onClick={() => onSelect(related.id)}
+            aria-label={`Jump to decision ${related.ordinal}: ${plainText(edge.explanation)}`}
+          >
+            {outgoing ? <ArrowRight size={13} aria-hidden="true" /> : <ArrowLeft size={13} aria-hidden="true" />}
+            <span><small>{outgoing ? 'Downstream' : 'Upstream'} · {CHANGE_RELATION_LABELS[edge.relation]}</small><b>{related.ordinal}. {truncate(related.label, 24)}</b></span>
+          </button>
+        </li>)}
+      </ol>}
+  </nav>;
 });

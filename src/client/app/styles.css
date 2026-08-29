@@ -475,6 +475,23 @@ nav { display: grid; gap: 3px; }
 .change-map-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 12px; list-style: none; }
 .change-map-legend li { display: inline-flex; align-items: center; gap: 6px; color: #85847d; font: 9px 'DM Mono'; }
 .change-map-legend li span { width: 14px; height: 2px; border-radius: 2px; background: var(--relation-tone); }
+.change-path { display: flex; align-items: stretch; min-width: 0; min-height: 49px; border-bottom: 1px solid #2a2a26; background: #141412; }
+.change-path-current { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 8px 11px; color: var(--acid); border-right: 1px solid #2a2a26; font: 700 9px 'DM Mono'; letter-spacing: .06em; text-transform: uppercase; }
+.change-path-current code { overflow: hidden; max-width: 180px; color: #d4d3cc; font: 10px 'DM Mono'; letter-spacing: 0; text-overflow: ellipsis; text-transform: none; white-space: nowrap; }
+.change-path > small { align-self: center; padding: 0 12px; color: #77766f; font: 9px 'DM Mono'; }
+.change-path ol { display: flex; min-width: 0; margin: 0; padding: 0; overflow-x: auto; overscroll-behavior-x: contain; list-style: none; }
+.change-path li { --relation-tone: #56554e; display: flex; flex: 0 0 auto; }
+.change-path button { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 6px 10px; color: var(--relation-tone); border: 0; border-right: 1px solid #252522; background: transparent; cursor: pointer; text-align: left; }
+.change-path button:hover, .change-path button:focus-visible { background: #22221e; outline: 0; }
+.change-path button > span { display: grid; gap: 2px; }
+.change-path button small { color: var(--relation-tone); font: 700 8px 'DM Mono'; letter-spacing: .05em; text-transform: uppercase; }
+.change-path button b { max-width: 180px; overflow: hidden; color: #c9c8c1; font: 10px 'DM Mono'; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.change-path .relation-passes-parameter { --relation-tone: #e5b769; }
+.change-path .relation-implements { --relation-tone: #c69bd8; }
+.change-path .relation-references-type { --relation-tone: #9ab6d8; }
+.change-path .relation-imports { --relation-tone: #6f9f8c; }
+.change-path .relation-calls { --relation-tone: #8bbd75; }
+.change-path .relation-uses { --relation-tone: #77766f; }
 .diff-review-queue-region { min-width: 0; }
 .workspace-diff .diff-review-decision-queue { background: #11110f; }
 .diff-review-decision-queue ol { display: flex; margin: 0; padding: 0; overflow-x: auto; overscroll-behavior-x: contain; list-style: none; }
@@ -557,7 +574,7 @@ nav { display: grid; gap: 3px; }
 .diff-review-actions > p { margin: 0; color: #e1a68f; font-size: 11px; }.diff-review-saving { color: #85847d; font: 10px 'DM Mono'; }
 .diff-review-load-error { padding: 14px; border: 1px solid #5b3935; border-radius: 7px; background: #211716; }.diff-review-load-error strong { color: #e1a68f; }.diff-review-load-error p { color: #aaa9a2; }
 .diff-review-workbench { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; border-top: 1px solid #252522; }
-.diff-review-file-diff { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; border-right: 1px solid #252522; background: #101010; }
+.diff-review-file-diff { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; border-right: 1px solid #252522; background: #101010; }
 .diff-review-file-diff > header { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #252522; background: #171715; }
 .diff-review-file-diff > header > span { display: flex; align-items: center; gap: 7px; min-width: 0; color: #85847d; }
 .diff-review-file-diff > header code { overflow-wrap: anywhere; color: #deddd6; font: 11px 'DM Mono'; }
@@ -668,6 +685,10 @@ nav { display: grid; gap: 3px; }
   .mobile-decision-navigator > .mobile-decision-detail-toggle { grid-column: 1 / -1; width: 100%; height: 44px; color: #c9c8a2; border-color: #605d3d; }
   .diff-review-queue-region { display: none; }
   .diff-review-file-diff { border-right: 0; }
+  .change-path { min-height: 54px; }
+  .change-path-current { flex: 0 0 auto; max-width: 42vw; padding-inline: 9px; }
+  .change-path-current code { max-width: 22vw; }
+  .change-path button { min-height: 54px; }
   .diff-review-file-diff-body { max-height: 58vh; }
   .diff-review-decision-card { gap: 16px; padding: 14px 12px; }
   .diff-review-decision-card > header { align-items: flex-start; flex-direction: column-reverse; gap: 8px; }
