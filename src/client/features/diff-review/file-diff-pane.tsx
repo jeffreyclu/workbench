@@ -253,8 +253,10 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
             <button
               type="button"
               className={`diff-review-block-marker state-${state ?? 'pending'}`}
-              aria-haspopup="dialog"
-              aria-expanded={openDetailFor === decisionId}
+              // Only advertise a popover when one is actually wired: a marker
+              // that announces a dialog and opens nothing is a dead click.
+              aria-haspopup={onOpenDetail ? 'dialog' : undefined}
+              aria-expanded={onOpenDetail ? openDetailFor === decisionId : undefined}
               aria-label={`Decision ${ordinal ?? ''} · ${reviewStateLabel(state)}${band ? ` · ${band} risk` : ''} — open decision details`}
               onClick={(event) => {
                 const anchor = event.currentTarget;

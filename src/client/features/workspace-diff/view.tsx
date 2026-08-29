@@ -10,6 +10,7 @@ import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
 import type { ReviewAssistTaskIntent } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
+import { DecisionPopover } from '../diff-review/decision-popover.js';
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import type { ReviewDecision } from '../diff-review/logic.js';
@@ -116,6 +117,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // signal for every click, not only the ones that change the decision.
   const [selectionTick, setSelectionTick] = useState(0);
   const [mobileDecisionDetailOpen, setMobileDecisionDetailOpen] = useState(false);
+  // The desktop decision detail is popover content opened from a block's gutter
+  // marker, so the open state has to carry the marker that opened it: the
+  // popover positions itself off that element's rect.
+  const [detailAnchor, setDetailAnchor] = useState<{ decisionId: string; anchor: HTMLElement } | null>(null);
   const isPhoneReview = usePhoneReviewControls();
   // null means "automatically show the latest record when Git is clean";
   // an empty string is the user's explicit choice to view current changes.
@@ -235,14 +240,31 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     try {
       await recordDecisionState(selectedDecision, state);
       setSelectedDecisionId(nextId);
+      setDetailAnchor(null);
       if (isPhoneReview) setMobileDecisionDetailOpen(false);
     } catch {
       // The mutation exposes its stable request error beside the actions.
     }
   };
 
+  // The gutter marker is the same handle on every layout, so on a phone — where
+  // there is no room to float a panel beside the code — it opens the same detail
+  // in the dialog the navigator uses, rather than setting an anchor that renders
+  // nothing.
+  const openDecisionDetail = (decisionId: string, anchor: HTMLElement) => {
+    if (isPhoneReview) {
+      setMobileDecisionDetailOpen(true);
+      return;
+    }
+    setDetailAnchor((current) => (current?.decisionId === decisionId ? null : { decisionId, anchor }));
+  };
+
   const selectDecision = (decisionId: string) => {
     setSelectedDecisionId(decisionId);
+    // Selecting elsewhere closes an open popover, but the marker selects its own
+    // decision before it opens, so keep the anchor when the id is unchanged —
+    // otherwise the marker would clear and immediately reopen, never toggling.
+    setDetailAnchor((current) => (current && current.decisionId === decisionId ? current : null));
     setSelectionTick((tick) => tick + 1);
     if (isPhoneReview) setMobileDecisionDetailOpen(false);
   };
@@ -348,10 +370,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                   <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">
-                    {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} onSelect={selectDecision} />}
-                    {!isPhoneReview && <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
-                      <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} />
-                    </DiffReviewDecisionDetailCard></div>}
+                    {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} />}
+                    {!isPhoneReview && detailAnchor && detailAnchor.decisionId === selectedDecision.id && <DecisionPopover anchor={detailAnchor.anchor} labelledBy="diff-review-decision-title" onClose={() => setDetailAnchor(null)}>
+                      <DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
+                        <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} />
+                      </DiffReviewDecisionDetailCard>
+                    </DecisionPopover>}
                   </div>
                   {isPhoneReview && mobileDecisionDetailOpen && <ModalDialog className="decision-detail-dialog" labelledBy="mobile-decision-detail-title" onClose={() => setMobileDecisionDetailOpen(false)}>
                     <div className="decision-detail-dialog-header">
