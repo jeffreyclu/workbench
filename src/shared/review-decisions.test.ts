@@ -36,4 +36,22 @@ describe('reviewAssistDecisionPayload', () => {
     expect(Math.max(...payload.hunks.flatMap((item) => item.lines.map((line) => line.length)))).toBeLessThanOrEqual(REVIEW_ASSIST_MAX_LINE_LENGTH);
     expect(payload.hunks[0].lines.some((line) => line.includes('diff lines omitted'))).toBe(true);
   });
+
+  it('normalizes an oversized payload from a tab opened before the current release', () => {
+    const oldClientPayload = {
+      action: 'score_risk',
+      decision: {
+        behavior: 'Changes a large hunk.', state: 'Pending', changeType: 'behavior_edit', secondaryChangeTypes: [],
+        hunks: [{ filePath: 'src/example.ts', location: 'Line 1', lines: Array.from({ length: 260 }, (_, index) => `+line ${index}`) }],
+        coverageEvidence: { symbols: [], hunks: [], uncitedSymbols: [] },
+        referenceEvidence: { symbols: [], hunks: [], residualSymbols: [], clearedSymbols: [] },
+      },
+      taskIntent: null,
+    };
+
+    const parsed = reviewAssistRequestSchema.parse(oldClientPayload);
+
+    expect(parsed.decision.hunks[0].lines).toHaveLength(REVIEW_ASSIST_MAX_LINES_PER_HUNK);
+    expect(parsed.decision.hunks[0].lines.some((line) => line.includes('diff lines omitted'))).toBe(true);
+  });
 });

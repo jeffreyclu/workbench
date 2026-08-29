@@ -322,6 +322,25 @@ export const REVIEW_ASSIST_MAX_HUNKS = 50;
 export const REVIEW_ASSIST_MAX_LINES_PER_HUNK = 200;
 export const REVIEW_ASSIST_MAX_LINE_LENGTH = 4_000;
 
+/** Accepts payloads from tabs opened before the current release while applying
+ * the exact same representative bound as the current client. This is a rolling
+ * compatibility boundary: a runtime handoff must not turn an old, valid diff
+ * into a 400 until the user refreshes their browser. */
+export function boundReviewAssistLines(lines: readonly string[]): string[] {
+  const bounded = lines.length <= REVIEW_ASSIST_MAX_LINES_PER_HUNK
+    ? lines
+    : [
+      ...lines.slice(0, Math.floor((REVIEW_ASSIST_MAX_LINES_PER_HUNK - 1) / 2)),
+      `... ${lines.length - REVIEW_ASSIST_MAX_LINES_PER_HUNK + 1} diff lines omitted ...`,
+      ...lines.slice(-(REVIEW_ASSIST_MAX_LINES_PER_HUNK - Math.floor((REVIEW_ASSIST_MAX_LINES_PER_HUNK - 1) / 2) - 1)),
+    ];
+  return bounded.map((line) => line.slice(0, REVIEW_ASSIST_MAX_LINE_LENGTH));
+}
+
+const reviewAssistLinesSchema = z.array(z.string())
+  .transform(boundReviewAssistLines)
+  .pipe(z.array(z.string().max(REVIEW_ASSIST_MAX_LINE_LENGTH)).max(REVIEW_ASSIST_MAX_LINES_PER_HUNK));
+
 export const reviewAssistRequestSchema = z.object({
   action: z.enum(['explain', 'what_could_break', 'compare_task_intent', 'score_risk']),
   decision: z.object({
@@ -335,7 +354,7 @@ export const reviewAssistRequestSchema = z.object({
     hunks: z.array(z.object({
       filePath: z.string().min(1).max(2_000),
       location: z.string().min(1).max(200),
-      lines: z.array(z.string().max(REVIEW_ASSIST_MAX_LINE_LENGTH)).max(REVIEW_ASSIST_MAX_LINES_PER_HUNK),
+      lines: reviewAssistLinesSchema,
     })).min(1).max(REVIEW_ASSIST_MAX_HUNKS),
     // Defaulted for the same reason as `changeType`: a tab opened before this
     // field existed still posts the old payload, and answering without the
@@ -345,7 +364,7 @@ export const reviewAssistRequestSchema = z.object({
       hunks: z.array(z.object({
         filePath: z.string().min(1).max(2_000),
         location: z.string().min(1).max(200),
-        lines: z.array(z.string().max(REVIEW_ASSIST_MAX_LINE_LENGTH)).max(REVIEW_ASSIST_MAX_LINES_PER_HUNK),
+        lines: reviewAssistLinesSchema,
         symbols: z.array(z.string().min(1).max(200)).max(12),
       })).max(4),
       uncitedSymbols: z.array(z.string().min(1).max(200)).max(12),
@@ -356,7 +375,7 @@ export const reviewAssistRequestSchema = z.object({
       hunks: z.array(z.object({
         filePath: z.string().min(1).max(2_000),
         location: z.string().min(1).max(200),
-        lines: z.array(z.string().max(REVIEW_ASSIST_MAX_LINE_LENGTH)).max(REVIEW_ASSIST_MAX_LINES_PER_HUNK),
+        lines: reviewAssistLinesSchema,
         symbols: z.array(z.string().min(1).max(200)).max(12),
         kind: z.enum(['residual', 'updated']),
       })).max(3),
