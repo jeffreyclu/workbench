@@ -18,6 +18,7 @@ import { useAutoReviewScores } from '../diff-review/auto-score.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
 import { DiffReviewChangeMap } from '../diff-review/change-map.js';
+import { DecisionRelationshipDiagram } from '../diff-review/decision-relationship-diagram.js';
 import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js';
 import { useGitHubPullRequestDiff } from '../github-diff/hooks.js';
 import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
@@ -350,7 +351,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">
                     {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} />}
-                    {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" onClose={() => setDetailAnchor(null)}>
+                    {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" onClose={() => setDetailAnchor(null)} aside={<DecisionRelationshipDiagram key={popoverDecision.id} map={changeMap} decisionId={popoverDecision.id} riskBands={riskBands} onSelect={selectDecision} />}>
                       <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)}>
                         <DiffReviewActions key={popoverDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(popoverDecision, state)} />
                       </DiffReviewDecisionDetailCard>

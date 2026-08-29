@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from 'react-dom';
 
 const POPOVER_WIDTH = 336;
+const ASIDE_WIDTH = 306;
+const ASIDE_GAP = 10;
 const VIEWPORT_MARGIN = 12;
 
 export type DecisionPopoverAnchor = HTMLElement | SVGElement;
@@ -18,7 +20,7 @@ export type DecisionPopoverAnchor = HTMLElement | SVGElement;
  * it — so focus moves in but is not trapped, and dismissal returns focus to the
  * marker so keyboard review continues where it left off.
  */
-export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-decision-marker', labelledBy, onClose, children }: {
+export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-decision-marker', labelledBy, aside, onClose, children }: {
   /** Either handle that opens this panel: a gutter marker (HTML) or a change
    * map node (SVG). Both measure and focus the same way. */
   anchor: DecisionPopoverAnchor;
@@ -31,11 +33,18 @@ export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-deci
    * across the page. */
   anchorAttribute?: string;
   labelledBy: string;
+  /** Companion content pinned to the panel's right edge — the diagram of what
+   * this decision relates to. It is placed as part of the panel, not beside
+   * it, so the pair is measured and flipped as one unit and the diagram can
+   * never be pushed off screen on its own. */
+  aside?: ReactNode;
   onClose: () => void;
   children: ReactNode;
 }) {
   const panel = useRef<HTMLDivElement | null>(null);
-  const [style, setStyle] = useState<CSSProperties>({ position: 'fixed', top: 0, left: 0, width: POPOVER_WIDTH, visibility: 'hidden' });
+  const hasAside = Boolean(aside);
+  const width = POPOVER_WIDTH + (hasAside ? ASIDE_GAP + ASIDE_WIDTH : 0);
+  const [style, setStyle] = useState<CSSProperties>({ position: 'fixed', top: 0, left: 0, width, visibility: 'hidden' });
 
   /** The element to measure against, re-resolved on every placement rather than
    * captured once. Selecting a decision can re-render the diff pane and unmount
@@ -55,19 +64,19 @@ export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-deci
       if (!element) return;
       const target = liveAnchor();
       if (!target) {
-        setStyle({ position: 'fixed', top: VIEWPORT_MARGIN, left: Math.max(VIEWPORT_MARGIN, (window.innerWidth - POPOVER_WIDTH) / 2), width: POPOVER_WIDTH, visibility: 'visible' });
+        setStyle({ position: 'fixed', top: VIEWPORT_MARGIN, left: Math.max(VIEWPORT_MARGIN, (window.innerWidth - width) / 2), width, visibility: 'visible' });
         return;
       }
       const rect = target.getBoundingClientRect();
       // Anchored off the marker's right edge, flipping to its left when the
       // viewport cannot hold the panel there.
       const spaceRight = window.innerWidth - rect.right - VIEWPORT_MARGIN;
-      const left = spaceRight >= POPOVER_WIDTH
+      const left = spaceRight >= width
         ? rect.right + 10
-        : Math.max(VIEWPORT_MARGIN, rect.left - POPOVER_WIDTH - 10);
+        : Math.max(VIEWPORT_MARGIN, rect.left - width - 10);
       const height = element.offsetHeight;
       const top = Math.max(VIEWPORT_MARGIN, Math.min(rect.top, window.innerHeight - VIEWPORT_MARGIN - height));
-      setStyle({ position: 'fixed', top, left, width: POPOVER_WIDTH, visibility: 'visible' });
+      setStyle({ position: 'fixed', top, left, width, visibility: 'visible' });
     };
     place();
     // The anchor moves with the diff scroller, not the window, so scroll is
@@ -81,7 +90,7 @@ export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-deci
       window.removeEventListener('resize', place);
       observer?.disconnect();
     };
-  }, [anchor, anchorId, anchorAttribute]);
+  }, [anchor, anchorId, anchorAttribute, width]);
 
   useEffect(() => {
     panel.current?.focus?.({ preventScroll: true });
@@ -113,8 +122,11 @@ export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-deci
   }, [anchor, anchorId, anchorAttribute, onClose]);
 
   return createPortal(
-    <div ref={panel} className="decision-popover" role="dialog" aria-labelledby={labelledBy} tabIndex={-1} style={style}>
-      {children}
+    <div ref={panel} className={`decision-popover${hasAside ? ' with-aside' : ''}`} role="dialog" aria-labelledby={labelledBy} tabIndex={-1} style={style}>
+      {hasAside ? <>
+        <div className="decision-popover-panel">{children}</div>
+        <div className="decision-popover-aside">{aside}</div>
+      </> : children}
     </div>,
     document.body,
   );
