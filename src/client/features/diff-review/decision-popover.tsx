@@ -30,15 +30,18 @@ export function DecisionPopover({ anchor, labelledBy, onClose, children }: {
       const element = panel.current;
       if (!element) return;
       const rect = anchor.getBoundingClientRect();
+      // A phone viewport is narrower than the panel's natural width, so the
+      // width is clamped first and every offset is computed from that.
+      const width = Math.min(POPOVER_WIDTH, window.innerWidth - VIEWPORT_MARGIN * 2);
       // Anchored off the marker's right edge, flipping to its left when the
       // viewport cannot hold the panel there.
       const spaceRight = window.innerWidth - rect.right - VIEWPORT_MARGIN;
-      const left = spaceRight >= POPOVER_WIDTH
+      const left = spaceRight >= width
         ? rect.right + 10
-        : Math.max(VIEWPORT_MARGIN, rect.left - POPOVER_WIDTH - 10);
+        : Math.max(VIEWPORT_MARGIN, Math.min(rect.left - width - 10, window.innerWidth - VIEWPORT_MARGIN - width));
       const height = element.offsetHeight;
       const top = Math.max(VIEWPORT_MARGIN, Math.min(rect.top, window.innerHeight - VIEWPORT_MARGIN - height));
-      setStyle({ position: 'fixed', top, left, width: POPOVER_WIDTH, visibility: 'visible' });
+      setStyle({ position: 'fixed', top, left, width, visibility: 'visible' });
     };
     place();
     // The anchor moves with the diff scroller, not the window, so scroll is
@@ -70,16 +73,16 @@ export function DecisionPopover({ anchor, labelledBy, onClose, children }: {
         onClose();
       }
     };
-    const onPointerDown = (event: MouseEvent) => {
+    const onPointerDown = (event: Event) => {
       const target = event.target as Node;
       if (panel.current?.contains(target) || anchor.contains(target)) return;
       onClose();
     };
     document.addEventListener('keydown', onKeyDown, true);
-    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('pointerdown', onPointerDown);
     return () => {
       document.removeEventListener('keydown', onKeyDown, true);
-      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('pointerdown', onPointerDown);
     };
   }, [anchor, onClose]);
 
