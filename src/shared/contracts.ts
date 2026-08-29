@@ -748,6 +748,10 @@ export interface AgentRun {
   reviewHandoff: AgentRunReviewHandoff | null;
 }
 
+/** A completed turn may cross this cache-read threshold, but its provider
+ * session is retired before the next turn instead of terminating active work. */
+export const CACHE_READ_SOFT_LIMIT_TOKENS = 500_000;
+
 export interface LinearSyncResult {
   imported: number;
   updated: number;

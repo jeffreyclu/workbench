@@ -868,9 +868,9 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
     // in-run ceiling would otherwise seed execute with an already-saturated
     // session, so the same checkpoint rule applies on this side of the handoff.
     if (result.agent === 'claude') {
-      const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile);
+      const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile, result.usage.cacheReadInputTokens ?? 0);
       repository.setConversationClaudeSessionId(target.conversationId, checkpoint ? null : result.sessionId ?? null);
-      if (checkpoint && linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile));
+      if (checkpoint && linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile, result.usage.cacheReadInputTokens ?? 0));
     }
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       if (isPairedReply) throw new Error('Claude reported an invalid workspace-scope blocker. Its paired response was kept as a Claude failure and was not replaced with Codex.');

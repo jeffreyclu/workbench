@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { SharedMessage } from '../../../shared/contracts';
+import { CACHE_READ_SOFT_LIMIT_TOKENS, type SharedMessage } from '../../../shared/contracts';
+import { conversationCacheSpendWarning } from './cache-spend';
 import { composerSelectionFromConversation, latestConversationExecutionKind, replyBadge } from './view';
 
 describe('replyBadge', () => {
@@ -99,5 +100,22 @@ describe('latestConversationExecutionKind', () => {
 
   it('does not invent an execution type when a manual conversation has no classified reply', () => {
     expect(latestConversationExecutionKind([{ author: 'claude', kind: null }] as SharedMessage[])).toBeNull();
+  });
+});
+
+describe('conversationCacheSpendWarning', () => {
+  it('warns about cumulative cache traffic without claiming the active turn was stopped', () => {
+    const warning = conversationCacheSpendWarning([
+      { cacheReadInputTokens: 300_000 },
+      { cacheReadInputTokens: 200_000 },
+    ] as SharedMessage[]);
+    expect(warning).toContain('500K cached tokens');
+    expect(warning).toContain('Active agents keep running');
+  });
+
+  it('stays quiet below the soft threshold', () => {
+    expect(conversationCacheSpendWarning([
+      { cacheReadInputTokens: CACHE_READ_SOFT_LIMIT_TOKENS - 1 },
+    ] as SharedMessage[])).toBeNull();
   });
 });

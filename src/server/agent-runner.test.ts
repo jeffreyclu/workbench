@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { homedir } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentRun, WorkItem } from '../shared/contracts.js';
+import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
 import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CLAUDE_EXECUTION_CONTRACT, autocompactCeilingTokens, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, toolCallLimitFor } from './agent-runner.js';
 import { openDatabase } from './database.js';
@@ -163,6 +163,12 @@ describe('classifyExecution', () => {
     // Missing usage samples are not evidence of bloat; discarding on unknown
     // peaks would throw away implementation context on every silent stream.
     expect(shouldCheckpointSession(undefined, 'standard')).toBe(false);
+  });
+
+  it('lets a cache-heavy turn finish but retires its session before the next turn', () => {
+    expect(shouldCheckpointSession(20_000, 'deep', CACHE_READ_SOFT_LIMIT_TOKENS)).toBe(true);
+    expect(shouldCheckpointSession(20_000, 'deep', CACHE_READ_SOFT_LIMIT_TOKENS - 1)).toBe(false);
+    expect(checkpointActivityDetail(20_000, 'deep', CACHE_READ_SOFT_LIMIT_TOKENS)).toContain('agent was not stopped');
   });
 
   it('reports the checkpoint with both the measured peak and the ceiling that tripped it', () => {

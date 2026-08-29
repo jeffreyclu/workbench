@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
-import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type WorkItem } from '../shared/contracts.js';
+import { CACHE_READ_SOFT_LIMIT_TOKENS, DEFAULT_ACCOUNT_PROFILE, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
@@ -753,12 +753,16 @@ export function autocompactCeilingTokens(profile: ExecutionProfile): number {
  * not evidence of bloat, and discarding on missing data would throw away live
  * implementation context every time the stream reported nothing.
  */
-export function shouldCheckpointSession(peakContextTokens: number | undefined, profile: ExecutionProfile): boolean {
-  return (peakContextTokens ?? 0) >= autocompactCeilingTokens(profile);
+export function shouldCheckpointSession(peakContextTokens: number | undefined, profile: ExecutionProfile, cacheReadInputTokens = 0): boolean {
+  return (peakContextTokens ?? 0) >= autocompactCeilingTokens(profile)
+    || cacheReadInputTokens >= CACHE_READ_SOFT_LIMIT_TOKENS;
 }
 
 /** Shared wording so the execute and conversation paths report a checkpoint identically. */
-export function checkpointActivityDetail(peakContextTokens: number, profile: ExecutionProfile): string {
+export function checkpointActivityDetail(peakContextTokens: number, profile: ExecutionProfile, cacheReadInputTokens = 0): string {
+  if (cacheReadInputTokens >= CACHE_READ_SOFT_LIMIT_TOKENS) {
+    return `Cache checkpoint: this turn finished after reading ${Math.round(cacheReadInputTokens / 1000)}k cached tokens. The agent was not stopped; the next turn starts from Workbench's compact context instead of replaying this provider session.`;
+  }
   return `Context checkpoint: this turn peaked at ${Math.round(peakContextTokens / 1000)}k tokens against a ${Math.round(autocompactCeilingTokens(profile) / 1000)}k ceiling. The next turn starts a fresh Claude session instead of replaying this one.`;
 }
 
@@ -1720,9 +1724,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     if (resumesSession && run.conversationId) {
       if (result.agent !== 'claude') repository.setConversationClaudeSessionId(run.conversationId, null);
       else {
-        const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile);
+        const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile, result.usage.cacheReadInputTokens ?? 0);
         repository.setConversationClaudeSessionId(run.conversationId, checkpoint ? null : result.sessionId ?? null);
-        if (checkpoint) repository.addActivity(item.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile));
+        if (checkpoint) repository.addActivity(item.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile, result.usage.cacheReadInputTokens ?? 0));
       }
     }
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {

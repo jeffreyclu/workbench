@@ -335,6 +335,13 @@ telemetry. Autocompaction, per-profile tool-call limits, and the 30-minute run
 timeout remain the controls for runaway turns; do not restore a cache-token
 termination threshold.
 
+On 2026-08-28, Jeffrey approved a non-fatal replacement: a completed turn that
+reports at least 500k cache-read tokens retires its resumable provider session
+before the next turn. It never cancels the active agent. Conversation UI also
+shows a warning once recorded cache reads reach that threshold; bounded prompt
+sections, deduplicated RAG, and compact conversation history remain the inputs
+used to seed a fresh turn.
+
 ### Cache-read reduction: dual-agent dispatch stays, other levers are the approved path
 
 On 2026-08-25, with cache-read at 521.9M tokens (30:1 over fresh input) across

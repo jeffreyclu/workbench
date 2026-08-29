@@ -78,6 +78,7 @@ import { pullRequestUrls, pullRequestUrlsInText } from '../github-diff/logic.js'
 import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { WorkspaceDiffScope } from '../../data/source-client';
 import { formatDiffFollowUpReference, type DiffFollowUpReference } from '../diff-confidence';
+import { conversationCacheSpendWarning } from './cache-spend';
 
 const CONVERSATION_ROW_GAP = 6;
 // Stack cards and task cards share an 88px minimum height. Keeping the
@@ -565,6 +566,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     refetchInterval: (query) => query.state.data?.messages.some((message) => message.status === 'running' || message.status === 'queued') ? 750 : false,
   });
   const allConversationMessages = messages.data?.messages ?? [];
+  const cacheSpendWarning = conversationCacheSpendWarning(allConversationMessages);
   const manualConversationExecutionKind = selectedConversation?.workItemId
     ? null
     : latestConversationExecutionKind(allConversationMessages);
@@ -1161,6 +1163,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           )}
           {!conversationDetail.isLoading && messages.isLoading && <ConversationThreadSkeleton />}
           {messages.error && <div className="list-state compact-state error-message">Could not load shared messages: {messages.error.message} <button type="button" className="button secondary compact" onClick={() => messages.refetch()}>Retry</button></div>}
+          {cacheSpendWarning && <div className="conversation-cache-warning" role="status"><AlertTriangle size={14} aria-hidden="true" /><span>{cacheSpendWarning}</span></div>}
           {!messages.isLoading && !messages.error && !selectedConversationMissing && messages.data?.messages.length === 0 && <div className="list-state compact-state">No messages yet. Ask Codex or Claude to get started.</div>}
           {hasEarlierMessages && (
             <button
