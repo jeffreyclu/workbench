@@ -37,6 +37,17 @@ function decision(filePath: string, lines: string[], subject: string | null = nu
   };
 }
 
+/** A decision grouping hunks from several files, which is what the queue does
+ * whenever one subject spans an implementation, its test and its fixtures. */
+function groupedDecision(files: Array<{ filePath: string; lines: string[] }>, subject: string | null = null): ReviewDecision {
+  const parts = files.map((file) => decision(file.filePath, file.lines, subject));
+  return {
+    ...parts[0],
+    hunks: parts.flatMap((part) => part.hunks),
+    filePaths: [...new Set(files.map((file) => file.filePath))],
+  };
+}
+
 function relationBetween(decisions: ReviewDecision[], fromId: string, toId: string): ChangeRelation | null {
   const edge = buildChangeMap(decisions).edges.find((candidate) => candidate.fromId === fromId && candidate.toId === toId);
   return edge?.relation ?? null;
@@ -127,12 +138,48 @@ describe('diff-scoped change map', () => {
   it('counts degree so unrelated changes are identifiable', () => {
     const producer = decision('src/shared/loader.ts', ['+export function loadWorkspace() {}']);
     const consumer = decision('src/client/caller.ts', ['+  loadWorkspace();']);
-    const unrelated = decision('README.md', ['+Documentation only.']);
+    const unrelated = decision('src/client/unrelated.ts', ['+export const banner = 1;']);
 
     const map = buildChangeMap([producer, consumer, unrelated]);
     expect(map.nodes.find((node) => node.id === unrelated.id)?.degree).toBe(0);
     expect(map.nodes.find((node) => node.id === producer.id)?.degree).toBe(1);
     expect(map.omittedEdges).toBe(0);
+  });
+
+  it('maps only JS and TS sources', () => {
+    const producer = decision('src/shared/loader.ts', ['+export function loadWorkspace() {}']);
+    const styles = decision('src/client/styles.css', ['+.loadWorkspace { color: red; }']);
+    const docs = decision('README.md', ['+Call loadWorkspace to start.']);
+
+    const map = buildChangeMap([producer, styles, docs]);
+    expect(map.nodes.map((node) => node.id)).toEqual([producer.id]);
+    expect(map.edges).toHaveLength(0);
+  });
+
+  it('never makes a test the source of an edge', () => {
+    // The regression: `describe('loadWorkspace')` gave the test a subject, the
+    // subject counted as a declaration, and every implementation mentioning
+    // `loadWorkspace` became downstream of the test.
+    const test = decision('src/shared/loader.test.ts', [
+      "+describe('loadWorkspace', () => {",
+      '+  expect(loadWorkspace()).toBe(1);',
+    ], 'loadWorkspace');
+    const implementation = decision('src/shared/loader.ts', ['+export function loadWorkspace() {}']);
+    const caller = decision('src/client/caller.ts', ['+  loadWorkspace();']);
+
+    const map = buildChangeMap([test, implementation, caller]);
+    expect(map.edges.filter((edge) => edge.fromId === test.id)).toHaveLength(0);
+    expect(relationBetween([test, implementation, caller], implementation.id, test.id)).toBe('calls');
+    expect(relationBetween([test, implementation, caller], implementation.id, caller.id)).toBe('calls');
+  });
+
+  it('ignores a declaration nested inside a function body', () => {
+    // A local is invisible to any other decision, so sharing its name is a
+    // coincidence rather than a relationship.
+    const producer = decision('src/shared/loader.ts', ['+  const workspaceRows = readRows();']);
+    const consumer = decision('src/client/caller.ts', ['+  render(workspaceRows);']);
+
+    expect(relationBetween([producer, consumer], producer.id, consumer.id)).toBeNull();
   });
 
   it('uses the subject as the declared symbol for a body-only edit', () => {
@@ -142,6 +189,44 @@ describe('diff-scoped change map', () => {
     const consumer = decision('src/client/caller.ts', ['+  loadWorkspace();']);
 
     expect(relationBetween([producer, consumer], producer.id, consumer.id)).toBe('calls');
+  });
+
+  it('declares nothing from the test half of a decision that spans code and its test', () => {
+    // The queue groups by subject, so an implementation and its test are one
+    // decision and `isTestDecision` never fired on it. A fixture declared at
+    // the top of the test then owned its name for the whole diff.
+    const mixed = groupedDecision([
+      { filePath: 'src/shared/loader.ts', lines: ['+export function loadWorkspace() {}'] },
+      { filePath: 'src/shared/loader.test.ts', lines: ['+const fixtureRows = buildRows();'] },
+    ], 'loadWorkspace');
+    const consumer = decision('src/client/panel.ts', ['+  render(fixtureRows);']);
+    const caller = decision('src/client/caller.ts', ['+  loadWorkspace();']);
+
+    const decisions = [mixed, consumer, caller];
+    expect(relationBetween(decisions, mixed.id, consumer.id)).toBeNull();
+    // The implementation half is unaffected: it still sources its own edges.
+    expect(relationBetween(decisions, mixed.id, caller.id)).toBe('calls');
+  });
+
+  it('reads no identifiers from a non-JS hunk inside a code decision', () => {
+    // `isCodeDecision` passes as soon as one file is code, so prose in the same
+    // decision used to name a changed symbol and draw an edge for it.
+    const producer = decision('src/shared/loader.ts', ['+export function loadWorkspace() {}']);
+    const mixed = groupedDecision([
+      { filePath: 'docs/notes.md', lines: ['+Call loadWorkspace once the pane mounts.'] },
+      { filePath: 'src/client/panel.ts', lines: ['+const paneReady = true;'] },
+    ]);
+
+    expect(relationBetween([producer, mixed], producer.id, mixed.id)).toBeNull();
+  });
+
+  it('locates a decision at its implementation file, not at whichever file came first', () => {
+    const mixed = groupedDecision([
+      { filePath: 'src/shared/loader.test.ts', lines: ['+  expect(loadWorkspace()).toBe(1);'] },
+      { filePath: 'src/shared/loader.ts', lines: ['+export function loadWorkspace() {}'] },
+    ], 'loadWorkspace');
+
+    expect(buildChangeMap([mixed]).nodes[0]?.filePath).toBe('src/shared/loader.ts');
   });
 });
 
