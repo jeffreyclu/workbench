@@ -1531,11 +1531,12 @@ export async function runAgentCommandWithFallback(
   resumeSessionId?: string,
   poolEligible = false,
   allowFallback = true,
+  initialUsage?: AgentUsage,
 ): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; costUsd?: number | null; peakContextTokens?: number }> {
+  let aggregate: AgentUsage = initialUsage ?? { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
   try {
     let segmentPrompt = prompt;
     let segmentResume = resumeSessionId;
-    let aggregate: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
     let result: AgentCommandResult;
     for (;;) {
       const before = aggregate;
@@ -1581,7 +1582,7 @@ export async function runAgentCommandWithFallback(
     // the provider's "No conversation found" protocol error to Jeffrey.
     if (primary === 'claude' && resumeSessionId && /no conversation found with session id/i.test(error instanceof Error ? error.message : String(error))) {
       onProgress?.('● Claude session expired. Restarting this turn in a fresh session…');
-      return runAgentCommandWithFallback(primary, cwd, prompt, onProgress, signal, onFallback, profile, onUsage, onAudit, kind, accountProfile, modelOverride, onSteeringReady, undefined, false, allowFallback);
+      return runAgentCommandWithFallback(primary, cwd, prompt, onProgress, signal, onFallback, profile, onUsage, onAudit, kind, accountProfile, modelOverride, onSteeringReady, undefined, false, allowFallback, aggregate);
     }
     if (signal?.aborted || modelOverride || !allowFallback || !isAgentCapacityError(error)) throw error;
     const fallback = primary === 'claude' ? 'codex' : 'claude';
@@ -1592,7 +1593,7 @@ export async function runAgentCommandWithFallback(
     const fallbackPrompt = primary === 'claude' && fallback === 'codex'
       ? `${prompt}\n\n${RUNNER_SYSTEM_CONTRACT}`
       : prompt;
-    const result = await runAgentCommandWithFallback(fallback, cwd, fallbackPrompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, undefined, profile, onUsage, onAudit, kind, accountProfile, undefined, undefined, undefined, poolEligible, false);
+    const result = await runAgentCommandWithFallback(fallback, cwd, fallbackPrompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, undefined, profile, onUsage, onAudit, kind, accountProfile, undefined, undefined, undefined, poolEligible, false, aggregate);
     return { ...result, fallbackFrom: primary, fallbackReason: reason.slice(0, 500) };
   }
 }

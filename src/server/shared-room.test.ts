@@ -6,7 +6,7 @@ import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const temporaryDirectories: string[] = [];
@@ -419,6 +419,29 @@ describe('shared-room Codex warming', () => {
     const claimed = claimWarmProcess('codex', directory, 'codex', ['app-server', '--stdio'], 'default');
     expect(claimed).not.toBeNull();
     claimed?.kill();
+  });
+
+  it('terminates Codex app-server when aggregate cache reaches the hard ceiling', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-codex-cache-budget-'));
+    temporaryDirectories.push(directory);
+    const fakeAppServer = [
+      '#!/bin/sh',
+      'IFS= read -r initialize',
+      `printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
+      'IFS= read -r thread_start',
+      `printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}'`,
+      'IFS= read -r turn_start',
+      `printf '%s\\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-1"}}}'`,
+      `printf '%s\\n' '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"itemId":"message-1","delta":"Preserved Codex checkpoint."}}'`,
+      `printf '%s\\n' '{"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"tokenUsage":{"total":{"inputTokens":700010,"cachedInputTokens":700000,"outputTokens":10}}}}'`,
+      'sleep 10',
+    ].join('\n');
+    writeFileSync(join(directory, 'codex'), fakeAppServer);
+    chmodSync(join(directory, 'codex'), 0o755);
+    process.env.PATH = directory;
+
+    await expect(runSteerableCodex('Implement it.', directory, new AbortController().signal, () => {}, () => {}, () => {}, () => {}, null, 'default', true))
+      .rejects.toThrow('700K aggregate cached-input ceiling');
   });
 });
 

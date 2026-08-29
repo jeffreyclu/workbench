@@ -754,7 +754,7 @@ export const CACHE_READ_SOFT_LIMIT_TOKENS = 500_000;
 /** Absolute aggregate cached-input ceiling for one visible agent reply.
  * Cooperative checkpoints reduce context before this point; this ceiling is
  * enforced by Workbench even when a provider ignores the checkpoint request. */
-export const CACHE_READ_HARD_LIMIT_TOKENS = 900_000;
+export const CACHE_READ_HARD_LIMIT_TOKENS = 700_000;
 
 export interface LinearSyncResult {
   imported: number;

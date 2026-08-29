@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
-import { addUsage, AgentTerminalWarningError, CACHE_HANDOFF_INSTRUCTION, cacheContinuationPrompt, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, executionProgressSteer, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type RetrievedMemory } from './agent-runner.js';
+import { addUsage, AgentCacheBudgetExceededError, AgentTerminalWarningError, CACHE_HANDOFF_INSTRUCTION, cacheContinuationPrompt, cacheReadHardLimitExceeded, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, executionProgressSteer, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -396,14 +396,37 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
   });
 }
 
-async function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, mutating = false): Promise<{ output: string; threadId: string; usage: AgentUsage }> {
+export async function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, mutating = false): Promise<{ output: string; threadId: string; usage: AgentUsage }> {
   let segmentPrompt = prompt;
   let segmentResume = resumeThreadId;
   let aggregate: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
   let result: Awaited<ReturnType<typeof runSteerableCodexSegment>>;
   for (;;) {
     const before = aggregate;
-    result = await runSteerableCodexSegment(segmentPrompt, cwd, signal, onProgress, onReady, onEvent, (usage) => onUsage(addUsage(before, usage)), segmentResume, accountProfile, mutating);
+    const segmentController = new AbortController();
+    const cancelSegment = () => segmentController.abort();
+    let hardLimitExceeded = false;
+    let latestSegmentProgress = '';
+    if (signal.aborted) segmentController.abort();
+    else signal.addEventListener('abort', cancelSegment, { once: true });
+    try {
+      result = await runSteerableCodexSegment(segmentPrompt, cwd, segmentController.signal, (partial) => {
+        latestSegmentProgress = partial;
+        onProgress(partial);
+      }, onReady, onEvent, (usage) => {
+        const aggregateUsage = addUsage(before, usage);
+        onUsage(aggregateUsage);
+        if (!hardLimitExceeded && cacheReadHardLimitExceeded(aggregateUsage)) {
+          hardLimitExceeded = true;
+          segmentController.abort();
+        }
+      }, segmentResume, accountProfile, mutating);
+    } catch (error) {
+      if (hardLimitExceeded) throw new AgentCacheBudgetExceededError(latestSegmentProgress);
+      throw error;
+    } finally {
+      signal.removeEventListener('abort', cancelSegment);
+    }
     aggregate = addUsage(aggregate, result.usage);
     if (shouldContinueCacheHandoff(result)) {
       onProgress('● Cache checkpoint saved. Continuing automatically in a fresh compact session…');
