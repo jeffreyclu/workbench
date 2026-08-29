@@ -708,7 +708,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       <details className="detail-section task-collapsible workspace-review-section">
         <summary><span>Workspace review</span><small>Latest changes and recorded snapshots</small></summary>
         <div className="task-collapsible-content">
-          <WorkspaceDiffView scope={{ workItemId: item.id }} activeWorkspacePaths={detail.data.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : [])} onFollowUp={addDiffFollowUp} taskIntent={{ title: item.title, description: item.description }} pullRequestUrlCandidates={references.map((reference) => reference.url)} />
+          <WorkspaceDiffView scope={{ workItemId: item.id }} activeWorkspacePaths={detail.data.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : [])} reviewHandoff={detail.data.runs.find((run) => run.reviewHandoff)?.reviewHandoff ?? null} onFollowUp={addDiffFollowUp} taskIntent={{ title: item.title, description: item.description }} pullRequestUrlCandidates={references.map((reference) => reference.url)} />
         </div>
       </details>
       <details className="detail-section task-collapsible relationships-section">

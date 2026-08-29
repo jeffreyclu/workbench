@@ -433,7 +433,7 @@ describe('shared-room Codex warming', () => {
       'IFS= read -r turn_start',
       `printf '%s\\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-1"}}}'`,
       `printf '%s\\n' '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"itemId":"message-1","delta":"Preserved Codex checkpoint."}}'`,
-      `printf '%s\\n' '{"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"tokenUsage":{"total":{"inputTokens":700010,"cachedInputTokens":700000,"outputTokens":10}}}}'`,
+      `printf '%s\\n' '{"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"tokenUsage":{"total":{"inputTokens":175010,"cachedInputTokens":175000,"outputTokens":10}}}}'`,
       'sleep 10',
     ].join('\n');
     writeFileSync(join(directory, 'codex'), fakeAppServer);
@@ -441,7 +441,7 @@ describe('shared-room Codex warming', () => {
     process.env.PATH = directory;
 
     await expect(runSteerableCodex('Implement it.', directory, new AbortController().signal, () => {}, () => {}, () => {}, () => {}, null, 'default', true))
-      .rejects.toThrow('700K aggregate cached-input ceiling');
+      .rejects.toThrow('175K enforced cache segment boundary');
   });
 });
 

@@ -748,13 +748,14 @@ export interface AgentRun {
   reviewHandoff: AgentRunReviewHandoff | null;
 }
 
-/** A completed turn may cross this cache-read threshold, but its provider
- * session is retired before the next turn instead of terminating active work. */
-export const CACHE_READ_SOFT_LIMIT_TOKENS = 500_000;
-/** Absolute aggregate cached-input ceiling for one visible agent reply.
- * Cooperative checkpoints reduce context before this point; this ceiling is
- * enforced by Workbench even when a provider ignores the checkpoint request. */
-export const CACHE_READ_HARD_LIMIT_TOKENS = 700_000;
+/** Ask for a checkpoint early, while the provider context is still small.
+ * This is advisory only; the hard segment boundary below is the enforcement. */
+export const CACHE_READ_SOFT_LIMIT_TOKENS = 125_000;
+/** Forced cache-read budget for one agent segment. Workbench aborts the
+ * provider at this boundary and continues once from the durable checkpoint.
+ * With the one continuation limit, an unattended visible reply cannot exceed
+ * 350K cached-input tokens. */
+export const CACHE_READ_HARD_LIMIT_TOKENS = 175_000;
 
 export interface LinearSyncResult {
   imported: number;

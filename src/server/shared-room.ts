@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
-import { addUsage, AgentCacheBudgetExceededError, AgentTerminalWarningError, CACHE_HANDOFF_INSTRUCTION, cacheContinuationPrompt, cacheReadHardLimitExceeded, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, executionProgressSteer, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type RetrievedMemory } from './agent-runner.js';
+import { addUsage, AgentCacheBudgetExceededError, AgentTerminalWarningError, CACHE_BUDGET_AUTO_RETRY_LIMIT, CACHE_HANDOFF_INSTRUCTION, cacheBudgetRetryPrompt, cacheContinuationPrompt, cacheReadHardLimitExceeded, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, executionProgressSteer, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -943,6 +943,7 @@ export async function replyInSharedRoom(
   runId?: string,
   retrievalSnapshot?: SharedReplyRetrieval,
   groundingSnapshot?: SharedReplyGrounding,
+  cacheCheckpoint?: string,
 ): Promise<void> {
   const target = repository.getSharedMessageById(messageId);
   if (!target) return;
@@ -962,6 +963,7 @@ export async function replyInSharedRoom(
 
   const controller = new AbortController();
   activeReplies.set(messageId, controller);
+  let cacheRetryCheckpoint: string | null = null;
   if (runId) {
     replyRunIds.set(messageId, runId);
     repository.updateRun(runId, { status: 'running', startedAt: new Date().toISOString() });
@@ -1051,7 +1053,7 @@ export async function replyInSharedRoom(
       groundingSource: turnGrounding.source,
       groundingContinuation: turnGrounding.continuation,
     });
-    const guardedPrompt = prompt;
+    const guardedPrompt = cacheCheckpoint ? `${prompt}${cacheBudgetRetryPrompt(cacheCheckpoint)}` : prompt;
     let result: { output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; codexThreadId?: string; peakContextTokens?: number };
     try {
       result = agent === 'codex'
@@ -1176,6 +1178,25 @@ export async function replyInSharedRoom(
     }
     const errorMessage = error instanceof Error ? error.message : 'Agent response failed.';
     const terminalCheckpoint = error instanceof AgentTerminalWarningError ? error.checkpoint.trim() : '';
+    const linkedRun = runId ? repository.getRun(runId) : null;
+    const canAutoContinue = error instanceof AgentCacheBudgetExceededError
+      && target.attempt < CACHE_BUDGET_AUTO_RETRY_LIMIT
+      && (!linkedRun || linkedRun.attempt < CACHE_BUDGET_AUTO_RETRY_LIMIT);
+    if (canAutoContinue) {
+      repository.updateSharedMessage(messageId, {
+        body: '● Cache budget reached. Continuing automatically in a fresh compact segment…',
+        status: 'queued', attempt: target.attempt + 1, error: '',
+      });
+      if (linkedRun) repository.updateRun(runId!, {
+        status: 'queued', attempt: linkedRun.attempt + 1, error: errorMessage,
+        ...(terminalCheckpoint ? { output: terminalCheckpoint } : {}),
+      });
+      // Release the current controller in finally, then claim the same visible
+      // reply again. This preserves its workspace and bubble rather than
+      // creating a second answer or asking Jeffrey to click Retry.
+      cacheRetryCheckpoint = terminalCheckpoint || 'The prior bounded agent segment stopped at the cache boundary. Inspect only what is necessary to finish the original request.';
+      return;
+    }
     repository.updateSharedMessage(messageId, {
       status: 'failed', error: errorMessage, ...(terminalCheckpoint ? { body: terminalCheckpoint } : {}),
     });
@@ -1185,6 +1206,14 @@ export async function replyInSharedRoom(
     activeReplies.delete(messageId);
     activeReplySteering.delete(messageId);
     replyRunIds.delete(messageId);
+    if (cacheRetryCheckpoint !== null) {
+      const checkpoint = cacheRetryCheckpoint;
+      setTimeout(() => {
+        void replyInSharedRoom(repository, agent, messageId, runId, retrievalSnapshot, groundingSnapshot, checkpoint).catch(() => {});
+      }, 0).unref?.();
+      publishRealtimeEvent('shared', 'work-items', 'insights');
+      return;
+    }
     // Test/runtime teardown may close the repository while an already-started
     // provider is settling. Do not turn that shutdown race into an unhandled
     // rejection; a serving runtime never treats a lost repository as a reply.

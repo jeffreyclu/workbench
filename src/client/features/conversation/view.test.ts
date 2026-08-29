@@ -104,13 +104,13 @@ describe('latestConversationExecutionKind', () => {
 });
 
 describe('conversationCacheSpendWarning', () => {
-  it('warns about cumulative cache traffic without claiming the active turn was stopped', () => {
+  it('labels cache traffic as cumulative spend rather than current context', () => {
     const warning = conversationCacheSpendWarning([
       { cacheReadInputTokens: 300_000 },
       { cacheReadInputTokens: 200_000 },
     ] as SharedMessage[]);
-    expect(warning).toContain('500K cached tokens');
-    expect(warning).toContain('Active agents keep running');
+    expect(warning).toContain('Cumulative cache spend: 500K cached-input tokens');
+    expect(warning).toContain('historical usage, not the current context size');
   });
 
   it('stays quiet below the soft threshold', () => {

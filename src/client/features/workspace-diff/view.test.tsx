@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
+import type { AgentRunReviewHandoff, DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { formatDiffFollowUpReference, type DiffFollowUpReference } from '../diff-confidence.js';
 import { WorkspaceDiffView } from './view.js';
 
@@ -24,10 +24,10 @@ function workspaceDiff(files: WorkspaceDiffFile[], revision = 'review-revision')
 /** This surface never scores decisions ambiently; assistance is on demand from
  * the detail card instead. Tests only stub the requests this view actually
  * makes, so a stray `/api/diff-confidence` call would fail as unexpected. */
-function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, onFollowUp?: (reference: DiffFollowUpReference) => void, pullRequestUrlCandidates?: string[]) {
+function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, onFollowUp?: (reference: DiffFollowUpReference) => void, reviewHandoff?: AgentRunReviewHandoff | null, pullRequestUrlCandidates?: string[]) {
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} onFollowUp={onFollowUp} pullRequestUrlCandidates={pullRequestUrlCandidates} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} reviewHandoff={reviewHandoff} onFollowUp={onFollowUp} pullRequestUrlCandidates={pullRequestUrlCandidates} /></QueryClientProvider>);
 }
 
 afterEach(() => {
@@ -69,6 +69,26 @@ describe('WorkspaceDiffView decision queue', () => {
     fireEvent.keyDown(dialog, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Decision details' })).toBeNull();
     expect(screen.getByRole('button', { name: 'View decision' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('renders the agent handoff before the review decision queue', async () => {
+    const files: WorkspaceDiffFile[] = [{ path: 'src/app.ts', editorUrl: null, previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff(files) });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock, false, undefined, {
+      agentRunId: 'run-1', formatVersion: 1, summary: 'Implemented the requested change.', changes: [], acceptanceCriteria: [], contractChanges: [], verification: [],
+      uncertainties: ['No completed test, build, typecheck, or lint command was observed by the runner.'], tradeoffs: [], createdAt: '2026-08-27T01:00:00.000Z',
+    });
+
+    const handoff = await screen.findByRole('region', { name: 'Agent review handoff' });
+    const queue = await screen.findByRole('navigation', { name: /review decision queue/i });
+    expect(handoff.compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('shows a retry action instead of an empty state when loading the workspace diff fails', async () => {
@@ -425,7 +445,7 @@ describe('WorkspaceDiffView pull-request source', () => {
       if (url.includes('/api/review-auto-score')) return json({ scores: [] });
       throw new Error(`Unexpected request: ${url}`);
     });
-    renderView(fetchMock, false, undefined, [pullRequestUrl]);
+    renderView(fetchMock, false, undefined, null, [pullRequestUrl]);
 
     expect(await screen.findByRole('heading', { name: 'Changes behavior in src/local.ts.' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'GitHub PR' }));
@@ -461,7 +481,7 @@ describe('WorkspaceDiffView pull-request source', () => {
       if (url.includes('/api/review-auto-score')) return json({ scores: [] });
       throw new Error(`Unexpected request: ${url}`);
     });
-    renderView(fetchMock, false, undefined, [pullRequestUrl]);
+    renderView(fetchMock, false, undefined, null, [pullRequestUrl]);
 
     fireEvent.click(await screen.findByRole('button', { name: 'GitHub PR' }));
     const picker = await screen.findByLabelText('Pull request');
@@ -470,7 +490,7 @@ describe('WorkspaceDiffView pull-request source', () => {
     fireEvent.click(screen.getByRole('button', { name: /Decision 2/ }));
 
     cleanup();
-    renderView(fetchMock, false, undefined, [pullRequestUrl]);
+    renderView(fetchMock, false, undefined, null, [pullRequestUrl]);
 
     expect(await screen.findByRole('heading', { name: 'Selectable scopes' })).toBeInTheDocument();
     expect(screen.getByLabelText('Pull request')).toHaveValue(pullRequestUrl);
@@ -488,7 +508,7 @@ describe('WorkspaceDiffView pull-request source', () => {
       if (url.includes('/api/review-auto-score')) return json({ scores: [] });
       throw new Error(`Unexpected request: ${url}`);
     });
-    renderView(fetchMock, false, undefined, [pullRequestUrl]);
+    renderView(fetchMock, false, undefined, null, [pullRequestUrl]);
 
     expect(await screen.findByRole('heading', { name: 'Changes behavior in src/page-1.ts.' })).toBeInTheDocument();
     // Paged pull requests keep their explicit load-more control in the queue.

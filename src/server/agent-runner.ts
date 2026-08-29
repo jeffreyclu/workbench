@@ -355,7 +355,7 @@ Execution mode: ${readOnly
 Additional instructions:
 ${compactPromptSection(run.instructions || 'Use your judgment and return a concise, actionable result.', 1_500)}
 
-${run.attempt > 0 && /aggregate cached-input ceiling/i.test(run.error)
+${run.attempt > 0 && /enforced cache segment boundary/i.test(run.error)
     ? cacheBudgetRetryPrompt(run.output)
     : ''}
 
@@ -581,7 +581,7 @@ export class AgentTerminalWarningError extends Error {
 
 export class AgentCacheBudgetExceededError extends AgentTerminalWarningError {
   constructor(checkpoint: string) {
-    super(`Agent reached Workbench's ${Math.round(CACHE_READ_HARD_LIMIT_TOKENS / 1_000)}K aggregate cached-input ceiling. Its completed work is preserved; retry to continue in a fresh budget.`, checkpoint);
+    super(`Agent reached Workbench's ${Math.round(CACHE_READ_HARD_LIMIT_TOKENS / 1_000)}K enforced cache segment boundary. Its completed work is preserved; Workbench will continue it once in a fresh compact segment.`, checkpoint);
     this.name = 'AgentCacheBudgetExceededError';
   }
 }
@@ -626,7 +626,7 @@ export function cacheContinuationPrompt(originalPrompt: string, checkpoint: stri
 }
 
 export function cacheBudgetRetryPrompt(checkpoint: string): string {
-  return `\n\nAutomatic cache-budget continuation: the previous provider session reached Workbench's hard cache ceiling after preserving the work below. Continue the user's original request from this checkpoint in the existing workspace. Do not restart broad discovery, debate the request, or repeat completed verification. Finish the smallest remaining action and report the observed result.\n\nPrior checkpoint:\n${compactPromptSection(checkpoint, 8_000)}`;
+  return `\n\nAutomatic bounded-step continuation: the previous provider segment reached Workbench's enforced cache boundary after preserving the work below. Continue the user's original request from this checkpoint in the existing workspace. Do not restart broad discovery, debate the request, or repeat completed verification. Finish the smallest remaining action and report the observed result.\n\nPrior checkpoint:\n${compactPromptSection(checkpoint, 8_000)}`;
 }
 
 export function addUsage(left: AgentUsage, right: AgentUsage): AgentUsage {
@@ -1953,7 +1953,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
           body: '● Cache budget reached. Continuing automatically in a fresh session…',
           status: 'queued',
         });
-        repository.addActivity(item.id, activeAgent, 'progress', `${run.kind} reached the cache budget; continuing automatically once in a fresh session.`);
+        repository.addActivity(item.id, activeAgent, 'progress', `${run.kind} reached the enforced cache segment boundary; continuing automatically once from its checkpoint.`);
         publishRealtimeEvent('work-items', 'shared', 'insights');
         return;
       }

@@ -290,10 +290,10 @@ describe('classifyExecution', () => {
     expect(CACHE_BUDGET_AUTO_RETRY_LIMIT).toBe(1);
     const prompt = buildPrompt(item('Fix the button'), {
       agent: 'claude', kind: 'execute', attempt: 1,
-      error: 'Agent reached Workbench\'s 700K aggregate cached-input ceiling.',
+      error: `Agent reached Workbench's ${Math.round(CACHE_READ_HARD_LIMIT_TOKENS / 1_000)}K enforced cache segment boundary.`,
       output: 'Edited the button; visual verification remains.', instructions: '',
     } as AgentRun);
-    expect(prompt).toContain('Automatic cache-budget continuation');
+    expect(prompt).toContain('Automatic bounded-step continuation');
     expect(prompt).toContain('Edited the button; visual verification remains.');
     expect(shouldAutoRetryCacheBudget({ attempt: 0 }, cacheError)).toBe(true);
     expect(shouldAutoRetryCacheBudget({ attempt: CACHE_BUDGET_AUTO_RETRY_LIMIT }, cacheError)).toBe(false);
@@ -336,7 +336,7 @@ describe('classifyExecution', () => {
     const fixture = fakeAgentDirectory(agent === 'codex' ? body : 'exit 1', agent === 'claude' ? body : 'exit 1');
 
     await expect(runAgentCommandWithFallback(agent, fixture.directory, 'Verify the change.', undefined, undefined, undefined, 'economy'))
-      .rejects.toThrow('700K aggregate cached-input ceiling');
+      .rejects.toThrow(`${Math.round(CACHE_READ_HARD_LIMIT_TOKENS / 1_000)}K enforced cache segment boundary`);
   });
 
   it('continues a cooperative Claude cache checkpoint in a fresh process without terminating either segment', async () => {
@@ -381,7 +381,7 @@ describe('classifyExecution', () => {
     const fixture = fakeAgentDirectory('exit 1', body);
 
     await expect(runAgentCommandWithFallback('claude', fixture.directory, 'Implement the change.'))
-      .rejects.toThrow('700K aggregate cached-input ceiling');
+      .rejects.toThrow(`${Math.round(CACHE_READ_HARD_LIMIT_TOKENS / 1_000)}K enforced cache segment boundary`);
     expect(readFileSync(countFile, 'utf8')).toBe('2');
     rmSync(countFile, { force: true });
   });
