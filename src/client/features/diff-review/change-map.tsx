@@ -2,6 +2,10 @@ import { memo, useMemo, useState, type KeyboardEvent } from 'react';
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Network } from 'lucide-react';
 import { CHANGE_RELATIONS, CHANGE_RELATION_LABELS, type ChangeMap, type ChangeRelation } from '../../../shared/change-map.js';
 import { CHANGE_MAP_NODE_HEIGHT, CHANGE_MAP_NODE_WIDTH, layoutChangeMap } from './change-map-layout.js';
+import { selectChangeConnections, selectFocusedChangeMap, type ChangeMapConnection } from './change-map-logic.js';
+
+const CHANGE_PATH_PREVIEW_LIMIT = 3;
+const CHANGE_MAP_FOCUS_LIMIT = 4;
 
 /** The diagram answers one question the queue cannot: which of these changes
  * exist because of another one. It reads left to right — a cause sits left of
@@ -31,7 +35,13 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
 }) {
   const [open, setOpen] = useState(false);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const layout = useMemo(() => layoutChangeMap(map), [map]);
+  const [fullMapForSelection, setFullMapForSelection] = useState<string | null>(null);
+  const focused = useMemo(() => selectedId
+    ? selectFocusedChangeMap(map, selectedId, CHANGE_MAP_FOCUS_LIMIT)
+    : { map, visibleConnections: map.edges.length, hiddenConnections: 0 }, [map, selectedId]);
+  const showingAll = Boolean(selectedId) && fullMapForSelection === selectedId;
+  const visibleMap = showingAll ? map : focused.map;
+  const layout = useMemo(() => layoutChangeMap(visibleMap), [visibleMap]);
 
   // One change has nothing to relate to, and a map of it would only take space
   // away from the diff.
@@ -62,6 +72,14 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
       </button>
     </header>
     {open && <>
+      {selectedId && <div className="change-map-scope">
+        <span>{showingAll
+          ? `All ${map.nodes.length} changes`
+          : `Focused on change ${map.nodes.find((node) => node.id === selectedId)?.ordinal ?? ''} · ${focused.visibleConnections} direct ${focused.visibleConnections === 1 ? 'relationship' : 'relationships'}`}</span>
+        {(focused.hiddenConnections > 0 || showingAll || focused.map.nodes.length < map.nodes.length) && <button type="button" onClick={() => setFullMapForSelection(showingAll ? null : selectedId)}>
+          {showingAll ? 'Focus on current change' : `Show all ${map.nodes.length} changes`}
+        </button>}
+      </div>}
       <div className="change-map-canvas" role="group" aria-label="Change map diagram" tabIndex={0}>
         <svg width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`}>
           <defs>
@@ -132,36 +150,56 @@ export const DiffReviewChangePath = memo(function DiffReviewChangePath({ map, se
   selectedId: string;
   onSelect: (decisionId: string) => void;
 }) {
-  const selectedNode = map.nodes.find((node) => node.id === selectedId);
+  const [expandedForSelection, setExpandedForSelection] = useState<string | null>(null);
+  const { selected: selectedNode, upstream, downstream } = useMemo(() => selectChangeConnections(map, selectedId), [map, selectedId]);
   if (!selectedNode || map.nodes.length < 2) return null;
 
-  const nodesById = new Map(map.nodes.map((node) => [node.id, node]));
-  const connections = map.edges.flatMap((edge) => {
-    if (edge.fromId !== selectedId && edge.toId !== selectedId) return [];
-    const outgoing = edge.fromId === selectedId;
-    const related = nodesById.get(outgoing ? edge.toId : edge.fromId);
-    return related ? [{ edge, related, outgoing }] : [];
-  }).sort((left, right) => left.related.ordinal - right.related.ordinal);
+  const expanded = expandedForSelection === selectedId;
+  const totalConnections = upstream.length + downstream.length;
+  const hiddenConnections = Math.max(0, upstream.length - CHANGE_PATH_PREVIEW_LIMIT)
+    + Math.max(0, downstream.length - CHANGE_PATH_PREVIEW_LIMIT);
+  const visibleUpstream = expanded ? upstream : upstream.slice(0, CHANGE_PATH_PREVIEW_LIMIT);
+  const visibleDownstream = expanded ? downstream : downstream.slice(0, CHANGE_PATH_PREVIEW_LIMIT);
 
   return <nav className="change-path" aria-label="Related code changes">
-    <div className="change-path-current">
+    <header className="change-path-current">
       <Network size={13} aria-hidden="true" />
       <span>Change {selectedNode.ordinal}</span>
       <code>{truncate(selectedNode.label, 28)}</code>
-    </div>
-    {connections.length === 0
+      {hiddenConnections > 0 && <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpandedForSelection(expanded ? null : selectedId)}
+      >{expanded ? 'Show fewer' : `Show all ${totalConnections}`}</button>}
+    </header>
+    {totalConnections === 0
       ? <small>No direct relationships in this diff</small>
-      : <ol>
-        {connections.map(({ edge, related, outgoing }) => <li key={edge.id} className={`relation-${edge.relation}`}>
-          <button
-            type="button"
-            onClick={() => onSelect(related.id)}
-            aria-label={`Jump to decision ${related.ordinal}: ${plainText(edge.explanation)}`}
-          >
-            {outgoing ? <ArrowRight size={13} aria-hidden="true" /> : <ArrowLeft size={13} aria-hidden="true" />}
-            <span><small>{outgoing ? 'Downstream' : 'Upstream'} · {CHANGE_RELATION_LABELS[edge.relation]}</small><b>{related.ordinal}. {truncate(related.label, 24)}</b></span>
-          </button>
-        </li>)}
-      </ol>}
+      : <div className={`change-path-groups${expanded ? ' expanded' : ''}`}>
+        {upstream.length > 0 && <ChangePathGroup direction="upstream" connections={visibleUpstream} total={upstream.length} onSelect={onSelect} />}
+        {downstream.length > 0 && <ChangePathGroup direction="downstream" connections={visibleDownstream} total={downstream.length} onSelect={onSelect} />}
+      </div>}
   </nav>;
+});
+
+const ChangePathGroup = memo(function ChangePathGroup({ direction, connections, total, onSelect }: {
+  direction: 'upstream' | 'downstream';
+  connections: ChangeMapConnection[];
+  total: number;
+  onSelect: (decisionId: string) => void;
+}) {
+  const upstream = direction === 'upstream';
+  return <section className="change-path-group" aria-label={`${total} ${direction} ${total === 1 ? 'change' : 'changes'}`}>
+    <header>
+      {upstream ? <ArrowLeft size={12} aria-hidden="true" /> : <ArrowRight size={12} aria-hidden="true" />}
+      <span>{direction}</span><small>{total}</small>
+    </header>
+    <ol>
+      {connections.map(({ edge, related }) => <li key={edge.id} className={`relation-${edge.relation}`}>
+        <button type="button" onClick={() => onSelect(related.id)} aria-label={`Jump to decision ${related.ordinal}: ${plainText(edge.explanation)}`}>
+          <b>{related.ordinal}. {truncate(related.label, 26)}</b>
+          <small>{CHANGE_RELATION_LABELS[edge.relation]} · {truncate(fileTail(related.filePath), 30)}</small>
+        </button>
+      </li>)}
+    </ol>
+  </section>;
 });
