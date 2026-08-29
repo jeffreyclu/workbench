@@ -5,6 +5,10 @@ const POPOVER_WIDTH = 336;
 const ASIDE_WIDTH = 306;
 const ASIDE_GAP = 10;
 const VIEWPORT_MARGIN = 12;
+/** Below this the panel, the diagram and the viewport margins cannot sit in a
+ * row, so the pair stacks instead of being squeezed to an unreadable width or
+ * pushed off a phone screen. */
+const STACK_BREAKPOINT = POPOVER_WIDTH + ASIDE_GAP + ASIDE_WIDTH + VIEWPORT_MARGIN * 2;
 
 export type DecisionPopoverAnchor = HTMLElement | SVGElement;
 
@@ -36,15 +40,25 @@ export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-deci
   /** Companion content pinned to the panel's right edge — the diagram of what
    * this decision relates to. It is placed as part of the panel, not beside
    * it, so the pair is measured and flipped as one unit and the diagram can
-   * never be pushed off screen on its own. */
+   * never be pushed off screen on its own. On a viewport too narrow for a row
+   * it stacks under the decision instead. */
   aside?: ReactNode;
   onClose: () => void;
   children: ReactNode;
 }) {
   const panel = useRef<HTMLDivElement | null>(null);
   const hasAside = Boolean(aside);
-  const width = POPOVER_WIDTH + (hasAside ? ASIDE_GAP + ASIDE_WIDTH : 0);
-  const [style, setStyle] = useState<CSSProperties>({ position: 'fixed', top: 0, left: 0, width, visibility: 'hidden' });
+  /** Measured on every placement rather than fixed at mount, so rotating a
+   * phone crosses the breakpoint without the panel having to close and reopen.
+   * Narrow viewports stack the diagram under the decision and clamp the panel
+   * to the screen; wide ones reserve both columns as before. */
+  const measure = () => {
+    const stacked = hasAside && window.innerWidth < STACK_BREAKPOINT;
+    const columns = hasAside && !stacked ? POPOVER_WIDTH + ASIDE_GAP + ASIDE_WIDTH : POPOVER_WIDTH;
+    return { stacked, width: Math.min(columns, window.innerWidth - VIEWPORT_MARGIN * 2) };
+  };
+  const [stacked, setStacked] = useState(() => measure().stacked);
+  const [style, setStyle] = useState<CSSProperties>(() => ({ position: 'fixed', top: 0, left: 0, width: measure().width, visibility: 'hidden' }));
 
   /** The element to measure against, re-resolved on every placement rather than
    * captured once. Selecting a decision can re-render the diff pane and unmount
@@ -62,6 +76,8 @@ export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-deci
     const place = () => {
       const element = panel.current;
       if (!element) return;
+      const { stacked: nextStacked, width } = measure();
+      setStacked(nextStacked);
       const target = liveAnchor();
       if (!target) {
         setStyle({ position: 'fixed', top: VIEWPORT_MARGIN, left: Math.max(VIEWPORT_MARGIN, (window.innerWidth - width) / 2), width, visibility: 'visible' });
@@ -90,7 +106,7 @@ export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-deci
       window.removeEventListener('resize', place);
       observer?.disconnect();
     };
-  }, [anchor, anchorId, anchorAttribute, width]);
+  }, [anchor, anchorId, anchorAttribute, hasAside]);
 
   useEffect(() => {
     panel.current?.focus?.({ preventScroll: true });
@@ -122,7 +138,7 @@ export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-deci
   }, [anchor, anchorId, anchorAttribute, onClose]);
 
   return createPortal(
-    <div ref={panel} className={`decision-popover${hasAside ? ' with-aside' : ''}`} role="dialog" aria-labelledby={labelledBy} tabIndex={-1} style={style}>
+    <div ref={panel} className={`decision-popover${hasAside ? ' with-aside' : ''}${stacked ? ' stacked' : ''}`} role="dialog" aria-labelledby={labelledBy} tabIndex={-1} style={style}>
       {hasAside ? <>
         <div className="decision-popover-panel">{children}</div>
         <div className="decision-popover-aside">{aside}</div>

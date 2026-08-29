@@ -571,6 +571,8 @@ nav { display: grid; gap: 3px; }
 .decision-popover.with-aside { display: grid; grid-template-columns: 336px 306px; gap: 10px; overflow: visible; border: 0; background: none; box-shadow: none; }
 .decision-popover.with-aside > .decision-popover-panel { overflow-y: auto; overscroll-behavior: contain; max-height: min(74vh, 620px); border: 1px solid #45443e; border-radius: 9px; box-shadow: 0 14px 38px #000a; }
 .decision-popover.with-aside > .decision-popover-aside { overflow-y: auto; overscroll-behavior: contain; max-height: min(74vh, 620px); }
+.decision-popover.with-aside.stacked { grid-template-columns: minmax(0, 1fr); overflow-y: auto; overscroll-behavior: contain; max-height: min(74vh, 620px); }
+.decision-popover.with-aside.stacked > .decision-popover-panel, .decision-popover.with-aside.stacked > .decision-popover-aside { overflow: visible; max-height: none; }
 .decision-relationship-diagram { border: 1px solid #45443e; border-radius: 9px; background: #131311; box-shadow: 0 14px 38px #000a; }
 .decision-relationship-diagram > header { display: flex; align-items: center; gap: 7px; padding: 10px 14px 8px; color: #85847d; font: 10px 'DM Mono'; }
 .decision-relationship-diagram > header small { margin-left: auto; color: #77766f; font: 9px 'DM Mono'; }

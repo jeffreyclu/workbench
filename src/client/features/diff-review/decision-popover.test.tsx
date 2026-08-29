@@ -135,5 +135,23 @@ describe('decision popover', () => {
     // reserves both widths and the pair flips together at the viewport edge.
     expect(dialog).toHaveClass('with-aside');
     expect(dialog).toHaveStyle({ width: '652px' });
+    expect(dialog).not.toHaveClass('stacked');
+  });
+
+  it('stacks the diagram under the decision when the viewport is too narrow for a row', () => {
+    const wide = window.innerWidth;
+    try {
+      Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
+      render(<Harness aside={<p>Diagram</p>} />);
+      press(marker());
+      const dialog = screen.getByRole('dialog');
+      // Stacked, and clamped to the phone: 652px of columns would have run off
+      // the screen and taken the diagram with it.
+      expect(dialog).toHaveClass('stacked');
+      expect(dialog).toHaveStyle({ width: '336px' });
+      expect(dialog.querySelector('.decision-popover-aside')).toHaveTextContent('Diagram');
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { value: wide, configurable: true });
+    }
   });
 });
