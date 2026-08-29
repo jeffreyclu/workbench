@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
-import { CACHE_READ_SOFT_LIMIT_TOKENS, DEFAULT_ACCOUNT_PROFILE, type AgentRun, type WorkItem } from '../shared/contracts.js';
+import { CACHE_READ_HARD_LIMIT_TOKENS, CACHE_READ_SOFT_LIMIT_TOKENS, DEFAULT_ACCOUNT_PROFILE, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
@@ -573,6 +573,17 @@ export class AgentTerminalWarningError extends Error {
     super(message);
     this.name = 'AgentTerminalWarningError';
   }
+}
+
+export class AgentCacheBudgetExceededError extends AgentTerminalWarningError {
+  constructor(checkpoint: string) {
+    super(`Agent reached Workbench's ${Math.round(CACHE_READ_HARD_LIMIT_TOKENS / 1_000)}K aggregate cached-input ceiling. Its completed work is preserved; retry to continue in a fresh budget.`, checkpoint);
+    this.name = 'AgentCacheBudgetExceededError';
+  }
+}
+
+export function cacheReadHardLimitExceeded(usage: AgentUsage): boolean {
+  return (usage.cacheReadInputTokens ?? 0) >= CACHE_READ_HARD_LIMIT_TOKENS;
 }
 
 export const CACHE_HANDOFF_MARKER = 'WORKBENCH_CACHE_HANDOFF:';
@@ -1528,7 +1539,30 @@ export async function runAgentCommandWithFallback(
     let result: AgentCommandResult;
     for (;;) {
       const before = aggregate;
-      result = await runAgentCommandWithUsage(primary, cwd, segmentPrompt, onProgress, signal, profile, (usage, agent) => onUsage?.(addUsage(before, usage), agent), onAudit, accountProfile, modelOverride, onSteeringReady, segmentResume, poolEligible && segmentPrompt === prompt, kind);
+      const segmentController = new AbortController();
+      const cancelSegment = () => segmentController.abort();
+      let hardLimitExceeded = false;
+      let latestSegmentProgress = '';
+      if (signal?.aborted) segmentController.abort();
+      else signal?.addEventListener('abort', cancelSegment, { once: true });
+      try {
+        result = await runAgentCommandWithUsage(primary, cwd, segmentPrompt, (partial) => {
+          latestSegmentProgress = partial;
+          onProgress?.(partial);
+        }, segmentController.signal, profile, (usage, agent) => {
+          const aggregateUsage = addUsage(before, usage);
+          onUsage?.(aggregateUsage, agent);
+          if (!hardLimitExceeded && cacheReadHardLimitExceeded(aggregateUsage)) {
+            hardLimitExceeded = true;
+            segmentController.abort();
+          }
+        }, onAudit, accountProfile, modelOverride, onSteeringReady, segmentResume, poolEligible && segmentPrompt === prompt, kind);
+      } catch (error) {
+        if (hardLimitExceeded) throw new AgentCacheBudgetExceededError(latestSegmentProgress);
+        throw error;
+      } finally {
+        signal?.removeEventListener('abort', cancelSegment);
+      }
       aggregate = addUsage(aggregate, result.usage);
       if (shouldContinueCacheHandoff(result)) {
         onProgress?.('● Cache checkpoint saved. Continuing automatically in a fresh compact session…');

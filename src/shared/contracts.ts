@@ -751,6 +751,10 @@ export interface AgentRun {
 /** A completed turn may cross this cache-read threshold, but its provider
  * session is retired before the next turn instead of terminating active work. */
 export const CACHE_READ_SOFT_LIMIT_TOKENS = 500_000;
+/** Absolute aggregate cached-input ceiling for one visible agent reply.
+ * Cooperative checkpoints reduce context before this point; this ceiling is
+ * enforced by Workbench even when a provider ignores the checkpoint request. */
+export const CACHE_READ_HARD_LIMIT_TOKENS = 900_000;
 
 export interface LinearSyncResult {
   imported: number;
@@ -1039,8 +1043,7 @@ export const createSharedMessageSchema = z.object({
 export const createSharedConversationSchema = z.object({ title: z.string().trim().min(1).max(200).default('New conversation') });
 
 export const updateSharedMessageSchema = z.object({
-  pinned: z.boolean().optional(),
-  kind: runKindSchema.nullable().optional(),
+  pinned: z.boolean(),
 });
 
 // --- Diagnostics and insights -----------------------------------------------
