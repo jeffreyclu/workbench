@@ -1,14 +1,16 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
-const IDLE_SHUTDOWN_MS = 30_000;
+const IDLE_SHUTDOWN_MS = 5 * 60_000;
 const CLASSIFIER_TIMEOUT_MS = 8_000;
 const SYSTEM_PROMPT = `You are Workbench's conversation supervisor. Convert a conversation into the one authoritative objective the coding agent must execute now.
 
 Rules:
 - The newest user correction overrides every conflicting earlier request, plan, hypothesis, implementation, and agent claim.
+- A newest message beginning with "no", "not that", "that's not", "instead", or equivalent rejects the immediately preceding proposal. Never carry the rejected deliverable into the objective unless the correction explicitly retains it.
 - If the newest user message is a continuation such as "continue", "do it", "build that", or "fix it", resolve it to the most recent concrete unresolved user request. Never use an agent's exploratory narration as the objective.
 - Preserve exact scope, named locations, and named existing UI controls. Do not invent architecture, persistence, schema, migrations, or adjacent cleanup unless the user requested it.
 - Acceptance criteria must describe observable completion. Exclusions must name tempting but conflicting work that should not be done.
+- Set continuation=true only when the newest message is shorthand that cannot stand as a concrete instruction by itself. A concrete correction is not a continuation.
 - Keep the objective compact and executable. Do not include analysis or a plan.
 
 Return exactly one JSON object and nothing else:
@@ -109,6 +111,13 @@ export function groundTurnWithHaiku(prompt: string): Promise<string> {
     pending.timer.unref();
     queue.push(pending);
     dispatch();
+  });
+}
+
+/** Pay the one-time CLI/model handshake during server startup, off the request path. */
+export function warmTurnGroundingClassifier(): void {
+  void groundTurnWithHaiku('Warm-up only. Return {"objective":"ready","acceptanceCriteria":[],"exclusions":[],"continuation":false}.').catch(() => {
+    // Best effort. A real turn retains its human-only fallback.
   });
 }
 

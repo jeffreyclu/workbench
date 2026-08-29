@@ -454,3 +454,24 @@ untouched, and ambiguous/context-dependent messages (short follow-ups like "why?
 back to the stored kind rather than being misrouted by absence of a keyword. Any future change to task
 routing must re-infer per-turn intent from the current message, not just from the task's original
 title/description.
+
+### Conversation history is evidence; one resolved turn objective is the instruction source
+
+On 2026-08-28, repeated Claude and Codex runs spent dozens of tool calls re-investigating simple
+requests because Workbench supplied a compacted transcript and shared brief without identifying
+which user instruction was authoritative. Corrections competed with stale agent hypotheses, and a
+terse “continue” could start a fresh run that rediscovered the repository instead of resuming the
+unresolved request.
+
+Every shared-room dispatch must now resolve one compact `TurnGrounding` before agent execution. A
+dedicated, tool-free Haiku process extracts the current objective, observable acceptance criteria,
+and explicit exclusions; the newest user correction wins. Both recipients of an Ask Both turn share
+the exact same promise/result. A human-only deterministic fallback is mandatory if the classifier is
+unavailable. The prompt labels history, memory, prior implementations, and agent narration as
+reference evidence only, and repeats that the grounded objective is the instruction source.
+
+Grounding is bound to the human message's dispatch-group ID. A retry must therefore use the same
+historical cutoff and cannot silently adopt a newer queued request. Exact continuation messages use
+the preceding concrete human instruction for their fallback objective and retain that objective's
+execution kind. Future prompt work must preserve these properties: latest correction wins, agent
+narration never becomes user intent, Ask Both has parity, and retries cannot drift across turns.

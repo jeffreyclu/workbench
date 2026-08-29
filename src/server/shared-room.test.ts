@@ -6,7 +6,7 @@ import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, sharedTurnKindForMessage, warmSharedRoomCodex } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const temporaryDirectories: string[] = [];
@@ -113,6 +113,61 @@ describe('compactConversationHistory', () => {
     ];
 
     expect(memoryQueryForSharedReply(messages)).toBe('What are my hobbies?');
+  });
+
+  it('resolves continue to the preceding concrete human objective without adopting agent narration', () => {
+    const messages = [
+      message(0, 'Add the existing expandable task-type robot control beside the pin.'),
+      message(1, 'I should add a database column and a passive badge.'),
+      message(2, 'fucking continue now'),
+    ];
+
+    const grounding = fallbackTurnGrounding(messages);
+
+    expect(grounding.continuation).toBe(true);
+    expect(grounding.objective).toContain('Add the existing expandable task-type robot control beside the pin.');
+    expect(grounding.objective).not.toContain('database column');
+  });
+
+  it('uses a tiny supervisor result as the authoritative objective and preserves explicit exclusions', async () => {
+    const messages = [
+      message(0, 'Show the execution type in the header.'),
+      message(1, 'I will persist a new derived type.'),
+      message(2, 'No. Reuse the existing task-type picker beside the pin. Do not add persistence.'),
+    ];
+    const grounding = await resolveTurnGrounding(messages, async () => JSON.stringify({
+      objective: 'Render the existing expandable task-type picker beside the pin.',
+      acceptanceCriteria: ['The picker is interactive in manually created conversations.'],
+      exclusions: ['Do not add a passive badge or persistence.'],
+      continuation: false,
+    }));
+    const prompt = buildSharedReplyPrompt('codex', 'Old shared hypothesis: add a badge.', '', messages, undefined, [], null, undefined, grounding);
+
+    expect(grounding.source).toBe('haiku');
+    expect(prompt).toContain('AUTHORITATIVE CURRENT OBJECTIVE');
+    expect(prompt).toContain('Render the existing expandable task-type picker beside the pin.');
+    expect(prompt).toContain('Do not add a passive badge or persistence.');
+    expect(prompt).toContain('Reference-only conversation transcript:');
+    expect(prompt).toContain('ignore the conflict');
+  });
+
+  it('falls back safely when the supervisor returns malformed output', async () => {
+    const messages = [message(0, 'Fix only the retry button.')];
+    const grounding = await resolveTurnGrounding(messages, async () => 'not json');
+
+    expect(grounding).toEqual(expect.objectContaining({ objective: 'Fix only the retry button.', source: 'fallback' }));
+  });
+
+  it('binds retries to their original human turn instead of a newer queued request', () => {
+    const original = message(0, 'Fix retry state immediately.');
+    const reply = message(1, 'The first attempt failed.');
+    reply.dispatchGroupId = original.id;
+    const newer = message(2, 'Now change the archive animation.');
+
+    const scoped = threadForSharedReply([original, reply, newer], reply.dispatchGroupId);
+
+    expect(latestHumanMessageForSharedReply(scoped)).toBe('Fix retry state immediately.');
+    expect(fallbackTurnGrounding(scoped).objective).toBe('Fix retry state immediately.');
   });
 
   it('uses the newest human turn for an external-action capability', () => {
