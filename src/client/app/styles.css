@@ -1454,6 +1454,7 @@ nav { display: grid; gap: 3px; }
   .mobile-detail-close { position: fixed; top: 12px; right: 14px; z-index: 7; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; color: #d9d8d0; background: #171715; border: 1px solid #373731; border-radius: 8px; box-shadow: 0 6px 16px #0009; transition: top .2s ease; }
   .agent-console-header:not(.is-mobile-header-collapsed) .mobile-detail-close { top: 140px; }
   .agent-console-title { position: fixed; top: 12px; right: 70px; left: 112px; z-index: 6; display: flex; align-items: center; justify-content: flex-start; gap: 7px; min-width: 0; height: 44px; padding: 0; overflow: hidden; background: transparent; border: 0; }
+  .agent-console-header:not(.is-mobile-header-collapsed) .agent-console-title { right: 12px; left: 12px; }
   .agent-console-title .conversation-origin { display: none; }
   .agent-console-header.has-conversation-actions { min-height: 0; }
   .agent-console-header.has-conversation-actions .agent-console-title { max-width: none; padding-top: 0; }
@@ -1472,6 +1473,8 @@ nav { display: grid; gap: 3px; }
   .conversation-surface-tabs { flex: 0 0 auto; margin-right: 0; border: 1px solid #373731; border-radius: 8px; background: #171715; }
   .conversation-surface-tabs button { flex: 0 0 auto; justify-content: center; width: 44px; min-width: 44px; min-height: 44px; padding: 0; font-size: 0; }
   .conversation-surface-tabs button[aria-pressed="true"] { color: var(--acid); background: #252520; }
+  .shared-message header .model-badge { flex: 1 1 auto; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden; text-overflow: clip; white-space: nowrap; scrollbar-width: none; -webkit-overflow-scrolling: touch; touch-action: pan-x; }
+  .shared-message header .model-badge::-webkit-scrollbar { display: none; }
   .conversation-review-layout { border-top: 0; }
   .conversation-review-layout.layout-changes .conversation-thread-pane { display: contents; }
   .conversation-review-layout.layout-changes .shared-composer,

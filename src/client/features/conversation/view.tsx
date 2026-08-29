@@ -453,7 +453,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     // Group headers change the virtual row geometry as conversations move
     // between stacks, so recalculate instead of waiting for a scroll event.
     conversationVirtualizer.measure();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [conversationStackShape, conversationVirtualizer]);
   useEffect(() => {
     const last = conversationRows.at(-1);

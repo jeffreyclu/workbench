@@ -156,7 +156,7 @@ const WRITER_TEST_FILE_ARGUMENT = /(?:^|\/)[^\s/]+\.(?:test|spec)\.[cm]?[jt]sx?(
 export function blockedWriterTestSuiteCommand(command: string): boolean {
   const normalized = command.replace(/\\\n/g, ' ').replace(/\s+/g, ' ').trim();
   if (!normalized || WRITER_TEST_FILE_ARGUMENT.test(normalized)) return false;
-  const runsPackageSuite = /\b(?:npm|pnpm|yarn)\b[^\n;&|]*(?:\btest(?:\:[\w-]+)?\b|\brun\s+test(?:\:[\w-]+)?\b)/i.test(normalized);
+  const runsPackageSuite = /\b(?:npm|pnpm|yarn)\b[^\n;&|]*(?:\btest(?::[\w-]+)?\b|\brun\s+test(?::[\w-]+)?\b)/i.test(normalized);
   const runsTestRunner = /(?:^|[\s;&|])(?:npx\s+(?:--\S+\s+)*(?:vitest|jest)|(?:\S*\/)?(?:vitest|jest)(?:\.m?js)?)(?:\s|$)/i.test(normalized);
   return runsPackageSuite || runsTestRunner;
 }
@@ -1187,9 +1187,9 @@ ${AGENT_EXECUTION_CONTRACT}`;
     // past the point where carrying it forward is cheaper than reseeding.
     let peakContextTokens = 0;
     let providerCostUsd: number | null = null;
-    let cacheHandoffRequested = false;
+    const cacheHandoffRequested = false;
     let toolStarts = 0;
-    let toolStartsAtCacheHandoff = 0;
+    const toolStartsAtCacheHandoff = 0;
     let steerAgentInput: AgentInputSteering | null = null;
     let lastReportedUsage = '';
     // See UsageSample: `--forward-subagent-text` can surface the same provider

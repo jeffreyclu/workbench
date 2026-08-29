@@ -225,7 +225,7 @@ describe('classifyExecution', () => {
   it('keeps Claude stdin open and appends an interjection after the initial prompt', async () => {
     const fixture = fakeAgentDirectory('exit 1', 'exit 1');
     const { directory, log } = fixture;
-    const script = `IFS= read -r first; printf '%s\\n' \"$first\" >> '${log}'; IFS= read -r second; printf '%s\\n' \"$second\" >> '${log}'; printf '%s\\n' '{\"type\":\"result\",\"result\":\"Applied the interjection.\"}'`;
+    const script = `IFS= read -r first; printf '%s\\n' "$first" >> '${log}'; IFS= read -r second; printf '%s\\n' "$second" >> '${log}'; printf '%s\\n' '{"type":"result","result":"Applied the interjection."}'`;
     writeFileSync(join(directory, 'claude'), `#!/bin/sh\nprintf '%s\\n' 'claude' >> '${log}'\n${script}\n`);
     chmodSync(join(directory, 'claude'), 0o755);
     const result = await runAgentCommandWithFallback('claude', directory, 'Start the task.', undefined, undefined, undefined, 'economy', undefined, undefined, 'analysis', undefined, undefined, (steer) => {

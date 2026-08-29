@@ -1709,7 +1709,7 @@ const schemaMigrations: readonly Migration[] = [
     id: '061_agent_run_review_handoffs',
     apply(database) {
       database.exec(`
-        CREATE TABLE agent_run_review_handoffs (
+        CREATE TABLE IF NOT EXISTS agent_run_review_handoffs (
           agent_run_id TEXT PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
           format_version INTEGER NOT NULL DEFAULT 1 CHECK (format_version = 1),
           summary TEXT NOT NULL CHECK (length(trim(summary)) > 0),
@@ -1731,7 +1731,7 @@ const schemaMigrations: readonly Migration[] = [
     id: '062_agent_run_review_handoffs_immutable',
     apply(database) {
       database.exec(`
-        CREATE TRIGGER agent_run_review_handoffs_immutable
+        CREATE TRIGGER IF NOT EXISTS agent_run_review_handoffs_immutable
         BEFORE UPDATE ON agent_run_review_handoffs
         BEGIN
           SELECT RAISE(ABORT, 'agent run review handoffs are immutable');
@@ -1745,8 +1745,11 @@ const schemaMigrations: readonly Migration[] = [
     // new databases must still receive the same schema before any later build.
     id: '063_shared_conversation_manual_position',
     apply(database) {
-      database.exec('ALTER TABLE shared_conversations ADD COLUMN manual_position REAL NOT NULL DEFAULT 0;');
-      database.exec('CREATE INDEX idx_shared_conversations_manual_position ON shared_conversations(manual_position, updated_at DESC);');
+      const columns = database.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'manual_position')) {
+        database.exec('ALTER TABLE shared_conversations ADD COLUMN manual_position REAL NOT NULL DEFAULT 0;');
+      }
+      database.exec('CREATE INDEX IF NOT EXISTS idx_shared_conversations_manual_position ON shared_conversations(manual_position, updated_at DESC);');
     },
   },
   {
@@ -1813,14 +1816,14 @@ const schemaMigrations: readonly Migration[] = [
     // terse callbacks to drift back to old task text after a classifier timeout.
     apply(database) {
       database.exec(`
-        CREATE TABLE shared_turn_groundings (
+        CREATE TABLE IF NOT EXISTS shared_turn_groundings (
           message_id TEXT PRIMARY KEY REFERENCES shared_messages(id) ON DELETE CASCADE,
           conversation_id TEXT NOT NULL REFERENCES shared_conversations(id) ON DELETE CASCADE,
           grounding_json TEXT NOT NULL CHECK (json_valid(grounding_json) AND json_type(grounding_json) = 'object'),
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
-        CREATE INDEX idx_shared_turn_groundings_conversation_created
+        CREATE INDEX IF NOT EXISTS idx_shared_turn_groundings_conversation_created
           ON shared_turn_groundings(conversation_id, created_at DESC);
       `);
     },

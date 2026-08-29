@@ -66,7 +66,7 @@ export function assertUsableRuntimeRelease(releasePath: string): void {
   if (!html.includes('<html') || !html.includes('/assets/')) {
     throw new Error(`Runtime client entry is invalid: ${clientEntry}`);
   }
-  const assetPaths = [...html.matchAll(/(?:src|href)="(\/assets\/[^"?#]+)[^\"]*"/g)].map((match) => match[1]);
+  const assetPaths = [...html.matchAll(/(?:src|href)="(\/assets\/[^"?#]+)[^"]*"/g)].map((match) => match[1]);
   if (assetPaths.length === 0 || assetPaths.some((asset) => !existsSync(join(releasePath, 'client', asset)))) {
     throw new Error(`Runtime client assets are incomplete: ${clientEntry}`);
   }

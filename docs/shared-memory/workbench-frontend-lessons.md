@@ -235,6 +235,11 @@ panel icon or visible button chrome. It opens on tap or downward swipe.
 the independent Conversation/Changes switch and close X move smoothly below
 the expanded tray, then return to their original top corners when it closes.
 
+*Correction from Jeffrey, 2026-08-29.* On phones, preserve the full text in the
+blue per-message model badge and the conversation title. Both pan horizontally
+instead of ellipsizing; the expanded tray title uses the full available width
+because the Conversation/Changes switch and close X move below the tray.
+
 *Decision from Jeffrey, 2026-08-27.* The constrained one-line title in the
 expanded phone conversation tray scrolls horizontally on touch; it does not
 ellipsis. Keep the title bounded between the floating review switch and close

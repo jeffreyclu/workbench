@@ -21,12 +21,14 @@ describe('AgentRunReviewHandoffCard', () => {
 
     expect(screen.getByText('Agent handoff')).toBeInTheDocument();
     const sections = document.querySelectorAll<HTMLDetailsElement>('.review-handoff-section');
-    expect(sections).toHaveLength(3);
+    // Completion summary, observed changes, requested outcome, verification.
+    expect(sections).toHaveLength(4);
     sections.forEach((section) => expect(section.open).toBe(false));
 
-    fireEvent.click(screen.getByText('Verification'));
+    const verification = screen.getByText('Verification');
+    fireEvent.click(verification);
 
-    expect(sections[2].open).toBe(true);
+    expect(verification.closest('details')).toHaveProperty('open', true);
     expect(screen.getByText(/pnpm typecheck/)).toBeVisible();
     expect(screen.getByText('1/2 passed')).toBeVisible();
   });

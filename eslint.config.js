@@ -8,6 +8,21 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // Plain-JS helper scripts run under Node; typescript-eslint already turns
+    // no-undef off for TypeScript, so only these files need the globals.
+    files: ['**/*.{js,mjs,cjs}'],
+    languageOptions: { globals: { console: 'readonly', process: 'readonly' } },
+  },
+  {
+    // An underscore prefix is this codebase's marker for a binding that exists
+    // only to satisfy a signature or a destructuring position.
+    rules: {
+      '@typescript-eslint/no-unused-vars': ['error', {
+        argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_',
+      }],
+    },
+  },
+  {
     files: ['src/client/**/*.{ts,tsx}'],
     plugins: {
       'react-hooks': reactHooks,

@@ -248,9 +248,9 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
     let peakContextTokens = 0;
     const pendingSteers = new Map<number, (accepted: boolean) => void>();
     let steerCount = 0;
-    let cacheHandoffRequested = false;
+    const cacheHandoffRequested = false;
     let toolStarts = 0;
-    let toolStartsAtCacheHandoff = 0;
+    const toolStartsAtCacheHandoff = 0;
     // A steered turn emits a separate `agentMessage` item per exchange (the
     // pre-interjection reply, then the reply to the steer). Deltas carry an
     // `itemId`; concatenating them flat without an item boundary runs the two
@@ -954,6 +954,32 @@ export async function replyInSharedRoom(
     replyRunIds.set(messageId, runId);
     repository.updateRun(runId, { status: 'running', startedAt: new Date().toISOString() });
   }
+  // Extracted from the finally block below: a `return` or `throw` that sits
+  // lexically inside `finally` silently replaces whatever the try/catch was
+  // already settling with. Running the same logic through a call keeps the
+  // shutdown-race handling without that hazard.
+  const finalizeReplyTurn = async () => {
+      // Test/runtime teardown may close the repository while an already-started
+      // provider is settling. Do not turn that shutdown race into an unhandled
+      // rejection; a serving runtime never treats a lost repository as a reply.
+      let synthesized = false;
+      let dispatched: SharedMessage[] = [];
+      try {
+        synthesized = await synthesizeSharedTurn(repository, target.conversationId, target.id);
+        dispatched = dispatchNextSharedTurn(repository, target.conversationId);
+      } catch (error) {
+        if ((error as { code?: string } | undefined)?.code !== 'ERR_INVALID_STATE') throw error;
+        return;
+      }
+      if (!synthesized && !dispatched.length) settleLinkedTask(repository, target.conversationId, `${agent} finished responding; review the conversation.`);
+      if (!synthesized && !dispatched.length) {
+        const completed = repository.getSharedMessageById(messageId);
+        publishRealtimeEvent('shared', 'work-items', 'insights');
+        publishRealtimeNotification(completed?.status === 'completed'
+          ? { tone: 'success', message: 'Agent finished', description: target.body.slice(0, 180), duration: 8_000, action: { label: 'Open conversation', route: `/conversations/${target.conversationId}` } }
+          : { tone: 'error', message: 'Agent needs your attention', description: target.body.slice(0, 180), duration: 0, action: { label: 'Open conversation', route: `/conversations/${target.conversationId}` } });
+      }
+  };
   try {
     const allThreadMessages = repository.listSharedMessages(100, null, target.conversationId).messages.filter((message) => message.id !== messageId);
     const thread = threadForSharedReply(allThreadMessages, target.dispatchGroupId);
@@ -1158,26 +1184,7 @@ export async function replyInSharedRoom(
     activeReplies.delete(messageId);
     activeReplySteering.delete(messageId);
     replyRunIds.delete(messageId);
-    // Test/runtime teardown may close the repository while an already-started
-    // provider is settling. Do not turn that shutdown race into an unhandled
-    // rejection; a serving runtime never treats a lost repository as a reply.
-    let synthesized = false;
-    let dispatched: SharedMessage[] = [];
-    try {
-      synthesized = await synthesizeSharedTurn(repository, target.conversationId, target.id);
-      dispatched = dispatchNextSharedTurn(repository, target.conversationId);
-    } catch (error) {
-      if ((error as { code?: string } | undefined)?.code !== 'ERR_INVALID_STATE') throw error;
-      return;
-    }
-    if (!synthesized && !dispatched.length) settleLinkedTask(repository, target.conversationId, `${agent} finished responding; review the conversation.`);
-    if (!synthesized && !dispatched.length) {
-      const completed = repository.getSharedMessageById(messageId);
-      publishRealtimeEvent('shared', 'work-items', 'insights');
-      publishRealtimeNotification(completed?.status === 'completed'
-        ? { tone: 'success', message: 'Agent finished', description: target.body.slice(0, 180), duration: 8_000, action: { label: 'Open conversation', route: `/conversations/${target.conversationId}` } }
-        : { tone: 'error', message: 'Agent needs your attention', description: target.body.slice(0, 180), duration: 0, action: { label: 'Open conversation', route: `/conversations/${target.conversationId}` } });
-    }
+    await finalizeReplyTurn();
   }
 }
 

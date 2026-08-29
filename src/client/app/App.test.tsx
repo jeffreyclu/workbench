@@ -1153,8 +1153,15 @@ describe('shared room', () => {
 
     fireEvent.click(changes);
     expect(await screen.findByRole('heading', { name: 'Review workspace decisions' })).toBeTruthy();
+    // The linked pull request is an explicit review source, so it opens on demand rather than by default.
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub PR' }));
+    fireEvent.change(await screen.findByLabelText('Pull request'), { target: { value: item.sourceUrl } });
     expect(await screen.findByRole('heading', { name: 'Conversation review' })).toBeTruthy();
-    expect(await screen.findAllByRole('button', { name: /src\/client\/App\.tsx/ })).toHaveLength(3);
+    // The queue chip and the diff block header. A lone decision has no relationships, so the change map contributes no node.
+    expect((await screen.findAllByRole('button', { name: /src\/client\/App\.tsx/ })).map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Decision 1: Changes behavior in src/client/App.tsx. \u2014 Pending',
+      'Select the decision at Lines 1\u20132 in src/client/App.tsx',
+    ]);
     expect(screen.getByRole('button', { name: 'Changes' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('button', { name: 'Split' })).toBeNull();
     expect(screen.getByLabelText('Message Codex or Claude').closest('.conversation-review-layout')).toHaveClass('layout-changes');
@@ -1262,11 +1269,10 @@ describe('shared room', () => {
     const changes = await screen.findByRole('button', { name: 'Changes' });
     await waitFor(() => expect(changes).toBeEnabled());
     fireEvent.click(changes);
-    expect(await screen.findByText('No uncommitted changes to review.')).toBeTruthy();
-    expect(screen.getByLabelText('Workspace diff history')).toHaveValue('');
-    expect(screen.getByRole('option', { name: /1 files/ })).toBeTruthy();
-    fireEvent.change(screen.getByLabelText('Workspace diff history'), { target: { value: 'snapshot-1' } });
+    // A clean checkout with a recorded version opens that version instead of an empty state.
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeTruthy();
+    expect(screen.getByLabelText('Workspace diff history')).toHaveValue('snapshot-1');
+    expect(screen.getByRole('option', { name: /1 files/ })).toBeTruthy();
   });
 
   it('does not duplicate the conversation pin in the top action bar', async () => {

@@ -393,9 +393,9 @@ describe('shared-room Codex warming', () => {
     const fakeAppServer = [
       '#!/bin/sh',
       'IFS= read -r initialize',
-      `printf '%s\\n' \"$initialize\" >> '${log}'`,
+      `printf '%s\\n' "$initialize" >> '${log}'`,
       'sleep 0.05',
-      `printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"serverInfo\":{\"name\":\"fake-codex\"}}}'`,
+      `printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
       'while IFS= read -r request; do :; done',
     ].join('\n');
     writeFileSync(join(directory, 'codex'), fakeAppServer);

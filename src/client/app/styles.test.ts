@@ -47,7 +47,7 @@ describe('shared message layout', () => {
 
 describe('conversation view controls', () => {
   it('keeps an existing execution conversation openable while a task dispatch starts', () => {
-    const rule = styles.match(/^\.detail-panel\.execution-starting button[^\{]*\{[^}]*\}/m)?.[0] ?? '';
+    const rule = styles.match(/^\.detail-panel\.execution-starting button[^{]*\{[^}]*\}/m)?.[0] ?? '';
 
     expect(rule).toContain('.open-run-chat');
     expect(rule).not.toContain('button:not(.mobile-detail-close)');
@@ -113,6 +113,7 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) { position: fixed; inset: 0 0 auto; z-index: 6; height: 128px; background: #11120f;');
     expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) .mobile-header-handle { position: absolute; bottom: 0; left: 50%;');
     expect(phoneRules).toContain('.agent-console-title { position: fixed; top: 12px; right: 70px; left: 112px; z-index: 6; display: flex; align-items: center; justify-content: flex-start; gap: 7px;');
+    expect(phoneRules).toContain('.agent-console-header:not(.is-mobile-header-collapsed) .agent-console-title { right: 12px; left: 12px; }');
     expect(phoneRules).toContain('.agent-console-title .conversation-origin { display: none; }');
     expect(phoneRules).toContain('.agent-console:has(.agent-console-header:not(.is-mobile-header-collapsed)) .shared-thread { padding-top: 140px; }');
     expect(phoneRules).toContain('.conversation-window-actions { position: fixed; top: 64px; right: 12px; left: 12px; z-index: 7;');
@@ -121,6 +122,7 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.agent-console-header.has-conversation-actions { min-height: 0; }');
     expect(phoneRules).toContain('.agent-console-header.has-conversation-actions .agent-console-title { max-width: none; padding-top: 0; }');
     expect(phoneRules).toContain('.agent-console-header h2 { flex: 1; width: auto; min-width: 0; margin: 0; overflow-x: auto; overflow-y: hidden; font-size: 16px; line-height: 1.15; text-overflow: clip; white-space: nowrap; -webkit-overflow-scrolling: touch; touch-action: pan-x; }');
+    expect(phoneRules).toContain('.shared-message header .model-badge { flex: 1 1 auto; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden; text-overflow: clip; white-space: nowrap; scrollbar-width: none; -webkit-overflow-scrolling: touch; touch-action: pan-x; }');
   });
 
   it('keeps mobile actions usable while the review toggle is its own top-left block', () => {

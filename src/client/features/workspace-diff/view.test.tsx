@@ -29,6 +29,19 @@ function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, revi
   render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} reviewHandoff={reviewHandoff} pullRequestUrlCandidates={pullRequestUrlCandidates} /></QueryClientProvider>);
 }
 
+/**
+ * The decision detail card — its title, the AI assist and the review actions —
+ * is popover content opened from a block's gutter marker, so a test that needs
+ * any of it opens that popover explicitly. Selection itself stays readable
+ * without opening anything: the selected queue chip carries `aria-current` and
+ * the decision's behavior sentence in its accessible name.
+ */
+const selectedDecisionChip = () => screen.getByRole('button', { current: 'step' });
+const findSelectedDecision = (behavior: string) => waitFor(() =>
+  expect(selectedDecisionChip()).toHaveAccessibleName(new RegExp(behavior.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))));
+const openDecisionDetail = async (ordinal: number) =>
+  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`^Decision ${ordinal} .*open decision details$`) }));
+
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
@@ -147,7 +160,7 @@ describe('WorkspaceDiffView decision queue', () => {
 
     const picker = await screen.findByLabelText('Workspace');
     fireEvent.change(picker, { target: { value: repositoryB } });
-    await screen.findByRole('heading', { name: 'Changes behavior in src/b.ts.' });
+    await findSelectedDecision('Changes behavior in src/b.ts.');
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ }));
 
     cleanup();
@@ -237,7 +250,7 @@ describe('WorkspaceDiffView decision queue', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Decision 2.*behavior/ }));
     expect(diffPane.querySelector('.diff-review-diff-block.active')).toHaveTextContent('@@ -10,3 +10,3 @@ secondBehavior');
-    expect(screen.getByRole('heading', { name: 'Changes behavior in src/local.ts.' })).toBeInTheDocument();
+    expect(selectedDecisionChip()).toHaveAccessibleName(/Changes behavior in src\/local\.ts\./);
 
     // Clicking a block inside the diff selects that decision too.
     fireEvent.click(within(diffPane).getByRole('button', { name: 'Select the decision at Lines 1\u20133 in src/local.ts' }));
@@ -291,11 +304,12 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
-    await screen.findByRole('heading', { name: 'Changes behavior in src/local.ts.' });
+    await findSelectedDecision('Changes behavior in src/local.ts.');
+    await openDecisionDetail(1);
     fireEvent.click(screen.getByRole('button', { name: 'Explain this decision' }));
     await screen.findByText('This decision only touches local formatting.');
 
-    fireEvent.click(screen.getByRole('button', { name: /Decision 2.*behavior/ }));
+    await openDecisionDetail(2);
     expect(screen.queryByText('This decision only touches local formatting.')).toBeNull();
   });
 
@@ -323,13 +337,15 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
-    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/reviewed.ts.' })).toBeInTheDocument();
+    await findSelectedDecision('Changes behavior in src/reviewed.ts.');
+    await openDecisionDetail(1);
     fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
-    expect(await screen.findByText('@@ -10 +10 @@ secondBehavior')).toBeInTheDocument();
+    await waitFor(() => expect(selectedDecisionChip()).toHaveAccessibleName(/^Decision 2/));
     expect(putBodies[0]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -1 +1 @@ firstBehavior' }], state: 'reviewed' });
 
+    await openDecisionDetail(2);
     fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
-    expect(await screen.findByText('@@ -20 +20 @@ thirdBehavior')).toBeInTheDocument();
+    await waitFor(() => expect(selectedDecisionChip()).toHaveAccessibleName(/^Decision 3/));
     expect(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 1.*Approved/ })).toBeInTheDocument();
     expect(putBodies[1]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -10 +10 @@ secondBehavior' }], state: 'reviewed' });
     expect(await screen.findByLabelText('3 decisions across 1 file, 3 completed')).toHaveTextContent('3 completed');
@@ -348,9 +364,11 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
-    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/failure.ts.' })).toBeInTheDocument();
+    await findSelectedDecision('Changes behavior in src/failure.ts.');
+    await openDecisionDetail(1);
     fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not save this decision. Database busy.');
+    // The popover stays anchored to the failed decision so the reviewer can retry it in place.
     expect(screen.getByRole('heading', { name: 'Changes behavior in src/failure.ts.' })).toBeInTheDocument();
   });
 
@@ -369,7 +387,7 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
     expect(screen.getByLabelText('Workspace diff history')).toHaveValue('recorded-version');
     expect(screen.getByText(/Agent run run-123/)).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Adds behavior in src/preserved.ts.' })).toBeInTheDocument();
+    expect(selectedDecisionChip()).toHaveAccessibleName(/Adds behavior in src\/preserved\.ts\./);
   });
 });
 
@@ -399,17 +417,18 @@ describe('WorkspaceDiffView pull-request source', () => {
     });
     renderView(fetchMock, false, null, [pullRequestUrl]);
 
-    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/local.ts.' })).toBeInTheDocument();
+    await findSelectedDecision('Changes behavior in src/local.ts.');
     fireEvent.click(screen.getByRole('button', { name: 'GitHub PR' }));
     const picker = await screen.findByLabelText('Pull request');
     expect(within(picker).getByRole('option', { name: 'acme/web #42' })).toBeInTheDocument();
 
     fireEvent.change(picker, { target: { value: pullRequestUrl } });
 
-    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/page-1.ts.' })).toBeInTheDocument();
+    await findSelectedDecision('Changes behavior in src/page-1.ts.');
     expect(screen.getByRole('heading', { name: 'Selectable scopes' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Changes behavior in src/local.ts.' })).toBeNull();
+    expect(selectedDecisionChip()).not.toHaveAccessibleName(/src\/local\.ts/);
 
+    await openDecisionDetail(1);
     fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
 
     await waitFor(() => expect(requests.some((request) => request.startsWith('PUT') && request.includes('/hunk-reviews/batch') && request.includes('"revision":"sha-42"'))).toBe(true));
@@ -438,7 +457,7 @@ describe('WorkspaceDiffView pull-request source', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'GitHub PR' }));
     const picker = await screen.findByLabelText('Pull request');
     fireEvent.change(picker, { target: { value: pullRequestUrl } });
-    await screen.findByRole('heading', { name: 'Changes behavior in src/page-one.ts.' });
+    await findSelectedDecision('Changes behavior in src/page-one.ts.');
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ }));
 
     cleanup();
@@ -462,7 +481,7 @@ describe('WorkspaceDiffView pull-request source', () => {
     });
     renderView(fetchMock, false, null, [pullRequestUrl]);
 
-    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/page-1.ts.' })).toBeInTheDocument();
+    await findSelectedDecision('Changes behavior in src/page-1.ts.');
     // Paged pull requests keep their explicit load-more control in the queue.
     expect(screen.getByRole('button', { name: 'Load 100 more files' })).toBeInTheDocument();
   });
