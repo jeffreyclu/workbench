@@ -1,5 +1,6 @@
+import { emptyHunkFacts, readHunk } from './change-map-ast.js';
 import type { DiffHunkReviewState } from './contracts.js';
-import type { ReviewDecision, ReviewDecisionHunk, ReviewRiskSignal } from './review-decisions.js';
+import type { ReviewDecision, ReviewRiskSignal } from './review-decisions.js';
 
 /** Why this lives beside `review-decisions.ts`: the map is a second reading of
  * the same decisions, not a second parse of the diff. Nodes are the decisions
@@ -98,24 +99,6 @@ const CODE_FILE = /\.(?:m|c)?[jt]sx?$/;
  * implementation it covers. */
 const TEST_FILE = /\.(?:test|spec)\.(?:m|c)?[jt]sx?$|(?:^|\/)__tests__\//;
 
-const IMPORT_KEYWORDS = new Set(['import', 'export', 'from', 'as', 'type', 'typeof', 'const', 'let', 'var', 'require', 'default', 'await', 'new']);
-const CONTROL_KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'await', 'function', 'super']);
-
-/** Module-level declarations only, anchored at column 0. A `const rows = []`
- * inside a function body is invisible to every other decision in the diff, so
- * counting it as a declaration made unrelated changes that happen to use the
- * same common name look connected. Diff lines keep their original indentation,
- * so leading whitespace is a reliable "this is nested" test. */
-const DECLARATION = /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:function|class|interface|type|enum|const|let|var)\s+([A-Za-z_$][\w$]*)/;
-const TYPE_DECLARATION = /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:interface|type|enum|class)\s+([A-Za-z_$][\w$]*)/;
-const CALL_REFERENCE = /\b([A-Za-z_$][\w$]*)\s*\(/g;
-/** Type positions only, and only capitalised names: `: string` and `<number>`
- * are not decisions in this diff, and lowercase matches were mostly variables. */
-const TYPE_REFERENCE = /(?::\s*|<|\bas\s+|\bsatisfies\s+|\bextends\s+|\bimplements\s+)([A-Z][\w$]*)/g;
-const INHERITANCE_REFERENCE = /\b(?:implements|extends)\s+([A-Za-z_$][\w$]*)/g;
-const IDENTIFIER = /[A-Za-z_$][\w$]*/g;
-const MODULE_SPECIFIER = /(?:^|\s)(?:import|export)\b[^'"]*?from\s*['"]([^'"]+)['"]|^\s*import\s*['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)/;
-
 function isCodeDecision(decision: ReviewDecision): boolean {
   return decision.filePaths.some((path) => CODE_FILE.test(path));
 }
@@ -134,113 +117,6 @@ interface DecisionFacts {
   inheritance: Set<string>;
   identifiers: Set<string>;
   imports: Array<{ module: string | null; symbols: string[] }>;
-}
-
-function signedLines(hunks: ReviewDecisionHunk[], sign: '+' | '-'): string[] {
-  const marker = sign.repeat(3);
-  return hunks
-    .flatMap((hunk) => hunk.lines)
-    .filter((line) => line.startsWith(sign) && !line.startsWith(marker))
-    .map((line) => line.slice(1));
-}
-
-function collect(pattern: RegExp, text: string): string[] {
-  const names: string[] = [];
-  for (const match of text.matchAll(pattern)) {
-    const name = match.slice(1).find((group) => typeof group === 'string');
-    if (name) names.push(name);
-  }
-  return names;
-}
-
-function splitParameters(text: string): string[] {
-  const parts: string[] = [];
-  let depth = 0;
-  let start = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if ('([{<'.includes(character)) depth += 1;
-    else if (')]}>'.includes(character)) depth -= 1;
-    else if (character === ',' && depth === 0) {
-      parts.push(text.slice(start, index));
-      start = index + 1;
-    }
-  }
-  parts.push(text.slice(start));
-  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
-}
-
-function parameterName(raw: string): string | null {
-  const trimmed = raw.replace(/^\.\.\./, '').trim();
-  return /^([A-Za-z_$][\w$]*)/.exec(trimmed)?.[1]
-    // A destructured parameter is named by its first field, which is what the
-    // call site passes and therefore what the reviewer recognises.
-    ?? /^\{\s*([A-Za-z_$][\w$]*)/.exec(trimmed)?.[1]
-    ?? null;
-}
-
-/** The first function-like signature on a line, with its parameter names. Read
- * with a depth counter rather than a regex so `(next: () => void)` survives.
- * A signature that wraps onto the next line is skipped: half a parameter list
- * would invent parameters that were never added. */
-function signatureOf(line: string): { name: string; parameters: string[] } | null {
-  const match = /\b([A-Za-z_$][\w$]*)\s*\(/.exec(line);
-  if (!match) return null;
-  const name = match[1];
-  if (CONTROL_KEYWORDS.has(name)) return null;
-  const open = match.index + match[0].length;
-  let depth = 1;
-  for (let index = open; index < line.length; index += 1) {
-    const character = line[index];
-    if ('([{'.includes(character)) depth += 1;
-    else if (')]}'.includes(character)) {
-      depth -= 1;
-      if (depth === 0) {
-        return character === ')'
-          ? { name, parameters: splitParameters(line.slice(open, index)).map(parameterName).filter((parameter): parameter is string => Boolean(parameter)) }
-          : null;
-      }
-    }
-  }
-  return null;
-}
-
-/** Parameters this decision added to an existing signature. Strict on purpose:
- * a removed line and an added line for the same name inside the same hunk is
- * an edit to one signature, while an added signature with no removed
- * counterpart is a brand-new function nobody was calling before. */
-function widenedSignatures(hunks: ReviewDecisionHunk[]): Map<string, string[]> {
-  const widened = new Map<string, string[]>();
-  for (const hunk of hunks) {
-    const before = new Map<string, string[]>();
-    for (const line of hunk.lines) {
-      if (!line.startsWith('-') || line.startsWith('---')) continue;
-      const signature = signatureOf(line.slice(1));
-      if (signature) before.set(signature.name, signature.parameters);
-    }
-    for (const line of hunk.lines) {
-      if (!line.startsWith('+') || line.startsWith('+++')) continue;
-      const signature = signatureOf(line.slice(1));
-      const previous = signature ? before.get(signature.name) : undefined;
-      if (!signature || !previous) continue;
-      const added = signature.parameters.filter((parameter) => !previous.includes(parameter));
-      if (added.length > 0) widened.set(signature.name, [...new Set([...(widened.get(signature.name) ?? []), ...added])]);
-    }
-  }
-  return widened;
-}
-
-function importsOf(lines: string[]): DecisionFacts['imports'] {
-  const imports: DecisionFacts['imports'] = [];
-  for (const line of lines) {
-    const trimmed = line.trim();
-    const match = MODULE_SPECIFIER.exec(trimmed);
-    if (!match) continue;
-    const module = match.slice(1).find((group) => typeof group === 'string') ?? null;
-    const symbols = collect(IDENTIFIER, trimmed.replace(/['"][^'"]*['"]/g, ' ')).filter((name) => !IMPORT_KEYWORDS.has(name));
-    imports.push({ module, symbols });
-  }
-  return imports;
 }
 
 function stripExtension(path: string): string {
@@ -262,16 +138,6 @@ export function resolveModulePath(fromFile: string, specifier: string): string |
   return stripExtension(segments.join('/'));
 }
 
-function moduleDeclarations(lines: string[], pattern: RegExp): Set<string> {
-  const names = new Set<string>();
-  for (const line of lines) {
-    if (/^\s/.test(line)) continue;
-    const name = pattern.exec(line)?.[1];
-    if (name) names.add(name);
-  }
-  return names;
-}
-
 /** Split per hunk rather than per decision. `codeHunks` is everything the
  * decision may react to; `sourceHunks` is the narrower set it may declare from.
  * The difference is the whole fix: a decision that edits `loader.ts` and
@@ -281,28 +147,38 @@ function moduleDeclarations(lines: string[], pattern: RegExp): Set<string> {
 function factsFor(decision: ReviewDecision): DecisionFacts {
   const codeHunks = decision.hunks.filter((hunk) => CODE_FILE.test(hunk.filePath));
   const sourceHunks = codeHunks.filter((hunk) => !TEST_FILE.test(hunk.filePath));
-  const added = signedLines(codeHunks, '+');
-  const changedLines = [...added, ...signedLines(codeHunks, '-')];
-  const declaredLines = [...signedLines(sourceHunks, '+'), ...signedLines(sourceHunks, '-')];
-  const changed = changedLines.join('\n');
-  const declared = moduleDeclarations(declaredLines, DECLARATION);
+  const merged = emptyHunkFacts();
+  for (const hunk of codeHunks) {
+    const facts = readHunk(hunk.lines, !TEST_FILE.test(hunk.filePath));
+    for (const name of facts.declared) merged.declared.add(name);
+    for (const name of facts.declaredTypes) merged.declaredTypes.add(name);
+    for (const name of facts.calls) merged.calls.add(name);
+    for (const name of facts.typeReferences) merged.typeReferences.add(name);
+    for (const name of facts.inheritance) merged.inheritance.add(name);
+    for (const name of facts.identifiers) merged.identifiers.add(name);
+    merged.imports.push(...facts.imports);
+    for (const [name, parameters] of facts.widenedSignatures) {
+      merged.widenedSignatures.set(name, [...new Set([...(merged.widenedSignatures.get(name) ?? []), ...parameters])]);
+    }
+  }
   // The subject is the enclosing function or type of a body-only edit, which is
-  // exactly the thing other hunks in the diff react to. It is a guess read from
-  // the hunk header, so a decision with no source hunk cannot use it: a test's
-  // subject — the name it passes to `describe` — is the code under test, not
-  // something the test owns.
-  if (decision.subject && sourceHunks.length > 0) declared.add(decision.subject);
+  // exactly the thing other hunks in the diff react to. The parser only sees
+  // the fragment, so a hunk cut from the middle of a function has no
+  // declaration to find. It is a guess read from the hunk header, so a decision
+  // with no source hunk cannot use it: a test's subject — the name it passes to
+  // `describe` — is the code under test, not something the test owns.
+  if (decision.subject && sourceHunks.length > 0) merged.declared.add(decision.subject);
   return {
     decision,
     sourceFiles: [...new Set(sourceHunks.map((hunk) => hunk.filePath))],
-    declared,
-    declaredTypes: moduleDeclarations(declaredLines, TYPE_DECLARATION),
-    widenedSignatures: widenedSignatures(sourceHunks),
-    calls: new Set(collect(CALL_REFERENCE, changed).filter((name) => !CONTROL_KEYWORDS.has(name))),
-    typeReferences: new Set(collect(TYPE_REFERENCE, changed)),
-    inheritance: new Set(collect(INHERITANCE_REFERENCE, changed)),
-    identifiers: new Set(collect(IDENTIFIER, changed)),
-    imports: importsOf(added),
+    declared: merged.declared,
+    declaredTypes: merged.declaredTypes,
+    widenedSignatures: merged.widenedSignatures,
+    calls: merged.calls,
+    typeReferences: merged.typeReferences,
+    inheritance: merged.inheritance,
+    identifiers: merged.identifiers,
+    imports: merged.imports,
   };
 }
 

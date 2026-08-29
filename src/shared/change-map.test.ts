@@ -231,6 +231,65 @@ describe('diff-scoped change map', () => {
   });
 });
 
+describe('syntax-aware reading of a hunk', () => {
+  it('ignores a name that only appears in a string or a comment', () => {
+    // The scanner this replaced read diff lines as text, so a symbol named in
+    // prose or in a log message linked two unrelated changes.
+    const producer = decision('src/shared/loader.ts', ['+export function loadWorkspace() {}']);
+    const consumer = decision('src/client/caller.ts', [
+      '+  // loadWorkspace is documented here, not called.',
+      "+  logger.info('loadWorkspace finished');",
+    ]);
+
+    expect(relationBetween([producer, consumer], producer.id, consumer.id)).toBeNull();
+  });
+
+  it('reads a parameter added to a signature that wraps across several lines', () => {
+    const producer = decision('src/shared/loader.ts', [
+      '-export function loadWorkspace(',
+      '-  id: string,',
+      '-) {',
+      '+export function loadWorkspace(',
+      '+  id: string,',
+      '+  workspacePath: string,',
+      '+) {',
+    ]);
+    const consumer = decision('src/client/caller.ts', ['+  const loaded = loadWorkspace(id, workspacePath);']);
+
+    const edge = buildChangeMap([producer, consumer]).edges.find((candidate) => candidate.toId === consumer.id);
+    expect(edge?.relation).toBe('passes-parameter');
+    expect(edge?.explanation).toContain('workspacePath');
+  });
+
+  it('links a changed component to the JSX that renders it', () => {
+    const producer = decision('src/client/button.tsx', ['+export function SubmitButton() {', '+  return <button />;', '+}']);
+    const consumer = decision('src/client/form.tsx', ['+  return <SubmitButton />;']);
+
+    expect(relationBetween([producer, consumer], producer.id, consumer.id)).toBe('calls');
+  });
+
+  it('links a new prop to the JSX that passes it', () => {
+    // A React component takes its props as one destructured parameter, so a new
+    // prop is a widened signature and the call site is the element that renders it.
+    const producer = decision('src/client/button.tsx', [
+      '-export function SubmitButton({ label }: Props) {',
+      '+export function SubmitButton({ label, variant }: Props) {',
+    ]);
+    const consumer = decision('src/client/form.tsx', ['+  return <SubmitButton label="Go" variant="primary" />;']);
+
+    const edge = buildChangeMap([producer, consumer]).edges.find((candidate) => candidate.toId === consumer.id);
+    expect(edge?.relation).toBe('passes-parameter');
+    expect(edge?.explanation).toContain('variant');
+  });
+
+  it('does not treat a declaration nested inside a function as something the diff can see', () => {
+    const producer = decision('src/shared/loader.ts', ['+  const workspaceCache = new Map();']);
+    const consumer = decision('src/client/caller.ts', ['+  workspaceCache.clear();']);
+
+    expect(relationBetween([producer, consumer], producer.id, consumer.id)).toBeNull();
+  });
+});
+
 describe('module specifier resolution', () => {
   it('resolves a relative specifier against the importing file and drops extensions', () => {
     expect(resolveModulePath('src/client/caller.ts', '../shared/loader.js')).toBe('src/shared/loader');

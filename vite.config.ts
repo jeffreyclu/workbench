@@ -88,6 +88,7 @@ export default defineConfig(({ mode }) => {
             if (id.includes('/node_modules/@tanstack/')) return 'query';
             if (id.includes('/node_modules/@lexical/') || id.includes('/node_modules/lexical/')) return 'editor';
             if (id.includes('/node_modules/@dnd-kit/')) return 'drag-drop';
+            if (id.includes('/node_modules/@babel/parser/')) return 'parser';
             if (id.includes('/node_modules/@huggingface/transformers/') || id.includes('/node_modules/onnxruntime-')) return 'ml';
           },
         },
