@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Network } from 'lucide-react';
 import { CHANGE_RELATIONS, CHANGE_RELATION_LABELS, type ChangeMap, type ChangeRelation } from '../../../shared/change-map.js';
 import { CHANGE_MAP_NODE_HEIGHT, CHANGE_MAP_NODE_WIDTH, layoutChangeMap } from './change-map-layout.js';
 import { plainRelationText, selectFocusedChangeMap } from './change-map-logic.js';
+import type { DecisionPopoverAnchor } from './decision-popover.js';
 
 const CHANGE_MAP_FOCUS_LIMIT = 4;
 
@@ -23,10 +24,18 @@ function fileTail(filePath: string): string {
   return parts.length <= 2 ? filePath : `…/${parts.slice(-2).join('/')}`;
 }
 
-export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, selectedId, onSelect }: {
+export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, selectedId, riskBands, openDetailFor, onSelect, onOpenDetail }: {
   map: ChangeMap;
   selectedId: string | null;
+  /** Scored risk band per decision, the same map the gutter dot reads, so a
+   * node carries its AI score without being opened. */
+  riskBands?: Map<string, string>;
+  openDetailFor?: string | null;
   onSelect: (decisionId: string) => void;
+  /** Opens the decision detail — score and AI assist — anchored to the node.
+   * The diagram is a review surface, not an index: a node must reach the same
+   * panel its gutter marker does. */
+  onOpenDetail?: (decisionId: string, anchor: DecisionPopoverAnchor) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
@@ -102,21 +111,32 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
           {layout.nodes.map((node) => {
             const isSelected = node.id === selectedId;
             const dimmed = Boolean(selectedId) && !isSelected && connectedIds.size > 0 && !connectedIds.has(node.id);
+            const band = riskBands?.get(node.id) ?? null;
+            const openDetail = (anchor: DecisionPopoverAnchor) => {
+              onSelect(node.id);
+              onOpenDetail?.(node.id, anchor);
+            };
             return <g
               key={node.id}
               className={`change-map-node state-${node.state ?? 'pending'}${isSelected ? ' selected' : ''}${dimmed ? ' dimmed' : ''}${node.degree === 0 ? ' isolated' : ''}`}
               role="button"
               tabIndex={0}
               aria-pressed={isSelected}
-              aria-label={`Decision ${node.ordinal}: ${node.behavior} ${node.degree === 0 ? 'No related changes.' : `${node.degree} related ${node.degree === 1 ? 'change' : 'changes'}.`}`}
-              onClick={() => onSelect(node.id)}
-              onKeyDown={(event) => activate(event, () => onSelect(node.id))}
+              // A stable handle on the node, so an open popover can re-find it
+              // after selecting reflows the diagram into focus mode.
+              data-change-map-node={node.id}
+              aria-haspopup={onOpenDetail ? 'dialog' : undefined}
+              aria-expanded={onOpenDetail ? openDetailFor === node.id : undefined}
+              aria-label={`Decision ${node.ordinal}: ${node.behavior} ${node.degree === 0 ? 'No related changes.' : `${node.degree} related ${node.degree === 1 ? 'change' : 'changes'}.`}${band ? ` ${band} risk.` : ''}${onOpenDetail ? ' Open decision details.' : ''}`}
+              onClick={(event) => openDetail(event.currentTarget)}
+              onKeyDown={(event) => activate(event, () => openDetail(event.currentTarget))}
             >
               <rect className="change-map-node-body" x={node.x} y={node.y} width={CHANGE_MAP_NODE_WIDTH} height={CHANGE_MAP_NODE_HEIGHT} rx="7" />
               <rect className="change-map-node-rail" x={node.x} y={node.y} width="3" height={CHANGE_MAP_NODE_HEIGHT} rx="1.5" />
               <text className="change-map-node-title" x={node.x + 13} y={node.y + 23}>{node.ordinal}. {truncate(node.label, 20)}</text>
               <text className="change-map-node-file" x={node.x + 13} y={node.y + 39}>{truncate(fileTail(node.filePath), 26)}</text>
               <text className="change-map-node-counts" x={node.x + 13} y={node.y + 53}>+{node.additions} / -{node.deletions}{node.fileCount > 1 ? ` · ${node.fileCount} files` : ''}</text>
+              {band && <circle className={`change-map-node-risk-dot band-${band}`} cx={node.x + CHANGE_MAP_NODE_WIDTH - 9} cy={node.y + 9} r="3.5" />}
             </g>;
           })}
         </svg>
@@ -126,7 +146,7 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
           ? plainRelationText(selectedEdge.explanation)
           : layout.edges.length === 0
             ? 'Nothing in this diff references anything else in it. Each change stands alone.'
-            : 'Select a line to read why two changes are related, or a box to open that decision.'}
+            : 'Select a line to read why two changes are related, or a box to open that decision — risk score and AI assist included.'}
       </p>
       {relationsPresent.length > 0 && <ul className="change-map-legend" aria-label="Relationship types">
         {relationsPresent.map((relation: ChangeRelation) => <li key={relation} className={`relation-${relation}`}><span aria-hidden="true" />{CHANGE_RELATION_LABELS[relation]}</li>)}

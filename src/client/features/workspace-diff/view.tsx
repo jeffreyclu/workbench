@@ -10,7 +10,7 @@ import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
 import type { ReviewAssistTaskIntent } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
-import { DecisionPopover } from '../diff-review/decision-popover.js';
+import { DecisionPopover, type DecisionPopoverAnchor } from '../diff-review/decision-popover.js';
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import type { ReviewDecision } from '../diff-review/logic.js';
@@ -120,7 +120,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // The desktop decision detail is popover content opened from a block's gutter
   // marker, so the open state has to carry the marker that opened it: the
   // popover positions itself off that element's rect.
-  const [detailAnchor, setDetailAnchor] = useState<{ decisionId: string; anchor: HTMLElement } | null>(null);
+  const [detailAnchor, setDetailAnchor] = useState<{ decisionId: string; anchor: DecisionPopoverAnchor; anchorAttribute: string } | null>(null);
   const isPhoneReview = usePhoneReviewControls();
   // null means "automatically show the latest record when Git is clean";
   // an empty string is the user's explicit choice to view current changes.
@@ -269,12 +269,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // there is no room to float a panel beside the code — it opens the same detail
   // in the dialog the navigator uses, rather than setting an anchor that renders
   // nothing.
-  const openDecisionDetail = (decisionId: string, anchor: HTMLElement) => {
+  const openDecisionDetail = (decisionId: string, anchor: DecisionPopoverAnchor, anchorAttribute = 'data-decision-marker') => {
     if (isPhoneReview) {
       setMobileDecisionDetailOpen(true);
       return;
     }
-    setDetailAnchor((current) => (current?.decisionId === decisionId ? null : { decisionId, anchor }));
+    setDetailAnchor((current) => (current?.decisionId === decisionId ? null : { decisionId, anchor, anchorAttribute }));
   };
 
   const selectDecision = (decisionId: string) => {
@@ -375,7 +375,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
               : <div className="workspace-diff-layout diff-review-layout">
                 {!isPullRequestSource && reviewHandoff && <AgentRunReviewHandoffCard handoff={reviewHandoff} />}
                 <DiffReviewSummaryView decisions={decisions} />
-                <DiffReviewChangeMap map={changeMap} selectedId={selectedDecision?.id ?? null} onSelect={selectDecision} />
+                <DiffReviewChangeMap map={changeMap} selectedId={selectedDecision?.id ?? null} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={(decisionId, anchor) => openDecisionDetail(decisionId, anchor, 'data-change-map-node')} />
                 {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
                 {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
                 {selectedDecision && <>
@@ -389,7 +389,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">
                     {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} />}
-                    {!isPhoneReview && detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} labelledBy="diff-review-decision-title" onClose={() => setDetailAnchor(null)}>
+                    {!isPhoneReview && detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" onClose={() => setDetailAnchor(null)}>
                       <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)}>
                         <DiffReviewActions key={popoverDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(popoverDecision, state)} />
                       </DiffReviewDecisionDetailCard>

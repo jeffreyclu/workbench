@@ -53,4 +53,37 @@ describe('diff review change navigation', () => {
     expect(screen.getByText(`All ${largeMap.nodes.length} changes`)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Focus on current change' })).toBeInTheDocument();
   });
+  it('makes a node open the decision detail and carry its AI risk band', () => {
+    // The diagram is a review surface, not an index: reaching a change through
+    // it has to reach the same scored panel the gutter marker opens.
+    const opened: Array<{ decisionId: string; tag: string }> = [];
+    render(<DiffReviewChangeMap
+      map={map}
+      selectedId="type"
+      riskBands={new Map([['consumer', 'high']])}
+      openDetailFor={null}
+      onSelect={() => {}}
+      onOpenDetail={(decisionId, anchor) => opened.push({ decisionId, tag: anchor.tagName })}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Full change diagram/ }));
+    const scored = screen.getByRole('button', { name: /Decision 2:.*high risk\. Open decision details\./ });
+    expect(scored).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(scored).toHaveAttribute('aria-expanded', 'false');
+    expect(scored.querySelector('.change-map-node-risk-dot.band-high')).not.toBeNull();
+
+    fireEvent.click(scored);
+    expect(opened).toEqual([{ decisionId: 'consumer', tag: 'g' }]);
+
+    // Keyboard reaches the same panel; a node that only responds to a mouse is
+    // still a dead handle for a keyboard reviewer.
+    fireEvent.keyDown(scored, { key: 'Enter' });
+    expect(opened).toHaveLength(2);
+  });
+  it('leaves the popover affordance off when no detail handler is wired', () => {
+    render(<DiffReviewChangeMap map={map} selectedId="type" onSelect={() => {}} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Full change diagram/ }));
+    expect(screen.getByRole('button', { name: /Decision 2:/ })).not.toHaveAttribute('aria-haspopup');
+  });
 });

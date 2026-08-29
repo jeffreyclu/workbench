@@ -4,6 +4,8 @@ import { createPortal } from 'react-dom';
 const POPOVER_WIDTH = 336;
 const VIEWPORT_MARGIN = 12;
 
+export type DecisionPopoverAnchor = HTMLElement | SVGElement;
+
 /**
  * The decision detail, anchored to the gutter marker that opened it.
  *
@@ -16,11 +18,18 @@ const VIEWPORT_MARGIN = 12;
  * it — so focus moves in but is not trapped, and dismissal returns focus to the
  * marker so keyboard review continues where it left off.
  */
-export function DecisionPopover({ anchor, anchorId, labelledBy, onClose, children }: {
-  anchor: HTMLElement;
-  /** The decision whose gutter marker opened this. Used to re-find a live
-   * marker when the original element is gone; see `liveAnchor`. */
+export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-decision-marker', labelledBy, onClose, children }: {
+  /** Either handle that opens this panel: a gutter marker (HTML) or a change
+   * map node (SVG). Both measure and focus the same way. */
+  anchor: DecisionPopoverAnchor;
+  /** The decision whose handle opened this. Used to re-find a live handle when
+   * the original element is gone; see `liveAnchor`. */
   anchorId?: string | null;
+  /** Which handle to re-find by. A decision has one marker per surface, so the
+   * surface that opened the panel is the one that must keep anchoring it —
+   * re-finding the gutter marker for a panel opened from the map would jump it
+   * across the page. */
+  anchorAttribute?: string;
   labelledBy: string;
   onClose: () => void;
   children: ReactNode;
@@ -34,10 +43,10 @@ export function DecisionPopover({ anchor, anchorId, labelledBy, onClose, childre
    * origin — which reads as "the panel opened in the corner, attached to
    * nothing". A live marker for the same decision is the right anchor then, and
    * when there is none the panel still opens, just centred. */
-  const liveAnchor = (): HTMLElement | null => {
+  const liveAnchor = (): DecisionPopoverAnchor | null => {
     if (anchor.isConnected) return anchor;
     if (!anchorId) return null;
-    return document.querySelector<HTMLElement>(`[data-decision-marker="${CSS.escape(anchorId)}"]`);
+    return document.querySelector<DecisionPopoverAnchor>(`[${anchorAttribute}="${CSS.escape(anchorId)}"]`);
   };
 
   useLayoutEffect(() => {
@@ -72,7 +81,7 @@ export function DecisionPopover({ anchor, anchorId, labelledBy, onClose, childre
       window.removeEventListener('resize', place);
       observer?.disconnect();
     };
-  }, [anchor, anchorId]);
+  }, [anchor, anchorId, anchorAttribute]);
 
   useEffect(() => {
     panel.current?.focus?.({ preventScroll: true });
@@ -81,7 +90,7 @@ export function DecisionPopover({ anchor, anchorId, labelledBy, onClose, childre
       // selecting another decision should not yank focus off its new target.
       if (document.activeElement === document.body || panel.current?.contains(document.activeElement)) liveAnchor()?.focus?.({ preventScroll: true });
     };
-  }, [anchor, anchorId]);
+  }, [anchor, anchorId, anchorAttribute]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -101,7 +110,7 @@ export function DecisionPopover({ anchor, anchorId, labelledBy, onClose, childre
       document.removeEventListener('keydown', onKeyDown, true);
       document.removeEventListener('mousedown', onPointerDown);
     };
-  }, [anchor, anchorId, onClose]);
+  }, [anchor, anchorId, anchorAttribute, onClose]);
 
   return createPortal(
     <div ref={panel} className="decision-popover" role="dialog" aria-labelledby={labelledBy} tabIndex={-1} style={style}>

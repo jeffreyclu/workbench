@@ -459,6 +459,13 @@ nav { display: grid; gap: 3px; }
 .change-map-node-title { fill: #deddd6; font: 12px 'DM Mono'; }
 .change-map-node-file { fill: #85847d; font: 10px 'DM Mono'; }
 .change-map-node-counts { fill: #77766f; font: 9px 'DM Mono'; }
+/* The same AI risk band the gutter dot shows, so severity reads off the
+   diagram without opening each node. */
+.change-map-node-risk-dot { --band: #8a8980; fill: var(--band); stroke: #131311; stroke-width: 1; }
+.change-map-node-risk-dot.band-low { --band: #8bbd75; }
+.change-map-node-risk-dot.band-elevated { --band: #d6bd76; }
+.change-map-node-risk-dot.band-high { --band: #e1a68f; }
+.change-map-node-risk-dot.band-signals { --band: #77766f; }
 .change-map-edge, .change-map-arrow, .change-map-legend li { --relation-tone: #56554e; }
 .change-map-edge.relation-passes-parameter, .change-map-arrow.relation-passes-parameter, .change-map-legend li.relation-passes-parameter { --relation-tone: #e5b769; }
 .change-map-edge.relation-implements, .change-map-arrow.relation-implements, .change-map-legend li.relation-implements { --relation-tone: #c69bd8; }
