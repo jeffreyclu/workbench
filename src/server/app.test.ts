@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApp, oauthCallbackBase, parseFollowUpPlan } from './app.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
@@ -119,15 +122,37 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     expect(body.workspaces.some((workspace) => workspace.path === body.selectedPath && workspace.selected)).toBe(true);
   });
 
+  it('retires provider sessions when Repo Explorer changes a conversation workspace', async () => {
+    const originalWorkspace = mkdtempSync(join(tmpdir(), 'workbench-session-workspace-'));
+    writeFileSync(join(originalWorkspace, 'package.json'), '{}');
+    const item = repository.create({ title: 'Move repository', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: originalWorkspace, dueDate: null });
+    const conversation = repository.createConversation('Move repository', item.id);
+    repository.setConversationClaudeSessionId(conversation.id, 'claude-session');
+    repository.setConversationCodexThreadId(conversation.id, 'codex-thread');
+
+    try {
+      const response = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/workspaces/selection`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspacePath: process.cwd() }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(repository.getConversation(conversation.id)).toEqual(expect.objectContaining({ claudeSessionId: null, codexThreadId: null }));
+    } finally {
+      rmSync(originalWorkspace, { recursive: true, force: true });
+    }
+  });
+
   it('reports only work owned by this backend in its runtime drain health', async () => {
     const idle = await fetch(`${baseUrl}/api/health`);
-    expect(await idle.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: false, ownedAgentWorkActive: false, buildId: expect.any(String) });
+    expect(await idle.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: false, ownedAgentWorkActive: false, liveAgentProcessCount: 0, buildId: expect.any(String) });
 
     const conversation = repository.ensureDefaultConversation();
     const promotion = repository.createSharedMessage('system', 'Promoting…', 'running', conversation.id, [], 'promotion');
     expect(repository.claimSharedMessage(promotion.id, OWNER_ID, 60_000)).toBe(true);
     const active = await fetch(`${baseUrl}/api/health`);
-    expect(await active.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: true, ownedAgentWorkActive: false, buildId: expect.any(String) });
+    expect(await active.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: true, ownedAgentWorkActive: false, liveAgentProcessCount: 0, buildId: expect.any(String) });
   });
 
   it('persists a manually selected bug-fix type when creating a task', async () => {

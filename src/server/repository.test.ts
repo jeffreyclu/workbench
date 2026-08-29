@@ -691,10 +691,14 @@ describe('WorkItemRepository', () => {
     const conversation = repository.createConversation('Manual thread');
     const reply = repository.createSharedMessage('codex', 'The implementation is complete.', 'completed', conversation.id);
 
-    expect(repository.setConversationWorkItem(conversation.id, task.id)).toEqual(expect.objectContaining({ workItemId: task.id }));
+    repository.setConversationClaudeSessionId(conversation.id, 'claude-before-link');
+    repository.setConversationCodexThreadId(conversation.id, 'codex-before-link');
+    expect(repository.setConversationWorkItem(conversation.id, task.id)).toEqual(expect.objectContaining({ workItemId: task.id, claudeSessionId: null, codexThreadId: null }));
     expect(repository.listRuns(task.id)).toEqual([expect.objectContaining({ agent: 'codex', messageId: reply.id, conversationId: conversation.id, output: reply.body, status: 'completed' })]);
     expect(repository.listActivity(task.id).some((entry) => entry.kind === 'conversation_linked')).toBe(true);
-    expect(repository.setConversationWorkItem(conversation.id, null)).toEqual(expect.objectContaining({ workItemId: null }));
+    repository.setConversationClaudeSessionId(conversation.id, 'claude-before-unlink');
+    repository.setConversationCodexThreadId(conversation.id, 'codex-before-unlink');
+    expect(repository.setConversationWorkItem(conversation.id, null)).toEqual(expect.objectContaining({ workItemId: null, claudeSessionId: null, codexThreadId: null }));
     expect(repository.listRuns(task.id)).toEqual([]);
     expect(repository.listActivity(task.id).some((entry) => entry.kind === 'conversation_unlinked')).toBe(true);
   });

@@ -112,26 +112,28 @@ describe('classifyExecution', () => {
     expect(commandFor('claude', '/tmp/project', 'standard').args).not.toContain('--no-session-persistence');
   });
 
+  it('passes the saved Claude session id to the provider resume primitive', () => {
+    expect(commandFor('claude', '/tmp/project', 'standard', undefined, 'claude-session').args)
+      .toEqual(expect.arrayContaining(['--resume', 'claude-session']));
+  });
+
   it('bounds in-run context by profile so the ceiling actually fires on long runs', () => {
-    // The flat 180k ceiling was inert: the worst measured run peaked at 146k and
-    // never compacted once, so every later request re-read a ~100k context.
     expect(commandFor('claude', '/tmp/project', 'economy').args).toEqual(expect.arrayContaining(['--autocompact', '100k']));
-    expect(commandFor('claude', '/tmp/project', 'standard').args).toEqual(expect.arrayContaining(['--autocompact', '100k']));
-    expect(commandFor('claude', '/tmp/project', 'deep').args).toEqual(expect.arrayContaining(['--autocompact', '140k']));
-    expect(commandFor('claude', '/tmp/project', 'deep').args).not.toContain('180k');
+    expect(commandFor('claude', '/tmp/project', 'standard').args).toEqual(expect.arrayContaining(['--autocompact', '200k']));
+    expect(commandFor('claude', '/tmp/project', 'deep').args).toEqual(expect.arrayContaining(['--autocompact', '300k']));
   });
 
   it('parses the context ceiling into tokens so the checkpoint cannot drift from compaction', () => {
     expect(autocompactCeilingTokens('economy')).toBe(100_000);
-    expect(autocompactCeilingTokens('standard')).toBe(100_000);
-    expect(autocompactCeilingTokens('deep')).toBe(140_000);
+    expect(autocompactCeilingTokens('standard')).toBe(200_000);
+    expect(autocompactCeilingTokens('deep')).toBe(300_000);
   });
 
   it('falls back to the standard ceiling rather than zero when an override is unparseable', () => {
     // A zero ceiling would checkpoint every single turn, discarding live context.
     process.env.WORKBENCH_AUTOCOMPACT_STANDARD = 'not-a-size';
     try {
-      expect(autocompactCeilingTokens('standard')).toBe(100_000);
+      expect(autocompactCeilingTokens('standard')).toBe(200_000);
     } finally {
       delete process.env.WORKBENCH_AUTOCOMPACT_STANDARD;
     }
@@ -147,15 +149,12 @@ describe('classifyExecution', () => {
   });
 
   it('retires a session whose turn peaked at the in-run ceiling', () => {
-    // The measured worst run peaked at 146k. Resuming that session hands the
-    // next turn a context already at its high-water mark.
-    expect(shouldCheckpointSession(146_000, 'standard')).toBe(true);
-    expect(shouldCheckpointSession(100_000, 'standard')).toBe(true);
-    expect(shouldCheckpointSession(146_000, 'deep')).toBe(true);
+    expect(shouldCheckpointSession(200_000, 'standard')).toBe(true);
+    expect(shouldCheckpointSession(300_000, 'deep')).toBe(true);
   });
 
   it('keeps a session that stayed under the ceiling so live context survives', () => {
-    expect(shouldCheckpointSession(99_999, 'standard')).toBe(false);
+    expect(shouldCheckpointSession(199_999, 'standard')).toBe(false);
     expect(shouldCheckpointSession(0, 'economy')).toBe(false);
   });
 
@@ -173,9 +172,8 @@ describe('classifyExecution', () => {
   });
 
   it('reports the checkpoint with both the measured peak and the ceiling that tripped it', () => {
-    const detail = checkpointActivityDetail(146_000, 'standard');
-    expect(detail).toContain('146k');
-    expect(detail).toContain('100k');
+    const detail = checkpointActivityDetail(200_000, 'standard');
+    expect(detail).toContain('200k');
   });
 
   it('passes invariant Claude runner rules through the static system-prompt channel', () => {
@@ -351,16 +349,22 @@ describe('classifyExecution', () => {
 
   it('recovers an expired Claude session through the same supervised fresh-session lifecycle', async () => {
     const countFile = join(tmpdir(), `workbench-expired-session-${Date.now()}`);
+    const promptFile = join(tmpdir(), `workbench-expired-session-prompts-${Date.now()}`);
     const missing = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'No conversation found with session ID: expired-session' });
     const completed = JSON.stringify({ type: 'result', result: 'Completed after starting a fresh session.' });
-    const body = `count=0\nif [ -f '${countFile}' ]; then read count < '${countFile}'; fi\ncount=$((count + 1))\nprintf '%s' "$count" > '${countFile}'\nif [ "$count" -eq 1 ]; then printf '%s\\n' '${missing}'; else printf '%s\\n' '${completed}'; fi`;
+    const body = `IFS= read -r prompt\nprintf '%s\\n' "$prompt" >> '${promptFile}'\ncount=0\nif [ -f '${countFile}' ]; then read count < '${countFile}'; fi\ncount=$((count + 1))\nprintf '%s' "$count" > '${countFile}'\nif [ "$count" -eq 1 ]; then printf '%s\\n' '${missing}'; else printf '%s\\n' '${completed}'; fi`;
     const fixture = fakeAgentDirectory('exit 1', body);
 
-    const result = await runAgentCommandWithFallback('claude', fixture.directory, 'Continue the task.', undefined, undefined, undefined, 'economy', undefined, undefined, 'analysis', undefined, undefined, undefined, 'expired-session');
+    const result = await runAgentCommandWithFallback('claude', fixture.directory, 'Incremental follow-up.', undefined, undefined, undefined, 'economy', undefined, undefined, 'analysis', undefined, undefined, undefined, 'expired-session', false, true, undefined, 'Full recovery prompt.');
 
     expect(result.output).toBe('Completed after starting a fresh session.');
     expect(readFileSync(countFile, 'utf8')).toBe('2');
+    const prompts = readFileSync(promptFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line).message.content as string);
+    expect(prompts[0]).toContain('Incremental follow-up.');
+    expect(prompts[1]).toContain('Full recovery prompt.');
+    expect(prompts[1]).not.toContain('Incremental follow-up.');
     rmSync(countFile, { force: true });
+    rmSync(promptFile, { force: true });
   });
 
   it('builds a bounded cache continuation and preserves null-aware usage accounting', () => {

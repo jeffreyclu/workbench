@@ -111,6 +111,10 @@ center does not prove the whole touch target remains clickable through an animat
 
 *Decision from Jeffrey, 2026-08-23.* The task controls in a linked conversation header and the composer attachment control must not render text labels. Keep unlink, complete, and attach as compact, distinct icon buttons with accessible names and hover titles; regression tests must prevent visible button text from returning.
 
+### Task execution chat is always available
+
+*Decision from Jeffrey, 2026-08-28.* The existing execution-chat button in task detail must remain enabled and clickable throughout the task lifecycle, including while its run is queued or running and after it completes. Do not place it inside a disabled `fieldset`: descendant controls remain natively disabled even when CSS restores their pointer events. Keep the button's existing conversation-opening action unchanged.
+
 ### Changes view header spacing belongs to conversation chrome, not diff content
 
 *Correction from Jeffrey, 2026-08-27.* When reducing the Changes view's header panel height, do not compact the workspace or GitHub diff header. Preserve the diff's normal 18px top spacing and native heading margins. Target the surrounding conversation chrome only.

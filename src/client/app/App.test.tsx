@@ -1915,6 +1915,38 @@ describe('agent activity stream', () => {
 });
 
 describe('task execution', () => {
+  it.each(['running', 'completed'] as const)('keeps the execution chat enabled and clickable while a run is %s', async (status) => {
+    const taskId = `00000000-0000-4000-8000-0000000000${status === 'running' ? '31' : '32'}`;
+    const conversationId = `00000000-0000-4000-8000-0000000000${status === 'running' ? '41' : '42'}`;
+    const timestamp = '2026-01-01T00:00:00Z';
+    const item = {
+      id: taskId, title: `${status} execution chat`, description: '', status: status === 'running' ? 'in_progress' : 'ready', priority: 2, queuePosition: 0,
+      source: 'manual', isQueued: true, archivedAt: null, completedAt: null, parentWorkItemId: null, completionStatus: 'incomplete',
+      agentOutcome: null, sourceIdentifier: null, sourceUrl: null, sourceTags: [], projectName: 'Workbench', workspacePath: null,
+      strategy: '', assignees: [], labels: [], dueDate: null, providerUpdatedAt: null, blockedBy: [],
+      createdAt: timestamp, updatedAt: timestamp, lastTouchedAt: timestamp,
+    };
+    const run = {
+      id: `${taskId}-run`, workItemId: taskId, kind: 'execute', requestedTarget: 'codex', requestedAgent: 'codex', agent: 'codex', status,
+      instructions: '', output: '', error: '', startedAt: timestamp, completedAt: status === 'completed' ? timestamp : null, createdAt: timestamp,
+      conversationId, messageId: null, model: null, accountProfile: 'default', executionProfile: null, inputTokens: null, outputTokens: null,
+      fallbackFrom: null, fallbackReason: null, attempt: 0, maxAttempts: 3, nextAttemptAt: null, resolvedWorkspace: null, origin: 'manual',
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input) === '/api/agent-accounts'
+        ? { accounts: [{ name: 'default', providers: {} }] }
+        : { item, parentItem: null, children: [], activity: [], runs: [run], executionPlan: null, classification: null, conversations: [], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] },
+    ), { headers: { 'Content-Type': 'application/json' } })));
+    const onOpenConversation = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><TaskDetail id={taskId} onClose={vi.fn()} onOpenConversation={onOpenConversation} onOpenTask={vi.fn()} onCreated={vi.fn()} /></QueryClientProvider>);
+
+    const chatExecution = await screen.findByRole('button', { name: 'Open execution chat' });
+    expect(chatExecution).toBeEnabled();
+    fireEvent.click(chatExecution);
+    expect(onOpenConversation).toHaveBeenCalledWith(conversationId);
+  });
+
   it('marks Agent Runs with their author so the task view can apply the conversation palette', async () => {
     const taskId = '00000000-0000-4000-8000-000000000009';
     const item = {

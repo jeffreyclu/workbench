@@ -739,18 +739,14 @@ export function effortFor(profile: ExecutionProfile): 'low' | 'medium' | 'high' 
 /**
  * In-run context ceiling handed to `--autocompact`.
  *
- * The previous flat 180k was inert: the worst measured run (124 provider
- * requests in one turn) peaked at 146k, so compaction never fired once and
- * every later request re-read a ~100k context. Cache reads are the dominant
- * line item precisely because context is allowed to sit near its high-water
- * mark for the back half of a long run, so the ceiling has to be low enough to
- * actually bite. Tier it by profile instead: economy work is short-horizon and
- * loses nothing to an aggressive cap, while deep runs keep the headroom a real
- * implementation pass needs. 100k previously caused compaction thrash for deep
- * coding runs, which is why deep stays well above it.
+ * Tier this by profile instead of imposing one low budget on every agent.
+ * Economy work remains aggressively bounded, while standard and deep coding
+ * runs retain enough active context to finish complex implementations. These
+ * are active-context ceilings, not cumulative-cache budgets: crossing one
+ * compacts or retires a session after the turn; it never cancels the agent.
  */
 export function autocompactCeilingFor(profile: ExecutionProfile): string {
-  const fallback = { economy: '100k', standard: '100k', deep: '140k' }[profile];
+  const fallback = { economy: '100k', standard: '200k', deep: '300k' }[profile];
   const configured = process.env[`WORKBENCH_AUTOCOMPACT_${profile.toUpperCase()}`]?.trim().toLowerCase();
   if (!configured) return fallback;
   if (configured === 'auto') return configured;
@@ -793,7 +789,7 @@ export function shouldCheckpointSession(peakContextTokens: number | undefined, p
 
 /** Shared wording so the execute and conversation paths report a checkpoint identically. */
 export function checkpointActivityDetail(peakContextTokens: number, profile: ExecutionProfile, _cacheReadInputTokens = 0): string {
-  return `Context checkpoint: this turn peaked at ${Math.round(peakContextTokens / 1000)}k tokens against a ${Math.round(autocompactCeilingTokens(profile) / 1000)}k ceiling. The next turn starts a fresh Claude session instead of replaying this one.`;
+  return `Context checkpoint: this turn peaked at ${Math.round(peakContextTokens / 1000)}k tokens against a ${Math.round(autocompactCeilingTokens(profile) / 1000)}k ceiling. The next turn starts a fresh provider session instead of replaying this one.`;
 }
 
 export type AgentInputSteering = (body: string) => Promise<boolean>;
@@ -1511,6 +1507,7 @@ export async function runAgentCommandWithFallback(
   poolEligible = false,
   allowFallback = true,
   initialUsage?: AgentUsage,
+  expiredSessionPrompt?: string,
 ): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; costUsd?: number | null; peakContextTokens?: number }> {
   let aggregate: AgentUsage = initialUsage ?? { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
   try {
@@ -1551,7 +1548,7 @@ export async function runAgentCommandWithFallback(
     // the provider's "No conversation found" protocol error to Jeffrey.
     if (primary === 'claude' && resumeSessionId && /no conversation found with session id/i.test(error instanceof Error ? error.message : String(error))) {
       onProgress?.('● Claude session expired. Restarting this turn in a fresh session…');
-      return runAgentCommandWithFallback(primary, cwd, prompt, onProgress, signal, onFallback, profile, onUsage, onAudit, kind, accountProfile, modelOverride, onSteeringReady, undefined, false, allowFallback, aggregate);
+      return runAgentCommandWithFallback(primary, cwd, expiredSessionPrompt ?? prompt, onProgress, signal, onFallback, profile, onUsage, onAudit, kind, accountProfile, modelOverride, onSteeringReady, undefined, false, allowFallback, aggregate);
     }
     if (signal?.aborted || modelOverride || !allowFallback || !isAgentCapacityError(error)) throw error;
     const fallback = primary === 'claude' ? 'codex' : 'claude';

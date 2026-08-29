@@ -122,6 +122,12 @@ export function createConversationRouter({ repository, database, capabilities, a
     database.prepare(`INSERT INTO shared_conversation_workspace_selection (conversation_id, workspace_path, updated_at)
       VALUES (?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET workspace_path = excluded.workspace_path, updated_at = excluded.updated_at`)
       .run(request.params.id, workspacePath, new Date().toISOString());
+    // Provider sessions are rooted in the previous repository. Never resume
+    // one after Repo Explorer changes the conversation's working directory.
+    if (explorer.selectedPath !== workspacePath) {
+      repository.setConversationClaudeSessionId(request.params.id, null);
+      repository.setConversationCodexThreadId(request.params.id, null);
+    }
     response.json({ selectedPath: workspacePath, workspaces: explorer.workspaces.map((workspace) => ({ ...workspace, selected: workspace.path === workspacePath })) });
   });
 

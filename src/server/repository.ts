@@ -420,7 +420,13 @@ export class WorkItemRepository {
   }
 
   setConversationWorkItem(id: string, workItemId: string | null): SharedConversation | null {
-    const conversation = this.conversationService.setWorkItem(id, workItemId);
+    const before = this.getConversation(id);
+    let conversation = this.conversationService.setWorkItem(id, workItemId);
+    if (conversation && before?.workItemId !== workItemId) {
+      this.conversations.setClaudeSessionId(id, null);
+      this.conversations.setCodexThreadId(id, null);
+      conversation = this.getConversation(id);
+    }
     if (conversation?.workItemId) this.syncConversationAttachmentsToWorkItem(conversation);
     return conversation;
   }

@@ -652,6 +652,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       </div>
       </details>
 
+      </fieldset>
       {detail.data.runs.length > 0 && (
         <details className="detail-section task-collapsible runs-section" open>
           <summary><span>Agent runs</span><small>{detail.data.runs.length} run{detail.data.runs.length === 1 ? '' : 's'}</small></summary>
@@ -687,6 +688,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         </details>
       )}
 
+      <fieldset className="task-execution-controls" disabled={isExecutionActive} aria-label={isExecutionActive ? 'Task actions are disabled while execution is in progress' : undefined}>
       {detail.data.executionPlan && (
         <div className="detail-section execution-plan">
           <span className="section-label">Approval required</span>

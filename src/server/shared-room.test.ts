@@ -6,7 +6,7 @@ import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildSharedReplyPrompt, classificationForLinkedItem, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, buildSharedReplyPrompt, classificationForLinkedItem, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const temporaryDirectories: string[] = [];
@@ -195,6 +195,23 @@ describe('compactConversationHistory', () => {
     expect(prompt).toContain('Do not add a passive badge or persistence.');
     expect(prompt).toContain('Reference-only conversation transcript:');
     expect(prompt).toContain('ignore the conflict');
+  });
+
+  it('sends only the authoritative turn delta when resuming a provider session', () => {
+    const grounding = fallbackTurnGrounding([message(0, 'Commit and push the finished fix.')]);
+    const prompt = buildResumedSharedReplyPrompt(
+      'Current repository: /tmp/project',
+      [],
+      'conversation',
+      'Supervisor-issued external-action capability: Commit and push once.',
+      grounding,
+    );
+
+    expect(prompt).toContain('Commit and push the finished fix.');
+    expect(prompt).toContain('Current repository: /tmp/project');
+    expect(prompt).toContain('Supervisor-issued external-action capability');
+    expect(prompt).toContain('already present in this session');
+    expect(prompt).not.toContain('Reference-only conversation transcript:');
   });
 
   it('falls back safely when the supervisor returns malformed output', async () => {
@@ -421,6 +438,44 @@ describe('shared-room Codex warming', () => {
     claimed?.kill();
   });
 
+  it('recovers an expired Codex thread with the full fresh-session prompt', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-codex-resume-'));
+    temporaryDirectories.push(directory);
+    const countFile = join(directory, 'count');
+    const log = join(directory, 'requests.log');
+    const fakeAppServer = [
+      '#!/bin/sh',
+      `count=0; if [ -f '${countFile}' ]; then read count < '${countFile}'; fi; count=$((count + 1)); printf '%s' "$count" > '${countFile}'`,
+      `IFS= read -r initialize; printf '%s\n' "$initialize" >> '${log}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
+      `IFS= read -r bootstrap; printf '%s\n' "$bootstrap" >> '${log}'`,
+      `if [ "$count" -eq 1 ]; then printf '%s\n' '{"jsonrpc":"2.0","id":2,"error":{"message":"Thread not found"}}'; exit 0; fi`,
+      `printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"fresh-thread"}}}'`,
+      `IFS= read -r turn; printf '%s\n' "$turn" >> '${log}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"fresh-turn"}}}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"itemId":"message-1","delta":"Completed from fresh thread."}}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"id":"fresh-turn","status":"completed"}}}'`,
+      'while IFS= read -r request; do :; done',
+    ].join('\n');
+    writeFileSync(join(directory, 'codex'), fakeAppServer);
+    chmodSync(join(directory, 'codex'), 0o755);
+    process.env.PATH = directory;
+
+    const progress: string[] = [];
+    const result = await runSteerableCodex(
+      'Incremental follow-up.', directory, new AbortController().signal,
+      (body) => progress.push(body), () => undefined, () => undefined, () => undefined,
+      'expired-thread', 'default', false, 'Full recovery prompt.',
+    );
+
+    expect(result.output).toBe('Completed from fresh thread.');
+    expect(progress).toContain('● Codex thread expired. Restarting this turn in a fresh session…');
+    const requests = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(requests.some((request) => request.method === 'thread/resume' && request.params.threadId === 'expired-thread')).toBe(true);
+    expect(requests.some((request) => request.method === 'thread/start')).toBe(true);
+    expect(requests.find((request) => request.method === 'turn/start')?.params.input[0].text).toBe('Full recovery prompt.');
+  });
+
 });
 
 describe('isCodexDecisionPreamble', () => {
@@ -474,7 +529,7 @@ describe('codexUsageFromAppServerEvent', () => {
   });
 
   it('prefers cumulative Codex turn usage over the last provider request', () => {
-    expect(codexUsageFromAppServerEvent({
+    const event = {
       method: 'thread/tokenUsage/updated',
       params: {
         tokenUsage: {
@@ -482,7 +537,9 @@ describe('codexUsageFromAppServerEvent', () => {
           total: { inputTokens: 620_000, cachedInputTokens: 550_000, outputTokens: 70 },
         },
       },
-    })).toEqual({ inputTokens: 70_000, cacheCreationInputTokens: null, cacheReadInputTokens: 550_000, outputTokens: 70 });
+    };
+    expect(codexUsageFromAppServerEvent(event)).toEqual({ inputTokens: 70_000, cacheCreationInputTokens: null, cacheReadInputTokens: 550_000, outputTokens: 70 });
+    expect(codexActiveContextTokensFromAppServerEvent(event)).toBe(100_000);
   });
 
   it('returns null for a turn/completed event with no usage field, matching current app-server output', () => {

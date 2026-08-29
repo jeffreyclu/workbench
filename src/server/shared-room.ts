@@ -117,6 +117,24 @@ export function codexUsageFromAppServerEvent(event: unknown): AgentUsage | null 
   return null;
 }
 
+/** Active input on the provider's latest request, distinct from cumulative
+ * turn accounting. Cumulative cache reads are spend telemetry and must never
+ * make Workbench retire an otherwise healthy resumable thread. */
+export function codexActiveContextTokensFromAppServerEvent(event: unknown): number | null {
+  if (!event || typeof event !== 'object') return null;
+  const params = (event as Record<string, unknown>).params as Record<string, unknown> | undefined;
+  const tokenUsage = params?.tokenUsage as Record<string, unknown> | undefined;
+  const latest = tokenUsage?.last as Record<string, unknown> | undefined;
+  if (typeof latest?.inputTokens === 'number') return latest.inputTokens;
+  const payload = params?.payload as Record<string, unknown> | undefined;
+  const info = payload?.info as Record<string, unknown> | undefined;
+  const forwarded = info?.last_token_usage as Record<string, unknown> | undefined;
+  if (typeof forwarded?.input_tokens === 'number') return forwarded.input_tokens;
+  const terminal = params?.usage as Record<string, unknown> | undefined;
+  if (typeof terminal?.input_tokens === 'number') return terminal.input_tokens;
+  return null;
+}
+
 /** Provider session IDs are ephemeral; a missing one must never poison retries. */
 export function isMissingClaudeSessionError(error: unknown): boolean {
   return /no conversation found with session id/i.test(error instanceof Error ? error.message : String(error));
@@ -218,7 +236,7 @@ export function warmSharedRoomCodex(cwd: string, accountProfile = DEFAULT_ACCOUN
 }
 
 /** Codex's app-server is the provider protocol that supports turn/steer. */
-function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, mutating = false): Promise<{ output: string; threadId: string; usage: AgentUsage; cacheHandoffRequested: boolean; terminalWarning?: string | null }> {
+function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, mutating = false): Promise<{ output: string; threadId: string; usage: AgentUsage; peakContextTokens: number; cacheHandoffRequested: boolean; terminalWarning?: string | null }> {
   return new Promise((resolveOutput, reject) => {
     const command = codexAppServerCommand();
     const claimed = claimWarmProcess('codex', cwd, command, CODEX_APP_SERVER_ARGS, accountProfile);
@@ -228,6 +246,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
     if (!process.env.VITEST) warmSharedRoomCodex(cwd, accountProfile);
     let buffered = ''; let output = ''; let liveOutput = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
     let usage: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
+    let peakContextTokens = 0;
     const pendingSteers = new Map<number, (accepted: boolean) => void>();
     let steerCount = 0;
     let cacheHandoffRequested = false;
@@ -296,6 +315,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         const reportedUsage = codexUsageFromAppServerEvent(event);
         if (reportedUsage) {
           usage = reportedUsage;
+          peakContextTokens = Math.max(peakContextTokens, codexActiveContextTokensFromAppServerEvent(event) ?? 0);
           onUsage(usage);
         }
         if (!initialized && event.id === 1 && event.result) {
@@ -364,7 +384,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
           rejectPendingSteers();
           const status = typeof event.params?.turn?.status === 'string' ? event.params.turn.status : null;
           const terminalWarning = status && status !== 'completed' ? `Codex ended the turn with ${status}.` : null;
-          resolveOutput({ output: output.trim(), threadId, usage, cacheHandoffRequested, terminalWarning });
+          resolveOutput({ output: output.trim(), threadId, usage, peakContextTokens, cacheHandoffRequested, terminalWarning });
           child.stdin.end();
           const terminalShutdown = setTimeout(() => {
             if (child.exitCode === null) stop();
@@ -375,7 +395,10 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
           if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
             pendingSteers.get(event.id)!(false);
             pendingSteers.delete(event.id);
-          } else fail(new Error(String(event.error.message ?? 'Codex app-server request failed.')));
+          } else {
+            stop();
+            fail(new Error(String(event.error.message ?? 'Codex app-server request failed.')));
+          }
         }
       }
     });
@@ -390,10 +413,11 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
   });
 }
 
-export async function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, mutating = false): Promise<{ output: string; threadId: string; usage: AgentUsage }> {
+export async function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, mutating = false, expiredThreadPrompt?: string): Promise<{ output: string; threadId: string; usage: AgentUsage; peakContextTokens: number }> {
   let segmentPrompt = prompt;
   let segmentResume = resumeThreadId;
   let aggregate: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
+  let peakContextTokens = 0;
   let result: Awaited<ReturnType<typeof runSteerableCodexSegment>>;
   for (;;) {
     const before = aggregate;
@@ -408,10 +432,20 @@ export async function runSteerableCodex(prompt: string, cwd: string, signal: Abo
         const aggregateUsage = addUsage(before, usage);
         onUsage(aggregateUsage);
       }, segmentResume, accountProfile, mutating);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (segmentResume && expiredThreadPrompt && /(?:thread|conversation).*(?:not found|does not exist|unknown)|no (?:thread|conversation) found/i.test(message)) {
+        onProgress('● Codex thread expired. Restarting this turn in a fresh session…');
+        segmentPrompt = expiredThreadPrompt;
+        segmentResume = undefined;
+        continue;
+      }
+      throw error;
     } finally {
       signal.removeEventListener('abort', cancelSegment);
     }
     aggregate = addUsage(aggregate, result.usage);
+    peakContextTokens = Math.max(peakContextTokens, result.peakContextTokens);
     if (shouldContinueCacheHandoff(result)) {
       onProgress('● Cache checkpoint saved. Continuing automatically in a fresh compact session…');
       segmentPrompt = cacheContinuationPrompt(prompt, result.output);
@@ -421,7 +455,7 @@ export async function runSteerableCodex(prompt: string, cwd: string, signal: Abo
     if (result.terminalWarning) throw new AgentTerminalWarningError(result.terminalWarning, result.output);
     break;
   }
-  return { output: result.output, threadId: result.threadId, usage: aggregate };
+  return { output: result.output, threadId: result.threadId, usage: aggregate, peakContextTokens };
 }
 
 type SharedReplyRetrieval = {
@@ -737,6 +771,30 @@ ${compactConversationHistory(thread)}
 Execute only the AUTHORITATIVE CURRENT OBJECTIVE above. Answer Jeffrey concisely. State the decision, handoff, or blocker you are continuing and any conflict with observed state. The live stream is progress only; after work ends, give one fresh, compact final handoff that synthesizes the outcome, changed files or decisions, verification, and any remaining blocker. Do not replay the live progress log or narrate steps verbatim. Before each tool call, emit a separate, concise \`Decision: <why this tool is the next correct action>\` statement. It is recorded in the agent debugger, so make it concrete and human-readable; never claim hidden reasoning. Retrieved memory covers the latest message only; query more via curl -sG http://localhost:5180/api/activity-memory --data-urlencode 'q=<terms>' --data 'limit=100'. Workspace isolation is mandatory: never write Workbench bookkeeping, \`docs/shared-memory*\`, or other Workbench-internal files into a linked project repository. Use this conversation and Workbench activity for durable handoffs; modify project files only for Jeffrey's explicit project request. Workbench is non-interactive: use tools directly and report exact missing access. Finish foreground work now; never detach work or promise a later result.`;
 }
 
+/** A resumed provider thread already contains the invariant persona, tools,
+ * workspace contract, and prior conversation. Send only the new turn's
+ * authoritative delta so the provider can reuse its existing cache instead of
+ * rebuilding the entire room prompt on every reply. */
+export function buildResumedSharedReplyPrompt(
+  connectionContext: string,
+  retrievedMemory: RetrievedMemory[],
+  localId: string | null,
+  externalActionContract: string,
+  turnGrounding: TurnGrounding,
+): string {
+  return `Continue the existing Workbench conversation in the same provider session.
+
+${turnGroundingForPrompt(turnGrounding)}
+
+${connectionContext}
+
+${formatRetrievedMemory(retrievedMemory, localId)}
+
+${externalActionContract}
+
+Execute only the AUTHORITATIVE CURRENT OBJECTIVE above. The previous conversation, workspace contract, and completed work are already present in this session; do not re-read or reconstruct them. Apply Jeffrey's newest instruction directly, preserve existing workspace edits, and finish with one concise result and focused verification.`;
+}
+
 /**
  * A shorthand follow-up needs the preceding user turn to retrieve the right
  * decision. A complete new question does not: adding an unrelated control turn
@@ -1014,7 +1072,7 @@ export async function replyInSharedRoom(
       retrievedMemoryCount: injectedMemory.length,
       retrievedMemoryDetail: { query: memoryQuery, items: injectedMemory },
     });
-    const prompt = buildSharedReplyPrompt(
+    const freshPrompt = buildSharedReplyPrompt(
       agent,
       repository.getSharedContext(target.conversationId, { conversationId: target.conversationId }),
       connectionContext,
@@ -1025,6 +1083,12 @@ export async function replyInSharedRoom(
       externalActionContract,
       turnGrounding,
     );
+    const resumeProviderId = agent === 'codex'
+      ? linkedConversation?.codexThreadId ?? null
+      : linkedConversation?.claudeSessionId ?? null;
+    const prompt = resumeProviderId
+      ? buildResumedSharedReplyPrompt(connectionContext, injectedMemory, target.conversationId, externalActionContract, turnGrounding)
+      : freshPrompt;
     if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'prompt', {
       promptChars: prompt.length,
       sharedContextChars: repository.getSharedContext(target.conversationId, { conversationId: target.conversationId }).length,
@@ -1054,12 +1118,8 @@ export async function replyInSharedRoom(
         const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
         repository.updateSharedMessage(messageId, telemetry);
         if (runId) { repository.updateRun(runId, telemetry); repository.addAgentRunDiagnostic(runId, messageId, agent, 'usage', telemetry); }
-      // Workbench already supplies a compact room prompt plus focused memory.
-      // Resuming Codex's provider thread replays its hidden tool history too,
-      // turning short follow-ups into 100k-token cache reads. Keep only the
-      // active turn steerable; every later room message starts clean.
-      }, undefined, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, Boolean(runId && MUTATING_RUN_KINDS.has(repository.getRun(runId)?.kind ?? 'analysis')))
-        .then(({ output, threadId, usage }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage, fallbackFrom: null, fallbackReason: null }))
+      }, linkedConversation?.codexThreadId, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, Boolean(runId && MUTATING_RUN_KINDS.has(repository.getRun(runId)?.kind ?? 'analysis')), freshPrompt)
+        .then(({ output, threadId, usage, peakContextTokens }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage, peakContextTokens, fallbackFrom: null, fallbackReason: null }))
       : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       if (controller.signal.aborted) return;
       updateLiveSharedBody(repository, messageId, partial);
@@ -1078,15 +1138,12 @@ export async function replyInSharedRoom(
       registerActiveReplySteering(messageId, steer);
       void deliverPendingSharedInterjections(repository, messageId);
     } : undefined,
-    // Workbench already supplies a bounded conversation prompt. Resuming the
-    // separate Claude CLI session also replays its old tool history: the last
-    // short follow-up read 199k cached tokens and took 57 seconds.
-    undefined, true, !isPairedReply);
+    linkedConversation?.claudeSessionId ?? undefined, true, !isPairedReply, undefined, claudeScopeRecoveryPrompt(freshPrompt, cwd));
     } catch (error) {
       if (agent !== 'claude' || !linkedConversation?.claudeSessionId || !isMissingClaudeSessionError(error)) throw error;
       repository.setConversationClaudeSessionId(target.conversationId, null);
       repository.updateSharedMessage(messageId, { body: '● Claude session expired. Restarting this turn in a fresh session…' });
-      result = await runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(guardedPrompt, cwd), (partial) => {
+      result = await runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(freshPrompt, cwd), (partial) => {
         if (controller.signal.aborted) return;
         updateLiveSharedBody(repository, messageId, partial);
         if (runId) repository.updateRun(runId, { output: partial });
@@ -1101,15 +1158,15 @@ export async function replyInSharedRoom(
         void deliverPendingSharedInterjections(repository, messageId);
       }, undefined, false, !isPairedReply);
     }
-    if (result.agent === 'codex') repository.setConversationCodexThreadId(target.conversationId, null);
-    // Conversation turns never resume this session, but they do store its id and
-    // the next execute run resumes from exactly that id. A turn that hit the
-    // in-run ceiling would otherwise seed execute with an already-saturated
-    // session, so the same checkpoint rule applies on this side of the handoff.
+    if (result.agent === 'codex') {
+      const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile);
+      repository.setConversationCodexThreadId(target.conversationId, checkpoint ? null : result.codexThreadId ?? null);
+      if (checkpoint && linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile));
+    }
     if (result.agent === 'claude') {
-      const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile, result.usage.cacheReadInputTokens ?? 0);
+      const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile);
       repository.setConversationClaudeSessionId(target.conversationId, checkpoint ? null : result.sessionId ?? null);
-      if (checkpoint && linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile, result.usage.cacheReadInputTokens ?? 0));
+      if (checkpoint && linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile));
     }
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       if (isPairedReply) throw new Error('Claude reported an invalid workspace-scope blocker. Its paired response was kept as a Claude failure and was not replaced with Codex.');
