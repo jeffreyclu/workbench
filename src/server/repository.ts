@@ -1975,8 +1975,8 @@ export class WorkItemRepository {
     return this.execution.claimQueuedTurn(id);
   }
 
-  renewLeases(ownerId: string, leaseMs: number): void {
-    this.execution.renewLeases(ownerId, leaseMs);
+  renewLeases(ownerId: string, leaseMs: number, adoptRunIds: readonly string[] = []): void {
+    this.execution.renewLeases(ownerId, leaseMs, adoptRunIds);
   }
 
   renewRunLease(id: string, ownerId: string, leaseMs: number): boolean {
@@ -2048,8 +2048,8 @@ export class WorkItemRepository {
    * See `ExecutionService.reclaimExpired` for why the run and message reclamation
    * loops share one transaction.
    */
-  reclaimExpired(graceMs = 3 * 60_000): { recoveredRunIds: string[]; failedRunIds: string[]; recoveredMessageIds: string[] } {
-    return this.execution.reclaimExpired(graceMs);
+  reclaimExpired(graceMs = 3 * 60_000, activeRunIds: readonly string[] = []): { recoveredRunIds: string[]; failedRunIds: string[]; recoveredMessageIds: string[] } {
+    return this.execution.reclaimExpired(graceMs, activeRunIds);
   }
 
   /** See `ExecutionService.reclaimOrphanedQueuedMessages` for why this backstop exists. */

@@ -258,6 +258,19 @@ detail card.
 not an inline panel. It closes through its close control, Escape, or its
 backdrop; keep the selected patch and sequential navigator visible behind it.
 
+*Superseded by Jeffrey, 2026-08-29.* Changes review no longer needs a
+phone-specific decision experience. Remove the sequential navigator and modal;
+the relationship-prioritized desktop queue is the authoritative review flow.
+
+### Relationship complexity determines review order
+
+*Decision from Jeffrey, 2026-08-29.* Use the code diagram's relationships to
+order review decisions. Pending code with more relationships is reviewed first;
+defer code with no relationships to the end. For equally connected blocks,
+show declarations before the implementations or call sites that depend on them,
+then use source order as the deterministic tie-breaker. Settled decisions remain
+after pending work.
+
 ### Mobile composer closes as a bottom sheet
 
 *Decision from Jeffrey, 2026-08-27.* When expanded on phones, the composer is

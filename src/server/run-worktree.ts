@@ -1,4 +1,4 @@
-import { execFile as execFileCallback, execFileSync } from 'node:child_process';
+import { execFile as execFileCallback, execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -18,13 +18,65 @@ function isIntegrationExcludedPath(path: string): boolean {
 
 const integrationPathspec = ['.', ':(exclude)node_modules', ':(exclude).workbench-runtime'];
 
-function changedPaths(cwd: string, range: string[]): Set<string> {
-  const output = execFileSync('git', ['diff', '--name-only', '-z', ...range], { cwd, encoding: 'utf8', timeout: 5_000, maxBuffer: 1_000_000 });
+/**
+ * Runs `git` without blocking the event loop, and returns stdout.
+ *
+ * Integration used to shell out with `execFileSync`. That is the same event loop
+ * that runs the scheduler heartbeat (`HEARTBEAT_MS` 10s) behind a 45s run lease,
+ * so every synchronous Git call froze the heartbeat for every *other* in-flight
+ * run as well as the HTTP API. The conflict fallback below applies the patch one
+ * file at a time, so a single multi-file conflict could block far past the lease
+ * and expire runs that were healthy. Awaiting each call keeps the loop turning.
+ *
+ * `spawn` rather than promisified `execFile` because `git apply -` needs the
+ * patch on stdin, and `execFile` has no `input` option.
+ */
+function git(args: string[], options: { cwd: string; input?: string; timeout: number; maxBuffer?: number }): Promise<string> {
+  const maxBuffer = options.maxBuffer ?? 1_000_000;
+  return new Promise<string>((resolvePromise, rejectPromise) => {
+    const child = spawn('git', args, { cwd: options.cwd });
+    let stdout = '';
+    let stderr = '';
+    let overflowed = false;
+    let settled = false;
+    const settle = (error: Error | null, value: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) rejectPromise(error); else resolvePromise(value);
+    };
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      settle(new Error(`git ${args[0]} timed out after ${options.timeout}ms`), '');
+    }, options.timeout);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      // Match the old `maxBuffer` contract: refuse oversized output rather than
+      // letting one enormous patch grow the heap without bound.
+      if (stdout.length + chunk.length > maxBuffer) { overflowed = true; child.kill('SIGKILL'); return; }
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk: string) => { if (stderr.length < 64_000) stderr += chunk; });
+    child.on('error', (error: Error) => settle(error, ''));
+    child.on('close', (code: number | null) => {
+      if (overflowed) return settle(new Error(`git ${args[0]} output exceeded ${maxBuffer} bytes`), '');
+      if (code === 0) return settle(null, stdout);
+      settle(new Error(`git ${args.join(' ')} failed (exit ${code}): ${stderr.trim() || stdout.trim()}`), '');
+    });
+    // stdin must always be closed or Git waits forever on a patch that never comes.
+    child.stdin.on('error', () => { /* A killed child closes stdin under us. */ });
+    child.stdin.end(options.input ?? '');
+  });
+}
+
+async function changedPaths(cwd: string, range: string[]): Promise<Set<string>> {
+  const output = await git(['diff', '--name-only', '-z', ...range], { cwd, timeout: 5_000, maxBuffer: 1_000_000 });
   return new Set(output.split('\0').filter(Boolean));
 }
 
-function untrackedPaths(cwd: string): string[] {
-  const output = execFileSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd, encoding: 'utf8', timeout: 5_000, maxBuffer: 1_000_000 });
+async function untrackedPaths(cwd: string): Promise<string[]> {
+  const output = await git(['ls-files', '--others', '--exclude-standard', '-z'], { cwd, timeout: 5_000, maxBuffer: 1_000_000 });
   return output.split('\0').filter(Boolean);
 }
 
@@ -159,46 +211,46 @@ export function integrateWorkbenchRunWorktree(sourceWorkspace: string, worktree:
   const source = resolve(sourceWorkspace);
   const detached = resolve(worktree);
   if (!isolate || source === detached) return Promise.resolve(notIntegrated());
-  const task = integrationTail.then((): IntegrationOutcome => {
-    const resetIndex = () => {
+  const task = integrationTail.then(async (): Promise<IntegrationOutcome> => {
+    const resetIndex = async () => {
       // Never reset the primary working tree, which may contain a user's
       // unrelated work. Only the index is integration's to manage.
-      try { execFileSync('git', ['reset', '--mixed', 'HEAD'], { cwd: source, stdio: 'ignore', timeout: 15_000 }); } catch { /* Preserve the original integration error. */ }
+      try { await git(['reset', '--mixed', 'HEAD'], { cwd: source, timeout: 15_000 }); } catch { /* Preserve the original integration error. */ }
     };
     try {
-      const branch = execFileSync('git', ['branch', '--show-current'], { cwd: source, encoding: 'utf8', timeout: 5_000 }).trim();
+      const branch = (await git(['branch', '--show-current'], { cwd: source, timeout: 5_000 })).trim();
       // A primary checkout parked off main is a property of the workspace, not a
       // defect in the run that just finished. Report it and leave the work in the
       // detached tree; do not throw, which would discard the completed run.
       if (branch !== 'main') return notIntegrated(`integration requires the primary checkout on main; found ${branch || 'detached HEAD'}. The run's changes stay in ${detached}.`);
       // Remember every tracked file the primary checkout had already changed.
       // Those paths are user/WIP territory and must not be refreshed below.
-      const primaryDirtyPaths = changedPaths(source, ['HEAD']);
+      const primaryDirtyPaths = await changedPaths(source, ['HEAD']);
       // `git diff HEAD` omits untracked files. Mark them intent-to-add in the
       // detached tree so its binary patch includes newly created source files;
       // the detached tree is reset after successful integration.
-      const untracked = untrackedPaths(detached).filter((path) => !isIntegrationExcludedPath(path));
-      if (untracked.length) execFileSync('git', ['add', '--intent-to-add', '--', ...untracked], { cwd: detached, stdio: 'ignore', timeout: 15_000 });
-      const patch = execFileSync('git', ['diff', '--binary', 'HEAD', '--', ...integrationPathspec], { cwd: detached, encoding: 'utf8', timeout: 15_000, maxBuffer: 4_000_000 });
+      const untracked = (await untrackedPaths(detached)).filter((path) => !isIntegrationExcludedPath(path));
+      if (untracked.length) await git(['add', '--intent-to-add', '--', ...untracked], { cwd: detached, timeout: 15_000 });
+      const patch = await git(['diff', '--binary', 'HEAD', '--', ...integrationPathspec], { cwd: detached, timeout: 15_000, maxBuffer: 4_000_000 });
       if (!patch.trim()) return notIntegrated();
 
-      const commitStagedIntegration = (conflicted: string[]): IntegrationOutcome => {
+      const commitStagedIntegration = async (conflicted: string[]): Promise<IntegrationOutcome> => {
         const message = conflicted.length
           ? `feat: integrate Workbench agent run ${runId} (${conflicted.length} conflicting file(s) left in the run worktree)`
           : `feat: integrate Workbench agent run ${runId}`;
-        execFileSync('git', ['commit', '-m', message], { cwd: source, encoding: 'utf8', timeout: 30_000, maxBuffer: 4_000_000 });
-        const commitHash = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8', timeout: 5_000 }).trim();
+        await git(['commit', '-m', message], { cwd: source, timeout: 30_000, maxBuffer: 4_000_000 });
+        const commitHash = (await git(['rev-parse', 'HEAD'], { cwd: source, timeout: 5_000 })).trim();
         // `--cached` intentionally leaves the working tree alone. Refresh only
         // files created by this commit that were clean before integration;
         // otherwise a clean primary would appear dirty after every handoff.
-        const integratedPaths = [...changedPaths(source, ['HEAD^', 'HEAD'])].filter((path) => !primaryDirtyPaths.has(path) && !isIntegrationExcludedPath(path));
+        const integratedPaths = [...(await changedPaths(source, ['HEAD^', 'HEAD']))].filter((path) => !primaryDirtyPaths.has(path) && !isIntegrationExcludedPath(path));
         if (integratedPaths.length) {
-          execFileSync('git', ['checkout', '--quiet', 'HEAD', '--', ...integratedPaths], { cwd: source, stdio: 'ignore', timeout: 15_000 });
+          await git(['checkout', '--quiet', 'HEAD', '--', ...integratedPaths], { cwd: source, timeout: 15_000 });
         }
         // Only a fully integrated run may be cleared. When files conflicted, the
         // detached copy is the sole remaining home of that work and must survive
         // for recovery -- and its dirty state keeps the collector away from it.
-        if (!conflicted.length) execFileSync('git', ['reset', '--hard', 'HEAD'], { cwd: detached, stdio: 'ignore', timeout: 15_000 });
+        if (!conflicted.length) await git(['reset', '--hard', 'HEAD'], { cwd: detached, timeout: 15_000 });
         return { integrated: true, commitHash, conflicted, blocked: null };
       };
 
@@ -207,41 +259,41 @@ export function integrateWorkbenchRunWorktree(sourceWorkspace: string, worktree:
         // working tree is clean. `--cached` applies the completed run's patch
         // against HEAD in the index only, so local edits remain exactly as they
         // were while the integration commit contains only this run.
-        execFileSync('git', ['apply', '--3way', '--cached', '-'], { cwd: source, input: patch, encoding: 'utf8', timeout: 30_000, maxBuffer: 4_000_000 });
-        return commitStagedIntegration([]);
-    } catch (error) {
-      // `git apply --cached` may leave conflict entries behind. Drop the
-      // half-applied index, then retry a file at a time so every clean file
-      // still lands and only genuinely conflicting files are held back.
-      resetIndex();
-      const files = splitPatchByFile(patch);
-      const conflicted: string[] = [];
-      let applied = 0;
-      for (const file of files) {
-        try {
-          execFileSync('git', ['apply', '--3way', '--cached', '-'], { cwd: source, input: file.patch, encoding: 'utf8', timeout: 30_000, maxBuffer: 4_000_000 });
-          applied += 1;
-        } catch {
-          conflicted.push(...file.paths);
-          // Unmerged stages block the commit below. Clear just this file's
-          // entries so the work that did apply stays committable.
-          for (const path of file.paths) {
-            try { execFileSync('git', ['reset', '--quiet', 'HEAD', '--', path], { cwd: source, stdio: 'ignore', timeout: 15_000 }); } catch { /* The path need not exist in HEAD. */ }
+        await git(['apply', '--3way', '--cached', '-'], { cwd: source, input: patch, timeout: 30_000 });
+        return await commitStagedIntegration([]);
+      } catch (error) {
+        // `git apply --cached` may leave conflict entries behind. Drop the
+        // half-applied index, then retry a file at a time so every clean file
+        // still lands and only genuinely conflicting files are held back.
+        await resetIndex();
+        const files = splitPatchByFile(patch);
+        const conflicted: string[] = [];
+        let applied = 0;
+        for (const file of files) {
+          try {
+            await git(['apply', '--3way', '--cached', '-'], { cwd: source, input: file.patch, timeout: 30_000 });
+            applied += 1;
+          } catch {
+            conflicted.push(...file.paths);
+            // Unmerged stages block the commit below. Clear just this file's
+            // entries so the work that did apply stays committable.
+            for (const path of file.paths) {
+              try { await git(['reset', '--quiet', 'HEAD', '--', path], { cwd: source, timeout: 15_000 }); } catch { /* The path need not exist in HEAD. */ }
+            }
           }
         }
+        if (!applied) {
+          await resetIndex();
+          // Nothing could be taken, but the detached tree still holds all of it.
+          // Name every file and the cause rather than failing the run.
+          return { integrated: false, commitHash: null, conflicted: [...new Set(files.flatMap((file) => file.paths))], blocked: integrationBlocker(error) };
+        }
+        return await commitStagedIntegration([...new Set(conflicted)]);
       }
-      if (!applied) {
-        resetIndex();
-        // Nothing could be taken, but the detached tree still holds all of it.
-        // Name every file and the cause rather than failing the run.
-        return { integrated: false, commitHash: null, conflicted: [...new Set(files.flatMap((file) => file.paths))], blocked: integrationBlocker(error) };
-      }
-      return commitStagedIntegration([...new Set(conflicted)]);
-    }
     } catch (error) {
       // Any other Git failure (a lock, a hook, a timeout) is likewise the
       // workspace's problem, not the run's. Leave the index as we found it.
-      resetIndex();
+      await resetIndex();
       return notIntegrated(integrationBlocker(error));
     }
   });

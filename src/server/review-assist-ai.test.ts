@@ -236,3 +236,174 @@ describe('change-type obligations', () => {
     expect(lookupReviewAssist(database, 'explain', { ...deletion, changeType: 'refactor_pure' as const }, null)).toBeNull();
   });
 });
+
+describe('surviving-reference evidence', () => {
+  const deletion = {
+    behavior: 'Removes the legacy parser.',
+    state: 'Pending',
+    changeType: 'deletion' as const,
+    secondaryChangeTypes: [],
+    hunks: [{ filePath: 'src/legacy-parse.ts', location: 'Lines 1-9', lines: ['-export function legacyParse(input: string) {', '-  return input.trim();', '-}'] }],
+  };
+  const residual = {
+    ...deletion,
+    referenceEvidence: {
+      symbols: ['legacyParse'],
+      hunks: [{ filePath: 'src/importer.ts', location: 'Lines 20-21', lines: ['   return legacyParse(raw);'], symbols: ['legacyParse'], kind: 'residual' as const }],
+      residualSymbols: ['legacyParse'],
+      clearedSymbols: [],
+    },
+  };
+
+  it('hands the model the surviving call site, so a deletion break is cited rather than guessed', async () => {
+    vi.resetModules();
+    const writes: string[] = [];
+    const spawn = mockStreamingWorker('Still referenced.', [], writes);
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { requestReviewAssist } = await import('./review-assist-ai.js');
+
+    await requestReviewAssist(openDatabase(':memory:'), 'explain', residual, null);
+
+    const prompt = writes[writes.length - 1];
+    expect(prompt).toContain('src/importer.ts');
+    expect(prompt).toContain('Still referenced after this change: legacyParse');
+    expect(prompt).toContain('report a break, not a possibility');
+  });
+
+  it('states an absent reference as narrowed risk rather than an all-clear, because the review is not the repository', async () => {
+    vi.resetModules();
+    const writes: string[] = [];
+    const spawn = mockStreamingWorker('Nothing here uses it.', [], writes);
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { requestReviewAssist } = await import('./review-assist-ai.js');
+
+    await requestReviewAssist(openDatabase(':memory:'), 'explain', {
+      ...deletion,
+      referenceEvidence: { symbols: ['legacyParse'], hunks: [], residualSymbols: [], clearedSymbols: ['legacyParse'] },
+    }, null);
+
+    const prompt = writes[writes.length - 1];
+    expect(prompt).toContain('narrows the risk without clearing it');
+    expect(prompt).toContain('remain unverified');
+  });
+
+  it('keys the cache on the evidence, so a later push that adds a caller is not served the old all-clear', async () => {
+    vi.resetModules();
+    const spawn = mockStreamingWorker('Nothing here uses it.');
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { requestReviewAssist, lookupReviewAssist } = await import('./review-assist-ai.js');
+    const database = openDatabase(':memory:');
+
+    await requestReviewAssist(database, 'explain', deletion, null);
+    expect(lookupReviewAssist(database, 'explain', deletion, null)).toBe('Nothing here uses it.');
+    // Same decision, same lines — only the surrounding review changed. The old
+    // answer must not survive that.
+    expect(lookupReviewAssist(database, 'explain', residual, null)).toBeNull();
+  });
+});
+
+describe('parity table contract', () => {
+  const refactor = {
+    behavior: 'Extracts the retry loop into a helper.',
+    state: 'Pending',
+    changeType: 'refactor_pure' as const,
+    secondaryChangeTypes: [],
+    hunks: [{ filePath: 'src/sync.ts', location: 'Lines 10-14', lines: ['-  for (let i = 0; i < 3; i += 1) {', '+  return retry(3, () => send());'] }],
+  };
+
+  it('asks a refactor for the four axes when the reviewer asks what could break', async () => {
+    vi.resetModules();
+    const writes: string[] = [];
+    vi.doMock('node:child_process', () => ({ spawn: mockStreamingWorker('SIGNATURE: SAME — identical.\nERROR HANDLING: SAME — identical.\nORDERING: SAME — identical.\nCOMPLEXITY: SAME — identical.', [], writes) }));
+    const { requestReviewAssist } = await import('./review-assist-ai.js');
+
+    await requestReviewAssist(openDatabase(':memory:'), 'what_could_break', refactor, null);
+
+    const prompt = writes[writes.length - 1];
+    expect(prompt).toContain('SIGNATURE, ERROR HANDLING, ORDERING, COMPLEXITY');
+    expect(prompt).toContain('never SAME');
+  });
+
+  // `explain` is capped at three sentences and `score_risk` at the two lines the
+  // client parses into a badge. A four-line table there would break the shape
+  // rather than add rigour.
+  it('leaves the shorter actions alone, whose output shapes a table would break', async () => {
+    vi.resetModules();
+    const writes: string[] = [];
+    vi.doMock('node:child_process', () => ({ spawn: mockStreamingWorker('Extracted a helper.', [], writes) }));
+    const { requestReviewAssist } = await import('./review-assist-ai.js');
+
+    await requestReviewAssist(openDatabase(':memory:'), 'explain', refactor, null);
+
+    expect(writes[writes.length - 1]).not.toContain('parity table');
+  });
+
+  it('does not demand a parity table of a change that is meant to differ', async () => {
+    vi.resetModules();
+    const writes: string[] = [];
+    vi.doMock('node:child_process', () => ({ spawn: mockStreamingWorker('Nothing obvious.', [], writes) }));
+    const { requestReviewAssist } = await import('./review-assist-ai.js');
+
+    await requestReviewAssist(openDatabase(':memory:'), 'what_could_break', { ...refactor, changeType: 'behavior_edit' as const }, null);
+
+    expect(writes[writes.length - 1]).not.toContain('parity table');
+  });
+
+  it('reports the axes a refactor answer skipped, so silence does not read as equivalence', async () => {
+    vi.resetModules();
+    vi.doMock('node:child_process', () => ({ spawn: mockStreamingWorker('SIGNATURE: SAME — identical.\nERROR HANDLING: SAME — identical.') }));
+    const { requestReviewAssist } = await import('./review-assist-ai.js');
+
+    const answer = await requestReviewAssist(openDatabase(':memory:'), 'what_could_break', refactor, null);
+
+    expect(answer).toContain('Parity check: ordering, complexity not compared');
+  });
+});
+
+describe('reference-claim audit', () => {
+  const deletion = {
+    behavior: 'Removes the legacy parser.',
+    state: 'Pending',
+    changeType: 'deletion' as const,
+    secondaryChangeTypes: [],
+    hunks: [{ filePath: 'src/legacy-parse.ts', location: 'Lines 1-9', lines: ['-export function legacyParse(input: string) {', '-  return input.trim();', '-}'] }],
+  };
+
+  it('contradicts an all-clear about callers with the surviving reference the review already found', async () => {
+    vi.resetModules();
+    vi.doMock('node:child_process', () => ({ spawn: mockStreamingWorker('All call sites are updated.') }));
+    const { requestReviewAssist } = await import('./review-assist-ai.js');
+
+    const answer = await requestReviewAssist(openDatabase(':memory:'), 'what_could_break', {
+      ...deletion,
+      referenceEvidence: {
+        symbols: ['legacyParse'],
+        hunks: [{ filePath: 'src/importer.ts', location: 'Lines 20-21', lines: ['   return legacyParse(raw);'], symbols: ['legacyParse'], kind: 'residual' as const }],
+        residualSymbols: ['legacyParse'],
+        clearedSymbols: [],
+      },
+    }, null);
+
+    expect(answer).toContain('Reference check: this review still references legacyParse on a surviving line');
+  });
+
+  it('marks an unbacked all-clear unverified when no reference evidence was supplied at all', async () => {
+    vi.resetModules();
+    vi.doMock('node:child_process', () => ({ spawn: mockStreamingWorker('The callers were updated already.') }));
+    const { requestReviewAssist } = await import('./review-assist-ai.js');
+
+    const answer = await requestReviewAssist(openDatabase(':memory:'), 'explain', deletion, null);
+
+    expect(answer).toContain('cite no supplied hunk and remain unverified');
+  });
+
+  // The badge parses the first line of a score; a third line would break it,
+  // and the action asks for no claims to audit in the first place.
+  it('never appends a note to a score, whose two-line shape the client parses', async () => {
+    vi.resetModules();
+    vi.doMock('node:child_process', () => ({ spawn: mockStreamingWorker('SCORE: 55\nAll call sites are updated.') }));
+    const { requestReviewAssist } = await import('./review-assist-ai.js');
+
+    expect(await requestReviewAssist(openDatabase(':memory:'), 'score_risk', deletion, null)).toBe('SCORE: 55\nAll call sites are updated.');
+  });
+});

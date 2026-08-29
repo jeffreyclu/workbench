@@ -129,10 +129,10 @@ export class ExecutionService {
     return true;
   }
 
-  renewLeases(ownerId: string, leaseMs: number): void {
+  renewLeases(ownerId: string, leaseMs: number, adoptRunIds: readonly string[] = []): void {
     const now = new Date().toISOString();
     const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
-    this.runs.renewOwnedLeases(ownerId, leaseMs);
+    this.runs.renewOwnedLeases(ownerId, leaseMs, adoptRunIds);
     this.database.prepare(`UPDATE shared_messages SET lease_expires_at = ? WHERE owner_id = ? AND status = 'running' AND lease_expires_at >= ?`).run(leaseExpiresAt, ownerId, now);
   }
 
@@ -177,13 +177,13 @@ export class ExecutionService {
    * `UnitOfWork` transaction so a whole reclamation pass commits or rolls
    * back together.
    */
-  reclaimExpired(graceMs = 0): { recoveredRunIds: string[]; failedRunIds: string[]; recoveredMessageIds: string[] } {
+  reclaimExpired(graceMs = 0, activeRunIds: readonly string[] = []): { recoveredRunIds: string[]; failedRunIds: string[]; recoveredMessageIds: string[] } {
     return this.unitOfWork.transaction(() => {
       const now = new Date().toISOString();
       // A lease remains valid until its expiry. Once it has expired, its owner
       // has already missed multiple heartbeats and the collector can recover it.
       const recoveryCutoff = new Date(Date.now() - graceMs).toISOString();
-      const { recoveredRunIds, failedRunIds } = this.runs.reclaimExpired(recoveryCutoff, now);
+      const { recoveredRunIds, failedRunIds } = this.runs.reclaimExpired(recoveryCutoff, now, activeRunIds);
       // Shared messages with expired leases are interrupted (not retried). This also
       // catches a reply that was persisted as `running` but whose dispatch process
       // died before it could claim its first lease. If there's an associated agent

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
+import type { ChangeMap, ChangeMapNode } from '../../../shared/change-map.js';
 import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions } from './logic.js';
 
 const localFile: WorkspaceDiffFile = {
@@ -87,14 +88,32 @@ describe('diff review queue logic', () => {
     expect(decisions.some((decision) => decision.hunks.length === 1 && decision.hunks[0].hunkRange === '@@ -80,1 +83,2 @@ unrelatedHelper')).toBe(true);
   });
 
-  it('orders decisions deterministically by source order, ignoring static risk signals', () => {
+  it('orders by relationship count, then declarations before dependents, with isolated code last', () => {
     const decisions = buildReviewDecisions([localFile, authFile], []);
     const authDecision = decisions.find((decision) => decision.filePaths[0] === authFile.path)!;
 
-    // The static signals all point at the auth file, but ordering never reads them.
+    // Static risk does not influence priority; only the relationship graph does.
     expect(authDecision.riskSignals).toContain('auth');
-    const ordered = orderReviewDecisions(decisions);
-    expect(ordered.map((decision) => decision.filePaths[0])).toEqual([localFile.path, authFile.path]);
+    const [isolated, declaration] = decisions;
+    const dependent = { ...isolated, id: 'dependent', ordinal: 3, subject: 'dependent', filePaths: ['src/dependent.ts'] };
+    const hub = { ...declaration, id: 'hub', ordinal: 4, subject: 'hub', filePaths: ['src/hub.ts'] };
+    const node = (decision: typeof isolated, degree: number): ChangeMapNode => ({
+      id: decision.id, ordinal: decision.ordinal, label: decision.subject ?? 'change', subject: decision.subject,
+      filePath: decision.filePaths[0], fileCount: decision.filePaths.length, behavior: decision.behavior,
+      additions: decision.additions, deletions: decision.deletions, state: decision.state, riskSignals: decision.riskSignals, degree,
+    });
+    const changeMap: ChangeMap = {
+      nodes: [node(isolated, 0), node(declaration, 1), node(dependent, 1), node(hub, 2)],
+      edges: [
+        { id: 'hub->declaration', fromId: hub.id, toId: declaration.id, relation: 'calls', symbols: ['declare'], explanation: '' },
+        { id: 'declaration->dependent', fromId: declaration.id, toId: dependent.id, relation: 'calls', symbols: ['depend'], explanation: '' },
+      ],
+      omittedEdges: 0,
+    };
+
+    expect(orderReviewDecisions([isolated, declaration, dependent, hub], changeMap).map((decision) => decision.id)).toEqual([
+      hub.id, declaration.id, dependent.id, isolated.id,
+    ]);
   });
 
   it('sorts reviewed decisions below every unreviewed decision, then by source order', () => {

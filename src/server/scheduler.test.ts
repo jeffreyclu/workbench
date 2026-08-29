@@ -8,8 +8,10 @@ type ExecuteAgentRun = (repository: WorkItemRepository, run: AgentRun, ownerId?:
 // executeAgentRun spawns a real Codex/Claude CLI subprocess; stub it so scheduler
 // dispatch tests exercise the claim/capacity logic without touching a real process.
 const executeAgentRunMock = vi.fn<ExecuteAgentRun>(async () => {});
+const activeAgentRunIdsMock = vi.fn<() => string[]>(() => []);
 vi.mock('./agent-runner.js', () => ({
   executeAgentRun: (...args: Parameters<ExecuteAgentRun>) => executeAgentRunMock(...args),
+  activeAgentRunIds: () => activeAgentRunIdsMock(),
 }));
 
 const { startScheduler, MAX_CONCURRENT_RUNS, TICK_MS } = await import('./scheduler.js');
@@ -56,6 +58,49 @@ describe('scheduler recovery semantics (integration-level, exercised via reposit
     expect(recoveredRunIds).not.toContain(run.id);
     expect(repository.getRun(run.id)?.status).toBe('failed');
     expect(repository.getRun(run.id)?.error).toMatch(/stopped reporting progress/);
+  });
+
+  it('late heartbeat: a run still executing in this process re-adopts its own lapsed lease', () => {
+    const item = createItem();
+    const run = repository.createRun(item.id, 'execute', 'codex', 'codex', '');
+    // The owning process claimed it, then its event loop blocked past LEASE_MS, so
+    // the heartbeat fires after the lease already lapsed.
+    repository.claimRun(run.id, 'this-process', -1);
+
+    repository.renewLeases('this-process', 60_000, [run.id]);
+
+    // Adoption restored the lease, so the collector leaves the live run alone.
+    const { failedRunIds } = repository.reclaimExpired(0);
+    expect(failedRunIds).not.toContain(run.id);
+    expect(repository.getRun(run.id)?.status).toBe('running');
+    // Without adoption the renew would no-op and this run would be failed instead.
+    expect(repository.claimRun(run.id, 'other-process', 60_000)).toBe(false);
+  });
+
+  it('late heartbeat: adoption cannot resurrect a run another process already reclaimed', () => {
+    const item = createItem();
+    const run = repository.createRun(item.id, 'execute', 'codex', 'codex', '');
+    repository.claimRun(run.id, 'this-process', -1);
+    repository.reclaimExpired(0); // a collector got there first
+
+    repository.renewLeases('this-process', 60_000, [run.id]);
+
+    expect(repository.getRun(run.id)?.status).toBe('failed');
+    // Lease bookkeeping is server-internal and deliberately absent from the shared
+    // AgentRun contract, so assert the cleared lease against the column itself.
+    const leaseRow = database.prepare('SELECT lease_expires_at FROM agent_runs WHERE id = ?').get(run.id) as { lease_expires_at: string | null };
+    expect(leaseRow.lease_expires_at).toBeNull();
+  });
+
+  it('reclaim skips runs whose agent subprocess is alive in this process', () => {
+    const item = createItem();
+    const run = repository.createRun(item.id, 'execute', 'codex', 'codex', '');
+    repository.claimRun(run.id, 'this-process', -1);
+
+    const { failedRunIds } = repository.reclaimExpired(0, [run.id]);
+
+    expect(failedRunIds).not.toContain(run.id);
+    expect(repository.getRun(run.id)?.status).toBe('running');
   });
 
   it('dedup: a second concurrent claim on the same run is refused so it cannot run twice', () => {

@@ -112,6 +112,12 @@ export function externalActionContractForAuthorization(decision: ExternalActionA
 
 const activeRunControllers = new Map<string, AbortController>();
 export const isAgentRunActive = (id: string) => activeRunControllers.has(id);
+/**
+ * Runs whose agent subprocess is alive in *this* process right now. The scheduler
+ * feeds this to the lease layer so a heartbeat that ran late can still re-adopt a
+ * lapsed lease instead of letting the collector kill a run that never stopped.
+ */
+export const activeAgentRunIds = (): string[] => [...activeRunControllers.keys()];
 
 const WRITER_REPOSITORY_NAMES = new Set([
   'writer-monorepo',
@@ -474,6 +480,51 @@ export class AgentTerminalWarningError extends Error {
     super(message);
     this.name = 'AgentTerminalWarningError';
   }
+}
+
+/**
+ * Streamed progress is the record of what the turn actually did; the final
+ * report is its summary. A failed turn is exactly when both are worth keeping,
+ * so only drop one when it is already contained in the other.
+ */
+export function terminalExitCheckpoint(finalOutput: string, progress: string): string {
+  const report = finalOutput.trim();
+  const streamed = progress.trim();
+  if (!report) return streamed;
+  if (!streamed) return report;
+  return streamed.includes(report) ? streamed : `${streamed}\n\n${report}`;
+}
+
+/** Kept in sync with `isTransientAgentError` and `isAgentCapacityError`: those decide retry, and they only see the message. */
+const PROVIDER_FAILURE_SIGNAL = /(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|socket hang up|network|timed out|timeout|5\d\d\b|temporarily unavailable|service unavailable|\b429\b|credit|usage limit|session limit|rate limit|quota|too many requests|hit (?:your|the) limit|limit resets?|capacity)/i;
+
+function providerFailureSignal(...sources: string[]): string {
+  for (const source of sources) {
+    for (const line of source.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed && PROVIDER_FAILURE_SIGNAL.test(trimmed)) return trimmed.slice(0, 200);
+    }
+  }
+  return '';
+}
+
+/**
+ * A provider that exits non-zero has not necessarily written a diagnostic.
+ * Claude's stdout is the raw JSONL stream and its final `result` text is the
+ * agent's own user-facing report, so falling back to either wrote agent prose
+ * (or stream JSON) into the failure column: the error then read like a
+ * Workbench guardrail and hid why the process exited. Keep the diagnostic
+ * provider-authored, and hand the agent's work back as a checkpoint so the
+ * existing terminal-warning path preserves it instead of discarding it.
+ */
+export function terminalExitFailure(exit: { stderr: string; terminalError: string; finalOutput: string; progress: string; stdout?: string; command: string; code: number | null }): Error {
+  // Retry and capacity classification read the error message, so a provider
+  // failure that only ever reached stdout must still be represented — as one
+  // bounded matching line, never the whole stream.
+  const signal = providerFailureSignal(exit.finalOutput, exit.progress, exit.stdout ?? '');
+  const diagnostic = exit.stderr.trim() || exit.terminalError.trim() || signal || `${exit.command} exited with code ${exit.code}.`;
+  const checkpoint = terminalExitCheckpoint(exit.finalOutput, exit.progress);
+  return checkpoint ? new AgentTerminalWarningError(diagnostic, checkpoint) : new Error(diagnostic);
 }
 
 export const CACHE_HANDOFF_MARKER = 'WORKBENCH_CACHE_HANDOFF:';
@@ -1326,10 +1377,7 @@ ${AGENT_EXECUTION_CONTRACT}`;
         const outputTokens = reportedUsage.outputTokens ?? (estimatedOutputTokens || null);
         resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens }, sessionId: eventContext.sessionId ?? null, costUsd: providerCostUsd, peakContextTokens, cacheHandoffRequested, terminalWarning: terminalError || null });
       }
-      else {
-        const providerDiagnostic = stderr.trim() || terminalError || finalOutput.trim() || stdout.trim();
-        reject(new Error(providerDiagnostic || `${command} exited with code ${code}.`));
-      }
+      else reject(terminalExitFailure({ stderr, terminalError, finalOutput, progress, stdout, command, code }));
     });
     if (signal?.aborted) cancel();
     else signal?.addEventListener('abort', cancel, { once: true });

@@ -312,11 +312,27 @@ export class RunRepository {
     `).run(new Date(Date.now() + retryAfterMs).toISOString(), runId, ownerId);
   }
 
-  /** Extends every still-live run lease owned by `ownerId`. Does not touch `shared_messages`; the caller renews those separately. */
-  renewOwnedLeases(ownerId: string, leaseMs: number): void {
+  /**
+   * Extends every still-live run lease owned by `ownerId`. Does not touch
+   * `shared_messages`; the caller renews those separately.
+   *
+   * `adoptRunIds` are runs the caller knows are executing in its own process at
+   * this instant. Those are renewed *without* the "not yet expired" guard: the
+   * heartbeat is a timer in the same event loop as the agent subprocesses, so a
+   * blocked loop or GC pause can push it past `LEASE_MS`. Without adoption that
+   * single late tick is irreversible — the renew no-ops, and the very next
+   * `reclaimExpired` fails a run whose agent is still happily working. The
+   * `owner_id`/`status = 'running'` guards keep it safe: if another process
+   * already reclaimed the row, the adoption update no-ops.
+   */
+  renewOwnedLeases(ownerId: string, leaseMs: number, adoptRunIds: readonly string[] = []): void {
     const now = new Date().toISOString();
     const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
     this.database.prepare(`UPDATE agent_runs SET lease_expires_at = ? WHERE owner_id = ? AND status = 'running' AND cancel_requested = 0 AND lease_expires_at >= ?`).run(leaseExpiresAt, ownerId, now);
+    if (!adoptRunIds.length) return;
+    const placeholders = adoptRunIds.map(() => '?').join(', ');
+    this.database.prepare(`UPDATE agent_runs SET lease_expires_at = ? WHERE owner_id = ? AND status = 'running' AND cancel_requested = 0 AND id IN (${placeholders})`)
+      .run(leaseExpiresAt, ownerId, ...adoptRunIds);
   }
 
   renewLease(id: string, ownerId: string, leaseMs: number): boolean {
@@ -412,12 +428,16 @@ export class RunRepository {
    * (`WorkItemRepository.reclaimExpired`) separately reclaims expired
    * `shared_messages` inside the same transaction.
    */
-  reclaimExpired(recoveryCutoff: string, now: string): { recoveredRunIds: string[]; failedRunIds: string[] } {
+  reclaimExpired(recoveryCutoff: string, now: string, activeRunIds: readonly string[] = []): { recoveredRunIds: string[]; failedRunIds: string[] } {
+    // Runs executing in this very process are never abandoned, whatever their
+    // lease says. Reclaiming one would fail a live run and orphan its subprocess.
+    const locallyActive = new Set(activeRunIds);
     const expiredRuns = this.database.prepare(`SELECT id, kind, owner_id, cancel_requested, attempt, max_attempts FROM agent_runs
       WHERE status = 'running' AND (lease_expires_at <= ? OR (owner_id IS NULL AND lease_expires_at IS NULL))`).all(recoveryCutoff) as Array<{ id: string; kind: AgentRun['kind']; owner_id: string | null; cancel_requested: number; attempt: number; max_attempts: number }>;
     const recoveredRunIds: string[] = [];
     const failedRunIds: string[] = [];
     for (const run of expiredRuns) {
+      if (locallyActive.has(run.id)) continue;
       if (run.cancel_requested === 1) {
         this.database.prepare(`UPDATE agent_runs SET status = 'canceled', completed_at = ?, owner_id = NULL, lease_expires_at = NULL
           WHERE id = ? AND status = 'running' AND cancel_requested = 1`).run(now, run.id);

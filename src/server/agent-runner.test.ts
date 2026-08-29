@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, executionProgressSteer, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, executionProgressSteer, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -291,6 +291,40 @@ describe('classifyExecution', () => {
     expect(executionProgressSteer(2, true)).toContain(CACHE_HANDOFF_MARKER);
     expect(shouldContinueCacheHandoff({ output: `${CACHE_HANDOFF_MARKER} useful checkpoint`, cacheHandoffRequested: true, terminalWarning: 'provider stopped' })).toBe(true);
     expect(shouldContinueCacheHandoff({ output: 'normal completion', cacheHandoffRequested: false, terminalWarning: null })).toBe(false);
+  });
+
+  it('keeps a non-zero provider exit diagnostic provider-authored and preserves the agent turn as a checkpoint', () => {
+    // Both shapes are taken from failed runs: one stored the agent's own final
+    // report in `error` (it read like a Workbench guardrail), the other stored
+    // the raw Claude JSONL stream.
+    const agentProse = 'Agent exceeded the standard tool-call limit (24) without completing. Verification must stay focused and terminate.';
+    const failure = terminalExitFailure({ stderr: '', terminalError: '', finalOutput: agentProse, progress: '\u25cf Running a workspace command: grep -n classification-badge', command: 'claude', code: 1 });
+    expect(failure.message).toBe('claude exited with code 1.');
+    expect(failure).toBeInstanceOf(AgentTerminalWarningError);
+    expect((failure as InstanceType<typeof AgentTerminalWarningError>).checkpoint).toContain(agentProse);
+    expect((failure as InstanceType<typeof AgentTerminalWarningError>).checkpoint).toContain('Running a workspace command');
+
+    const streamJson = '{"type":"system","subtype":"init","cwd":"/Users/jeffrey.lu/dev/writer-monorepo"}';
+    expect(terminalExitFailure({ stderr: '', terminalError: '', finalOutput: '', progress: '', command: 'claude', code: 1 }).message).toBe('claude exited with code 1.');
+    expect(terminalExitFailure({ stderr: '', terminalError: '', finalOutput: '', progress: streamJson, command: 'claude', code: 1 }).message).not.toContain('"type":"system"');
+
+    // A real provider diagnostic still wins over the synthesized exit-code text.
+    expect(terminalExitFailure({ stderr: 'spawn ENOENT', terminalError: '', finalOutput: '', progress: '', command: 'claude', code: 1 }).message).toBe('spawn ENOENT');
+    expect(terminalExitFailure({ stderr: '', terminalError: 'Claude ended the turn with error_max_turns.', finalOutput: '', progress: '', command: 'claude', code: 1 }).message).toBe('Claude ended the turn with error_max_turns.');
+
+    // Nothing to keep means an ordinary failure, not a terminal-warning checkpoint.
+    expect(terminalExitFailure({ stderr: 'boom', terminalError: '', finalOutput: '', progress: '', command: 'codex', code: 2 })).not.toBeInstanceOf(AgentTerminalWarningError);
+    expect(terminalExitCheckpoint('same report', 'lead-in\n\nsame report')).toBe('lead-in\n\nsame report');
+
+    // A provider failure that only reached stdout must still classify for retry.
+    const transient = terminalExitFailure({ stderr: '', terminalError: '', finalOutput: '', progress: '', stdout: 'noise\nError: socket hang up while streaming\nmore noise', command: 'claude', code: 1 });
+    expect(transient.message).toBe('Error: socket hang up while streaming');
+    expect(isTransientAgentError(transient)).toBe(true);
+    const capacity = terminalExitFailure({ stderr: '', terminalError: '', finalOutput: 'usage limit reached for this account', progress: '', command: 'claude', code: 1 });
+    expect(isAgentCapacityError(capacity)).toBe(true);
+    // Agent prose that merely contains the word "limit" is not a provider failure.
+    expect(isAgentCapacityError(failure)).toBe(false);
+    expect(isTransientAgentError(failure)).toBe(false);
   });
 
   it.each(['codex', 'claude'] as const)('lets %s complete after more than the former economy tool-call ceiling', async (agent) => {

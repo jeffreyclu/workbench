@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { executeAgentRun } from './agent-runner.js';
+import { activeAgentRunIds, executeAgentRun } from './agent-runner.js';
 import type { WorkItemRepository } from './repository.js';
 
 /**
@@ -46,7 +46,7 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
   // once capacity frees up, so the next stall can log again.
   let stallLogged = false;
   const heartbeat = setInterval(() => {
-    try { repository.renewLeases(OWNER_ID, LEASE_MS); }
+    try { repository.renewLeases(OWNER_ID, LEASE_MS, activeAgentRunIds()); }
     catch (error) {
       repository.logDiagnostic('scheduler_error', 'scheduler', 'failure', `Heartbeat failed: ${String(error)}`, undefined, 'heartbeat_error');
     }
@@ -56,7 +56,7 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
   const runTick = () => {
     const start = Date.now();
     try {
-      const { recoveredRunIds, failedRunIds } = repository.reclaimExpired();
+      const { recoveredRunIds, failedRunIds } = repository.reclaimExpired(undefined, activeAgentRunIds());
       if (recoveredRunIds.length || failedRunIds.length) {
         repository.logDiagnostic(
           'scheduler_tick',

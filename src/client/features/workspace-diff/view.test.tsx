@@ -36,7 +36,7 @@ afterEach(() => {
 });
 
 describe('WorkspaceDiffView decision queue', () => {
-  it('uses arrow navigation and opens the decision panel in a modal on phones', async () => {
+  it('does not add phone-only decision navigation or a modal', async () => {
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     const file: WorkspaceDiffFile = {
       path: 'src/mobile-review.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
@@ -52,22 +52,11 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
-    expect(await screen.findByRole('button', { name: 'View decision' })).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByRole('heading', { name: 'Changes behavior in src/mobile-review.ts.' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Previous decision' })).toBeDisabled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Next decision' }));
-    expect(screen.getByText('Decision 2 of 2')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Changes behavior in src/mobile-review.ts.' })).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'View decision' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Decision details' });
-    expect(within(dialog).getByRole('heading', { name: 'Changes behavior in src/mobile-review.ts.' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'View decision' })).toHaveAttribute('aria-expanded', 'true');
-
-    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(await screen.findByRole('navigation', { name: 'Review decision queue' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Previous decision' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Next decision' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'View decision' })).toBeNull();
     expect(screen.queryByRole('dialog', { name: 'Decision details' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'View decision' })).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('renders the agent handoff before the review decision queue', async () => {
@@ -169,7 +158,7 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
   });
 
-  it('orders the queue deterministically by source order, with no ambient AI scoring', async () => {
+  it('keeps source order when decisions have no relationships, with no ambient AI scoring', async () => {
     const files: WorkspaceDiffFile[] = [
       { path: 'src/local.ts', editorUrl: 'vscode://file/tmp/workbench/src/local.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false, patch: '@@ -1 +1 @@ localOne\n-before\n+after\n@@ -10 +10 @@ localTwo\n-old\n+new' },
       { path: 'src/server/auth/routes.ts', previousPath: null, status: 'modified', additions: 3, deletions: 1, isBinary: false, patch: '@@ -20 +20,3 @@ authorizeRequest\n-export function authorizeRequest() {}\n+export async function authorizeRequest() {\n+  await repository.update(session)\n+  throw new Error("denied")' },
@@ -187,11 +176,8 @@ describe('WorkspaceDiffView decision queue', () => {
     renderView(fetchMock, true);
 
     expect(await screen.findByLabelText('3 decisions across 2 files, 0 completed')).toHaveTextContent('3 decisions across 2 files');
-    // Priority order is purely deterministic by source order (ordinal): decision 1 opens first.
     expect(screen.getByRole('button', { name: /Decision 1.*local/ })).toHaveAttribute('aria-current', 'step');
     expect(screen.getByText('src/local.ts', { selector: 'code' })).toBeInTheDocument();
-    // Deterministic risk signals still surface on the detail card (Phase 1 stays visible by
-    // default); they never gate or reorder the queue, and no ambient AI request ever fires for them.
     expect(screen.getByRole('button', { name: /Decision 3.*risk signals/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Refresh changes' })).toHaveClass('workspace-diff-refresh-pending');
 

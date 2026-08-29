@@ -231,6 +231,10 @@ is the exception to the dark square control treatment: show a simple centered
 floating grab bar with a transparent full-size accessible button target, not a
 panel icon or visible button chrome. It opens on tap or downward swipe.
 
+*Correction from Jeffrey, 2026-08-29.* When the phone conversation tray opens,
+the independent Conversation/Changes switch and close X move smoothly below
+the expanded tray, then return to their original top corners when it closes.
+
 *Decision from Jeffrey, 2026-08-27.* The constrained one-line title in the
 expanded phone conversation tray scrolls horizontally on touch; it does not
 ellipsis. Keep the title bounded between the floating review switch and close

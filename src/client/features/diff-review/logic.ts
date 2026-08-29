@@ -1,4 +1,5 @@
 import type { DiffHunkReviewState, WorkspaceDiffFile } from '../../../shared/contracts.js';
+import type { ChangeMap } from '../../../shared/change-map.js';
 // Derivation lives in shared code so the server's background scorer builds the
 // same decisions, with the same ids, as the queue the reviewer is reading.
 export { REVIEW_RISK_SIGNALS, buildReviewDecisions, reviewAssistDecisionPayload, reviewStateLabel, reviewStateShortLabel } from '../../../shared/review-decisions.js';
@@ -11,18 +12,26 @@ import type { ReviewDecision, ReviewRiskSignal } from '../../../shared/review-de
 
 const STATE_ORDER: Record<DiffHunkReviewState, number> = { needs_changes: 1, commented: 2, reviewed: 3 };
 
-/** Priority order is purely deterministic: unreviewed decisions first, then in
- * stable source order (ordinal). No AI signal ever reorders or gates the
- * queue — assistance is available on demand from the detail card instead. */
-export function orderReviewDecisions(decisions: ReviewDecision[]): ReviewDecision[] {
+/** Review relationships before isolated edits. Degree is the primary
+ * complexity signal; when two connected decisions tie, declarations precede
+ * the implementations or call sites that depend on them. Source ordinal keeps
+ * every remaining tie deterministic. AI signals never reorder the queue. */
+export function orderReviewDecisions(decisions: ReviewDecision[], changeMap?: ChangeMap): ReviewDecision[] {
+  const nodes = new Map((changeMap?.nodes ?? []).map((node) => [node.id, node]));
+  const outgoing = new Map<string, number>();
+  for (const edge of changeMap?.edges ?? []) outgoing.set(edge.fromId, (outgoing.get(edge.fromId) ?? 0) + 1);
   return [...decisions].sort((left, right) => {
     const stateDifference = (left.state ? STATE_ORDER[left.state] : 0) - (right.state ? STATE_ORDER[right.state] : 0);
-    return stateDifference !== 0 ? stateDifference : left.ordinal - right.ordinal;
+    if (stateDifference !== 0) return stateDifference;
+    const relationshipDifference = (nodes.get(right.id)?.degree ?? 0) - (nodes.get(left.id)?.degree ?? 0);
+    if (relationshipDifference !== 0) return relationshipDifference;
+    const declarationDifference = (outgoing.get(right.id) ?? 0) - (outgoing.get(left.id) ?? 0);
+    return declarationDifference !== 0 ? declarationDifference : left.ordinal - right.ordinal;
   });
 }
 
-export function nextPendingDecisionId(decisions: ReviewDecision[], currentId: string): string | null {
-  const ordered = orderReviewDecisions(decisions);
+export function nextPendingDecisionId(decisions: ReviewDecision[], currentId: string, changeMap?: ChangeMap): string | null {
+  const ordered = orderReviewDecisions(decisions, changeMap);
   const currentIndex = ordered.findIndex((decision) => decision.id === currentId);
   const after = ordered.slice(currentIndex + 1).find((decision) => decision.state === null);
   const before = ordered.slice(0, Math.max(currentIndex, 0)).find((decision) => decision.state === null);

@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
 import { changeTypeLabel, isReviewChangeType, type ReviewChangeType } from '../shared/change-type.js';
-import { auditCitations, citationAuditNote, type CoverageEvidence } from '../shared/coverage-evidence.js';
+import { auditCitations, auditReferenceClaims, citationAuditNote, referenceClaimNote, type CoverageEvidence, type ReferenceEvidence } from '../shared/coverage-evidence.js';
+import { auditParityTable, parityAuditNote, parityTableApplies, PARITY_DIRECTIVE } from '../shared/parity-table.js';
 
 export type ReviewAssistAction = 'explain' | 'what_could_break' | 'compare_task_intent' | 'score_risk';
 
@@ -20,6 +21,7 @@ export type ReviewAssistDecision = {
   /** Test hunks from elsewhere in the same review that name this decision's new
    * declarations. Optional because a stale tab still posts the old payload. */
   coverageEvidence?: CoverageEvidence;
+  referenceEvidence?: ReferenceEvidence;
 };
 
 export type ReviewAssistTaskIntent = { title: string; description: string } | null;
@@ -51,7 +53,7 @@ const CHANGES_AGENT_SYSTEM_PROMPT = [
 /** Bumped whenever the system prompt or an action directive changes what a good
  * answer looks like. It is part of the cache key, so a corrected rubric
  * recomputes stale answers once instead of serving the old judgement forever. */
-const ASSIST_PROMPT_VERSION = 4;
+const ASSIST_PROMPT_VERSION = 6;
 
 // Answer length is the dominant latency term once the session is primed:
 // measured on this machine a warm turn spends ~0.9s on session overhead and the
@@ -75,10 +77,10 @@ const CHANGE_TYPE_DIRECTIVES: Record<ReviewChangeType, string> = {
   new_code: 'This is brand-new code. Coverage first: for every visible branch — guard, catch, early return, loop, switch arm — emit one line pairing the logic with its proof, as [logic path:line] <- [test path:line], or mark the branch UNCOVERED with no test citation. Draw test citations from the companion test hunks when they are supplied. If no test hunk names this code at all, say coverage is not visible rather than guessing either way. Then judge correctness, naming, and complexity of the new logic itself.',
   extension: 'This extends existing logic rather than rewriting it. Ask which previously handled inputs now take the new path, and whether the existing behavior is preserved for everything else. Cite the added branch as [path:line], and cite a companion test line for it when one is supplied.',
   behavior_edit: 'This edits existing behavior in place. State the old behavior and the new behavior in one line each, then name who would notice the difference.',
-  refactor_pure: 'This looks like a behavior-preserving refactor. Compare old and new on the same axes and in the same order: signature, error handling, ordering and control flow, complexity. Name every difference that is not cosmetic. Call sites are not visible here — do not claim they are updated.',
-  replacement: 'This replaces an existing implementation. Compare the removed and added versions on signature, error handling, edge cases, and ordering, then say which callers must be re-checked. Callers are not visible here — list them as unverified rather than as fine.',
-  move_rename: 'This moves or renames code. The only questions that matter are whether the body changed while moving, and whether references to the old location or name are updated. References outside this diff are not visible — say so.',
-  deletion: 'This deletes code. Say the most likely reason it was deleted, and say plainly when the reason is not visible in the diff. Then say what breaks if anything still references it, and flag any test deleted alongside it. Remaining references are not visible here: treat "is it still referenced?" as unverified, never as safe.',
+  refactor_pure: 'This looks like a behavior-preserving refactor. Compare old and new on the same axes and in the same order: signature, error handling, ordering and control flow, complexity. Name every difference that is not cosmetic. Call sites are visible only through a surviving-reference block below; without one, do not claim they are updated.',
+  replacement: 'This replaces an existing implementation. Compare the removed and added versions on signature, error handling, edge cases, and ordering, then say which callers must be re-checked. Callers are visible only through a surviving-reference block below; without one, list them as unverified rather than as fine.',
+  move_rename: 'This moves or renames code. The only questions that matter are whether the body changed while moving, and whether references to the old location or name are updated. References outside this diff are visible only through a surviving-reference block below; without one, say so.',
+  deletion: 'This deletes code. Say the most likely reason it was deleted, and say plainly when the reason is not visible in the diff. Then say what breaks if anything still references it, and flag any test deleted alongside it. Remaining references are visible only through a surviving-reference block below: cite it when it names one, and otherwise treat "is it still referenced?" as unverified, never as safe.',
   test_only: 'This is test-only and ships to no user. Judge it solely on whether coverage got weaker: assertions deleted, loosened, or skipped. An assertion updated to match intended new behavior is expected, not a risk.',
   config_dep: 'This is configuration or dependency change. Judge the size of the version jump, environment coupling, and whether build or runtime behavior moves with it.',
   docs_comment: 'This is documentation or comments only, with no runtime behavior. Judge only whether the text now contradicts the code.',
@@ -92,6 +94,17 @@ const CHANGE_TYPE_RISK_BANDS: Record<ReviewChangeType, string> = {
   replacement: '40-85', move_rename: '20-60', deletion: '40-90', test_only: '0-20',
   config_dep: '10-60', docs_comment: '0-10', generated: '0-10',
 };
+
+/** Only `what_could_break` asks for the parity table. It is the action whose
+ * question — what does this supposedly equivalent change actually alter — the
+ * table *is* the answer to. `explain` is capped at three sentences and
+ * `score_risk` at two lines, so a four-line table there would either overflow
+ * the shape the client parses or crowd out the answer itself. */
+const PARITY_ACTIONS = new Set<ReviewAssistAction>(['what_could_break']);
+
+function parityContractApplies(action: ReviewAssistAction, changeType: ReviewChangeType): boolean {
+  return PARITY_ACTIONS.has(action) && parityTableApplies(changeType);
+}
 
 /** Cheapest possible turn whose only job is to pay the session's one-time
  * initialisation before a reviewer is waiting on it. Measured on this machine:
@@ -115,7 +128,22 @@ function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision,
   // Change type is keyed: it selects a different obligations block, so the
   // same hunks classified differently are a different question with a
   // different right answer.
-  const keyedDecision = { behavior: decision.behavior, changeType: decision.changeType, secondaryChangeTypes: decision.secondaryChangeTypes, hunks: decision.hunks };
+  // Evidence packs are keyed as well, because the prompt states their
+  // conclusions as searched-the-whole-review fact. Keying only the conclusions
+  // and the hunk identities, never the evidence bodies: whole-text keying would
+  // throw a good answer away every time an unrelated line moved in a companion
+  // hunk, which is the fragmentation the pack size caps already guard against.
+  // `symbols` is omitted from both because it is derived from hunks, which are
+  // keyed already; `clearedSymbols` is omitted as the complement of residual.
+  const keyedEvidence = {
+    coverage: decision.coverageEvidence
+      ? [decision.coverageEvidence.uncitedSymbols, decision.coverageEvidence.hunks.map((hunk) => `${hunk.filePath}:${hunk.symbols.join(',')}`)]
+      : null,
+    references: decision.referenceEvidence
+      ? [decision.referenceEvidence.residualSymbols, decision.referenceEvidence.hunks.map((hunk) => `${hunk.kind}:${hunk.filePath}:${hunk.symbols.join(',')}`)]
+      : null,
+  };
+  const keyedDecision = { behavior: decision.behavior, changeType: decision.changeType, secondaryChangeTypes: decision.secondaryChangeTypes, hunks: decision.hunks, evidence: keyedEvidence };
   const keyed = action === 'compare_task_intent'
     ? { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, taskIntent }
     : { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision };
@@ -166,6 +194,30 @@ function buildPrompt(action: ReviewAssistAction, decision: ReviewAssistDecision,
   if (evidence && evidence.uncitedSymbols.length > 0) {
     parts.push(`The whole review was searched: no test hunk anywhere in it mentions ${evidence.uncitedSymbols.join(', ')}. Treat those as uncovered, not as unverifiable.`);
   }
+  const references = decision.referenceEvidence;
+  if (references && references.hunks.length > 0) {
+    const referenceText = references.hunks
+      .map((hunk) => {
+        const claim = hunk.kind === 'residual'
+          ? `still references ${hunk.symbols.join(', ')} on a line this review keeps`
+          : `drops its references to ${hunk.symbols.join(', ')}`;
+        return `${hunk.filePath} (${hunk.location}) — ${claim}:\n${hunk.lines.join('\n')}`;
+      })
+      .join('\n\n');
+    parts.push(`Surviving-reference block for declarations this change removes (same review, different decision — evidence only, not part of this change):\n${referenceText}`);
+  }
+  if (references && references.residualSymbols.length > 0) {
+    parts.push(`Still referenced after this change: ${references.residualSymbols.join(', ')}. Cite the hunk that proves it and report a break, not a possibility.`);
+  }
+  // Asymmetric on purpose. A surviving reference found in the review is proof of
+  // breakage; finding none is not proof of safety, because the review is not the
+  // repository and an untouched caller never appears in any diff. Stating the
+  // negative as "cleared" would manufacture exactly the false all-clear the
+  // deletion directive was written to prevent.
+  if (references && references.clearedSymbols.length > 0) {
+    parts.push(`No surviving line anywhere in this review mentions ${references.clearedSymbols.join(', ')}. This review is not the whole repository, so that narrows the risk without clearing it: say references outside the reviewed files remain unverified.`);
+  }
+  if (parityContractApplies(action, changeType)) parts.push(PARITY_DIRECTIVE);
   if (action === 'score_risk') parts.push(`Defensible range for this change type: ${CHANGE_TYPE_RISK_BANDS[changeType]}. Leave it only for a reason you state in the second line.`);
   if (action === 'compare_task_intent') {
     parts.push(taskIntent ? `Task title: ${taskIntent.title}\nTask description: ${taskIntent.description}` : 'No task is linked to this review; say so and note that alignment cannot be judged.');
@@ -378,15 +430,24 @@ function runOneOffTurn(prompt: string): Promise<string> {
  * window, or after a restart — pays for it twice. `onDelta` streams the answer
  * as it is generated so the reviewer reads the first sentence about a second
  * in, instead of staring at a spinner until the whole turn completes. */
-/** Appends the deterministic citation check to an answer before it is cached,
- * so a reviewer never has to take a cited line on trust. `score_risk` is
+/** Appends the deterministic checks to an answer before it is cached, so a
+ * reviewer never has to take a cited line, a reassurance about code the model
+ * could not see, or a claim of equivalence on trust. `score_risk` is
  * exempt: its two-line shape is a parsing contract with the client, and a third
  * line would break the badge. It asks for no citations anyway. */
-function withCitationAudit(action: ReviewAssistAction, decision: ReviewAssistDecision, answer: string): string {
+function withAnswerAudits(action: ReviewAssistAction, decision: ReviewAssistDecision, answer: string): string {
   if (action === 'score_risk') return answer;
-  const supplied = [...decision.hunks, ...(decision.coverageEvidence?.hunks ?? [])];
-  const note = citationAuditNote(auditCitations(answer, supplied));
-  return note ? `${answer}\n\n${note}` : answer;
+  const changeType = isReviewChangeType(decision.changeType) ? decision.changeType : 'behavior_edit';
+  const supplied = [...decision.hunks, ...(decision.coverageEvidence?.hunks ?? []), ...(decision.referenceEvidence?.hunks ?? [])];
+  // Ordered narrowest-claim-first: whether the cited lines exist, then whether
+  // a reassurance about unseen code was earned, then whether the comparison was
+  // complete. A reviewer reads the notes as an increasingly broad set of doubts.
+  const notes = [
+    citationAuditNote(auditCitations(answer, supplied)),
+    referenceClaimNote(auditReferenceClaims(answer, decision.referenceEvidence), decision.referenceEvidence),
+    parityContractApplies(action, changeType) ? parityAuditNote(auditParityTable(answer)) : null,
+  ].filter((note): note is string => note !== null);
+  return notes.length > 0 ? `${answer}\n\n${notes.join('\n')}` : answer;
 }
 
 export async function requestReviewAssist(
@@ -400,7 +461,7 @@ export async function requestReviewAssist(
   const cached = readCached(database, hash);
   if (cached) return cached;
   const raw = await runTurn(buildPrompt(action, decision, taskIntent), onDelta);
-  const answer = withCitationAudit(action, decision, raw);
+  const answer = withAnswerAudits(action, decision, raw);
   writeCached(database, hash, answer);
   return answer;
 }

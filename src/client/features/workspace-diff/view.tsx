@@ -1,8 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { ChevronLeft, ChevronRight, ExternalLink, FileDiff, GitPullRequest, History, RefreshCw, X } from 'lucide-react';
+import { ExternalLink, FileDiff, GitPullRequest, History, RefreshCw } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
-import { ModalDialog } from '../../components/dialogs/modal-dialog.js';
 import type { AgentRunReviewHandoff, DiffHunkReviewState, WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { buildChangeMap } from '../../../shared/change-map.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
@@ -14,7 +13,7 @@ import { DecisionPopover, type DecisionPopoverAnchor } from '../diff-review/deci
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import type { ReviewDecision } from '../diff-review/logic.js';
-import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, parseAiRiskScore, reviewStateShortLabel } from '../diff-review/logic.js';
+import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, parseAiRiskScore } from '../diff-review/logic.js';
 import { useAutoReviewScores } from '../diff-review/auto-score.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
@@ -42,20 +41,6 @@ function DiffSkeleton() {
     <header><div><Skeleton width="132px" height="12px" /><Skeleton width="min(440px, 78%)" height="20px" /></div></header>
     <div className="workspace-diff-skeleton"><Skeleton width="30%" height="220px" radius="6px" /><SkeletonText lines={12} /></div>
   </section>;
-}
-
-function usePhoneReviewControls() {
-  const query = '(max-width: 640px) and (pointer: coarse)';
-  const [isPhone, setIsPhone] = useState(() => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(query).matches);
-  useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return;
-    const media = window.matchMedia(query);
-    const update = () => setIsPhone(media.matches);
-    update();
-    media.addEventListener('change', update);
-    return () => media.removeEventListener('change', update);
-  }, []);
-  return isPhone;
 }
 
 export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, reviewHandoff, taskIntent = null, pullRequestUrlCandidates }: {
@@ -116,12 +101,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // the reviewer had scrolled it. Counting selections gives the diff pane a
   // signal for every click, not only the ones that change the decision.
   const [selectionTick, setSelectionTick] = useState(0);
-  const [mobileDecisionDetailOpen, setMobileDecisionDetailOpen] = useState(false);
   // The desktop decision detail is popover content opened from a block's gutter
   // marker, so the open state has to carry the marker that opened it: the
   // popover positions itself off that element's rect.
   const [detailAnchor, setDetailAnchor] = useState<{ decisionId: string; anchor: DecisionPopoverAnchor; anchorAttribute: string } | null>(null);
-  const isPhoneReview = usePhoneReviewControls();
   // null means "automatically show the latest record when Git is clean";
   // an empty string is the user's explicit choice to view current changes.
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
@@ -210,13 +193,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const upsertHunkReview = useUpsertDiffHunkReview(scope, reviewRevision);
   const decisions = useMemo(() => buildReviewDecisions(displayedDiff?.files ?? [], hunkReviews.data?.reviews ?? []), [displayedDiff?.files, hunkReviews.data?.reviews]);
   const changeMap = useMemo(() => buildChangeMap(decisions), [decisions]);
-  const orderedDecisions = useMemo(() => orderReviewDecisions(decisions), [decisions]);
+  const orderedDecisions = useMemo(() => orderReviewDecisions(decisions, changeMap), [decisions, changeMap]);
   // Scores computed by the background pass that starts when an agent comes to
   // rest. Nothing here requests them; they stream in and populate whichever
   // decision panel the reviewer opens.
   const autoScores = useAutoReviewScores({ workItemId, conversationId }, reviewRevision);
   const selectedDecision = orderedDecisions.find((decision) => decision.id === selectedDecisionId) ?? orderedDecisions[0] ?? null;
-  const selectedDecisionIndex = selectedDecision ? orderedDecisions.findIndex((decision) => decision.id === selectedDecision.id) : -1;
   const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
   // The same AI score the detail panel shows, reduced to a band for the gutter
   // dot, so severity is readable straight off the diff instead of only after
@@ -254,26 +236,17 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     });
 
   const saveDecision = async (decision: ReviewDecision, state: DiffHunkReviewState) => {
-    const nextId = nextPendingDecisionId(orderedDecisions, decision.id);
+    const nextId = nextPendingDecisionId(orderedDecisions, decision.id, changeMap);
     try {
       await recordDecisionState(decision, state);
       setSelectedDecisionId(nextId);
       setDetailAnchor(null);
-      if (isPhoneReview) setMobileDecisionDetailOpen(false);
     } catch {
       // The mutation exposes its stable request error beside the actions.
     }
   };
 
-  // The gutter marker is the same handle on every layout, so on a phone — where
-  // there is no room to float a panel beside the code — it opens the same detail
-  // in the dialog the navigator uses, rather than setting an anchor that renders
-  // nothing.
   const openDecisionDetail = (decisionId: string, anchor: DecisionPopoverAnchor, anchorAttribute = 'data-decision-marker') => {
-    if (isPhoneReview) {
-      setMobileDecisionDetailOpen(true);
-      return;
-    }
     setDetailAnchor((current) => (current?.decisionId === decisionId ? null : { decisionId, anchor, anchorAttribute }));
   };
 
@@ -284,12 +257,6 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     // otherwise the marker would clear and immediately reopen, never toggling.
     setDetailAnchor((current) => (current && current.decisionId === decisionId ? current : null));
     setSelectionTick((tick) => tick + 1);
-    if (isPhoneReview) setMobileDecisionDetailOpen(false);
-  };
-
-  const moveDecision = (direction: -1 | 1) => {
-    const next = orderedDecisions[selectedDecisionIndex + direction];
-    if (next) selectDecision(next.id);
   };
 
   // Switching source resets the queue: decision ids belong to one diff.
@@ -379,31 +346,16 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                 {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
                 {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
                 {selectedDecision && <>
-                  <div className="mobile-decision-navigator" aria-label="Decision navigation">
-                    <button type="button" onClick={() => moveDecision(-1)} disabled={selectedDecisionIndex <= 0} aria-label="Previous decision"><ChevronLeft size={18} aria-hidden="true" /></button>
-                    <span>Decision {selectedDecision.ordinal} of {orderedDecisions.length}<em className={`diff-review-decision-state state-${selectedDecision.state ?? 'pending'}`}>{reviewStateShortLabel(selectedDecision.state)}</em></span>
-                    <button type="button" onClick={() => moveDecision(1)} disabled={selectedDecisionIndex >= orderedDecisions.length - 1} aria-label="Next decision"><ChevronRight size={18} aria-hidden="true" /></button>
-                    <button type="button" className="mobile-decision-detail-toggle" onClick={() => setMobileDecisionDetailOpen(true)} aria-expanded={mobileDecisionDetailOpen} aria-controls="mobile-decision-detail">View decision</button>
-                  </div>
                   <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">
                     {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} />}
-                    {!isPhoneReview && detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" onClose={() => setDetailAnchor(null)}>
+                    {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" onClose={() => setDetailAnchor(null)}>
                       <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)}>
                         <DiffReviewActions key={popoverDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(popoverDecision, state)} />
                       </DiffReviewDecisionDetailCard>
                     </DecisionPopover>}
                   </div>
-                  {isPhoneReview && mobileDecisionDetailOpen && <ModalDialog className="decision-detail-dialog" labelledBy="mobile-decision-detail-title" onClose={() => setMobileDecisionDetailOpen(false)}>
-                    <div className="decision-detail-dialog-header">
-                      <span id="mobile-decision-detail-title">Decision details</span>
-                      <button type="button" onClick={() => setMobileDecisionDetailOpen(false)} aria-label="Close decision details"><X size={18} /></button>
-                    </div>
-                    <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
-                      <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(selectedDecision, state)} />
-                    </DiffReviewDecisionDetailCard></div>
-                  </ModalDialog>}
                 </>}
               </div>}
   </section>;

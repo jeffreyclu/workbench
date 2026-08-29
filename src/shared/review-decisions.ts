@@ -1,5 +1,5 @@
 import type { DiffHunkReview, DiffHunkReviewState, WorkspaceDiffFile } from './contracts.js';
-import { buildCoverageEvidence, type CoverageEvidence } from './coverage-evidence.js';
+import { buildCoverageEvidence, buildReferenceEvidence, type CoverageEvidence, type ReferenceEvidence } from './coverage-evidence.js';
 import { classifyChangeType, type ReviewChangeType } from './change-type.js';
 
 /** Decision derivation is shared, not client-only: the server's background
@@ -322,6 +322,7 @@ export function reviewAssistDecisionPayload(decision: ReviewDecision, allDecisio
   secondaryChangeTypes: ReviewChangeType[];
   hunks: Array<{ filePath: string; location: string; lines: string[] }>;
   coverageEvidence: CoverageEvidence;
+  referenceEvidence: ReferenceEvidence;
 } {
   const hunks = decision.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines }));
   // Siblings come from the whole review, not just neighbouring decisions: a new
@@ -339,5 +340,6 @@ export function reviewAssistDecisionPayload(decision: ReviewDecision, allDecisio
     secondaryChangeTypes: decision.secondaryChangeTypes,
     hunks,
     coverageEvidence: buildCoverageEvidence(hunks, siblings),
+    referenceEvidence: buildReferenceEvidence(hunks, siblings),
   };
 }

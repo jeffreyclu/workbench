@@ -343,6 +343,19 @@ export const reviewAssistRequestSchema = z.object({
       })).max(4),
       uncitedSymbols: z.array(z.string().min(1).max(200)).max(12),
     }).default({ symbols: [], hunks: [], uncitedSymbols: [] }),
+    // Defaulted for the same reason as `coverageEvidence`.
+    referenceEvidence: z.object({
+      symbols: z.array(z.string().min(1).max(200)).max(12),
+      hunks: z.array(z.object({
+        filePath: z.string().min(1).max(2_000),
+        location: z.string().min(1).max(200),
+        lines: z.array(z.string().max(4_000)).max(200),
+        symbols: z.array(z.string().min(1).max(200)).max(12),
+        kind: z.enum(['residual', 'updated']),
+      })).max(3),
+      residualSymbols: z.array(z.string().min(1).max(200)).max(12),
+      clearedSymbols: z.array(z.string().min(1).max(200)).max(12),
+    }).default({ symbols: [], hunks: [], residualSymbols: [], clearedSymbols: [] }),
   }),
   taskIntent: z.object({
     title: z.string().max(2_000),

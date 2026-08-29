@@ -356,4 +356,54 @@ describe('isolatedRunWorkspace', () => {
     // Cleanup sweeps the real ~/.workbench/run-worktrees root, so this test's
     // cost scales with however many run worktrees the machine has accumulated.
   }, 30_000);
+
+  it('keeps the event loop free while integrating, so other runs keep heartbeating', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
+    directories.push(directory);
+    execFileSync('git', ['init', '-q'], { cwd: directory });
+    execFileSync('git', ['config', 'user.email', 'workbench@example.test'], { cwd: directory });
+    execFileSync('git', ['config', 'user.name', 'Workbench Test'], { cwd: directory });
+    // Enough files to drive the per-file conflict fallback: the unbounded path
+    // that ran one synchronous `git apply` per file.
+    const files = Array.from({ length: 60 }, (unused, index) => `file-${index}.ts`);
+    for (const file of files) writeFileSync(join(directory, file), 'export const value = 0;\n');
+    execFileSync('git', ['add', '--', ...files], { cwd: directory });
+    execFileSync('git', ['commit', '-qm', 'seed'], { cwd: directory });
+    execFileSync('git', ['branch', '-M', 'main'], { cwd: directory });
+
+    const previous = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      const workspace = await isolatedRunWorkspace(directory, 'loop-run', true, true);
+      for (const file of files) writeFileSync(join(workspace, file), 'export const value = 1;\n');
+      // Advance main on every file so the whole-patch apply fails and the
+      // slowest path -- a `git apply` per file -- is what gets measured.
+      for (const file of files) writeFileSync(join(directory, file), 'export const value = 2;\n');
+      execFileSync('git', ['commit', '-qam', 'advance main'], { cwd: directory });
+
+      // Stands in for the scheduler heartbeat, which is a timer on this very
+      // event loop. A blocked loop does not run it late -- it does not run it
+      // at all -- so the meaningful signal is how many times it got to fire.
+      let ticks = 0;
+      const heartbeat = setInterval(() => { ticks += 1; }, 10);
+      const startedAt = Date.now();
+      try {
+        await integrateWorkbenchRunWorktree(directory, workspace, 'loop-run', true);
+      } finally {
+        clearInterval(heartbeat);
+      }
+      const elapsedMs = Date.now() - startedAt;
+
+      // The scheduler renews a 45s lease on a 10s timer. Synchronous
+      // integration starved that timer completely for the whole span, so a
+      // long one expired leases on runs that were still healthy. Require the
+      // heartbeat to keep firing through integration: at least a quarter of
+      // the ticks the interval would get on an idle loop.
+      expect(ticks).toBeGreaterThan(elapsedMs / 10 / 4);
+      execFileSync('git', ['worktree', 'remove', '--force', workspace], { cwd: directory });
+    } finally {
+      if (previous === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previous;
+    }
+  }, 30_000);
 });
