@@ -851,7 +851,14 @@ export async function runSharedBackgroundJob(
   }
 }
 
-export async function replyInSharedRoom(repository: WorkItemRepository, agent: AgentRun['agent'], messageId: string, runId?: string, retrievalSnapshot?: SharedReplyRetrieval): Promise<void> {
+export async function replyInSharedRoom(
+  repository: WorkItemRepository,
+  agent: AgentRun['agent'],
+  messageId: string,
+  runId?: string,
+  retrievalSnapshot?: SharedReplyRetrieval,
+  groundingSnapshot?: SharedReplyGrounding,
+): Promise<void> {
   const target = repository.getSharedMessageById(messageId);
   if (!target) return;
 
@@ -923,7 +930,8 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
     });
-    const [externalAuthorization, retrievedMemory] = await Promise.all([externalAuthorizationPromise, retrievedMemoryPromise]);
+    const groundingPromise = groundingSnapshot?.resolved ?? resolveTurnGrounding(thread);
+    const [externalAuthorization, retrievedMemory, turnGrounding] = await Promise.all([externalAuthorizationPromise, retrievedMemoryPromise, groundingPromise]);
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const injectedMemory = selectRelevantMemoryForPrompt(retrievedMemory, undefined, target.conversationId);
     repository.updateSharedMessage(messageId, {
@@ -939,6 +947,7 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       injectedMemory,
       target.conversationId,
       externalActionContract,
+      turnGrounding,
     );
     if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'prompt', {
       promptChars: prompt.length,
@@ -947,6 +956,9 @@ export async function replyInSharedRoom(repository: WorkItemRepository, agent: A
       conversationMessageCount: thread.length,
       retrievedMemoryCount: injectedMemory.length,
       retrievedMemoryChars: injectedMemory.reduce((total, match) => total + match.title.length + match.body.length, 0),
+      authoritativeObjective: turnGrounding.objective,
+      groundingSource: turnGrounding.source,
+      groundingContinuation: turnGrounding.continuation,
     });
     const guardedPrompt = prompt;
     let result: { output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; codexThreadId?: string; peakContextTokens?: number };
