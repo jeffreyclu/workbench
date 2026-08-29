@@ -15,26 +15,39 @@ const CLASSIFICATION_LABELS: Record<AgentRun['kind'], string> = {
   research: 'Research', analysis: 'Analysis', strategy: 'Strategy', execute: 'Execute', review: 'Review', bugfix: 'Bug fix',
 };
 
-export function TaskClassificationSelect({ itemId, kind, compact = false, disclosure = false }: { itemId: string; kind?: string | null; compact?: boolean; disclosure?: boolean }) {
-  const update = useTaskClassification(itemId);
+export function ClassificationKindDisclosure({ kind, onChange, pending = false, label = 'Task type', ariaLabel }: {
+  kind?: string | null; onChange: (kind: AgentRun['kind']) => void; pending?: boolean; label?: string; ariaLabel?: string;
+}) {
   const [open, setOpen] = useState(false);
   if (kind && !['research', 'analysis', 'strategy', 'execute', 'review', 'bugfix'].includes(kind)) return null;
   const selectedKind = (kind ?? 'execute') as AgentRun['kind'];
-  const select = <select className="card-classification-select" aria-label="Task type" value={selectedKind} autoFocus={disclosure} onChange={(event) => { update.mutate(event.target.value as AgentRun['kind']); if (disclosure) setOpen(false); }} onBlur={() => disclosure && setOpen(false)} disabled={update.isPending}>
+  const select = <select className="card-classification-select" aria-label={ariaLabel ?? label} value={selectedKind} autoFocus onChange={(event) => { onChange(event.target.value as AgentRun['kind']); setOpen(false); }} onBlur={() => setOpen(false)} disabled={pending}>
     <option value="research">Research</option><option value="analysis">Analysis</option><option value="strategy">Strategy</option><option value="execute">Execute</option><option value="review">Review</option><option value="bugfix">Bug fix</option>
   </select>;
 
+  return <span className="card-classification-control disclosure" onClick={(event) => event.stopPropagation()}>
+    {open
+      ? <span className="card-classification-popover">
+        <span className="card-classification"><Bot size={10} /> {label}</span>
+        {select}
+        {pending && <LoaderCircle className="spin card-classification-spinner" size={10} />}
+      </span>
+      : <button type="button" className="icon-button" aria-expanded={open} aria-label={ariaLabel ?? `${label}: ${CLASSIFICATION_LABELS[selectedKind]}`} title={ariaLabel ?? `${label}: ${CLASSIFICATION_LABELS[selectedKind]}`} onClick={() => setOpen(true)}><Bot size={13} /></button>}
+  </span>;
+}
+
+export function TaskClassificationSelect({ itemId, kind, compact = false, disclosure = false }: { itemId: string; kind?: string | null; compact?: boolean; disclosure?: boolean }) {
+  const update = useTaskClassification(itemId);
+  if (kind && !['research', 'analysis', 'strategy', 'execute', 'review', 'bugfix'].includes(kind)) return null;
+  const selectedKind = (kind ?? 'execute') as AgentRun['kind'];
+
   if (disclosure) {
-    return <span className="card-classification-control disclosure" onClick={(event) => event.stopPropagation()}>
-      {open
-        ? <span className="card-classification-popover">
-          <span className="card-classification"><Bot size={10} /> Task type</span>
-          {select}
-          {update.isPending && <LoaderCircle className="spin card-classification-spinner" size={10} />}
-        </span>
-        : <button type="button" className="icon-button" aria-expanded={open} aria-label={`Task type: ${CLASSIFICATION_LABELS[selectedKind]}`} title={`Task type: ${CLASSIFICATION_LABELS[selectedKind]}`} onClick={() => setOpen(true)}><Bot size={13} /></button>}
-    </span>;
+    return <ClassificationKindDisclosure kind={kind} onChange={(next) => update.mutate(next)} pending={update.isPending} label="Task type" />;
   }
+
+  const select = <select className="card-classification-select" aria-label="Task type" value={selectedKind} onChange={(event) => update.mutate(event.target.value as AgentRun['kind'])} disabled={update.isPending}>
+    <option value="research">Research</option><option value="analysis">Analysis</option><option value="strategy">Strategy</option><option value="execute">Execute</option><option value="review">Review</option><option value="bugfix">Bug fix</option>
+  </select>;
 
   return <span className={`card-classification-control ${compact ? 'compact' : ''}`} onClick={(event) => event.stopPropagation()}>
     <span className="card-classification"><Bot size={10} /> Task type</span>
