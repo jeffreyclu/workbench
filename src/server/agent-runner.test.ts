@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, executionProgressSteer, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -280,6 +280,16 @@ describe('classifyExecution', () => {
   it('gives Codex and Claude the same execution contract without a cached-input kill switch', () => {
     expect(CLAUDE_EXECUTION_CONTRACT).toBe(AGENT_EXECUTION_CONTRACT);
     expect(AGENT_EXECUTION_CONTRACT).not.toContain('cached-input budgets');
+    expect(AGENT_EXECUTION_CONTRACT).toContain("A user's observed live failure is authoritative evidence");
+  });
+
+  it('uses one provider-neutral progress supervisor for action and cache handoff reminders', () => {
+    expect(executionProgressSteer(7, false)).toBeNull();
+    expect(executionProgressSteer(8, false)).toContain('make the smallest relevant edit now');
+    expect(executionProgressSteer(1, true)).toBeNull();
+    expect(executionProgressSteer(2, true)).toContain(CACHE_HANDOFF_MARKER);
+    expect(shouldContinueCacheHandoff({ output: 'useful checkpoint', cacheHandoffRequested: true, terminalWarning: 'provider stopped' })).toBe(true);
+    expect(shouldContinueCacheHandoff({ output: 'normal completion', cacheHandoffRequested: false, terminalWarning: null })).toBe(false);
   });
 
   it.each(['codex', 'claude'] as const)('lets %s complete after more than the former economy tool-call ceiling', async (agent) => {
@@ -326,6 +336,44 @@ describe('classifyExecution', () => {
 
     expect(result.output).toBe('Finished in the compact continuation.');
     expect(result.usage.cacheReadInputTokens).toBe(CACHE_READ_SOFT_LIMIT_TOKENS + 100);
+    expect(readFileSync(countFile, 'utf8')).toBe('2');
+    rmSync(countFile, { force: true });
+  });
+
+  it('continues a cache-heavy Claude turn from its useful terminal checkpoint even when Claude omits the marker', async () => {
+    const countFile = join(tmpdir(), `workbench-implicit-cache-segments-${Date.now()}`);
+    const highUsage = JSON.stringify({ type: 'assistant', request_id: 'budget-crossing-request', message: { usage: { input_tokens: 10, cache_read_input_tokens: CACHE_READ_SOFT_LIMIT_TOKENS, output_tokens: 5 } } });
+    const checkpoint = JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, result: 'Edited the focused file; one verification remains.' });
+    const completed = JSON.stringify({ type: 'result', result: 'Finished verification in the compact continuation.', usage: { input_tokens: 20, cache_read_input_tokens: 100, output_tokens: 7 } });
+    const body = `count=0\nif [ -f '${countFile}' ]; then read count < '${countFile}'; fi\ncount=$((count + 1))\nprintf '%s' "$count" > '${countFile}'\nif [ "$count" -eq 1 ]; then\n  printf '%s\\n%s\\n' '${highUsage}' '${checkpoint}'\nelse\n  printf '%s\\n' '${completed}'\nfi`;
+    const fixture = fakeAgentDirectory('exit 1', body);
+
+    const result = await runAgentCommandWithFallback('claude', fixture.directory, 'Implement and verify the change.');
+
+    expect(result.output).toBe('Finished verification in the compact continuation.');
+    expect(result.usage.cacheReadInputTokens).toBe(CACHE_READ_SOFT_LIMIT_TOKENS + 100);
+    expect(readFileSync(countFile, 'utf8')).toBe('2');
+    rmSync(countFile, { force: true });
+  });
+
+  it('reports a concise Claude terminal diagnostic instead of exposing the entire failed handoff as the error', async () => {
+    const failed = JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, result: 'A very long user-facing handoff that must not become the error field.' });
+    const fixture = fakeAgentDirectory('exit 1', `printf '%s\\n' '${failed}'`);
+
+    await expect(runAgentCommandWithFallback('claude', fixture.directory, 'Implement it.'))
+      .rejects.toThrow('Claude ended the turn with error_max_turns.');
+  });
+
+  it('recovers an expired Claude session through the same supervised fresh-session lifecycle', async () => {
+    const countFile = join(tmpdir(), `workbench-expired-session-${Date.now()}`);
+    const missing = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'No conversation found with session ID: expired-session' });
+    const completed = JSON.stringify({ type: 'result', result: 'Completed after starting a fresh session.' });
+    const body = `count=0\nif [ -f '${countFile}' ]; then read count < '${countFile}'; fi\ncount=$((count + 1))\nprintf '%s' "$count" > '${countFile}'\nif [ "$count" -eq 1 ]; then printf '%s\\n' '${missing}'; else printf '%s\\n' '${completed}'; fi`;
+    const fixture = fakeAgentDirectory('exit 1', body);
+
+    const result = await runAgentCommandWithFallback('claude', fixture.directory, 'Continue the task.', undefined, undefined, undefined, 'economy', undefined, undefined, 'analysis', undefined, undefined, undefined, 'expired-session');
+
+    expect(result.output).toBe('Completed after starting a fresh session.');
     expect(readFileSync(countFile, 'utf8')).toBe('2');
     rmSync(countFile, { force: true });
   });

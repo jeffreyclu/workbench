@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
 import { projectKey } from '../shared/project-name.js';
-import { addUsage, CACHE_HANDOFF_INSTRUCTION, cacheContinuationPrompt, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, shouldCheckpointSession, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type RetrievedMemory } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, CACHE_HANDOFF_INSTRUCTION, cacheContinuationPrompt, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, executionProgressSteer, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, PROMPT_MEMORY_CANDIDATE_LIMIT, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, selectRelevantMemoryForPrompt, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type RetrievedMemory } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -218,7 +218,7 @@ export function warmSharedRoomCodex(cwd: string, accountProfile = DEFAULT_ACCOUN
 }
 
 /** Codex's app-server is the provider protocol that supports turn/steer. */
-function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE): Promise<{ output: string; threadId: string; usage: AgentUsage; cacheHandoffRequested: boolean }> {
+function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, mutating = false): Promise<{ output: string; threadId: string; usage: AgentUsage; cacheHandoffRequested: boolean; terminalWarning?: string | null }> {
   return new Promise((resolveOutput, reject) => {
     const command = codexAppServerCommand();
     const claimed = claimWarmProcess('codex', cwd, command, CODEX_APP_SERVER_ARGS, accountProfile);
@@ -231,6 +231,8 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
     const pendingSteers = new Map<number, (accepted: boolean) => void>();
     let steerCount = 0;
     let cacheHandoffRequested = false;
+    let toolStarts = 0;
+    let toolStartsAtCacheHandoff = 0;
     // A steered turn emits a separate `agentMessage` item per exchange (the
     // pre-interjection reply, then the reply to the steer). Deltas carry an
     // `itemId`; concatenating them flat without an item boundary runs the two
@@ -297,6 +299,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
           onUsage(usage);
           if (!cacheHandoffRequested && (usage.cacheReadInputTokens ?? 0) >= CACHE_READ_SOFT_LIMIT_TOKENS && threadId && turnId) {
             cacheHandoffRequested = true;
+            toolStartsAtCacheHandoff = toolStarts;
             appendLiveEvent('● Cache soft budget reached. Finishing the current operation, then continuing in a fresh compact session…');
             void steer(CACHE_HANDOFF_INSTRUCTION);
           }
@@ -345,6 +348,12 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         const agentEvent = agentStreamEventForCodexAppServerItem(event.method, item);
         if (agentEvent) {
           onEvent(agentEvent);
+          if (mutating && agentEvent.kind === 'tool' && event.method === 'item/started') {
+            toolStarts += 1;
+            const supervisedCount = cacheHandoffRequested ? toolStarts - toolStartsAtCacheHandoff : toolStarts;
+            const steering = executionProgressSteer(supervisedCount, cacheHandoffRequested);
+            if (steering) void steer(steering);
+          }
           // The debugger is an audit trail, not the only place the user gets
           // to see work in progress. Keep provider-recorded decisions and
           // tool starts in the running activity feed too.
@@ -359,7 +368,9 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
           settled = true;
           if (startupTimeout) clearTimeout(startupTimeout);
           rejectPendingSteers();
-          resolveOutput({ output: output.trim(), threadId, usage, cacheHandoffRequested });
+          const status = typeof event.params?.turn?.status === 'string' ? event.params.turn.status : null;
+          const terminalWarning = status && status !== 'completed' ? `Codex ended the turn with ${status}.` : null;
+          resolveOutput({ output: output.trim(), threadId, usage, cacheHandoffRequested, terminalWarning });
           child.stdin.end();
           const terminalShutdown = setTimeout(() => {
             if (child.exitCode === null) stop();
@@ -385,19 +396,23 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
   });
 }
 
-async function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE): Promise<{ output: string; threadId: string; usage: AgentUsage }> {
+async function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, mutating = false): Promise<{ output: string; threadId: string; usage: AgentUsage }> {
   let segmentPrompt = prompt;
   let segmentResume = resumeThreadId;
   let aggregate: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
   let result: Awaited<ReturnType<typeof runSteerableCodexSegment>>;
   for (;;) {
     const before = aggregate;
-    result = await runSteerableCodexSegment(segmentPrompt, cwd, signal, onProgress, onReady, onEvent, (usage) => onUsage(addUsage(before, usage)), segmentResume, accountProfile);
+    result = await runSteerableCodexSegment(segmentPrompt, cwd, signal, onProgress, onReady, onEvent, (usage) => onUsage(addUsage(before, usage)), segmentResume, accountProfile, mutating);
     aggregate = addUsage(aggregate, result.usage);
-    if (!result.cacheHandoffRequested || !hasCacheHandoff(result.output)) break;
-    onProgress('● Cache checkpoint saved. Continuing automatically in a fresh compact session…');
-    segmentPrompt = cacheContinuationPrompt(prompt, result.output);
-    segmentResume = undefined;
+    if (shouldContinueCacheHandoff(result)) {
+      onProgress('● Cache checkpoint saved. Continuing automatically in a fresh compact session…');
+      segmentPrompt = cacheContinuationPrompt(prompt, result.output);
+      segmentResume = undefined;
+      continue;
+    }
+    if (result.terminalWarning) throw new AgentTerminalWarningError(result.terminalWarning, result.output);
+    break;
   }
   return { output: result.output, threadId: result.threadId, usage: aggregate };
 }
@@ -1035,7 +1050,7 @@ export async function replyInSharedRoom(
       // Resuming Codex's provider thread replays its hidden tool history too,
       // turning short follow-ups into 100k-token cache reads. Keep only the
       // active turn steerable; every later room message starts clean.
-      }, undefined, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE)
+      }, undefined, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, Boolean(runId && MUTATING_RUN_KINDS.has(repository.getRun(runId)?.kind ?? 'analysis')))
         .then(({ output, threadId, usage }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage, fallbackFrom: null, fallbackReason: null }))
       : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       if (controller.signal.aborted) return;
@@ -1137,10 +1152,11 @@ export async function replyInSharedRoom(
       return;
     }
     const errorMessage = error instanceof Error ? error.message : 'Agent response failed.';
+    const terminalCheckpoint = error instanceof AgentTerminalWarningError ? error.checkpoint.trim() : '';
     repository.updateSharedMessage(messageId, {
-      status: 'failed', error: errorMessage,
+      status: 'failed', error: errorMessage, ...(terminalCheckpoint ? { body: terminalCheckpoint } : {}),
     });
-    if (runId) repository.updateRun(runId, { status: 'failed', error: errorMessage, completedAt: new Date().toISOString() });
+    if (runId) repository.updateRun(runId, { status: 'failed', error: errorMessage, completedAt: new Date().toISOString(), ...(terminalCheckpoint ? { output: terminalCheckpoint } : {}) });
   } finally {
     clearInterval(leaseHeartbeat);
     activeReplies.delete(messageId);

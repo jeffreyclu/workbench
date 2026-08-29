@@ -1,6 +1,6 @@
 import { execFile as execFileCallback, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, symlinkSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -41,6 +41,19 @@ export function shouldIsolateRunWorkspace(sourceWorkspace: string): boolean {
  * excluded from integration, and is removed with the worktree—not its target.
  */
 export function provisionRunWorktreeDependencies(repository: string, worktree: string): void {
+  // A trailing-slash `node_modules/` ignore does not match a symlink on every
+  // Git version. Record a local, uncommitted repository exclusion so the
+  // dependency links never appear as agent-authored source changes, including
+  // in projects whose checked-in .gitignore does not mention node_modules.
+  try {
+    const reported = execFileSync('git', ['rev-parse', '--git-path', 'info/exclude'], { cwd: repository, encoding: 'utf8', timeout: 5_000 }).trim();
+    const excludePath = resolve(repository, reported);
+    const existing = existsSync(excludePath) ? readFileSync(excludePath, 'utf8') : '';
+    if (!existing.split(/\r?\n/).includes('node_modules')) {
+      mkdirSync(dirname(excludePath), { recursive: true });
+      appendFileSync(excludePath, `${existing && !existing.endsWith('\n') ? '\n' : ''}# Workbench run-worktree dependency links\nnode_modules\n`);
+    }
+  } catch { /* Integration also excludes dependency paths if local ignore setup fails. */ }
   let manifests = ['package.json'];
   try {
     manifests = execFileSync('git', ['ls-files', '-z', '--', 'package.json', ':(glob)**/package.json'], { cwd: repository, encoding: 'utf8', timeout: 5_000, maxBuffer: 2_000_000 })

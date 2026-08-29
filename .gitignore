@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 dist/
 .workbench-runtime/
 # Workbench's local database, attachments, logs, backups, and generated

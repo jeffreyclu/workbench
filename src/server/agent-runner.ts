@@ -38,7 +38,7 @@ export const CANCEL_FORCE_KILL_DELAY_MS = 3_000;
 /** One foreground agent owns each Workbench run. This keeps Claude's cache
  * footprint proportional to the actual task rather than multiplying it across
  * fresh subagent contexts. */
-export const AGENT_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Do not broaden a source-code verification into deployed-runtime, cache, database, process, or asset inspection unless the user explicitly asked for runtime diagnosis or the focused verification produced direct evidence of such a problem. Run worktrees already receive the primary checkout's dependencies: do not check for node_modules or bootstrap dependencies there. Never install dependencies merely to verify a change; use dependencies already available to the workspace or report the exact verification gap. Workbench enforces finite tool-call and elapsed-time budgets and will stop a run that does not conclude. Report a command as passing only if it ran in this run and its output was observed.`;
+export const AGENT_EXECUTION_CONTRACT = `Use the shortest tool path that can complete the requested work correctly. Work directly in this foreground run; do not delegate to subagents. Do not reread unchanged files or repeat equivalent searches. Run one focused verification pass, expand it only when that pass reveals a concrete risk, then stop and report the result. Do not broaden a source-code verification into deployed-runtime, cache, database, process, or asset inspection unless the user explicitly asked for runtime diagnosis or the focused verification produced direct evidence of such a problem. A user's observed live failure is authoritative evidence: static wiring, source inspection, and isolated unit tests cannot prove that behavior is already fixed. Reproduce it at the relevant mounted or integration surface or make the focused change; never dismiss the report solely because the code path appears connected. Run worktrees already receive the primary checkout's dependencies: do not check for node_modules or bootstrap dependencies there. Never install dependencies merely to verify a change; use dependencies already available to the workspace or report the exact verification gap. Workbench supervises progress and cache use; when it asks for a checkpoint, stop starting tools and return that checkpoint immediately. Report a command as passing only if it ran in this run and its output was observed.`;
 // Kept as an exported alias for callers/tests that used the old provider-specific name.
 export const CLAUDE_EXECUTION_CONTRACT = AGENT_EXECUTION_CONTRACT;
 export const TOOL_OUTPUT_CONTRACT = `Tool-output discipline: keep every command and file read bounded to the lines needed for the decision. Never read an entire unknown-size file, directory, diff, log, or search result: start with at most 200 lines or 20 matches, then reopen an exact range if needed. Do not paste, summarize verbatim, or carry raw command output into later turns. Record only the command, relevant paths, and the decisive finding; reopen an exact path/range when needed.`;
@@ -566,13 +566,36 @@ export interface AgentUsage {
   cacheReadInputTokens: number | null;
   outputTokens: number | null;
 }
-interface AgentCommandResult { output: string; usage: AgentUsage; sessionId?: string | null; /** Largest single-request context observed this turn. */ peakContextTokens?: number; /** Provider-billed dollars when the CLI reports them (Claude only today). */ costUsd?: number | null; cacheHandoffRequested?: boolean; }
+interface AgentCommandResult { output: string; usage: AgentUsage; sessionId?: string | null; /** Largest single-request context observed this turn. */ peakContextTokens?: number; /** Provider-billed dollars when the CLI reports them (Claude only today). */ costUsd?: number | null; cacheHandoffRequested?: boolean; /** A provider can return a useful final checkpoint with a terminal protocol warning (for example max turns). */ terminalWarning?: string | null; }
+
+export class AgentTerminalWarningError extends Error {
+  constructor(message: string, readonly checkpoint: string) {
+    super(message);
+    this.name = 'AgentTerminalWarningError';
+  }
+}
 
 export const CACHE_HANDOFF_MARKER = 'WORKBENCH_CACHE_HANDOFF:';
 export const CACHE_HANDOFF_INSTRUCTION = `Cache soft budget reached. Finish only the operation already in flight; do not start another tool or model cycle in this provider session. Preserve all completed work, then return a concise checkpoint beginning exactly \`${CACHE_HANDOFF_MARKER}\` with what changed, what remains, and verification already observed. Workbench will continue the task automatically in a fresh compact session.`;
 
 export function hasCacheHandoff(output: string): boolean {
   return output.includes(CACHE_HANDOFF_MARKER);
+}
+
+export function shouldContinueCacheHandoff(result: Pick<AgentCommandResult, 'output' | 'cacheHandoffRequested' | 'terminalWarning'>): boolean {
+  return Boolean(result.cacheHandoffRequested && (hasCacheHandoff(result.output) || (result.terminalWarning && result.output.trim())));
+}
+
+export const PROGRESS_STEER_INTERVAL = 8;
+export function executionProgressSteer(toolStarts: number, cacheHandoffRequested: boolean): string | null {
+  if (cacheHandoffRequested) {
+    return toolStarts > 0 && toolStarts % 2 === 0
+      ? `The cache handoff is still pending. Do not start another tool. Return the required ${CACHE_HANDOFF_MARKER} checkpoint now; Workbench will resume the task in a fresh session.`
+      : null;
+  }
+  return toolStarts > 0 && toolStarts % PROGRESS_STEER_INTERVAL === 0
+    ? 'Progress supervisor: stop broad discovery. Re-read the authoritative objective. For a mutating task, make the smallest relevant edit now; if a concrete blocker prevents that edit, report it and finish. Do not start another general repository search.'
+    : null;
 }
 
 export function cacheContinuationPrompt(originalPrompt: string, checkpoint: string): string {
@@ -1105,7 +1128,20 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
 function terminalAgentError(agent: AgentRun['agent'], line: string): string | null {
   try {
     const event = JSON.parse(line) as Record<string, unknown>;
-    if (agent === 'claude' && event.type === 'result' && event.is_error === true) return String(event.result ?? event.error ?? 'Claude reported a terminal error.');
+    if (agent === 'claude' && event.type === 'result' && event.is_error === true) {
+      // Claude's `result` is often a useful checkpoint/final handoff even when
+      // the terminal subtype is a protocol warning such as max turns. Never
+      // turn that entire user-facing report into the error diagnostic.
+      const structuredError = event.error as Record<string, unknown> | string | undefined;
+      if (typeof structuredError === 'string' && structuredError.trim()) return structuredError.trim();
+      if (structuredError && typeof structuredError === 'object' && typeof structuredError.message === 'string') return structuredError.message;
+      const resultText = typeof event.result === 'string' ? event.result.trim() : '';
+      // This diagnostic drives the fresh-session recovery path below; retain
+      // it verbatim while keeping ordinary handoff prose out of the error.
+      if (/no conversation found with session id/i.test(resultText)) return resultText;
+      const subtype = typeof event.subtype === 'string' ? event.subtype : null;
+      return subtype ? `Claude ended the turn with ${subtype}.` : 'Claude reported a terminal error.';
+    }
     if (agent === 'codex' && event.type === 'turn.failed') {
       const error = event.error as Record<string, unknown> | undefined;
       return String(error?.message ?? event.message ?? 'Codex reported a terminal error.');
@@ -1208,6 +1244,8 @@ ${AGENT_EXECUTION_CONTRACT}`;
     let peakContextTokens = 0;
     let providerCostUsd: number | null = null;
     let cacheHandoffRequested = false;
+    let toolStarts = 0;
+    let toolStartsAtCacheHandoff = 0;
     let steerAgentInput: AgentInputSteering | null = null;
     let lastReportedUsage = '';
     // See UsageSample: `--forward-subagent-text` can surface the same provider
@@ -1252,6 +1290,7 @@ ${AGENT_EXECUTION_CONTRACT}`;
       emitLiveUsage();
       if (!cacheHandoffRequested && (reportedUsage.cacheReadInputTokens ?? 0) >= CACHE_READ_SOFT_LIMIT_TOKENS && steerAgentInput) {
         cacheHandoffRequested = true;
+        toolStartsAtCacheHandoff = toolStarts;
         progress += `${progress ? '\n\n' : ''}● Cache soft budget reached. Finishing the current operation, then continuing in a fresh compact session…`;
         void steerAgentInput(CACHE_HANDOFF_INSTRUCTION);
       }
@@ -1350,7 +1389,19 @@ ${AGENT_EXECUTION_CONTRACT}`;
             terminalShutdown.unref();
           }
         }
-        if (event.audit.length) onAudit?.(event.audit, agent);
+        if (event.audit.length) {
+          onAudit?.(event.audit, agent);
+          if (agent === 'claude' && MUTATING_RUN_KINDS.has(kind)) {
+            for (const entry of event.audit) {
+              const isToolStart = entry.command === undefined && ['tool', 'file_read', 'file_write'].includes(entry.streamKind ?? '');
+              if (!isToolStart) continue;
+              toolStarts += 1;
+              const supervisedCount = cacheHandoffRequested ? toolStarts - toolStartsAtCacheHandoff : toolStarts;
+              const steering = executionProgressSteer(supervisedCount, cacheHandoffRequested);
+              if (steering && steerAgentInput) void steerAgentInput(steering);
+            }
+          }
+        }
       }
       if (progress) flushProgress();
     });
@@ -1383,10 +1434,10 @@ ${AGENT_EXECUTION_CONTRACT}`;
       if (progress) flushProgress(true);
       if (cancellationRequested || signal?.aborted) reject(new Error('Agent run canceled.'));
       else if (terminationError) reject(terminationError);
-      else if (code === 0 && !terminalError) {
+      else if (code === 0 && (!terminalError || finalOutput.trim())) {
         const output = finalOutput.trim() || progress.trim() || stdout.trim();
         const outputTokens = reportedUsage.outputTokens ?? (estimatedOutputTokens || null);
-        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens }, sessionId: eventContext.sessionId ?? null, costUsd: providerCostUsd, peakContextTokens, cacheHandoffRequested });
+        resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens }, sessionId: eventContext.sessionId ?? null, costUsd: providerCostUsd, peakContextTokens, cacheHandoffRequested, terminalWarning: terminalError || null });
       }
       else {
         const providerDiagnostic = stderr.trim() || terminalError || finalOutput.trim() || stdout.trim();
@@ -1479,10 +1530,14 @@ export async function runAgentCommandWithFallback(
       const before = aggregate;
       result = await runAgentCommandWithUsage(primary, cwd, segmentPrompt, onProgress, signal, profile, (usage, agent) => onUsage?.(addUsage(before, usage), agent), onAudit, accountProfile, modelOverride, onSteeringReady, segmentResume, poolEligible && segmentPrompt === prompt, kind);
       aggregate = addUsage(aggregate, result.usage);
-      if (!result.cacheHandoffRequested || !hasCacheHandoff(result.output)) break;
-      onProgress?.('● Cache checkpoint saved. Continuing automatically in a fresh compact session…');
-      segmentPrompt = cacheContinuationPrompt(prompt, result.output);
-      segmentResume = undefined;
+      if (shouldContinueCacheHandoff(result)) {
+        onProgress?.('● Cache checkpoint saved. Continuing automatically in a fresh compact session…');
+        segmentPrompt = cacheContinuationPrompt(prompt, result.output);
+        segmentResume = undefined;
+        continue;
+      }
+      if (result.terminalWarning) throw new AgentTerminalWarningError(result.terminalWarning, result.output);
+      break;
     }
     return { ...result, usage: aggregate, agent: primary, fallbackFrom: null, fallbackReason: null };
   } catch (error) {
@@ -1492,8 +1547,7 @@ export async function runAgentCommandWithFallback(
     // the provider's "No conversation found" protocol error to Jeffrey.
     if (primary === 'claude' && resumeSessionId && /no conversation found with session id/i.test(error instanceof Error ? error.message : String(error))) {
       onProgress?.('● Claude session expired. Restarting this turn in a fresh session…');
-      const result = await runAgentCommandWithUsage(primary, cwd, prompt, onProgress, signal, profile, onUsage, onAudit, accountProfile, modelOverride, onSteeringReady, undefined, false, kind);
-      return { ...result, agent: primary, fallbackFrom: null, fallbackReason: null };
+      return runAgentCommandWithFallback(primary, cwd, prompt, onProgress, signal, onFallback, profile, onUsage, onAudit, kind, accountProfile, modelOverride, onSteeringReady, undefined, false, allowFallback);
     }
     if (signal?.aborted || modelOverride || !allowFallback || !isAgentCapacityError(error)) throw error;
     const fallback = primary === 'claude' ? 'codex' : 'claude';
@@ -1504,8 +1558,8 @@ export async function runAgentCommandWithFallback(
     const fallbackPrompt = primary === 'claude' && fallback === 'codex'
       ? `${prompt}\n\n${RUNNER_SYSTEM_CONTRACT}`
       : prompt;
-    const result = await runAgentCommandWithUsage(fallback, cwd, fallbackPrompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, profile, onUsage, onAudit, accountProfile, undefined, undefined, undefined, poolEligible, kind);
-    return { ...result, agent: fallback, fallbackFrom: primary, fallbackReason: reason.slice(0, 500) };
+    const result = await runAgentCommandWithFallback(fallback, cwd, fallbackPrompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, undefined, profile, onUsage, onAudit, kind, accountProfile, undefined, undefined, undefined, poolEligible, false);
+    return { ...result, fallbackFrom: primary, fallbackReason: reason.slice(0, 500) };
   }
 }
 
@@ -1834,6 +1888,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       return;
     }
     const message = error instanceof Error ? error.message : 'Agent run failed.';
+    const terminalCheckpoint = error instanceof AgentTerminalWarningError ? error.checkpoint.trim() : '';
     const activeAgent = repository.getRun(run.id)?.agent ?? run.agent;
     if (RETRYABLE_KINDS.has(run.kind) && isTransientAgentError(error) && repository.scheduleRunRetry(run.id, ownerId, backoffDelayMs((repository.getRun(run.id)?.attempt ?? 0) + 1))) {
       repository.addActivity(item.id, activeAgent, 'progress', `${run.kind} hit a transient error and was scheduled for retry: ${message.slice(0, 240)}`);
@@ -1841,8 +1896,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       // notifying on every attempt would spam Slack for something Jeffrey doesn't need to see yet.
       return;
     }
-    if (!repository.finishRun(run.id, ownerId, { status: 'failed', error: message, completedAt: new Date().toISOString() })) return;
-    if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'failed', error: message });
+    if (!repository.finishRun(run.id, ownerId, { status: 'failed', error: message, completedAt: new Date().toISOString(), ...(terminalCheckpoint ? { output: terminalCheckpoint } : {}) })) return;
+    if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'failed', error: message, ...(terminalCheckpoint ? { body: terminalCheckpoint } : {}) });
     const latestItem = repository.get(item.id);
     if (!latestItem?.archivedAt && latestItem?.status !== 'done') {
       repository.update(item.id, { status: 'blocked' }, false, { actor: 'system', source: 'agent_runner' });

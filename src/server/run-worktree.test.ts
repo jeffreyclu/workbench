@@ -89,6 +89,7 @@ describe('isolatedRunWorkspace', () => {
       expect(execFileSync('cat', ['node_modules/.bin/vitest'], { cwd: workspace, encoding: 'utf8' })).toBe('shared executable\n');
       expect(realpathSync(join(workspace, 'frontend', 'node_modules'))).toBe(realpathSync(join(directory, 'frontend', 'node_modules')));
       expect(execFileSync('cat', ['frontend/node_modules/.bin/vite'], { cwd: workspace, encoding: 'utf8' })).toBe('nested shared executable\n');
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' })).toBe('');
       // Provisioning is idempotent for retries of the same run.
       provisionRunWorktreeDependencies(directory, workspace);
       expect(realpathSync(join(workspace, 'node_modules'))).toBe(realpathSync(join(directory, 'node_modules')));
