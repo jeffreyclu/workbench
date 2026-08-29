@@ -3,9 +3,9 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { homedir } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CACHE_READ_HARD_LIMIT_TOKENS, CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
+import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, AgentCacheBudgetExceededError, CACHE_BUDGET_AUTO_RETRY_LIMIT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, cacheReadHardLimitExceeded, checkpointActivityDetail, shouldAutoRetryCacheBudget, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, executionProgressSteer, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, PROMPT_MEMORY_CANDIDATE_LIMIT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, executionProgressSteer, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, memoryQueryForRun, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, retrievedMemoryForPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -165,10 +165,11 @@ describe('classifyExecution', () => {
     expect(shouldCheckpointSession(undefined, 'standard')).toBe(false);
   });
 
-  it('lets a cache-heavy turn finish but retires its session before the next turn', () => {
-    expect(shouldCheckpointSession(20_000, 'deep', CACHE_READ_SOFT_LIMIT_TOKENS)).toBe(true);
-    expect(shouldCheckpointSession(20_000, 'deep', CACHE_READ_SOFT_LIMIT_TOKENS - 1)).toBe(false);
-    expect(checkpointActivityDetail(20_000, 'deep', CACHE_READ_SOFT_LIMIT_TOKENS)).toContain('agent was not stopped');
+  it('retires only a session whose active context crossed its profile threshold, not one with high cumulative spend', () => {
+    const ceiling = autocompactCeilingTokens('deep');
+    expect(shouldCheckpointSession(20_000, 'deep', CACHE_READ_SOFT_LIMIT_TOKENS * 20)).toBe(false);
+    expect(shouldCheckpointSession(ceiling, 'deep')).toBe(true);
+    expect(checkpointActivityDetail(ceiling, 'deep')).toContain('Context checkpoint');
   });
 
   it('reports the checkpoint with both the measured peak and the ceiling that tripped it', () => {
@@ -285,28 +286,13 @@ describe('classifyExecution', () => {
     expect(AGENT_EXECUTION_CONTRACT).toContain('Never debate, reinterpret, downgrade, or substitute a different task');
   });
 
-  it('automatically continues exactly one hard cache-budget stop with its checkpoint', () => {
-    const cacheError = new AgentCacheBudgetExceededError('Edited the button; visual verification remains.');
-    expect(CACHE_BUDGET_AUTO_RETRY_LIMIT).toBe(1);
-    const prompt = buildPrompt(item('Fix the button'), {
-      agent: 'claude', kind: 'execute', attempt: 1,
-      error: `Agent reached Workbench's ${Math.round(CACHE_READ_HARD_LIMIT_TOKENS / 1_000)}K enforced cache segment boundary.`,
-      output: 'Edited the button; visual verification remains.', instructions: '',
-    } as AgentRun);
-    expect(prompt).toContain('Automatic bounded-step continuation');
-    expect(prompt).toContain('Edited the button; visual verification remains.');
-    expect(shouldAutoRetryCacheBudget({ attempt: 0 }, cacheError)).toBe(true);
-    expect(shouldAutoRetryCacheBudget({ attempt: CACHE_BUDGET_AUTO_RETRY_LIMIT }, cacheError)).toBe(false);
-  });
-
   it('uses one provider-neutral progress supervisor for action and cache handoff reminders', () => {
     expect(executionProgressSteer(7, false)).toBeNull();
     expect(executionProgressSteer(8, false)).toContain('make the smallest relevant edit now');
     expect(executionProgressSteer(1, true)).toBeNull();
     expect(executionProgressSteer(2, true)).toContain(CACHE_HANDOFF_MARKER);
-    expect(shouldContinueCacheHandoff({ output: 'useful checkpoint', cacheHandoffRequested: true, terminalWarning: 'provider stopped' })).toBe(true);
+    expect(shouldContinueCacheHandoff({ output: `${CACHE_HANDOFF_MARKER} useful checkpoint`, cacheHandoffRequested: true, terminalWarning: 'provider stopped' })).toBe(true);
     expect(shouldContinueCacheHandoff({ output: 'normal completion', cacheHandoffRequested: false, terminalWarning: null })).toBe(false);
-    expect(cacheReadHardLimitExceeded({ inputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: CACHE_READ_HARD_LIMIT_TOKENS, outputTokens: 0 })).toBe(true);
   });
 
   it.each(['codex', 'claude'] as const)('lets %s complete after more than the former economy tool-call ceiling', async (agent) => {
@@ -325,7 +311,7 @@ describe('classifyExecution', () => {
     expect(result.output).toBe('Finished after 13 tool calls.');
   });
 
-  it.each(['codex', 'claude'] as const)('stops %s after reporting cache usage above the aggregate hard ceiling', async (agent) => {
+  it.each(['codex', 'claude'] as const)('does not terminate %s solely because cumulative cache usage is high', async (agent) => {
     const usageEvent = agent === 'codex'
       ? { type: 'token_count', info: { last_token_usage: { input_tokens: 1_600_010, cached_input_tokens: 1_600_000, output_tokens: 5 } } }
       : { type: 'assistant', request_id: 'large-cache-request', message: { usage: { input_tokens: 10, cache_read_input_tokens: 1_600_000, output_tokens: 5 } } };
@@ -336,7 +322,7 @@ describe('classifyExecution', () => {
     const fixture = fakeAgentDirectory(agent === 'codex' ? body : 'exit 1', agent === 'claude' ? body : 'exit 1');
 
     await expect(runAgentCommandWithFallback(agent, fixture.directory, 'Verify the change.', undefined, undefined, undefined, 'economy'))
-      .rejects.toThrow(`${Math.round(CACHE_READ_HARD_LIMIT_TOKENS / 1_000)}K enforced cache segment boundary`);
+      .resolves.toMatchObject({ output: 'Finished after the large cache read.' });
   });
 
   it('continues a cooperative Claude cache checkpoint in a fresh process without terminating either segment', async () => {
@@ -351,37 +337,6 @@ describe('classifyExecution', () => {
 
     expect(result.output).toBe('Finished in the compact continuation.');
     expect(result.usage.cacheReadInputTokens).toBe(CACHE_READ_SOFT_LIMIT_TOKENS + 100);
-    expect(readFileSync(countFile, 'utf8')).toBe('2');
-    rmSync(countFile, { force: true });
-  });
-
-  it('continues a cache-heavy Claude turn from its useful terminal checkpoint even when Claude omits the marker', async () => {
-    const countFile = join(tmpdir(), `workbench-implicit-cache-segments-${Date.now()}`);
-    const highUsage = JSON.stringify({ type: 'assistant', request_id: 'budget-crossing-request', message: { usage: { input_tokens: 10, cache_read_input_tokens: CACHE_READ_SOFT_LIMIT_TOKENS, output_tokens: 5 } } });
-    const checkpoint = JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, result: 'Edited the focused file; one verification remains.' });
-    const completed = JSON.stringify({ type: 'result', result: 'Finished verification in the compact continuation.', usage: { input_tokens: 20, cache_read_input_tokens: 100, output_tokens: 7 } });
-    const body = `count=0\nif [ -f '${countFile}' ]; then read count < '${countFile}'; fi\ncount=$((count + 1))\nprintf '%s' "$count" > '${countFile}'\nif [ "$count" -eq 1 ]; then\n  printf '%s\\n%s\\n' '${highUsage}' '${checkpoint}'\nelse\n  printf '%s\\n' '${completed}'\nfi`;
-    const fixture = fakeAgentDirectory('exit 1', body);
-
-    const result = await runAgentCommandWithFallback('claude', fixture.directory, 'Implement and verify the change.');
-
-    expect(result.output).toBe('Finished verification in the compact continuation.');
-    expect(result.usage.cacheReadInputTokens).toBe(CACHE_READ_SOFT_LIMIT_TOKENS + 100);
-    expect(readFileSync(countFile, 'utf8')).toBe('2');
-    rmSync(countFile, { force: true });
-  });
-
-  it('enforces the aggregate cache ceiling across fresh checkpoint segments', async () => {
-    const countFile = join(tmpdir(), `workbench-hard-cache-ceiling-${Date.now()}`);
-    const firstUsage = JSON.stringify({ type: 'assistant', request_id: 'first-budget-request', message: { usage: { input_tokens: 10, cache_read_input_tokens: CACHE_READ_SOFT_LIMIT_TOKENS, output_tokens: 5 } } });
-    const checkpoint = JSON.stringify({ type: 'result', result: `${CACHE_HANDOFF_MARKER} first segment complete.` });
-    const progress = JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Second segment work is preserved.' } } });
-    const secondUsage = JSON.stringify({ type: 'assistant', request_id: 'second-budget-request', message: { usage: { input_tokens: 10, cache_read_input_tokens: CACHE_READ_HARD_LIMIT_TOKENS - CACHE_READ_SOFT_LIMIT_TOKENS, output_tokens: 5 } } });
-    const body = `count=0\nif [ -f '${countFile}' ]; then read count < '${countFile}'; fi\ncount=$((count + 1))\nprintf '%s' "$count" > '${countFile}'\nif [ "$count" -eq 1 ]; then\n  printf '%s\\n%s\\n' '${firstUsage}' '${checkpoint}'\nelse\n  printf '%s\\n' '${progress}'\n  sleep 0.4\n  printf '%s\\n' '${secondUsage}'\n  sleep 10\nfi`;
-    const fixture = fakeAgentDirectory('exit 1', body);
-
-    await expect(runAgentCommandWithFallback('claude', fixture.directory, 'Implement the change.'))
-      .rejects.toThrow(`${Math.round(CACHE_READ_HARD_LIMIT_TOKENS / 1_000)}K enforced cache segment boundary`);
     expect(readFileSync(countFile, 'utf8')).toBe('2');
     rmSync(countFile, { force: true });
   });

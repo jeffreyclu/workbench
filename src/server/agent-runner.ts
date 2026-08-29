@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
-import { CACHE_READ_HARD_LIMIT_TOKENS, CACHE_READ_SOFT_LIMIT_TOKENS, DEFAULT_ACCOUNT_PROFILE, type AgentRun, type WorkItem } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
@@ -355,10 +355,6 @@ Execution mode: ${readOnly
 Additional instructions:
 ${compactPromptSection(run.instructions || 'Use your judgment and return a concise, actionable result.', 1_500)}
 
-${run.attempt > 0 && /enforced cache segment boundary/i.test(run.error)
-    ? cacheBudgetRetryPrompt(run.output)
-    : ''}
-
 Shared context available to every agent:
 ${compactPromptSection(sharedContext || 'No shared context yet.', 700)}
 
@@ -579,34 +575,15 @@ export class AgentTerminalWarningError extends Error {
   }
 }
 
-export class AgentCacheBudgetExceededError extends AgentTerminalWarningError {
-  constructor(checkpoint: string) {
-    super(`Agent reached Workbench's ${Math.round(CACHE_READ_HARD_LIMIT_TOKENS / 1_000)}K enforced cache segment boundary. Its completed work is preserved; Workbench will continue it once in a fresh compact segment.`, checkpoint);
-    this.name = 'AgentCacheBudgetExceededError';
-  }
-}
-
-export function cacheReadHardLimitExceeded(usage: AgentUsage): boolean {
-  return (usage.cacheReadInputTokens ?? 0) >= CACHE_READ_HARD_LIMIT_TOKENS;
-}
-
 export const CACHE_HANDOFF_MARKER = 'WORKBENCH_CACHE_HANDOFF:';
-export const CACHE_HANDOFF_INSTRUCTION = `Cache soft budget reached. Finish only the operation already in flight; do not start another tool or model cycle in this provider session. Preserve all completed work, then return a concise checkpoint beginning exactly \`${CACHE_HANDOFF_MARKER}\` with what changed, what remains, and verification already observed. Workbench will continue the task automatically in a fresh compact session.`;
-/** A hard cache stop is recoverable once, including write-capable work: the
- * workspace is preserved and the next attempt starts fresh. A second hard stop
- * remains visible instead of silently compounding spend indefinitely. */
-export const CACHE_BUDGET_AUTO_RETRY_LIMIT = 1;
-
-export function shouldAutoRetryCacheBudget(run: Pick<AgentRun, 'attempt'>, error: unknown): boolean {
-  return error instanceof AgentCacheBudgetExceededError && run.attempt < CACHE_BUDGET_AUTO_RETRY_LIMIT;
-}
+export const CACHE_HANDOFF_INSTRUCTION = `Context is approaching its compacting threshold. Finish only the operation already in flight; do not start another tool or model cycle in this provider session. Preserve all completed work, then return a concise checkpoint beginning exactly \`${CACHE_HANDOFF_MARKER}\` with what changed, what remains, and verification already observed. Workbench will continue in a fresh compact session without canceling the task.`;
 
 export function hasCacheHandoff(output: string): boolean {
   return output.includes(CACHE_HANDOFF_MARKER);
 }
 
 export function shouldContinueCacheHandoff(result: Pick<AgentCommandResult, 'output' | 'cacheHandoffRequested' | 'terminalWarning'>): boolean {
-  return Boolean(result.cacheHandoffRequested && (hasCacheHandoff(result.output) || (result.terminalWarning && result.output.trim())));
+  return hasCacheHandoff(result.output);
 }
 
 export const PROGRESS_STEER_INTERVAL = 8;
@@ -623,10 +600,6 @@ export function executionProgressSteer(toolStarts: number, cacheHandoffRequested
 
 export function cacheContinuationPrompt(originalPrompt: string, checkpoint: string): string {
   return `Continue the original request in a fresh provider session after a cache-budget checkpoint. Treat the checkpoint as progress evidence, inspect only what is needed to finish, and return the final user-facing answer. Do not repeat the checkpoint marker unless this new session receives another cache-budget instruction.\n\nOriginal request:\n${compactPromptSection(originalPrompt, 12_000)}\n\nCompleted segment checkpoint:\n${compactPromptSection(checkpoint, 8_000)}`;
-}
-
-export function cacheBudgetRetryPrompt(checkpoint: string): string {
-  return `\n\nAutomatic bounded-step continuation: the previous provider segment reached Workbench's enforced cache boundary after preserving the work below. Continue the user's original request from this checkpoint in the existing workspace. Do not restart broad discovery, debate the request, or repeat completed verification. Finish the smallest remaining action and report the observed result.\n\nPrior checkpoint:\n${compactPromptSection(checkpoint, 8_000)}`;
 }
 
 export function addUsage(left: AgentUsage, right: AgentUsage): AgentUsage {
@@ -814,16 +787,12 @@ export function autocompactCeilingTokens(profile: ExecutionProfile): number {
  * not evidence of bloat, and discarding on missing data would throw away live
  * implementation context every time the stream reported nothing.
  */
-export function shouldCheckpointSession(peakContextTokens: number | undefined, profile: ExecutionProfile, cacheReadInputTokens = 0): boolean {
-  return (peakContextTokens ?? 0) >= autocompactCeilingTokens(profile)
-    || cacheReadInputTokens >= CACHE_READ_SOFT_LIMIT_TOKENS;
+export function shouldCheckpointSession(peakContextTokens: number | undefined, profile: ExecutionProfile, _cacheReadInputTokens = 0): boolean {
+  return (peakContextTokens ?? 0) >= autocompactCeilingTokens(profile);
 }
 
 /** Shared wording so the execute and conversation paths report a checkpoint identically. */
-export function checkpointActivityDetail(peakContextTokens: number, profile: ExecutionProfile, cacheReadInputTokens = 0): string {
-  if (cacheReadInputTokens >= CACHE_READ_SOFT_LIMIT_TOKENS) {
-    return `Cache checkpoint: this turn finished after reading ${Math.round(cacheReadInputTokens / 1000)}k cached tokens. The agent was not stopped; the next turn starts from Workbench's compact context instead of replaying this provider session.`;
-  }
+export function checkpointActivityDetail(peakContextTokens: number, profile: ExecutionProfile, _cacheReadInputTokens = 0): string {
   return `Context checkpoint: this turn peaked at ${Math.round(peakContextTokens / 1000)}k tokens against a ${Math.round(autocompactCeilingTokens(profile) / 1000)}k ceiling. The next turn starts a fresh Claude session instead of replaying this one.`;
 }
 
@@ -1293,6 +1262,8 @@ ${AGENT_EXECUTION_CONTRACT}`;
     };
     const reportUsage = (usage: UsageSample) => {
       if (typeof usage.costUsd === 'number') providerCostUsd = usage.costUsd;
+      const sampleContext = (usage.inputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0);
+      if (sampleContext > peakContextTokens) peakContextTokens = sampleContext;
       if (usage.cumulative) {
         // A cumulative event supersedes accumulated per-message samples, but must
         // not erase a count it simply did not carry.
@@ -1305,8 +1276,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
       } else {
         if (usage.sampleId && seenUsageSamples.has(usage.sampleId)) return;
         if (usage.sampleId) seenUsageSamples.add(usage.sampleId);
-        const sampleContext = (usage.inputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0);
-        if (sampleContext > peakContextTokens) peakContextTokens = sampleContext;
         reportedUsage = {
           inputTokens: usage.inputTokens === null ? reportedUsage.inputTokens : (reportedUsage.inputTokens ?? 0) + usage.inputTokens,
           cacheCreationInputTokens: usage.cacheCreationInputTokens === null ? reportedUsage.cacheCreationInputTokens : (reportedUsage.cacheCreationInputTokens ?? 0) + usage.cacheCreationInputTokens,
@@ -1315,12 +1284,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
         };
       }
       emitLiveUsage();
-      if (!cacheHandoffRequested && (reportedUsage.cacheReadInputTokens ?? 0) >= CACHE_READ_SOFT_LIMIT_TOKENS && steerAgentInput) {
-        cacheHandoffRequested = true;
-        toolStartsAtCacheHandoff = toolStarts;
-        progress += `${progress ? '\n\n' : ''}● Cache soft budget reached. Finishing the current operation, then continuing in a fresh compact session…`;
-        void steerAgentInput(CACHE_HANDOFF_INSTRUCTION);
-      }
     };
     // Silence is the failure Jeffrey actually feels: a long tool loop or a long
     // thinking block can pass minutes without a single stream event, and the run
@@ -1558,25 +1521,15 @@ export async function runAgentCommandWithFallback(
       const before = aggregate;
       const segmentController = new AbortController();
       const cancelSegment = () => segmentController.abort();
-      let hardLimitExceeded = false;
-      let latestSegmentProgress = '';
       if (signal?.aborted) segmentController.abort();
       else signal?.addEventListener('abort', cancelSegment, { once: true });
       try {
         result = await runAgentCommandWithUsage(primary, cwd, segmentPrompt, (partial) => {
-          latestSegmentProgress = partial;
           onProgress?.(partial);
         }, segmentController.signal, profile, (usage, agent) => {
           const aggregateUsage = addUsage(before, usage);
           onUsage?.(aggregateUsage, agent);
-          if (!hardLimitExceeded && cacheReadHardLimitExceeded(aggregateUsage)) {
-            hardLimitExceeded = true;
-            segmentController.abort();
-          }
         }, onAudit, accountProfile, modelOverride, onSteeringReady, segmentResume, poolEligible && segmentPrompt === prompt, kind);
-      } catch (error) {
-        if (hardLimitExceeded) throw new AgentCacheBudgetExceededError(latestSegmentProgress);
-        throw error;
       } finally {
         signal?.removeEventListener('abort', cancelSegment);
       }
@@ -1941,23 +1894,6 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const message = error instanceof Error ? error.message : 'Agent run failed.';
     const terminalCheckpoint = error instanceof AgentTerminalWarningError ? error.checkpoint.trim() : '';
     const activeAgent = repository.getRun(run.id)?.agent ?? run.agent;
-    // A cache ceiling is a controlled checkpoint, not a task failure. Resume
-    // the exact run once—even for execute—so filesystem edits and the user's
-    // request survive without requiring a Retry click. Persist its reason and
-    // checkpoint before requeueing so the fresh provider session gets a
-    // targeted continuation instead of repeating discovery.
-    if (shouldAutoRetryCacheBudget(run, error)) {
-      repository.updateRun(run.id, { error: message, ...(terminalCheckpoint ? { output: terminalCheckpoint } : {}) });
-      if (repository.scheduleRunRetry(run.id, ownerId, backoffDelayMs(run.attempt + 1))) {
-        if (run.messageId) repository.updateSharedMessage(run.messageId, {
-          body: '● Cache budget reached. Continuing automatically in a fresh session…',
-          status: 'queued',
-        });
-        repository.addActivity(item.id, activeAgent, 'progress', `${run.kind} reached the enforced cache segment boundary; continuing automatically once from its checkpoint.`);
-        publishRealtimeEvent('work-items', 'shared', 'insights');
-        return;
-      }
-    }
     if (RETRYABLE_KINDS.has(run.kind) && isTransientAgentError(error) && repository.scheduleRunRetry(run.id, ownerId, backoffDelayMs((repository.getRun(run.id)?.attempt ?? 0) + 1))) {
       repository.addActivity(item.id, activeAgent, 'progress', `${run.kind} hit a transient error and was scheduled for retry: ${message.slice(0, 240)}`);
       // Do not call notifyAgentRunFinished here: a retry is not a final outcome, and
