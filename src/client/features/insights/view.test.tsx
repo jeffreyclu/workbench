@@ -27,9 +27,12 @@ describe('InsightsView', () => {
     expect(screen.getAllByRole('button', { name: /last 15 minutes|last hour|last day|all time/i })).toHaveLength(4);
     expect(screen.getByRole('button', { name: '7 days' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '30 days' })).toBeTruthy();
+    const mobileTimeframe = screen.getByRole('combobox', { name: 'Time window' });
+    expect(screen.getAllByRole('option')).toHaveLength(6);
+    expect((mobileTimeframe as HTMLSelectElement).value).toBe('all');
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/api/insights?timeframe=all'))).toBe(true);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Last 15 minutes' }));
+    fireEvent.change(mobileTimeframe, { target: { value: '15m' } });
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/api/insights?timeframe=15m'))).toBe(true));
   });
 

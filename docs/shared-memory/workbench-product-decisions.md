@@ -133,6 +133,8 @@ On 2026-08-25, Jeffrey first asked for a rolling-24-hour reading, then corrected
 
 *Decision from Jeffrey, 2026-08-28; corrected later that day.* Insights must offer exactly: **Last 15 minutes**, **Last hour**, **Last day**, **7 days**, **30 days**, and **All Time**. The new options extend, rather than replace, the existing 7-day and 30-day ranges. Keep all six choices when adding or revising Insights filters and calculations.
 
+*Mobile correction from Jeffrey, 2026-08-29.* On phone layouts, expose those six Insights time frames through one dropdown instead of the expanded segmented-button panel. Desktop keeps the segmented control.
+
 ### Awaiting status and new-conversation account default
 
 *Decision from Jeffrey, 2026-08-24.*

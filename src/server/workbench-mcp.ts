@@ -12,7 +12,6 @@ import {
   executionProfileOverrideSchema,
   figmaScopeSchema,
   runKindSchema,
-  sourceProviderSchema,
   workItemFilterSchema,
   workItemReferenceTypeSchema,
 } from '../shared/contracts.js';

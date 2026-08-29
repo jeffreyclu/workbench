@@ -88,9 +88,8 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
         const event = JSON.parse(line) as { type?: string; result?: string; is_error?: boolean };
         if (event.type !== 'result' || !active) continue;
         const pending = active; active = null;
-        event.is_error || typeof event.result !== 'string'
-          ? settle(pending, new Error('Haiku turn-grounding classifier failed.'))
-          : settle(pending, undefined, event.result);
+        if (event.is_error || typeof event.result !== 'string') settle(pending, new Error('Haiku turn-grounding classifier failed.'));
+        else settle(pending, undefined, event.result);
         dispatch();
       } catch { /* Ignore non-terminal stream records. */ }
     }

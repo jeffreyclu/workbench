@@ -335,7 +335,7 @@ describe('shared room', () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000112';
     const queuedDraft = { id: 'queued-draft', conversationId, author: 'jeffrey', body: 'Do this after the active response.', pinned: false, status: 'queued', error: '', createdAt: '2026-01-01T00:00:00Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'codex', queuePriority: 0 };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Cancel queued draft', workItemId: null, archivedAt: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.endsWith('/queued-draft/cancel')) return new Response(JSON.stringify({ message: { ...queuedDraft, status: 'canceled' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -1898,7 +1898,7 @@ describe('shared room', () => {
     const retryResponse = new Promise<Response>((resolve) => {
       resolveRetry = () => resolve(new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } }));
     });
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Parallel retry', workItemId: null, createdAt: timestamp, updatedAt: timestamp }], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages/') && url.endsWith('/retry')) return retryResponse;

@@ -8,7 +8,7 @@ describe('GitHub pull-request diffs', () => {
   });
 
   it('loads PR metadata and patches with the configured GitHub credential', async () => {
-    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const endpoint = String(input);
       if (endpoint.endsWith('/pulls/24')) return new Response(JSON.stringify({ html_url: 'https://github.com/writer/workbench/pull/24', title: 'Render diffs', number: 24, base: { ref: 'main' }, head: { ref: 'feature/diff', sha: 'a'.repeat(40) }, changed_files: 2, additions: 8, deletions: 3 }), { status: 200 });
     if (endpoint.includes('page=1')) return new Response(JSON.stringify([{ filename: 'src/a.ts', status: 'modified', additions: 8, deletions: 3, patch: '@@ -1 +1 @@\n-old\n+new' }, { filename: 'image.png', status: 'modified', additions: 0, deletions: 0 }]), { status: 200 });

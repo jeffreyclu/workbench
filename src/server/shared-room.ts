@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, executionProgressSteer, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, selectPromptExecutionProfile, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, executionProgressSteer, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -77,6 +77,28 @@ export function agentStreamEventForCodexAppServerItem(method: string, item: Reco
 /** App-server sends debugger-only decision preambles as ordinary text deltas. */
 export function isCodexDecisionPreamble(text: string): boolean {
   return /^\s*Decision:\s*/i.test(text);
+}
+
+/**
+ * The subset of Codex app-server stream records this reader touches. Typed
+ * loosely on purpose: the transport is newline JSON and unknown records must
+ * pass through untouched rather than fail parsing.
+ */
+interface CodexAppServerEvent {
+  id?: number | string;
+  method?: string;
+  error?: { message?: unknown };
+  result?: {
+    thread?: { id?: string };
+    turn?: { id?: string };
+    turnId?: string;
+  };
+  params?: {
+    delta?: unknown;
+    itemId?: unknown;
+    item?: unknown;
+    turn?: { status?: unknown };
+  };
 }
 
 /** Extracts token snapshots forwarded by Codex's steerable app-server. */
@@ -310,7 +332,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
     child.stdout.on('data', (chunk: Buffer) => {
       buffered += chunk.toString(); const lines = buffered.split('\n'); buffered = lines.pop() ?? '';
       for (const line of lines.filter(Boolean)) {
-        let event: any; try { event = JSON.parse(line); } catch { continue; }
+        let event: CodexAppServerEvent; try { event = JSON.parse(line) as CodexAppServerEvent; } catch { continue; }
         const reportedUsage = codexUsageFromAppServerEvent(event);
         if (reportedUsage) {
           usage = reportedUsage;
@@ -358,7 +380,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         // Reasoning items begin before their summary text is available. Capture
         // the completed item so each subsequent tool call has the actual
         // decision that preceded it rather than an empty placeholder.
-        const agentEvent = agentStreamEventForCodexAppServerItem(event.method, item);
+        const agentEvent = agentStreamEventForCodexAppServerItem(event.method ?? '', item);
         if (agentEvent) {
           onEvent(agentEvent);
           if (mutating && agentEvent.kind === 'tool' && event.method === 'item/started') {

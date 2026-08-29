@@ -7,7 +7,7 @@ import { createSessionFeedbackSchema, createSharedConversationSchema, createShar
 import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
 import { resolveWorkingDirectory, runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
-import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, resolveSharedReplyWorkingDirectory, retrySharedSynthesis, runSharedBackgroundJob } from '../shared-room.js';
+import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, retrySharedSynthesis, runSharedBackgroundJob } from '../shared-room.js';
 import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { parseFollowUpPlan } from '../app-exports.js';

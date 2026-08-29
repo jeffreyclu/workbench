@@ -5,6 +5,15 @@ import { api } from '../../data/api';
 import { InsightsSkeleton } from '../../components/skeleton/skeleton';
 import type { InsightsTimeframe, RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsTokenUsage } from '../../../shared/contracts';
 
+const INSIGHTS_TIMEFRAMES: readonly { value: InsightsTimeframe; label: string }[] = [
+  { value: '15m', label: 'Last 15 minutes' },
+  { value: '1h', label: 'Last hour' },
+  { value: '1d', label: 'Last day' },
+  { value: '7d', label: '7 days' },
+  { value: '30d', label: '30 days' },
+  { value: 'all', label: 'All Time' },
+];
+
 function InfoTooltip({ children }: { children: string }) {
   return (
     <span className="insight-info-tooltip" tabIndex={0} role="tooltip" aria-label={children}>
@@ -162,13 +171,14 @@ export function InsightsView() {
           <p>How work moves through Workbench and which agent fits each task.</p>
         </div>
         <div className="insight-window-toggle" role="group" aria-label="Time window">
-          <button className={timeframe === '15m' ? 'active' : ''} onClick={() => setTimeframe('15m')}>Last 15 minutes</button>
-          <button className={timeframe === '1h' ? 'active' : ''} onClick={() => setTimeframe('1h')}>Last hour</button>
-          <button className={timeframe === '1d' ? 'active' : ''} onClick={() => setTimeframe('1d')}>Last day</button>
-          <button className={timeframe === '7d' ? 'active' : ''} onClick={() => setTimeframe('7d')}>7 days</button>
-          <button className={timeframe === '30d' ? 'active' : ''} onClick={() => setTimeframe('30d')}>30 days</button>
-          <button className={timeframe === 'all' ? 'active' : ''} onClick={() => setTimeframe('all')}>All Time</button>
+          {INSIGHTS_TIMEFRAMES.map((option) => <button key={option.value} className={timeframe === option.value ? 'active' : ''} onClick={() => setTimeframe(option.value)}>{option.label}</button>)}
         </div>
+        <label className="insight-window-select">
+          <span className="visually-hidden">Time window</span>
+          <select value={timeframe} onChange={(event) => setTimeframe(event.target.value as InsightsTimeframe)}>
+            {INSIGHTS_TIMEFRAMES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
       </header>
 
       {insights.isLoading && <InsightsSkeleton />}

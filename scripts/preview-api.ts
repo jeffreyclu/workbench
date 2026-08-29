@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import { createApp } from '../src/server/app.js';
 import { openDatabase } from '../src/server/database.js';
-import { WorkItemRepository } from '../src/server/repository.js';
 import { warmFastTaskDraftModel } from '../src/server/fast-task-draft-ai.js';
 import { previewRuntimeCapabilities } from '../src/server/runtime-capabilities.js';
 import { createServer } from 'node:http';

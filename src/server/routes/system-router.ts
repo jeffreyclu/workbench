@@ -17,7 +17,7 @@ export function createHealthRouter({ repository, capabilities, buildId }: RouteC
   return router;
 }
 
-export function createSystemRouter({ repository, admin }: RouteContext) {
+export function createSystemRouter({ repository }: RouteContext) {
   const router = Router();
   router.post('/api/runtime/retire', (_request, response) => {
     beginRuntimeRetirement();

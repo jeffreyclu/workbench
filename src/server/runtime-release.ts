@@ -1,5 +1,5 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative } from 'node:path';
 import { isDatabaseCompatible } from './runtime-compatibility.js';
 
 const CLIENT_ENTRY = 'client/index.html';

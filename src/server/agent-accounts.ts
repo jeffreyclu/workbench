@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentAccountEnv, accountProfileKey, managedAccountDirectory } from './agent-security.js';
+import { agentAccountEnv, managedAccountDirectory } from './agent-security.js';
 
 export type AccountProvider = 'codex' | 'claude';
 export interface AgentAccountProfile {
