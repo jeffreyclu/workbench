@@ -748,11 +748,18 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   if (!repository.claimQueuedTurn(queued.message.id)) return [];
   const conversation = repository.listConversations().find((item) => item.id === conversationId);
   const linkedItem = conversation?.workItemId ? repository.get(conversation.workItemId) : null;
+  const retrievalThread = repository.listSharedMessages(100, null, conversationId).messages;
+  const fallbackGrounding = fallbackTurnGrounding(retrievalThread);
+  const grounding: SharedReplyGrounding = {
+    fallback: fallbackGrounding,
+    resolved: resolveTurnGrounding(retrievalThread),
+  };
   // A linked task may predate classification. Use its deterministic routing
   // instead of treating every chat instruction as generic analysis, but let
-  // each turn's own request override that routing when it reads as a
-  // different kind of work than the task started as.
-  const taskKind = sharedTurnKindForMessage(repository, linkedItem, queued.message.body);
+  // the supervisor-resolved objective override that routing. This matters for
+  // terse continuations: "continue" must retain the execute/review kind of the
+  // concrete request it resumes instead of silently degrading to analysis.
+  const taskKind = sharedTurnKindForMessage(repository, linkedItem, fallbackGrounding.objective);
   const resolvedAgents = resolveAgents(taskKind, queued.dispatchTarget);
   const agents = queued.dispatchTarget === 'auto'
     ? [repository.selectBalancedAgent(resolvedAgents[0])]
@@ -767,8 +774,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   // snapshot. Starting independent refreshes lets the first recipient's
   // streamed output enter the index before the second searches, which can
   // crowd out the prior context the two agents were meant to share.
-  const retrievalThread = repository.listSharedMessages(100, null, conversationId).messages;
-  const retrievalQuery = memoryQueryForSharedReply(retrievalThread);
+  const retrievalQuery = fallbackGrounding.objective.slice(0, 2_000);
   const retrieval: SharedReplyRetrieval = {
     query: retrievalQuery,
     matches: repository.searchActivityMemory(retrievalQuery, PROMPT_MEMORY_CANDIDATE_LIMIT, {
@@ -791,7 +797,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'
       ? repository.createRun(linkedItem.id, taskKind, queued.dispatchTarget, agent, queued.message.body, conversationId, reply.id, 'manual', accountProfile)
       : null;
-    void replyInSharedRoom(repository, agent, reply.id, run?.id, retrieval);
+    void replyInSharedRoom(repository, agent, reply.id, run?.id, retrieval, grounding);
   }
   return replies;
 }
