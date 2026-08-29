@@ -6,6 +6,22 @@ import { buildChangeLinkIndex, plainRelationText, type ChangeLink, type ChangeLi
 import type { ReviewDecision, ReviewDiffHunk } from './logic.js';
 import { reviewStateLabel } from './logic.js';
 
+/** Breathing room left above a scrolled-to block, so the reader sees that the
+ * change has a context above it rather than reading from the pane's edge. */
+const SCROLL_LEAD = 28;
+
+/** The pane is not the page: the shell keeps `body` unscrollable and scrolls an
+ * inner container, so on a stacked layout the diff can sit entirely below the
+ * fold. Finding that container lets a selection reveal the pane without
+ * `scrollIntoView` walking — and disturbing — every ancestor. */
+function nearestScroller(from: HTMLElement): HTMLElement | null {
+  for (let node = from.parentElement; node && node !== document.body; node = node.parentElement) {
+    const overflow = window.getComputedStyle?.(node).overflowY;
+    if ((overflow === 'auto' || overflow === 'scroll') && node.scrollHeight > node.clientHeight + 1) return node;
+  }
+  return null;
+}
+
 /** Mirrors the queue's chips so the same decision reads the same way in both
  * places — the reviewer should recognise "already handled" from the gutter
  * without re-reading a word. */
@@ -65,6 +81,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   onOpenDetail?: (decisionId: string, anchor: HTMLElement) => void;
 }) {
   const activeBlock = useRef<HTMLElement | null>(null);
+  const lastSelection = useRef<string | null>(null);
   const diffBody = useRef<HTMLDivElement | null>(null);
   const [peekDecisionId, setPeekDecisionId] = useState<string | null>(null);
   const language = languageFromPath(filePath);
@@ -89,10 +106,40 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
     const block = activeBlock.current;
     if (!body || !block) return;
     const behavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
-    body.scrollTo?.({ top: Math.max(0, block.offsetTop - body.clientHeight / 2), behavior });
+    // Measure the block against the pane itself rather than through
+    // `offsetTop`: offsetTop is relative to whichever ancestor happens to be
+    // positioned, which is not this pane, so it lands at an arbitrary place in
+    // a long file. Rect deltas are correct whatever the layout does.
+    const blockBox = block.getBoundingClientRect();
+    const bodyBox = body.getBoundingClientRect();
+    const blockTop = blockBox.top - bodyBox.top + body.scrollTop;
+    // A block that fits reads best centred; one taller than the pane reads from
+    // its first line, so the change itself is what comes into view.
+    const lead = blockBox.height + SCROLL_LEAD * 2 <= body.clientHeight
+      ? (body.clientHeight - blockBox.height) / 2
+      : SCROLL_LEAD;
+    const furthest = Math.max(0, body.scrollHeight - body.clientHeight);
+    body.scrollTo?.({ top: Math.min(furthest, Math.max(0, blockTop - lead)), behavior });
     // Moves keyboard/screen-reader focus onto the selected block, not just the
     // visual scroll — selecting a decision from the queue should land here too.
     block.focus?.({ preventScroll: true });
+
+    // Only a deliberate re-selection may move the surrounding page. On the
+    // first render the reviewer has just opened the task and belongs at its
+    // top — that is the legacy behaviour the comment above protects.
+    const reselected = lastSelection.current !== null && lastSelection.current !== activeDecisionId;
+    lastSelection.current = activeDecisionId;
+    if (!reselected) return;
+    const scroller = nearestScroller(body);
+    if (!scroller) return;
+    const paneBox = body.getBoundingClientRect();
+    const viewBox = scroller.getBoundingClientRect();
+    // Reveal the pane only when it genuinely is not readable: a pane already in
+    // view must not jump because the reviewer picked the next decision.
+    const above = viewBox.top + SCROLL_LEAD - paneBox.top;
+    const below = paneBox.top + Math.min(paneBox.height, viewBox.height) - viewBox.bottom;
+    const delta = above > 0 ? -above : below > 0 ? below : 0;
+    if (delta !== 0) scroller.scrollTo?.({ top: Math.max(0, scroller.scrollTop + delta), behavior });
   }, [activeDecisionId, filePath]);
 
   useEffect(() => setPeekDecisionId(null), [filePath]);
@@ -103,8 +150,11 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   };
 
   // A decision can own several blocks in one file; its lens belongs on the
-  // first of them rather than repeated down the file.
+  // first of them rather than repeated down the file. The scroll target is the
+  // first block too — every active block sharing one ref would leave it on the
+  // last one, scrolling past the start of the change.
   const lensShown = new Set<string>();
+  let scrollTargetTaken = false;
 
   return <article className="diff-review-file-diff" aria-label={`Full diff for ${filePath}`}>
     <header>
@@ -124,12 +174,14 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         const peeking = peekDecisionId === decisionId;
         const marker = active ? null : markers.get(decisionId) ?? null;
         const ordinal = decision?.ordinal ?? null;
+        const scrollTarget = active && !scrollTargetTaken;
+        if (scrollTarget) scrollTargetTaken = true;
         // A scored band outranks the raw signal count: once the model has read
         // the change, its severity is the more useful thing to show.
         const band = riskBands?.get(decisionId) ?? ((decision?.riskSignals.length ?? 0) > 0 ? 'signals' : null);
         return <section
           key={hunk.range}
-          ref={active ? activeBlock : undefined}
+          ref={scrollTarget ? activeBlock : undefined}
           tabIndex={-1}
           className={`diff-review-diff-block state-${state ?? 'pending'}${state === null ? '' : ' settled'}${active ? ' active' : ''}${marker ? ` linked relation-${marker.relation}` : ''}`}
           aria-current={active ? 'location' : undefined}

@@ -78,6 +78,72 @@ describe('review file diff pane', () => {
     expect(container.querySelector('.diff-review-diff-block')).not.toHaveClass('active');
   });
 
+  it('scrolls the pane to the first block of the selected decision, measured against the pane itself', () => {
+    const twoHunkPatch = [
+      '@@ -1,3 +1,3 @@ function first()',
+      ' function first() {',
+      '-  return before;',
+      '+  return after;',
+      '@@ -40,3 +40,3 @@ function second()',
+      ' function second() {',
+      '-  return before;',
+      '+  return after;',
+    ].join('\n');
+    const fileHunks = buildFileDiffHunks({ path: 'src/example.ts', patch: twoHunkPatch, isBinary: false });
+    expect(fileHunks).toHaveLength(2);
+
+    // One decision owning both blocks: the scroll must land on the first, not
+    // on whichever block happened to mount last.
+    const spanning: ReviewDecision = {
+      ...decision(null),
+      id: fileHunks[0].decisionId,
+      hunks: fileHunks.map((hunk) => ({ id: hunk.decisionId, filePath: 'src/example.ts', editorUrl: null, hunkRange: hunk.range, location: hunk.location, lines: [], additions: 1, deletions: 1, state: null, note: null })),
+    };
+
+    // jsdom reports no geometry, so the pane and its two blocks are given the
+    // layout a browser would report: a 400px pane with the blocks below it.
+    const scrolls: number[] = [];
+    const isPane = (el: Element) => el.classList.contains('diff-review-file-diff-body');
+    const rect = (top: number, height: number) => ({ top, height, bottom: top + height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    const originals = {
+      rect: Element.prototype.getBoundingClientRect,
+      scrollTo: HTMLElement.prototype.scrollTo,
+      clientHeight: Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight'),
+      scrollHeight: Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight'),
+    };
+    Element.prototype.getBoundingClientRect = function stub(this: Element) {
+      if (isPane(this)) return rect(50, 400);
+      if (this.classList.contains('diff-review-diff-block')) return rect(this.textContent?.includes('function first') ? 250 : 650, 200);
+      return rect(0, 0);
+    };
+    HTMLElement.prototype.scrollTo = function stub(this: HTMLElement, options?: ScrollToOptions | number) {
+      if (isPane(this)) scrolls.push(typeof options === 'object' ? options.top ?? 0 : Number(options ?? 0));
+    };
+    Object.defineProperty(Element.prototype, 'clientHeight', { configurable: true, get(this: Element) { return isPane(this) ? 400 : 0; } });
+    Object.defineProperty(Element.prototype, 'scrollHeight', { configurable: true, get(this: Element) { return isPane(this) ? 2000 : 0; } });
+
+    try {
+      render(<DiffReviewFileDiffPane
+        filePath="src/example.ts"
+        editorUrl={null}
+        hunks={fileHunks}
+        decisions={[spanning]}
+        activeDecisionId={fileHunks[0].decisionId}
+        onSelect={() => {}}
+      />);
+    } finally {
+      Element.prototype.getBoundingClientRect = originals.rect;
+      HTMLElement.prototype.scrollTo = originals.scrollTo;
+      if (originals.clientHeight) Object.defineProperty(Element.prototype, 'clientHeight', originals.clientHeight);
+      if (originals.scrollHeight) Object.defineProperty(Element.prototype, 'scrollHeight', originals.scrollHeight);
+    }
+
+    // First block sits at 250 - 50 = 200 inside the pane and is shorter than
+    // it, so it centres: 200 - (400 - 200) / 2 = 100. Targeting the last block
+    // (or an offsetTop measured against some other ancestor) would not.
+    expect(scrolls).toEqual([100]);
+  });
+
   it('keeps the block header operable as the selection control', () => {
     renderPane('src/other.ts::@@ -1 +1 @@');
 
