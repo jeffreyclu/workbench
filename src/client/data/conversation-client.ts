@@ -40,4 +40,5 @@ export const conversationClient = {
   createTasksFromReport: (id: string) => request<{ plan?: ExecutionPlan; jobMessage?: SharedMessage }>(`/api/shared/messages/${id}/create-tasks`, { method: 'POST' }),
   retrySharedMessage: (id: string) => request<{ reply: SharedMessage; replies: SharedMessage[] }>(`/api/shared/messages/${id}/retry`, { method: 'POST' }),
   getRetrievedMemory: (id: string) => request<{ detail: RetrievedMemoryDetail | null }>(`/api/shared/messages/${id}/retrieved-memory`),
+  updateSharedMessageKind: (id: string, kind: SharedMessage['kind']) => request<{ message: SharedMessage }>(`/api/shared/messages/${id}`, { method: 'PATCH', body: JSON.stringify({ kind }) }),
 };

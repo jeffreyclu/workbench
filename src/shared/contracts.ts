@@ -1039,7 +1039,8 @@ export const createSharedMessageSchema = z.object({
 export const createSharedConversationSchema = z.object({ title: z.string().trim().min(1).max(200).default('New conversation') });
 
 export const updateSharedMessageSchema = z.object({
-  pinned: z.boolean(),
+  pinned: z.boolean().optional(),
+  kind: runKindSchema.nullable().optional(),
 });
 
 // --- Diagnostics and insights -----------------------------------------------

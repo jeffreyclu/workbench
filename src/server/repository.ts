@@ -785,7 +785,7 @@ export class WorkItemRepository {
     }, changes.costUsd);
   }
 
-  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; accountProfile?: string | null; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null; interjectionStreamOffset?: number | null; retrievedMemoryCount?: number | null; retrievedMemoryDetail?: { query: string; items: Array<{ source: string; title: string; body: string; createdAt: string }> } | null; costUsd?: number | null }): SharedMessage | null {
+  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; accountProfile?: string | null; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null; interjectionStreamOffset?: number | null; retrievedMemoryCount?: number | null; retrievedMemoryDetail?: { query: string; items: Array<{ source: string; title: string; body: string; createdAt: string }> } | null; costUsd?: number | null; kind?: SharedMessage['kind'] }): SharedMessage | null {
     // A retry reuses the same message row. Never let the error from the prior
     // attempt survive a successful or user-canceled terminal transition.
     const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
@@ -797,6 +797,7 @@ export class WorkItemRepository {
     const entries = Object.entries({
       estimated_cost_usd: cost?.costUsd, cost_source: cost?.costSource,
       pinned: changes.pinned === undefined ? undefined : Number(changes.pinned),
+      kind: changes.kind,
       body: changes.body, status: changes.status, error, author: changes.author, model: changes.model, account_profile: changes.accountProfile, execution_profile: changes.executionProfile,
       input_tokens: changes.inputTokens, cache_creation_input_tokens: changes.cacheCreationInputTokens, cache_read_input_tokens: changes.cacheReadInputTokens, output_tokens: changes.outputTokens, fallback_from: changes.fallbackFrom, fallback_reason: changes.fallbackReason, interjection_stream_offset: changes.interjectionStreamOffset, retrieved_memory_count: changes.retrievedMemoryCount,
       retrieved_memory_detail_json: changes.retrievedMemoryDetail === undefined ? undefined : changes.retrievedMemoryDetail === null ? null : JSON.stringify(changes.retrievedMemoryDetail),

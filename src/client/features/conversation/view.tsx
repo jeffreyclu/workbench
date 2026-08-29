@@ -126,9 +126,13 @@ export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'ac
  * turn to change from (for example) research to execute.
  */
 export function latestConversationExecutionKind(messages: SharedMessage[]): AgentRun['kind'] | null {
+  return latestConversationExecutionMessage(messages)?.kind ?? null;
+}
+
+export function latestConversationExecutionMessage(messages: SharedMessage[]): SharedMessage | null {
   return [...messages].reverse().find((message) =>
     (message.author === 'codex' || message.author === 'claude') && message.kind,
-  )?.kind ?? null;
+  ) ?? null;
 }
 
 type ConversationTaskPickerProps = {
@@ -567,9 +571,10 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   });
   const allConversationMessages = messages.data?.messages ?? [];
   const cacheSpendWarning = conversationCacheSpendWarning(allConversationMessages);
-  const manualConversationExecutionKind = selectedConversation?.workItemId
+  const manualConversationExecutionMessage = selectedConversation?.workItemId
     ? null
-    : latestConversationExecutionKind(allConversationMessages);
+    : latestConversationExecutionMessage(allConversationMessages);
+  const manualConversationExecutionKind = manualConversationExecutionMessage?.kind ?? null;
   // A pasted pull-request link is enough to review it: resolving one must not
   // require the conversation to be linked to a work item first.
   const githubCandidateUrls = useMemo(() => pullRequestUrls([
@@ -747,6 +752,11 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       queryClient.setQueryData(['shared-conversation', conversation.id], { conversation });
     },
     onError: (error) => toastError('Could not update the conversation pin.', error),
+  });
+  const setManualConversationExecutionKind = useMutation({
+    mutationFn: (kind: SharedMessage['kind']) => api.updateSharedMessageKind(manualConversationExecutionMessage!.id, kind),
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] }); },
+    onError: (error) => toastError('Could not update the execution type.', error),
   });
   const deleteConversation = useMutation({
     mutationFn: async (id: string) => { setDeleteConversationPromptOpen(false); await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())); await animateConversationExit(id); return api.deleteSharedConversation(id); },
@@ -1150,7 +1160,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
         {isPhoneChrome && <div className="mobile-chrome-controls"><button type="button" className={`mobile-chrome-toggle mobile-conversation-toggle icon-button${mobileHeaderOpen ? ' icon-button-active' : ''}`} onClick={() => setMobileHeaderOpen(true)} aria-label="Expand conversation tray" title="Expand conversation tray"><PanelTop size={16} /></button></div>}
         {isPhoneChrome && conversationId && <div className="mobile-review-toggle"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-label="Conversation" title="Conversation" aria-pressed={activePane === 'conversation'} onClick={() => setActivePane('conversation')}><MessageSquare size={13} /><span>Conversation</span></button><button type="button" aria-label="Changes" aria-pressed={activePane === 'changes'} onClick={() => setActivePane('changes')} title={changesAvailability.hasChanges ? 'Review changes' : changesAvailability.isError ? 'Could not check for changes' : changesAvailability.isLoading ? 'Checking for changes…' : 'No changes to review'}><FileDiff size={13} /> <span>Changes</span></button></div></div>}
         {isPhoneChrome && !mobileComposerOpen && <button type="button" className="mobile-composer-toggle icon-button" onClick={() => setMobileComposerOpen(true)} aria-label="Expand composer" title="Expand composer"><SquarePen size={16} /></button>}
-        {conversationId && <div className="thread-filter-bar"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-label="Conversation" title="Conversation" aria-pressed={activePane === 'conversation'} onClick={() => setActivePane('conversation')}><MessageSquare size={13} /><span>Conversation</span></button><button type="button" aria-label="Changes" aria-pressed={activePane === 'changes'} onClick={() => setActivePane('changes')} title={changesAvailability.hasChanges ? 'Review changes' : changesAvailability.isError ? 'Could not check for changes' : changesAvailability.isLoading ? 'Checking for changes…' : 'No changes to review'}><FileDiff size={13} /> <span>Changes</span></button></div>{changesAvailability.isError && <button type="button" className="button secondary compact" onClick={() => void changesAvailability.retry()} disabled={changesAvailability.isLoading}>Retry</button>}{selectedConversation && <button type="button" className={`icon-button${selectedConversation.pinned ? ' icon-button-active' : ''}`} onClick={() => setConversationPinned.mutate(!selectedConversation.pinned)} disabled={setConversationPinned.isPending} aria-pressed={Boolean(selectedConversation.pinned)} aria-label={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'} title={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'}><Pin size={13} fill={selectedConversation.pinned ? 'currentColor' : 'none'} /></button>}{linkedWorkItem.data?.item && <TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} disclosure />}{manualConversationExecutionKind && <span className="classification-badge" title="Latest classified execution type"><Bot size={10} aria-hidden="true" />{manualConversationExecutionKind}</span>}</div>}
+        {conversationId && <div className="thread-filter-bar"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-label="Conversation" title="Conversation" aria-pressed={activePane === 'conversation'} onClick={() => setActivePane('conversation')}><MessageSquare size={13} /><span>Conversation</span></button><button type="button" aria-label="Changes" aria-pressed={activePane === 'changes'} onClick={() => setActivePane('changes')} title={changesAvailability.hasChanges ? 'Review changes' : changesAvailability.isError ? 'Could not check for changes' : changesAvailability.isLoading ? 'Checking for changes…' : 'No changes to review'}><FileDiff size={13} /> <span>Changes</span></button></div>{changesAvailability.isError && <button type="button" className="button secondary compact" onClick={() => void changesAvailability.retry()} disabled={changesAvailability.isLoading}>Retry</button>}{selectedConversation && <button type="button" className={`icon-button${selectedConversation.pinned ? ' icon-button-active' : ''}`} onClick={() => setConversationPinned.mutate(!selectedConversation.pinned)} disabled={setConversationPinned.isPending} aria-pressed={Boolean(selectedConversation.pinned)} aria-label={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'} title={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'}><Pin size={13} fill={selectedConversation.pinned ? 'currentColor' : 'none'} /></button>}{linkedWorkItem.data?.item && <TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} disclosure />}{manualConversationExecutionMessage && <span className="card-classification-control compact" title="Latest classified execution type"><Bot size={10} aria-hidden="true" /><select className="card-classification-select" aria-label="Execution type" value={manualConversationExecutionKind ?? 'execute'} onChange={(event) => setManualConversationExecutionKind.mutate(event.target.value as AgentRun['kind'])} disabled={setManualConversationExecutionKind.isPending}><option value="research">Research</option><option value="analysis">Analysis</option><option value="strategy">Strategy</option><option value="execute">Execute</option><option value="review">Review</option><option value="bugfix">Bug fix</option></select>{setManualConversationExecutionKind.isPending && <LoaderCircle className="spin card-classification-spinner" size={10} />}</span>}</div>}
         <div className={`conversation-review-layout layout-${activePane}`}>
         <div className="conversation-thread-pane">
         <div className="shared-thread" ref={threadScrollRef}>
