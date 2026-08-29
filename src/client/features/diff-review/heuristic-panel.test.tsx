@@ -2,7 +2,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ReviewDecision, ReviewDecisionHunk } from './logic.js';
+import type { ReviewDecision, ReviewDecisionHunk, StaleReferenceReport } from './logic.js';
 import { DiffReviewHeuristicPanel } from './heuristic-panel.js';
 
 afterEach(cleanup);
@@ -19,8 +19,8 @@ const decision = (over: Partial<ReviewDecision> & { hunks: ReviewDecisionHunk[] 
   riskSignals: [], state: null, note: null, ...over,
 });
 
-function open(subject: ReviewDecision, all: ReviewDecision[] = []) {
-  render(<DiffReviewHeuristicPanel decision={subject} decisions={all} />);
+function open(subject: ReviewDecision, all: ReviewDecision[] = [], staleReferences: StaleReferenceReport | null = null) {
+  render(<DiffReviewHeuristicPanel decision={subject} decisions={all} staleReferences={staleReferences} />);
   fireEvent.click(screen.getByRole('button'));
 }
 
@@ -182,5 +182,67 @@ describe('diff review heuristic panel', () => {
     render(<DiffReviewHeuristicPanel decision={decision({ hunks: [hunk({ filePath: 'src/thing.ts', lines: ['+const a = 1;'] })] })} />);
     expect(document.querySelector('.diff-review-heuristic-summary')).toBeNull();
     expect(screen.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('names a reference left outside the change when the server reports one', () => {
+    open(
+      decision({ hunks: [hunk({ filePath: 'src/config.ts', lines: ['-export function loadConfig(path) {', '+export function loadConfig(path, mode) {'] })] }),
+      [],
+      {
+        symbols: ['loadConfig'],
+        staleSymbols: ['loadConfig'],
+        truncated: false,
+        references: [{ symbol: 'loadConfig', filePath: 'src/untouched.ts', line: 12, text: 'loadConfig(path)' }],
+      },
+    );
+    expect(screen.getByText(/src\/untouched\.ts still references it/)).toBeInTheDocument();
+  });
+
+  it('ignores a stale reference to a symbol this decision does not own', () => {
+    open(
+      decision({ hunks: [hunk({ filePath: 'src/config.ts', lines: ['+export function added() { return 1; }'] })] }),
+      [],
+      {
+        symbols: ['elsewhere'],
+        staleSymbols: ['elsewhere'],
+        truncated: false,
+        references: [{ symbol: 'elsewhere', filePath: 'src/untouched.ts', line: 3, text: 'elsewhere()' }],
+      },
+    );
+    expect(screen.queryByText(/still references it/)).not.toBeInTheDocument();
+  });
+
+  it('reports a test that names the new code but asserts nothing about it', () => {
+    const subject = decision({
+      changeType: 'new_code',
+      hunks: [hunk({ filePath: 'src/loader.ts', fileStatus: 'added', lines: ['+export function loadConfig() { return { port: 80 }; }'] })],
+    });
+    const test = decision({
+      id: 'test-decision', ordinal: 2,
+      hunks: [hunk({ filePath: 'src/loader.test.ts', lines: ["+it('loads', () => { expect(loadConfig()).toBeDefined(); });"] })],
+    });
+    open(subject, [subject, test]);
+    expect(screen.getByText(/assert nothing|asserts only/)).toBeInTheDocument();
+  });
+
+  it('says a test constrains the new code when it pins a value', () => {
+    const subject = decision({
+      changeType: 'new_code',
+      hunks: [hunk({ filePath: 'src/loader.ts', fileStatus: 'added', lines: ['+export function loadConfig() { return { port: 80 }; }'] })],
+    });
+    const test = decision({
+      id: 'test-decision', ordinal: 2,
+      hunks: [hunk({ filePath: 'src/loader.test.ts', lines: ["+it('loads', () => { expect(loadConfig().port).toBe(80); });"] })],
+    });
+    open(subject, [subject, test]);
+    expect(screen.queryByText(/asserts only/)).not.toBeInTheDocument();
+  });
+
+  it('lists a new dependency as a claim review cannot settle by reading', () => {
+    open(decision({
+      changeType: 'new_code',
+      hunks: [hunk({ filePath: 'src/client.ts', fileStatus: 'added', lines: ["+import { retry } from 'resilient';", '+export function call() { return retry(); }'] })],
+    }));
+    expect(screen.getByText(/nothing in the diff or the repository can confirm exists/)).toBeInTheDocument();
   });
 });

@@ -9,6 +9,12 @@ export type { ChangeTypeExplanation, ChangeTypeFacts, ChangeTypeRule, ChangeType
 export { PARITY_AXES, PARITY_DIRECTIVE, parityTableApplies } from '../../../shared/parity-table.js';
 export type { ParityAxis } from '../../../shared/parity-table.js';
 export { buildCoverageEvidence, buildReferenceEvidence } from '../../../shared/coverage-evidence.js';
+export { buildAssertionEvidence } from '../../../shared/assertion-evidence.js';
+export type { AssertionEvidence } from '../../../shared/assertion-evidence.js';
+export { buildExternalSurfaceEvidence } from '../../../shared/external-surface.js';
+export type { ExternalSurfaceEvidence } from '../../../shared/external-surface.js';
+export { EMPTY_STALE_REFERENCE_REPORT } from '../../../shared/stale-reference-contract.js';
+export type { StaleReference, StaleReferenceReport } from '../../../shared/stale-reference-contract.js';
 export type { CoverageEvidence, ReferenceEvidence } from '../../../shared/coverage-evidence.js';
 import { countChangedLines, hunkLocation, splitPatchHunks } from '../../../shared/review-decisions.js';
 import type { ReviewDecision, ReviewRiskSignal } from '../../../shared/review-decisions.js';

@@ -34,6 +34,7 @@ import { generateFastAiTaskDraft } from '../fast-task-draft-ai.js';
 import { assessDiffBlocks, lookupDiffConfidenceBlocks } from '../diff-confidence-ai.js';
 import { lookupReviewAssist, requestReviewAssist } from '../review-assist-ai.js';
 import { ensureReviewAutoScore, reviewAutoScoreView } from '../review-auto-score.js';
+import { findStaleReferences } from '../stale-references.js';
 import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
@@ -196,6 +197,19 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
         repository.listConversationsForWorkItem(item.id).map((conversation) => conversation.id),
       );
       response.json({ snapshots: repository.listWorkspaceDiffSnapshots({ workItemId: item.id }) });
+    } catch (error) { next(error); }
+  });
+  // The one review check that has to read outside the patch: a reference the
+  // change forgot to update is, by definition, in a file the diff does not
+  // contain. Served separately from the diff itself because it spawns a grep
+  // per changed symbol and the diff must stay fast.
+  router.get('/api/work-items/:id/workspace-diff/stale-references', async (request, response, next) => {
+    try {
+      const item = repository.get(request.params.id);
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      const workingDirectory = taskWorkingDirectory(item.id);
+      if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
+      response.json({ report: await findStaleReferences(workingDirectory) });
     } catch (error) { next(error); }
   });
   router.get('/api/work-items/:id/workspace-diff/status', async (request, response, next) => {

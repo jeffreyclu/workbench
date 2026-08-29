@@ -1,8 +1,9 @@
 import { memo, useMemo, useState } from 'react';
 import {
-  buildCoverageEvidence, buildReferenceEvidence, changeTypeLabel, explainChangeType, parityTableApplies, riskSignalLabel,
+  buildAssertionEvidence, buildCoverageEvidence, buildExternalSurfaceEvidence, buildReferenceEvidence,
+  changeTypeLabel, explainChangeType, parityTableApplies, riskSignalLabel,
 } from './logic.js';
-import type { ChangeTypeFacts, ChangeTypeRule, ReviewChangeType, ReviewDecision } from './logic.js';
+import type { ChangeTypeFacts, ChangeTypeRule, ReviewChangeType, ReviewDecision, StaleReferenceReport } from './logic.js';
 
 /**
  * The deterministic layer, answering the only question the panel is opened for:
@@ -86,12 +87,17 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
-export const DiffReviewHeuristicPanel = memo(function DiffReviewHeuristicPanel({ decision, decisions = [] }: {
+export const DiffReviewHeuristicPanel = memo(function DiffReviewHeuristicPanel({ decision, decisions = [], staleReferences = null }: {
   decision: ReviewDecision;
   /** The whole review. Evidence packs are cross-decision by nature — a new
    * function and its test always land in different files, so different
    * decisions — and read as empty without them. */
   decisions?: ReviewDecision[];
+  /** Repository-wide references to changed declarations, from the server. The
+   * only input here that is not derivable from the diff, and optional for that
+   * reason: the panel is fully useful without it and simply cannot raise this
+   * one finding until it arrives. */
+  staleReferences?: StaleReferenceReport | null;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -105,7 +111,15 @@ export const DiffReviewHeuristicPanel = memo(function DiffReviewHeuristicPanel({
       .flatMap((other) => other.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines })));
     const coverage = buildCoverageEvidence(own, siblings);
     const reference = buildReferenceEvidence(own, siblings);
+    const assertions = buildAssertionEvidence(coverage);
+    const external = buildExternalSurfaceEvidence(own);
     const { facts } = explanation;
+    // The report covers the whole diff, so it is narrowed to the declarations
+    // this decision actually owns before it is allowed to accuse this block.
+    const ownedSymbols = new Set(coverage.symbols.concat(reference.residualSymbols, facts.droppedDeclarations));
+    const stale = (staleReferences?.references ?? []).filter((hit) => ownedSymbols.has(hit.symbol));
+    const staleSymbols = [...new Set(stale.map((hit) => hit.symbol))].sort();
+    const staleFiles = [...new Set(stale.map((hit) => hit.filePath))];
     const fileCount = facts.files.length;
     const fired = [...explanation.fileRules, ...explanation.productionRules].find((rule) => rule.outcome === 'fired');
     const firedWhy = fired ? whyItFired(fired, facts) : null;
@@ -120,6 +134,12 @@ export const DiffReviewHeuristicPanel = memo(function DiffReviewHeuristicPanel({
         ? {
           id: 'dangling', weight: 2, warn: true, short: `${names(reference.residualSymbols)} still referenced after removal`,
           text: `${names(reference.residualSymbols)} is removed here and still referenced on a surviving line elsewhere in this review. That is a concrete break rather than a question of taste, so it is worth settling before any time goes into the rest of the block.`,
+        }
+        : null,
+      staleSymbols.length > 0
+        ? {
+          id: 'stale-reference', weight: 2, warn: true, short: `${names(staleSymbols)} still used in ${names(staleFiles)}, outside this change`,
+          text: `${names(staleSymbols)} changed here, and ${names(staleFiles)} still references it without being part of this change. A caller the patch never opened is the one break a diff cannot show, because the file that breaks is the file that is missing — so this is where the time goes before anything on screen is read.`,
         }
         : null,
       facts.droppedDeclarations.length > 0
@@ -146,6 +166,18 @@ export const DiffReviewHeuristicPanel = memo(function DiffReviewHeuristicPanel({
         ? {
           id: 'untested', weight: 1, warn: true, short: `no test names ${names(coverage.uncitedSymbols)}`,
           text: `No test in this review touches ${names(coverage.uncitedSymbols)}. The whole diff was searched for the name, so this is not missing evidence — nothing but your own reading is going to establish that the new code is right.`,
+        }
+        : null,
+      assertions.unconstrainedSymbols.length > 0
+        ? {
+          id: 'test-theater', weight: 1, warn: true, short: `tests for ${names(assertions.unconstrainedSymbols)} assert nothing`,
+          text: `Every test naming ${names(assertions.unconstrainedSymbols)} in this review asserts only ${names(assertions.matchers.map((matcher) => `\`${matcher}\``))}, which passes for almost any value the code could return. It counts as coverage in the queue and would not fail if this change were reverted, so read it as untested rather than tested.`,
+        }
+        : null,
+      external.claims.length > 0
+        ? {
+          id: 'unverified-api', weight: 1, warn: true, short: `new external surface: ${names(external.claims)}`,
+          text: `This starts using ${names(external.claims)}, which nothing in the diff or the repository can confirm exists. It is not evidence of a mistake — it is the one class of claim review cannot settle by reading, so confirm it against the package or deployment config rather than against the change.`,
         }
         : null,
       rewritten
@@ -194,10 +226,10 @@ export const DiffReviewHeuristicPanel = memo(function DiffReviewHeuristicPanel({
       // "Cheap to review" is itself a critical answer, and it is only worth
       // trusting if it names what was checked to reach it.
       clean: kept.length === 0
-        ? 'Everything that would argue for more time came back clean: no declaration is dropped without a replacement, no removed name is still referenced in this review, every new declaration is named by a test, and no risk signal is set.'
+        ? `Everything that would argue for more time came back clean: no declaration is dropped without a replacement, no removed name is still referenced in this review, every new declaration is named by a test that asserts something about it, no new dependency or environment key is introduced, and no risk signal is set.${staleReferences ? ' Nothing outside this change still references the declarations it altered.' : ''}`
         : null,
     };
-  }, [decision, decisions]);
+  }, [decision, decisions, staleReferences]);
 
   return (
     <section className="diff-review-heuristic">

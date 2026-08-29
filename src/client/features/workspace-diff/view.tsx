@@ -204,6 +204,16 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // rest. Nothing here requests them; they stream in and populate whichever
   // decision panel the reviewer opens.
   const autoScores = useAutoReviewScores({ workItemId, conversationId }, reviewRevision);
+  // The only review check that reads outside the patch, so the only one that
+  // needs the server. Keyed on the revision because its answer is invalidated
+  // by any edit to the working tree, and disabled outside work-item scope
+  // where the endpoint does not apply — the panel treats it as optional.
+  const staleReferences = useQuery({
+    queryKey: ['stale-references', workItemId, reviewRevision],
+    queryFn: () => sourceClient.getStaleReferences(workItemId!),
+    enabled: Boolean(workItemId) && reviewSource === 'workspace',
+    staleTime: 60_000,
+  });
   const selectedDecision = orderedDecisions.find((decision) => decision.id === selectedDecisionId) ?? orderedDecisions[0] ?? null;
   const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
   // The same AI score the detail panel shows, reduced to a band for the gutter
@@ -369,7 +379,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                   <div className="diff-review-workbench">
                     {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} />}
                     {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={<DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />} onClose={() => setDetailAnchor(null)}>
-                      <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)}>
+                      <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null}>
                         <DiffReviewActions key={popoverDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(popoverDecision, state)} />
                       </DiffReviewDecisionDetailCard>
                     </DecisionPopover>}

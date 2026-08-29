@@ -1,3 +1,4 @@
+import type { StaleReferenceReport } from '../../shared/stale-reference-contract.js';
 import type { BrokerConnection, BrokerSearchResponse, BrokerSourceId, ResolvedSourceDraft } from '../../shared/contracts';
 import type { DiffHunkReview, DiffHunkReviewState, GitHubPullRequestDiff, UpsertDiffHunkReviewsInput, WorkspaceDiff, WorkspaceDiffSnapshot } from '../../shared/contracts';
 import { request } from './request';
@@ -29,6 +30,7 @@ export const sourceClient = {
   getDiffHunkReviews: (scope: WorkspaceDiffScope, revision: string) => request<{ reviews: DiffHunkReview[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/hunk-reviews?revision=${encodeURIComponent(revision)}`),
   upsertDiffHunkReview: (scope: WorkspaceDiffScope, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string }) => request<{ review: DiffHunkReview }>(`${workspaceDiffBasePath(scope)}/workspace-diff/hunk-reviews`, { method: 'PUT', body: JSON.stringify(input) }),
   upsertDiffHunkReviews: (scope: WorkspaceDiffScope, input: UpsertDiffHunkReviewsInput) => request<{ reviews: DiffHunkReview[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/hunk-reviews/batch`, { method: 'PUT', body: JSON.stringify(input) }),
+  getStaleReferences: (id: string) => request<{ report: StaleReferenceReport }>(`/api/work-items/${id}/workspace-diff/stale-references`),
   getWorkItemWorkspaces: (id: string) => request<{ selectedPath: string | null; workspaces: Array<{ path: string; label: string; selected: boolean }> }>(`/api/work-items/${id}/workspaces`),
   selectWorkItemWorkspace: (id: string, workspacePath: string) => request<{ selectedPath: string; workspaces: Array<{ path: string; label: string; selected: boolean }> }>(`/api/work-items/${id}/workspaces/selection`, { method: 'PUT', body: JSON.stringify({ workspacePath }) }),
   getGitHubPullRequestDiff: (url: string, page = 1) => request<{ diff: GitHubPullRequestDiff }>(`/api/github/pull-request-diff?url=${encodeURIComponent(url)}&page=${page}`),

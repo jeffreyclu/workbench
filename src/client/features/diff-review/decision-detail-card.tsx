@@ -3,7 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 import { sourceClient } from '../../data/source-client.js';
 import { changeTypeLabel } from './logic.js';
 import { DiffReviewHeuristicPanel } from './heuristic-panel.js';
-import type { ReviewDecision } from './logic.js';
+import type { ReviewDecision, StaleReferenceReport } from './logic.js';
 import { aiRiskBand, parseAiRiskScore, reviewAssistDecisionPayload } from './logic.js';
 import type { AutoScoreResult } from './auto-score.js';
 import { ACTION_LABELS, EXPLAIN_ACTIONS, useCachedReviewAssistAnswers, type ReviewAssistAction, type ReviewAssistTaskIntent } from './review-assist.js';
@@ -20,7 +20,7 @@ export type { ReviewAssistAction, ReviewAssistTaskIntent };
  * lives on the block's gutter marker instead, so the panel only carries what
  * has to be asked for.
  */
-export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', decisions = [], children }: {
+export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', decisions = [], staleReferences = null, children }: {
   decision: ReviewDecision;
   taskIntent: ReviewAssistTaskIntent;
   /** Result of the background pass that scores a diff once its agent comes to
@@ -33,6 +33,10 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
    * is how a new function's tests — always a different decision, since they
    * live in a different file — reach the model at all. */
   decisions?: ReviewDecision[];
+  /** Repository-wide references to declarations this review changed. Optional
+   * because it is the one finding that needs a server round trip: the panel is
+   * complete without it and simply omits that check until it lands. */
+  staleReferences?: StaleReferenceReport | null;
   children: ReactNode;
 }) {
   const decisionPayload = reviewAssistDecisionPayload(decision, decisions);
@@ -84,7 +88,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
       * allowed to rest on. Collapsed by default, because a reviewer only opens
       * it when the verdict looks wrong — which is exactly when a description
       * of the heuristic would be useless and the trace is not. */}
-    <DiffReviewHeuristicPanel decision={decision} decisions={decisions} />
+    <DiffReviewHeuristicPanel decision={decision} decisions={decisions} staleReferences={staleReferences} />
     <section className="diff-review-ai-risk" aria-labelledby="diff-review-risk-title">
       {/* The score action lives beside the number it produces, not in the assist
         * row: it answers a different question, and its label swaps width once a
