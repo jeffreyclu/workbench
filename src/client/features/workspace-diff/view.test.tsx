@@ -534,4 +534,27 @@ describe('WorkspaceDiffView pull-request source', () => {
     expect(await screen.findByRole('heading', { name: 'Selectable scopes' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Open on GitHub/i })).toHaveAttribute('href', pullRequestUrl);
   });
+
+  /** The diagram is popover content: it lived as a component with passing unit
+   * tests while no caller mounted it, so this asserts it from the view. */
+  it('opens the related-changes diagram beside the decision popover', async () => {
+    const file: WorkspaceDiffFile = {
+      path: 'src/related.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
+      patch: '@@ -1 +1 @@ function render(scale)\n-const a = 1\n+const a = render(scale)\n@@ -10 +10 @@ function render(scale)\n-const b = 2\n+const b = render(scale)',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file]) });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    await waitFor(() => expect(selectedDecisionChip()).toBeInTheDocument());
+    await openDecisionDetail(1);
+    const popover = await screen.findByRole('dialog', { name: /./ });
+    expect(within(popover).getByRole('region', { name: 'Related changes for this decision' })).toBeInTheDocument();
+  });
 });

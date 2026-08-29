@@ -11,6 +11,7 @@ import { sourceClient } from '../../data/source-client.js';
 import type { ReviewAssistTaskIntent } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
 import { DecisionPopover, type DecisionPopoverAnchor } from '../diff-review/decision-popover.js';
+import { DecisionRelationshipDiagram } from '../diff-review/decision-relationship-diagram.js';
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import type { ReviewDecision } from '../diff-review/logic.js';
@@ -102,6 +103,9 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // the reviewer had scrolled it. Counting selections gives the diff pane a
   // signal for every click, not only the ones that change the decision.
   const [selectionTick, setSelectionTick] = useState(0);
+  // The change the reviewer moved away from on the last selection, so the
+  // diagram beside the panel can mark the way back.
+  const [cameFromDecisionId, setCameFromDecisionId] = useState<string | null>(null);
   // The desktop decision detail is popover content opened from a block's gutter
   // marker, so the open state has to carry the marker that opened it: the
   // popover positions itself off that element's rect.
@@ -241,6 +245,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     const nextId = nextPendingDecisionId(orderedDecisions, decision.id, changeMap);
     try {
       await recordDecisionState(decision, state);
+      if (nextId !== decision.id) setCameFromDecisionId(decision.id);
       setSelectedDecisionId(nextId);
       setDetailAnchor(null);
     } catch {
@@ -253,6 +258,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   };
 
   const selectDecision = (decisionId: string) => {
+    if (selectedDecisionId && selectedDecisionId !== decisionId) setCameFromDecisionId(selectedDecisionId);
     setSelectedDecisionId(decisionId);
     // Selecting elsewhere closes an open popover, but the marker selects its own
     // decision before it opens, so keep the anchor when the id is unchanged —
@@ -362,7 +368,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">
                     {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} />}
-                    {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" onClose={() => setDetailAnchor(null)}>
+                    {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={<DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />} onClose={() => setDetailAnchor(null)}>
                       <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)}>
                         <DiffReviewActions key={popoverDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(popoverDecision, state)} />
                       </DiffReviewDecisionDetailCard>
