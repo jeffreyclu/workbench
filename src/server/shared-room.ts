@@ -40,9 +40,29 @@ export function interjectionSteeringPrompt(body: string): string {
  * conversation renders the activity immediately instead of waiting for its
  * polling fallback.
  */
-function updateLiveSharedBody(repository: WorkItemRepository, messageId: string, body: string): void {
-  repository.updateSharedMessage(messageId, { body });
-  publishRealtimeEvent('shared');
+export function isTransientSqliteContention(error: unknown): boolean {
+  const candidate = error as { code?: unknown; errcode?: unknown; message?: unknown } | null;
+  return candidate?.errcode === 5
+    || candidate?.code === 'SQLITE_BUSY'
+    || (typeof candidate?.message === 'string' && /database is (?:locked|busy)/i.test(candidate.message));
+}
+
+/** Intermediate stream snapshots are disposable; the in-memory provider
+ * result is persisted again at terminal completion. A short WAL writer clash
+ * must therefore skip one snapshot, not abort the provider or crash runtime. */
+function persistNonTerminalAgentUpdate(operation: () => void): void {
+  try { operation(); }
+  catch (error) {
+    if (!isTransientSqliteContention(error)) throw error;
+  }
+}
+
+function updateLiveSharedBody(repository: WorkItemRepository, messageId: string, body: string, runId?: string): void {
+  persistNonTerminalAgentUpdate(() => {
+    repository.updateSharedMessage(messageId, { body });
+    if (runId) repository.updateRun(runId, { output: body });
+    publishRealtimeEvent('shared');
+  });
 }
 
 export function agentStreamEventForCodexAppServerItem(method: string, item: Record<string, unknown> | undefined): { kind: 'decision' | 'tool'; detail: string } | null {
@@ -294,25 +314,38 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
       liveBlocks.push(detail);
       publishLiveOutput();
     };
-    const request = (method: string, params: Record<string, unknown>) => {
-      const id = ++sequence;
-      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
-      return id;
-    };
     const rejectPendingSteers = () => {
       for (const resolveSteer of pendingSteers.values()) resolveSteer(false);
       pendingSteers.clear();
     };
     let startupTimeout: ReturnType<typeof setTimeout> | null = null;
+    const stop = () => { try { process.kill(child.pid ? -child.pid : child.pid!, 'SIGTERM'); } catch { child.kill('SIGTERM'); } };
     const fail = (error: Error) => {
       if (!settled) {
         settled = true;
         if (startupTimeout) clearTimeout(startupTimeout);
         rejectPendingSteers();
+        stop();
         reject(error);
       }
     };
-    const stop = () => { try { process.kill(child.pid ? -child.pid : child.pid!, 'SIGTERM'); } catch { child.kill('SIGTERM'); } };
+    const transportError = (error: Error) => fail(new Error(`Codex app-server transport failed: ${error.message}`));
+    // `child.on('error')` does not receive errors emitted by the stdin Socket.
+    // A provider that closes its pipe while a JSON-RPC request is being written
+    // emits EPIPE there; without this listener Node treats it as an uncaught
+    // process error and takes down the entire Workbench backend.
+    child.stdin.on('error', transportError);
+    const request = (method: string, params: Record<string, unknown>) => {
+      const id = ++sequence;
+      if (child.stdin.destroyed || child.stdin.writableEnded || !child.stdin.writable) {
+        queueMicrotask(() => transportError(new Error('stdin is closed')));
+        return id;
+      }
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`, (error) => {
+        if (error) transportError(error);
+      });
+      return id;
+    };
     const steer: ActiveReplySteering = (body) => {
       if (!threadId || !turnId || settled) return Promise.resolve(false);
       return new Promise((resolveSteer) => {
@@ -328,10 +361,14 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
     };
     signal.addEventListener('abort', cancel, { once: true });
     child.on('error', fail);
+    child.stdout.on('error', transportError);
+    child.stderr.on('error', transportError);
     child.stderr.on('data', (chunk: Buffer) => { if (!settled && chunk.toString().trim()) { /* diagnostics arrive on close */ } });
     child.stdout.on('data', (chunk: Buffer) => {
-      buffered += chunk.toString(); const lines = buffered.split('\n'); buffered = lines.pop() ?? '';
-      for (const line of lines.filter(Boolean)) {
+      if (settled) return;
+      try {
+        buffered += chunk.toString(); const lines = buffered.split('\n'); buffered = lines.pop() ?? '';
+        for (const line of lines.filter(Boolean)) {
         let event: CodexAppServerEvent; try { event = JSON.parse(line) as CodexAppServerEvent; } catch { continue; }
         const reportedUsage = codexUsageFromAppServerEvent(event);
         if (reportedUsage) {
@@ -421,11 +458,18 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
             fail(new Error(String(event.error.message ?? 'Codex app-server request failed.')));
           }
         }
+        }
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
       }
     });
-    child.on('close', (code) => {
+    child.on('close', (code, exitSignal) => {
       unregisterProcess();
-      if (!settled) fail(signal.aborted ? new Error('Agent run canceled.') : new Error(`Codex app-server exited with code ${code}.`));
+      if (!settled) fail(signal.aborted
+        ? new Error('Agent run canceled.')
+        : new Error(code === null
+          ? `Codex app-server exited unexpectedly${exitSignal ? ` after signal ${exitSignal}` : ''}.`
+          : `Codex app-server exited with code ${code}.`));
     });
     const initialRequest = codexAppServerInitialRequest(cwd, resumeThreadId, initialized);
     request(initialRequest.method, initialRequest.params);
@@ -1085,35 +1129,39 @@ export async function replyInSharedRoom(
       result = agent === 'codex'
       ? await runSteerableCodex(guardedPrompt, cwd, controller.signal, (partial) => {
         if (controller.signal.aborted) return;
-        updateLiveSharedBody(repository, messageId, partial);
-        if (runId) repository.updateRun(runId, { output: partial });
+        updateLiveSharedBody(repository, messageId, partial, runId);
       }, (steer) => {
         registerActiveReplySteering(messageId, steer);
         // A click can arrive while the app-server is still creating its turn.
         // Keep that explicitly promoted human message queued, then deliver it
         // as soon as the same live session exposes turn/steer.
         void deliverPendingSharedInterjections(repository, messageId);
-      }, (event) => repository.addAgentStreamEvents(messageId, runId ?? null, [event]), (usage) => {
-        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
-        repository.updateSharedMessage(messageId, telemetry);
-        if (runId) { repository.updateRun(runId, telemetry); repository.addAgentRunDiagnostic(runId, messageId, agent, 'usage', telemetry); }
+      }, (event) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, [event])), (usage) => {
+        persistNonTerminalAgentUpdate(() => {
+          const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
+          repository.updateSharedMessage(messageId, telemetry);
+          if (runId) { repository.updateRun(runId, telemetry); repository.addAgentRunDiagnostic(runId, messageId, agent, 'usage', telemetry); }
+        });
       }, linkedConversation?.codexThreadId, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, Boolean(runId && MUTATING_RUN_KINDS.has(repository.getRun(runId)?.kind ?? 'analysis')), freshPrompt)
         .then(({ output, threadId, usage, peakContextTokens }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage, peakContextTokens, fallbackFrom: null, fallbackReason: null }))
       : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       if (controller.signal.aborted) return;
-      updateLiveSharedBody(repository, messageId, partial);
-      if (runId) repository.updateRun(runId, { output: partial });
+      updateLiveSharedBody(repository, messageId, partial, runId);
     }, controller.signal, (fallback, reason) => {
-      repository.updateSharedMessage(messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: agent, fallbackReason: reason.slice(0, 500) });
-      if (runId) repository.updateRun(runId, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: agent, fallbackReason: reason.slice(0, 500) });
+      persistNonTerminalAgentUpdate(() => {
+        repository.updateSharedMessage(messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: agent, fallbackReason: reason.slice(0, 500) });
+        if (runId) repository.updateRun(runId, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: agent, fallbackReason: reason.slice(0, 500) });
+      });
     }, profile, (usage) => {
-      const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
-      repository.updateSharedMessage(messageId, telemetry);
-      if (runId) repository.updateRun(runId, telemetry);
-      if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'usage', telemetry);
-    }, (entries) => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
+      persistNonTerminalAgentUpdate(() => {
+        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
+        repository.updateSharedMessage(messageId, telemetry);
+        if (runId) repository.updateRun(runId, telemetry);
+        if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'usage', telemetry);
+      });
+    }, (entries) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
       kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
-    }))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, agent === 'claude' ? (steer) => {
+    })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, agent === 'claude' ? (steer) => {
       registerActiveReplySteering(messageId, steer);
       void deliverPendingSharedInterjections(repository, messageId);
     } : undefined,
@@ -1124,15 +1172,16 @@ export async function replyInSharedRoom(
       repository.updateSharedMessage(messageId, { body: '● Claude session expired. Restarting this turn in a fresh session…' });
       result = await runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(freshPrompt, cwd), (partial) => {
         if (controller.signal.aborted) return;
-        updateLiveSharedBody(repository, messageId, partial);
-        if (runId) repository.updateRun(runId, { output: partial });
+        updateLiveSharedBody(repository, messageId, partial, runId);
       }, controller.signal, undefined, profile, (usage) => {
-        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
-        repository.updateSharedMessage(messageId, telemetry);
-        if (runId) repository.updateRun(runId, telemetry);
-      }, (entries) => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
+        persistNonTerminalAgentUpdate(() => {
+          const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
+          repository.updateSharedMessage(messageId, telemetry);
+          if (runId) repository.updateRun(runId, telemetry);
+        });
+      }, (entries) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
-      }))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
+      })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
         registerActiveReplySteering(messageId, steer);
         void deliverPendingSharedInterjections(repository, messageId);
       }, undefined, false, !isPairedReply);
@@ -1155,12 +1204,13 @@ export async function replyInSharedRoom(
       repository.updateSharedMessage(messageId, { body: '● Claude reported an invalid workspace-scope blocker. Handing this tracked turn to Codex…', fallbackFrom: 'claude', fallbackReason: reason });
       const recovered = await runAgentCommandWithFallback('codex', cwd, `${guardedPrompt}\n\nRecovery handoff: Claude incorrectly claimed it lacked workspace access. Complete the original request directly. Do not repeat that claim; report only observed commands, files changed, verification, and concrete blockers.`, (partial) => {
         if (controller.signal.aborted) return;
-        updateLiveSharedBody(repository, messageId, partial);
-        if (runId) repository.updateRun(runId, { output: partial });
+        updateLiveSharedBody(repository, messageId, partial, runId);
       }, controller.signal, undefined, profile, (usage) => {
-        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
-        repository.updateSharedMessage(messageId, telemetry);
-        if (runId) repository.updateRun(runId, telemetry);
+        persistNonTerminalAgentUpdate(() => {
+          const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
+          repository.updateSharedMessage(messageId, telemetry);
+          if (runId) repository.updateRun(runId, telemetry);
+        });
       }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, undefined, undefined, true);
       result = { ...recovered, fallbackFrom: 'claude', fallbackReason: reason };
       repository.updateSharedMessage(messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });

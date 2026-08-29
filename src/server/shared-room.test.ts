@@ -6,7 +6,7 @@ import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, buildSharedReplyPrompt, classificationForLinkedItem, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, buildSharedReplyPrompt, classificationForLinkedItem, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const temporaryDirectories: string[] = [];
@@ -57,6 +57,12 @@ function message(index: number, body: string): SharedMessage {
 }
 
 describe('compactConversationHistory', () => {
+  it('recognizes SQLite writer contention without swallowing unrelated failures', () => {
+    expect(isTransientSqliteContention(Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_ERROR', errcode: 5 }))).toBe(true);
+    expect(isTransientSqliteContention(new Error('database is busy'))).toBe(true);
+    expect(isTransientSqliteContention(new Error('disk I/O error'))).toBe(false);
+  });
+
   it('recognizes an expired Claude session so retries can start fresh', () => {
     expect(isMissingClaudeSessionError(new Error('No conversation found with session ID: abc'))).toBe(true);
     expect(isMissingClaudeSessionError(new Error('Provider rate limited'))).toBe(false);
@@ -449,6 +455,57 @@ describe('shared-room Codex warming', () => {
     expect(requests.some((request) => request.method === 'thread/resume' && request.params.threadId === 'expired-thread')).toBe(true);
     expect(requests.some((request) => request.method === 'thread/start')).toBe(true);
     expect(requests.find((request) => request.method === 'turn/start')?.params.input[0].text).toBe('Full recovery prompt.');
+  });
+
+  it('contains a closed app-server stdin pipe to the turn instead of crashing Workbench', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-codex-epipe-'));
+    temporaryDirectories.push(directory);
+    const fakeAppServer = [
+      '#!/bin/sh',
+      'IFS= read -r initialize',
+      `printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
+      // Keep stdout alive briefly after closing stdin so Workbench receives
+      // initialize and attempts the next JSON-RPC write into a closed pipe.
+      'exec 0<&-',
+      'sleep 0.05',
+    ].join('\n');
+    writeFileSync(join(directory, 'codex'), fakeAppServer);
+    chmodSync(join(directory, 'codex'), 0o755);
+    process.env.PATH = directory;
+
+    await expect(runSteerableCodex(
+      'Trigger the closed transport.', directory, new AbortController().signal,
+      () => undefined, () => undefined, () => undefined, () => undefined,
+    )).rejects.toThrow(/Codex app-server (?:transport failed|exited)/);
+
+    // Reaching this assertion proves the stream's EPIPE stayed inside the
+    // rejected turn instead of becoming an uncaught process-level error.
+    expect(true).toBe(true);
+  });
+
+  it('contains failures from a live-stream persistence callback to the turn', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-codex-callback-error-'));
+    temporaryDirectories.push(directory);
+    const fakeAppServer = [
+      '#!/bin/sh',
+      'IFS= read -r initialize',
+      `printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
+      'IFS= read -r bootstrap',
+      `printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}'`,
+      'IFS= read -r turn',
+      `printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-1"}}}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"itemId":"message-1","delta":"stream me"}}'`,
+      'sleep 1',
+    ].join('\n');
+    writeFileSync(join(directory, 'codex'), fakeAppServer);
+    chmodSync(join(directory, 'codex'), 0o755);
+    process.env.PATH = directory;
+
+    await expect(runSteerableCodex(
+      'Trigger the callback.', directory, new AbortController().signal,
+      () => { throw new Error('database is locked'); },
+      () => undefined, () => undefined, () => undefined,
+    )).rejects.toThrow('database is locked');
   });
 
 });
