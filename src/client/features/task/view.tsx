@@ -74,7 +74,6 @@ import { useTaskAccountProfile, useTaskExecutionProfile } from './state';
 import { celebrate } from '../../components/celebrate';
 import { SessionFeedbackPrompt } from '../../components/dialogs/session-feedback-prompt';
 import { WorkspaceDiffView } from '../workspace-diff/view';
-import { formatDiffFollowUpReference, type DiffFollowUpReference } from '../diff-confidence';
 import type { AgentAccountProfile } from '../../data/runtime-client';
 
 /**
@@ -117,17 +116,6 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const [activityVisibleCount, setActivityVisibleCount] = useState(ACTIVITY_PAGE_SIZE);
   const RUNS_PAGE_SIZE = 5;
   const [runsVisibleCount, setRunsVisibleCount] = useState(RUNS_PAGE_SIZE);
-  const addDiffFollowUp = (reference: DiffFollowUpReference) => {
-    const conversation = detail.data?.conversations[0];
-    if (!conversation) {
-      toast.error('This task has no conversation to follow up in.');
-      return;
-    }
-    const previousDraft = readConversationDrafts()[conversation.id]?.trim();
-    writeConversationDraft(conversation.id, [previousDraft, formatDiffFollowUpReference(reference)].filter(Boolean).join('\n\n'));
-    onOpenConversation(conversation.id);
-  };
-
   const initializedExecutionPlanSelectionId = useRef<string | null>(null);
   const update = useMutation({
     mutationFn: (input: UpdateWorkItemInput) => api.updateWorkItem(id, input),
@@ -710,7 +698,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       <details className="detail-section task-collapsible workspace-review-section">
         <summary><span>Workspace review</span><small>Latest changes and recorded snapshots</small></summary>
         <div className="task-collapsible-content">
-          <WorkspaceDiffView scope={{ workItemId: item.id }} activeWorkspacePaths={detail.data.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : [])} reviewHandoff={detail.data.runs.find((run) => run.reviewHandoff)?.reviewHandoff ?? null} onFollowUp={addDiffFollowUp} taskIntent={{ title: item.title, description: item.description }} pullRequestUrlCandidates={references.map((reference) => reference.url)} />
+          <WorkspaceDiffView scope={{ workItemId: item.id }} activeWorkspacePaths={detail.data.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : [])} reviewHandoff={detail.data.runs.find((run) => run.reviewHandoff)?.reviewHandoff ?? null} taskIntent={{ title: item.title, description: item.description }} pullRequestUrlCandidates={references.map((reference) => reference.url)} />
         </div>
       </details>
       <details className="detail-section task-collapsible relationships-section">

@@ -8,13 +8,12 @@ import { buildChangeMap } from '../../../shared/change-map.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
-import type { DiffFollowUpReference } from '../diff-confidence.js';
 import type { ReviewAssistTaskIntent } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import type { ReviewDecision } from '../diff-review/logic.js';
-import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, reviewDecisionFollowUpReference, reviewStateShortLabel } from '../diff-review/logic.js';
+import { buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, reviewStateShortLabel } from '../diff-review/logic.js';
 import { useAutoReviewScores } from '../diff-review/auto-score.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
@@ -58,12 +57,11 @@ function usePhoneReviewControls() {
   return isPhone;
 }
 
-export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, reviewHandoff, onFollowUp, taskIntent = null, pullRequestUrlCandidates }: {
+export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, reviewHandoff, taskIntent = null, pullRequestUrlCandidates }: {
   scope: WorkspaceDiffScope;
   isRunning?: boolean;
   activeWorkspacePaths?: string[];
   reviewHandoff?: AgentRunReviewHandoff | null;
-  onFollowUp?: (reference: DiffFollowUpReference) => void;
   taskIntent?: ReviewAssistTaskIntent;
   /** Any URLs that may be pull requests. Recognised ones join the repository
    * picker as review sources beside the local checkouts. */
@@ -295,23 +293,6 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     writeWorkspaceDiffSource(preferenceScope, url);
   };
 
-  // Following up hands the decision to the agent, so it is recorded as
-  // commented rather than left pending. Selection deliberately stays put: the
-  // reviewer is about to type about this decision, not move past it. Attaching
-  // still happens if the state write fails — the conversation is the point.
-  const followUpOnDecision = async () => {
-    if (!selectedDecision || !onFollowUp) return;
-    const reference = reviewDecisionFollowUpReference(selectedDecision);
-    if (selectedDecision.state === null) {
-      try {
-        await recordDecisionState(selectedDecision, 'commented');
-      } catch {
-        // The mutation exposes its stable request error beside the actions.
-      }
-    }
-    onFollowUp(reference);
-  };
-
   const workspaces = explorer.data?.workspaces ?? [];
   if (!isPullRequestSource) {
     if (query.isLoading) return <DiffSkeleton />;
@@ -363,7 +344,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                   <div className="diff-review-workbench">
                     {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={selectDecision} />}
                     {!isPhoneReview && <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
-                      <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
+                      <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} />
                     </DiffReviewDecisionDetailCard></div>}
                   </div>
                   {isPhoneReview && mobileDecisionDetailOpen && <ModalDialog className="decision-detail-dialog" labelledBy="mobile-decision-detail-title" onClose={() => setMobileDecisionDetailOpen(false)}>
@@ -372,7 +353,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                       <button type="button" onClick={() => setMobileDecisionDetailOpen(false)} aria-label="Close decision details"><X size={18} /></button>
                     </div>
                     <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
-                      <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} onFollowUp={onFollowUp ? () => void followUpOnDecision() : undefined} />
+                      <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} />
                     </DiffReviewDecisionDetailCard></div>
                   </ModalDialog>}
                 </>}
