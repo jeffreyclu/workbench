@@ -144,6 +144,110 @@ describe('review file diff pane', () => {
     expect(scrolls).toEqual([100]);
   });
 
+  it('scrolls back to the selected block when the same decision is picked again', () => {
+    // The reviewer scrolls the diff by hand to read context, then clicks the
+    // decision they are already on. React bails out of the identical id, so the
+    // selection counter is what has to bring them back.
+    const scrolls: number[] = [];
+    const isPane = (el: Element) => el.classList.contains('diff-review-file-diff-body');
+    const rect = (top: number, height: number) => ({ top, height, bottom: top + height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    const originals = {
+      rect: Element.prototype.getBoundingClientRect,
+      scrollTo: HTMLElement.prototype.scrollTo,
+      clientHeight: Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight'),
+      scrollHeight: Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight'),
+    };
+    Element.prototype.getBoundingClientRect = function stub(this: Element) {
+      if (isPane(this)) return rect(50, 400);
+      if (this.classList.contains('diff-review-diff-block')) return rect(250, 200);
+      return rect(0, 0);
+    };
+    HTMLElement.prototype.scrollTo = function stub(this: HTMLElement, options?: ScrollToOptions | number) {
+      if (isPane(this)) scrolls.push(typeof options === 'object' ? options.top ?? 0 : Number(options ?? 0));
+    };
+    Object.defineProperty(Element.prototype, 'clientHeight', { configurable: true, get(this: Element) { return isPane(this) ? 400 : 0; } });
+    Object.defineProperty(Element.prototype, 'scrollHeight', { configurable: true, get(this: Element) { return isPane(this) ? 2000 : 0; } });
+
+    const pane = (tick: number) => <DiffReviewFileDiffPane
+      filePath="src/example.ts"
+      editorUrl={null}
+      hunks={hunks}
+      decisions={[decision(null)]}
+      activeDecisionId={hunks[0].decisionId}
+      selectionTick={tick}
+      onSelect={() => {}}
+    />;
+    try {
+      const { rerender } = render(pane(1));
+      expect(scrolls).toEqual([100]);
+      // Same decision, one more click: the pane scrolls to the same place again
+      // instead of leaving the reviewer where they had scrolled to.
+      rerender(pane(2));
+      expect(scrolls).toEqual([100, 100]);
+    } finally {
+      Element.prototype.getBoundingClientRect = originals.rect;
+      HTMLElement.prototype.scrollTo = originals.scrollTo;
+      if (originals.clientHeight) Object.defineProperty(Element.prototype, 'clientHeight', originals.clientHeight);
+      if (originals.scrollHeight) Object.defineProperty(Element.prototype, 'scrollHeight', originals.scrollHeight);
+    }
+  });
+
+  it('corrects the landing when the block moves after the commit that measured it', () => {
+    // A peek panel collapsing above the block, or the pane being revealed in
+    // the outer scroller, moves the target after the first measurement. The
+    // reviewer should end up on the block, not next to where it used to be.
+    const scrolls: number[] = [];
+    const frames: FrameRequestCallback[] = [];
+    let blockTop = 250;
+    const isPane = (el: Element) => el.classList.contains('diff-review-file-diff-body');
+    const rect = (top: number, height: number) => ({ top, height, bottom: top + height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    const originals = {
+      rect: Element.prototype.getBoundingClientRect,
+      scrollTo: HTMLElement.prototype.scrollTo,
+      raf: window.requestAnimationFrame,
+      clientHeight: Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight'),
+      scrollHeight: Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight'),
+    };
+    Element.prototype.getBoundingClientRect = function stub(this: Element) {
+      if (isPane(this)) return rect(50, 400);
+      if (this.classList.contains('diff-review-diff-block')) return rect(blockTop, 200);
+      return rect(0, 0);
+    };
+    HTMLElement.prototype.scrollTo = function stub(this: HTMLElement, options?: ScrollToOptions | number) {
+      if (isPane(this)) scrolls.push(typeof options === 'object' ? options.top ?? 0 : Number(options ?? 0));
+    };
+    // Frames are driven by hand so the settle loop is observable rather than
+    // racing the test.
+    window.requestAnimationFrame = ((callback: FrameRequestCallback) => frames.push(callback)) as typeof window.requestAnimationFrame;
+    Object.defineProperty(Element.prototype, 'clientHeight', { configurable: true, get(this: Element) { return isPane(this) ? 400 : 0; } });
+    Object.defineProperty(Element.prototype, 'scrollHeight', { configurable: true, get(this: Element) { return isPane(this) ? 2000 : 0; } });
+
+    try {
+      render(<DiffReviewFileDiffPane
+        filePath="src/example.ts"
+        editorUrl={null}
+        hunks={hunks}
+        decisions={[decision(null)]}
+        activeDecisionId={hunks[0].decisionId}
+        onSelect={() => {}}
+      />);
+      // Block at 250, pane at 50: 200 inside the pane, centred in 400 → 100.
+      expect(scrolls).toEqual([100]);
+
+      // The layout above the block collapses by 100px before the next frame.
+      blockTop = 150;
+      frames.splice(0).forEach((callback) => callback(0));
+
+      expect(scrolls).toEqual([100, 0]);
+    } finally {
+      Element.prototype.getBoundingClientRect = originals.rect;
+      HTMLElement.prototype.scrollTo = originals.scrollTo;
+      window.requestAnimationFrame = originals.raf;
+      if (originals.clientHeight) Object.defineProperty(Element.prototype, 'clientHeight', originals.clientHeight);
+      if (originals.scrollHeight) Object.defineProperty(Element.prototype, 'scrollHeight', originals.scrollHeight);
+    }
+  });
+
   it('keeps the block header operable as the selection control', () => {
     renderPane('src/other.ts::@@ -1 +1 @@');
 

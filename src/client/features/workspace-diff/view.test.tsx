@@ -159,14 +159,14 @@ describe('WorkspaceDiffView decision queue', () => {
     const picker = await screen.findByLabelText('Workspace');
     fireEvent.change(picker, { target: { value: repositoryB } });
     await screen.findByRole('heading', { name: 'Changes behavior in src/b.ts.' });
-    fireEvent.click(screen.getByRole('button', { name: /Decision 2/ }));
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ }));
 
     cleanup();
     selectedPath = repositoryA;
     renderView(fetchMock);
 
     await waitFor(() => expect(screen.getByLabelText('Workspace')).toHaveValue(repositoryB));
-    expect(screen.getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
+    expect(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
   });
 
   it('orders the queue deterministically by source order, with no ambient AI scoring', async () => {
@@ -192,7 +192,7 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(screen.getByText('src/local.ts', { selector: 'code' })).toBeInTheDocument();
     // Deterministic risk signals still surface on the detail card (Phase 1 stays visible by
     // default); they never gate or reorder the queue, and no ambient AI request ever fires for them.
-    expect(screen.getByText('Risk signals')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Decision 3.*risk signals/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Refresh changes' })).toHaveClass('workspace-diff-refresh-pending');
 
     const decisionQueue = screen.getByRole('navigation', { name: 'Review decision queue' });
@@ -344,7 +344,7 @@ describe('WorkspaceDiffView decision queue', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
     expect(await screen.findByText('@@ -20 +20 @@ thirdBehavior')).toBeInTheDocument();
-    expect(screen.getByText('Commented', { selector: '.diff-review-completion-state' })).toBeInTheDocument();
+    expect(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 1.*Approved/ })).toBeInTheDocument();
     expect(putBodies[1]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -10 +10 @@ secondBehavior' }], state: 'reviewed' });
     expect(await screen.findByLabelText('3 decisions across 1 file, 3 completed')).toHaveTextContent('3 completed');
   });
@@ -453,14 +453,14 @@ describe('WorkspaceDiffView pull-request source', () => {
     const picker = await screen.findByLabelText('Pull request');
     fireEvent.change(picker, { target: { value: pullRequestUrl } });
     await screen.findByRole('heading', { name: 'Changes behavior in src/page-one.ts.' });
-    fireEvent.click(screen.getByRole('button', { name: /Decision 2/ }));
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ }));
 
     cleanup();
     renderView(fetchMock, false, null, [pullRequestUrl]);
 
     expect(await screen.findByRole('heading', { name: 'Selectable scopes' })).toBeInTheDocument();
     expect(screen.getByLabelText('Pull request')).toHaveValue(pullRequestUrl);
-    expect(screen.getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
+    expect(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
   });
 
   it('opens the linked pull request when the local checkout has nothing to review', async () => {

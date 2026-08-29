@@ -110,6 +110,11 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     previousWorkspacePath.current = selectedWorkspacePath;
   }, [selectedWorkspacePath, query.refetch, snapshotsQuery.refetch]);
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
+  // React bails out of a state update that sets the same id, so re-picking the
+  // decision already shown would render nothing and the diff would stay where
+  // the reviewer had scrolled it. Counting selections gives the diff pane a
+  // signal for every click, not only the ones that change the decision.
+  const [selectionTick, setSelectionTick] = useState(0);
   const [mobileDecisionDetailOpen, setMobileDecisionDetailOpen] = useState(false);
   const isPhoneReview = usePhoneReviewControls();
   // null means "automatically show the latest record when Git is clean";
@@ -238,6 +243,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
 
   const selectDecision = (decisionId: string) => {
     setSelectedDecisionId(decisionId);
+    setSelectionTick((tick) => tick + 1);
     if (isPhoneReview) setMobileDecisionDetailOpen(false);
   };
 
@@ -342,7 +348,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                   <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">
-                    {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} onSelect={selectDecision} />}
+                    {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} onSelect={selectDecision} />}
                     {!isPhoneReview && <div id="mobile-decision-detail"><DiffReviewDecisionDetailCard key={selectedDecision.id} decision={selectedDecision} taskIntent={taskIntent} autoScore={autoScores.results.get(selectedDecision.id)}>
                       <DiffReviewActions key={selectedDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(state)} />
                     </DiffReviewDecisionDetailCard></div>}

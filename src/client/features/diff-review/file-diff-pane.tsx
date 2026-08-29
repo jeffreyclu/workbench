@@ -10,6 +10,16 @@ import { reviewStateLabel } from './logic.js';
  * change has a context above it rather than reading from the pane's edge. */
 const SCROLL_LEAD = 28;
 
+/** How many frames a selection keeps re-measuring its landing. Roughly a third
+ * of a second at 60fps — long enough for a block that mounts on a later commit
+ * and for the layout above it to settle, short enough that it can never argue
+ * with a reviewer who scrolls away straight after clicking. */
+const SCROLL_SETTLE_FRAMES = 20;
+
+/** Consecutive frames with an unmoved landing that end the loop early, so the
+ * ordinary selection stops looking after a few frames instead of all twenty. */
+const SCROLL_SETTLED_FRAMES = 3;
+
 /** The pane is not the page: the shell keeps `body` unscrollable and scrolls an
  * inner container, so on a stacked layout the diff can sit entirely below the
  * fold. Finding that container lets a selection reveal the pane without
@@ -66,12 +76,17 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, changeMap, riskBands, openDetailFor, onSelect, onOpenDetail }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, onSelect, onOpenDetail }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
   decisions: ReviewDecision[];
   activeDecisionId: string;
+  /** Bumped by every selection, including re-selecting the decision already
+   * shown. React bails out of an identical state update, so without this the
+   * pane would never scroll back to a block the reviewer had scrolled away
+   * from. */
+  selectionTick?: number;
   changeMap?: ChangeMap;
   /** Scored risk band per decision, so the gutter dot carries the same
    * severity the detail panel shows without opening it. */
@@ -103,44 +118,87 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
     // IDE LEGACY-AFFECTING: `scrollIntoView` scrolls every ancestor, including
     // the task detail. Scroll only this pane so opening a task stays at its top.
     const body = diffBody.current;
-    const block = activeBlock.current;
-    if (!body || !block) return;
+    if (!body) return;
     const behavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
     // Measure the block against the pane itself rather than through
     // `offsetTop`: offsetTop is relative to whichever ancestor happens to be
     // positioned, which is not this pane, so it lands at an arbitrary place in
-    // a long file. Rect deltas are correct whatever the layout does.
-    const blockBox = block.getBoundingClientRect();
-    const bodyBox = body.getBoundingClientRect();
-    const blockTop = blockBox.top - bodyBox.top + body.scrollTop;
-    // A block that fits reads best centred; one taller than the pane reads from
-    // its first line, so the change itself is what comes into view.
-    const lead = blockBox.height + SCROLL_LEAD * 2 <= body.clientHeight
-      ? (body.clientHeight - blockBox.height) / 2
-      : SCROLL_LEAD;
-    const furthest = Math.max(0, body.scrollHeight - body.clientHeight);
-    body.scrollTo?.({ top: Math.min(furthest, Math.max(0, blockTop - lead)), behavior });
-    // Moves keyboard/screen-reader focus onto the selected block, not just the
-    // visual scroll — selecting a decision from the queue should land here too.
-    block.focus?.({ preventScroll: true });
+    // a long file. Rect deltas are correct whatever the layout does, and stay
+    // correct when re-measured mid-scroll: the rect moves with `scrollTop`.
+    const landing = (block: HTMLElement) => {
+      const blockBox = block.getBoundingClientRect();
+      const bodyBox = body.getBoundingClientRect();
+      const blockTop = blockBox.top - bodyBox.top + body.scrollTop;
+      // A block that fits reads best centred; one taller than the pane reads
+      // from its first line, so the change itself is what comes into view.
+      const lead = blockBox.height + SCROLL_LEAD * 2 <= body.clientHeight
+        ? (body.clientHeight - blockBox.height) / 2
+        : SCROLL_LEAD;
+      const furthest = Math.max(0, body.scrollHeight - body.clientHeight);
+      return Math.min(furthest, Math.max(0, blockTop - lead));
+    };
 
-    // Only a deliberate re-selection may move the surrounding page. On the
-    // first render the reviewer has just opened the task and belongs at its
-    // top — that is the legacy behaviour the comment above protects.
-    const reselected = lastSelection.current !== null && lastSelection.current !== activeDecisionId;
+    // Only a deliberate selection may move the surrounding page. On the first
+    // render the reviewer has just opened the task and belongs at its top —
+    // that is the legacy behaviour the comment above protects. Every later run
+    // is a click, including re-picking the decision already shown, so the pane
+    // must be revealed then too. Read before the frame loop starts, so a late
+    // block does not turn a click into a first render.
+    const reselected = lastSelection.current !== null;
     lastSelection.current = activeDecisionId;
-    if (!reselected) return;
-    const scroller = nearestScroller(body);
-    if (!scroller) return;
-    const paneBox = body.getBoundingClientRect();
-    const viewBox = scroller.getBoundingClientRect();
-    // Reveal the pane only when it genuinely is not readable: a pane already in
-    // view must not jump because the reviewer picked the next decision.
-    const above = viewBox.top + SCROLL_LEAD - paneBox.top;
-    const below = paneBox.top + Math.min(paneBox.height, viewBox.height) - viewBox.bottom;
-    const delta = above > 0 ? -above : below > 0 ? below : 0;
-    if (delta !== 0) scroller.scrollTo?.({ top: Math.max(0, scroller.scrollTop + delta), behavior });
-  }, [activeDecisionId, filePath]);
+
+    const reveal = () => {
+      const scroller = nearestScroller(body);
+      if (!scroller) return;
+      const paneBox = body.getBoundingClientRect();
+      const viewBox = scroller.getBoundingClientRect();
+      // Reveal the pane only when it genuinely is not readable: a pane already
+      // in view must not jump because the reviewer picked the next decision.
+      const above = viewBox.top + SCROLL_LEAD - paneBox.top;
+      const below = paneBox.top + Math.min(paneBox.height, viewBox.height) - viewBox.bottom;
+      const delta = above > 0 ? -above : below > 0 ? below : 0;
+      if (delta !== 0) scroller.scrollTo?.({ top: Math.max(0, scroller.scrollTop + delta), behavior });
+    };
+
+    // The landing is not final at the commit that triggered this effect. The
+    // block can attach a commit later (switching files renders new hunks), and
+    // once attached it can still move: a peek panel collapsing above it, the
+    // pane being revealed in the outer scroller, a late monospace font. So keep
+    // re-measuring for a few frames and re-issue only when the landing actually
+    // moved — re-issuing an unchanged target would restart the smooth animation
+    // every frame and never arrive. Giving up after one look is what left the
+    // reader parked next to the wrong change.
+    let frame: number | undefined;
+    let issued: number | null = null;
+    let settledFor = 0;
+    let framesLeft = SCROLL_SETTLE_FRAMES;
+    const step = () => {
+      frame = undefined;
+      const block = activeBlock.current;
+      if (block) {
+        const target = landing(block);
+        if (issued === null || Math.abs(target - issued) > 1) {
+          // A correction mid-flight snaps rather than animating again: it is a
+          // small distance, and a second animation would fight the first.
+          body.scrollTo?.({ top: target, behavior: issued === null ? behavior : 'auto' });
+          settledFor = 0;
+          if (issued === null) {
+            // Moves keyboard/screen-reader focus onto the selected block, not
+            // just the visual scroll — selecting from the queue should land here.
+            block.focus?.({ preventScroll: true });
+            if (reselected) reveal();
+          }
+          issued = target;
+        } else settledFor += 1;
+      }
+      framesLeft -= 1;
+      if (framesLeft > 0 && settledFor < SCROLL_SETTLED_FRAMES) frame = window.requestAnimationFrame?.(step);
+    };
+    // The first pass runs now, so the common case scrolls in this commit rather
+    // than waiting a frame; the loop only covers what moves afterwards.
+    step();
+    return () => { if (frame !== undefined) window.cancelAnimationFrame?.(frame); };
+  }, [activeDecisionId, filePath, selectionTick]);
 
   useEffect(() => setPeekDecisionId(null), [filePath]);
 
