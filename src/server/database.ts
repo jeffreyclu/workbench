@@ -1806,6 +1806,25 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    id: '067_shared_turn_groundings',
+    // A continuation or retry must reuse the objective resolved for its human
+    // dispatch message. Recomputing from an ever-growing transcript allowed
+    // terse callbacks to drift back to old task text after a classifier timeout.
+    apply(database) {
+      database.exec(`
+        CREATE TABLE shared_turn_groundings (
+          message_id TEXT PRIMARY KEY REFERENCES shared_messages(id) ON DELETE CASCADE,
+          conversation_id TEXT NOT NULL REFERENCES shared_conversations(id) ON DELETE CASCADE,
+          grounding_json TEXT NOT NULL CHECK (json_valid(grounding_json) AND json_type(grounding_json) = 'object'),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_shared_turn_groundings_conversation_created
+          ON shared_turn_groundings(conversation_id, created_at DESC);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

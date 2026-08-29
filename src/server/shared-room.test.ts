@@ -129,6 +129,52 @@ describe('compactConversationHistory', () => {
     expect(grounding.objective).not.toContain('database column');
   });
 
+  it('walks through an urgency and continuation chain to the unresolved concrete request', () => {
+    const messages = [
+      message(0, "Why is this text so big and taking up so much space? Clicking a hunk doesn't work; it does nothing."),
+      message(1, 'I inspected several unrelated files and hit the tool cap.'),
+      message(2, '???'),
+      message(3, 'I inspected again and hit the tool cap.'),
+      message(4, 'continue'),
+      message(5, 'I restarted discovery and hit the tool cap.'),
+      message(6, 'WHY THE FUCK ARE YOU TAKING SO LONG JUST FUCKING BUILD IT'),
+      message(7, 'I started another broad investigation.'),
+      message(8, 'continue'),
+    ];
+
+    const grounding = fallbackTurnGrounding(messages);
+
+    expect(grounding.objective).toContain('Why is this text so big');
+    expect(grounding.objective).toContain("Clicking a hunk doesn't work");
+    expect(grounding.objective).not.toContain('TAKING SO LONG');
+  });
+
+  it('reuses a persisted objective instantly for a continuation without another model call', async () => {
+    const prior = {
+      objective: 'Fix the oversized text and make hunk clicks select the matching decision.',
+      acceptanceCriteria: ['Both interactions work in the live diff review.'],
+      exclusions: ['Do not revisit diff colors.'],
+      continuation: false,
+      source: 'haiku' as const,
+    };
+    let classifierCalls = 0;
+    const grounding = await resolveTurnGrounding([message(0, 'continue')], async () => {
+      classifierCalls += 1;
+      return '{}';
+    }, prior);
+
+    expect(classifierCalls).toBe(0);
+    expect(grounding).toEqual({ ...prior, continuation: true, source: 'persisted' });
+  });
+
+  it('keeps a correction authoritative instead of treating it as a continuation', () => {
+    const prior = { objective: 'Add a passive badge.', acceptanceCriteria: [], exclusions: [], continuation: false, source: 'haiku' as const };
+    const grounding = fallbackTurnGrounding([message(0, 'No, that is not the problem. Remove the badge.')], prior);
+
+    expect(grounding.objective).toBe('No, that is not the problem. Remove the badge.');
+    expect(grounding.source).toBe('fallback');
+  });
+
   it('uses a tiny supervisor result as the authoritative objective and preserves explicit exclusions', async () => {
     const messages = [
       message(0, 'Show the execution type in the header.'),

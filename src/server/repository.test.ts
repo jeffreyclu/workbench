@@ -256,6 +256,21 @@ describe('WorkItemRepository', () => {
     ]);
   });
 
+  it('persists one grounding per human turn and retrieves the preceding objective', () => {
+    const conversation = repository.createConversation('Durable grounding');
+    const first = repository.createSharedMessage('jeffrey', 'Fix hunk selection.', 'completed', conversation.id);
+    const second = repository.createSharedMessage('jeffrey', 'continue', 'completed', conversation.id);
+    const firstGrounding = JSON.stringify({ objective: 'Fix hunk selection.', acceptanceCriteria: [], exclusions: [], continuation: false, source: 'fallback' });
+    repository.setSharedTurnGrounding(first.id, conversation.id, firstGrounding);
+
+    expect(repository.getSharedTurnGrounding(first.id)).toBe(firstGrounding);
+    expect(repository.latestSharedTurnGrounding(conversation.id, second.id)).toBe(firstGrounding);
+
+    const resolvedContinuation = JSON.stringify({ objective: 'Fix hunk selection.', acceptanceCriteria: [], exclusions: [], continuation: true, source: 'persisted' });
+    repository.setSharedTurnGrounding(second.id, conversation.id, resolvedContinuation);
+    expect(repository.getSharedTurnGrounding(second.id)).toBe(resolvedContinuation);
+  });
+
   it('shares durable Codex and Claude handoffs only within the conversation or linked task scope', () => {
     const task = repository.create({ title: 'Durable handoff task', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const linked = repository.createConversation('Linked handoff', task.id);

@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
 const IDLE_SHUTDOWN_MS = 5 * 60_000;
 const CLASSIFIER_TIMEOUT_MS = 8_000;
+const WARMUP_TIMEOUT_MS = 20_000;
 const SYSTEM_PROMPT = `You are Workbench's conversation supervisor. Convert a conversation into the one authoritative objective the coding agent must execute now.
 
 Rules:
@@ -16,7 +17,7 @@ Rules:
 Return exactly one JSON object and nothing else:
 {"objective":string,"acceptanceCriteria":string[],"exclusions":string[],"continuation":boolean}`;
 
-type Pending = { prompt: string; resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> | null };
+type Pending = { prompt: string; resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> | null; timeoutMs: number };
 let worker: ChildProcessWithoutNullStreams | null = null;
 let active: Pending | null = null;
 let buffer = '';
@@ -53,7 +54,19 @@ function dispatch(): void {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = null;
   active = queue.shift()!;
-  worker.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: active.prompt } })}\n`);
+  const pending = active;
+  pending.timer = setTimeout(() => {
+    if (active !== pending) return;
+    active = null;
+    try { worker?.kill('SIGTERM'); } catch { /* already stopped */ }
+    worker = null;
+    buffer = '';
+    settle(pending, new Error(`Haiku turn-grounding classifier timed out after ${pending.timeoutMs / 1_000}s.`));
+    if (queue.length) ensureWorker();
+    dispatch();
+  }, pending.timeoutMs);
+  pending.timer.unref();
+  worker.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: pending.prompt } })}\n`);
 }
 
 function ensureWorker(): ChildProcessWithoutNullStreams {
@@ -92,23 +105,10 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
 }
 
 /** One tiny, tool-free model call shared by every agent answering the same user turn. */
-export function groundTurnWithHaiku(prompt: string): Promise<string> {
+export function groundTurnWithHaiku(prompt: string, timeoutMs = CLASSIFIER_TIMEOUT_MS): Promise<string> {
   ensureWorker();
   return new Promise((resolve, reject) => {
-    const pending: Pending = { prompt, resolve, reject, timer: null };
-    pending.timer = setTimeout(() => {
-      const index = queue.indexOf(pending);
-      if (index >= 0) queue.splice(index, 1);
-      if (active === pending) {
-        active = null;
-        try { worker?.kill('SIGTERM'); } catch { /* already stopped */ }
-        worker = null;
-        buffer = '';
-        dispatch();
-      }
-      settle(pending, new Error(`Haiku turn-grounding classifier timed out after ${CLASSIFIER_TIMEOUT_MS / 1_000}s.`));
-    }, CLASSIFIER_TIMEOUT_MS);
-    pending.timer.unref();
+    const pending: Pending = { prompt, resolve, reject, timer: null, timeoutMs };
     queue.push(pending);
     dispatch();
   });
@@ -116,7 +116,7 @@ export function groundTurnWithHaiku(prompt: string): Promise<string> {
 
 /** Pay the one-time CLI/model handshake during server startup, off the request path. */
 export function warmTurnGroundingClassifier(): void {
-  void groundTurnWithHaiku('Warm-up only. Return {"objective":"ready","acceptanceCriteria":[],"exclusions":[],"continuation":false}.').catch(() => {
+  void groundTurnWithHaiku('Warm-up only. Return {"objective":"ready","acceptanceCriteria":[],"exclusions":[],"continuation":false}.', WARMUP_TIMEOUT_MS).catch(() => {
     // Best effort. A real turn retains its human-only fallback.
   });
 }

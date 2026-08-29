@@ -412,7 +412,7 @@ export type TurnGrounding = {
   acceptanceCriteria: string[];
   exclusions: string[];
   continuation: boolean;
-  source: 'haiku' | 'fallback';
+  source: 'haiku' | 'fallback' | 'persisted';
 };
 
 export type SharedReplyGrounding = {
@@ -551,7 +551,13 @@ function isContinuationTurn(message: string): boolean {
     .replace(/[^a-z0-9' ]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  if (!normalized) return Boolean(message.trim());
+  // Corrections are context-dependent, but they are new authoritative input;
+  // never erase them by treating them as a plain continuation.
+  if (/\b(?:no|not|instead|except|but)\b/.test(normalized)) return false;
   if (/^(?:continue|keep going|go ahead|proceed|do it|build it|build that|fix it|ship it|yes|yeah|yep)$/.test(normalized)) return true;
+  if (/^(?:why .*(?:taking (?:so )?long|so slow|stuck|still not|doing nothing)|what .*(?:doing|happening)|hurry up|come on)/.test(normalized)
+    && /\b(?:it|this|that|build|fix|finish|continue|done|long|slow|stuck)\b/.test(normalized)) return true;
   return normalized.split(' ').length <= 8 && /\b(?:it|that|this|those|these|them|same|again)\b/.test(normalized);
 }
 
@@ -560,10 +566,11 @@ function isContinuationTurn(message: string): boolean {
  * It intentionally reads only human turns: an agent's exploratory narration
  * can be evidence, but can never silently become Jeffrey's requested outcome.
  */
-export function fallbackTurnGrounding(thread: SharedMessage[]): TurnGrounding {
+export function fallbackTurnGrounding(thread: SharedMessage[], priorGrounding?: TurnGrounding | null): TurnGrounding {
   const humanTurns = thread.filter((message) => message.author === 'jeffrey' && message.body.trim()).map((message) => message.body.trim());
   const current = humanTurns.at(-1) ?? 'Respond to Jeffrey’s current request.';
   const continuation = isContinuationTurn(current);
+  if (continuation && priorGrounding) return { ...priorGrounding, continuation: true, source: 'persisted' };
   const priorConcrete = continuation
     ? [...humanTurns.slice(0, -1)].reverse().find((message) => !isContinuationTurn(message))
     : undefined;
@@ -580,13 +587,30 @@ export function fallbackTurnGrounding(thread: SharedMessage[]): TurnGrounding {
 }
 
 function turnGroundingInput(thread: SharedMessage[]): string {
-  const relevant = thread
-    .filter((message) => message.author === 'jeffrey' || message.author === 'claude' || message.author === 'codex')
-    .slice(-14);
-  const latestHumanIndex = relevant.findLastIndex((message) => message.author === 'jeffrey');
-  const latestHuman = latestHumanIndex >= 0 ? relevant[latestHumanIndex].body.replace(/\s+/g, ' ').trim().slice(0, 2_500) : '';
-  const prior = relevant.slice(0, latestHumanIndex).map((message) => `${message.author.toUpperCase()}: ${message.body.replace(/\s+/g, ' ').trim().slice(0, 750)}`);
-  return `PRIOR CONTEXT (reference-only; conflicting requests and all agent proposals are non-authoritative):\n${prior.join('\n')}\n\nLATEST USER MESSAGE (highest authority; preserve its correction exactly):\n${latestHuman}`.slice(-10_000);
+  const latestHumanMessage = [...thread].reverse().find((message) => message.author === 'jeffrey');
+  const latestHuman = latestHumanMessage?.body.replace(/\s+/g, ' ').trim().slice(0, 2_000) ?? '';
+  const priorHumans = thread.filter((message) => message.author === 'jeffrey' && message.id !== latestHumanMessage?.id).slice(-8)
+    .map((message) => `JEFFREY: ${message.body.replace(/\s+/g, ' ').trim().slice(0, 600)}`);
+  const precedingAgent = [...thread].reverse().find((message) => (message.author === 'claude' || message.author === 'codex') && (!latestHumanMessage || message.createdAt <= latestHumanMessage.createdAt));
+  const agentReference = precedingAgent ? `\nMOST RECENT AGENT OUTCOME (reference-only):\n${precedingAgent.author.toUpperCase()}: ${precedingAgent.body.replace(/\s+/g, ' ').trim().slice(0, 700)}` : '';
+  return `PRIOR USER REQUESTS (reference-only; conflicting requests are superseded):\n${priorHumans.join('\n')}${agentReference}\n\nLATEST USER MESSAGE (highest authority; preserve its correction exactly):\n${latestHuman}`.slice(-7_000);
+}
+
+export function persistedTurnGrounding(raw: string | null | undefined): TurnGrounding | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Partial<TurnGrounding>;
+    if (typeof value.objective !== 'string' || !value.objective.trim()) return null;
+    return {
+      objective: value.objective.trim().slice(0, 2_500),
+      acceptanceCriteria: Array.isArray(value.acceptanceCriteria) ? value.acceptanceCriteria.filter((item): item is string => typeof item === 'string').slice(0, 6) : [],
+      exclusions: Array.isArray(value.exclusions) ? value.exclusions.filter((item): item is string => typeof item === 'string').slice(0, 6) : [],
+      continuation: Boolean(value.continuation),
+      source: value.source === 'haiku' || value.source === 'fallback' || value.source === 'persisted' ? value.source : 'fallback',
+    };
+  } catch {
+    return null;
+  }
 }
 
 function parseTurnGrounding(raw: string): TurnGrounding | null {
@@ -614,8 +638,10 @@ function parseTurnGrounding(raw: string): TurnGrounding | null {
 export async function resolveTurnGrounding(
   thread: SharedMessage[],
   classify: (prompt: string) => Promise<string> = groundTurnWithHaiku,
+  priorGrounding?: TurnGrounding | null,
 ): Promise<TurnGrounding> {
-  const fallback = fallbackTurnGrounding(thread);
+  const fallback = fallbackTurnGrounding(thread, priorGrounding);
+  if (fallback.source === 'persisted') return fallback;
   try {
     return parseTurnGrounding(await classify(turnGroundingInput(thread))) ?? fallback;
   } catch (error) {
@@ -631,7 +657,7 @@ export function turnGroundingForPrompt(grounding: TurnGrounding): string {
   const exclusions = grounding.exclusions.length
     ? grounding.exclusions.map((exclusion) => `- ${exclusion}`).join('\n')
     : '- Do not broaden the task beyond the objective.';
-  return `AUTHORITATIVE CURRENT OBJECTIVE (${grounding.source === 'haiku' ? 'conversation supervisor' : 'local fallback'})
+  return `AUTHORITATIVE CURRENT OBJECTIVE (${grounding.source === 'haiku' ? 'conversation supervisor' : grounding.source === 'persisted' ? 'persisted conversation objective' : 'local fallback'})
 ${grounding.objective}
 
 Acceptance criteria:
@@ -762,10 +788,18 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   const conversation = repository.listConversations().find((item) => item.id === conversationId);
   const linkedItem = conversation?.workItemId ? repository.get(conversation.workItemId) : null;
   const retrievalThread = threadForSharedReply(repository.listSharedMessages(100, null, conversationId).messages, queued.message.id);
-  const fallbackGrounding = fallbackTurnGrounding(retrievalThread);
+  const priorGrounding = persistedTurnGrounding(repository.latestSharedTurnGrounding(conversationId, queued.message.id));
+  const fallbackGrounding = fallbackTurnGrounding(retrievalThread, priorGrounding);
+  repository.setSharedTurnGrounding(queued.message.id, conversationId, JSON.stringify(fallbackGrounding));
+  const resolvedGrounding = process.env.VITEST
+    ? Promise.resolve(fallbackGrounding)
+    : resolveTurnGrounding(retrievalThread, groundTurnWithHaiku, priorGrounding).then((resolved) => {
+      repository.setSharedTurnGrounding(queued.message.id, conversationId, JSON.stringify(resolved));
+      return resolved;
+    });
   const grounding: SharedReplyGrounding = {
     fallback: fallbackGrounding,
-    resolved: process.env.VITEST ? Promise.resolve(fallbackGrounding) : resolveTurnGrounding(retrievalThread),
+    resolved: resolvedGrounding,
   };
   // A linked task may predate classification. Use its deterministic routing
   // instead of treating every chat instruction as generic analysis, but let
@@ -944,7 +978,12 @@ export async function replyInSharedRoom(
       console.error('[shared-room] memory retrieval failed for prompt injection', error);
       return [];
     });
-    const groundingPromise = groundingSnapshot?.resolved ?? resolveTurnGrounding(thread);
+    const storedGrounding = target.dispatchGroupId ? persistedTurnGrounding(repository.getSharedTurnGrounding(target.dispatchGroupId)) : null;
+    const groundingPromise = groundingSnapshot?.resolved
+      ?? (storedGrounding ? Promise.resolve(storedGrounding) : resolveTurnGrounding(thread).then((resolved) => {
+        if (target.dispatchGroupId) repository.setSharedTurnGrounding(target.dispatchGroupId, target.conversationId, JSON.stringify(resolved));
+        return resolved;
+      }));
     const [externalAuthorization, retrievedMemory, turnGrounding] = await Promise.all([externalAuthorizationPromise, retrievedMemoryPromise, groundingPromise]);
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const injectedMemory = selectRelevantMemoryForPrompt(retrievedMemory, undefined, target.conversationId);

@@ -275,6 +275,34 @@ export class WorkItemRepository {
     return this.conversations.setSharedBrief(id, brief) ? this.getConversation(id) : null;
   }
 
+  getSharedTurnGrounding(messageId: string): string | null {
+    const row = this.database.prepare('SELECT grounding_json FROM shared_turn_groundings WHERE message_id = ?').get(messageId) as { grounding_json: string } | undefined;
+    return row?.grounding_json ?? null;
+  }
+
+  latestSharedTurnGrounding(conversationId: string, beforeMessageId: string): string | null {
+    const row = this.database.prepare(`
+      SELECT grounding.grounding_json
+      FROM shared_turn_groundings grounding
+      JOIN shared_messages message ON message.id = grounding.message_id
+      JOIN shared_messages cutoff ON cutoff.id = ?
+      WHERE grounding.conversation_id = ?
+        AND (message.created_at < cutoff.created_at OR (message.created_at = cutoff.created_at AND message.rowid < cutoff.rowid))
+      ORDER BY message.created_at DESC, message.rowid DESC
+      LIMIT 1
+    `).get(beforeMessageId, conversationId) as { grounding_json: string } | undefined;
+    return row?.grounding_json ?? null;
+  }
+
+  setSharedTurnGrounding(messageId: string, conversationId: string, groundingJson: string): void {
+    const now = new Date().toISOString();
+    this.database.prepare(`
+      INSERT INTO shared_turn_groundings (message_id, conversation_id, grounding_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(message_id) DO UPDATE SET grounding_json = excluded.grounding_json, updated_at = excluded.updated_at
+    `).run(messageId, conversationId, groundingJson, now, now);
+  }
+
   setConversationDraft(id: string, body: string): SharedConversation | null {
     return this.conversations.setDraftBody(id, body) ? this.getConversation(id) : null;
   }
