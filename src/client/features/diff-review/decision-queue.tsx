@@ -28,6 +28,9 @@ export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ d
     // highlighted hunk in the diff pane), so the queue must bring its own
     // selection into view rather than assuming the reviewer scrolled here first.
     selectedButton.current?.scrollIntoView?.({ behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'nearest', inline: 'center' });
+    // Clicking a highlighted hunk must land keyboard/screen-reader focus on its
+    // matching decision here too, not just scroll it into view.
+    selectedButton.current?.focus?.({ preventScroll: true });
   }, [selectedId]);
 
   return <div className="diff-review-queue-region">
