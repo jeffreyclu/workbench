@@ -1413,6 +1413,7 @@ describe('shared room', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === `/api/shared/conversations/${conversationId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'mobile-changes', changedFiles: 1, additions: 1, deletions: 0, publish: { branch: 'mobile-changes', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/mobile.tsx', previousPath: null, status: 'modified', additions: 1, deletions: 0, isBinary: false, patch: '@@ -1 +1 @@\n-old\n+new' }] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages: [{ id: 'mobile-agent-reply', conversationId, author: 'codex', recipient: 'jeffrey', kind: 'execute', status: 'completed', body: 'Implemented the mobile change.', attachments: [], createdAt: '2026-01-01T00:01:00Z', updatedAt: '2026-01-01T00:01:00Z' }] }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Compact mobile conversation', workItemId: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }] }), { headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
     }));
@@ -1427,6 +1428,9 @@ describe('shared room', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand conversation tray' }));
     expect(heading.closest('header')).not.toHaveClass('is-mobile-header-collapsed');
     expect(screen.getByRole('button', { name: 'Collapse conversation tray' })).toBeInTheDocument();
+    const executionType = await screen.findByRole('button', { name: 'Execution type: Execute' });
+    expect(executionType.closest('.conversation-window-actions')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Execution type: Execute' })).toHaveLength(1);
 
     // JSDOM does not preserve PointerEvent client coordinates, so the swipe
     // threshold itself is covered by the production handler while this test
@@ -1440,7 +1444,9 @@ describe('shared room', () => {
     expect(composer).not.toHaveClass('is-mobile-composer-collapsed');
     fireEvent.click(screen.getByRole('button', { name: 'Collapse composer' }));
     expect(composer).toHaveClass('is-mobile-composer-collapsed');
-    const changes = screen.getByRole('button', { name: 'Changes' });
+    const mobileReviewToggle = document.querySelector('.mobile-review-toggle');
+    expect(mobileReviewToggle).toBeInTheDocument();
+    const changes = within(mobileReviewToggle as HTMLElement).getByRole('button', { name: 'Changes' });
     await waitFor(() => expect(changes).toBeEnabled());
     fireEvent.click(changes);
     fireEvent.click(screen.getByRole('button', { name: 'Expand composer' }));
