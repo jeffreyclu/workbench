@@ -109,7 +109,6 @@ const baselineInventory = [
   'PUT /api/source-connections/grafana',
   'PUT /api/shared/conversations/:id/workspaces/selection',
   'POST /api/source-connections/:provider/mcp/oauth/start',
-  'POST /api/source-connections/:provider/managed/oauth/start',
   'GET /api/source-connections/:provider/mcp/oauth/callback',
   'DELETE /api/source-connections/:provider',
   'POST /api/queue/proposals/:id/:resolution',
@@ -181,7 +180,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(149);
+    expect(baselineInventory).toHaveLength(148);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

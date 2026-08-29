@@ -3,7 +3,7 @@ import { Check, LoaderCircle, X } from 'lucide-react';
 import { memo, useEffect, useState } from 'react';
 import type { BrokerConnection } from '../../../shared/contracts';
 import { sourceData, sourceQueryKeys } from './data';
-import { useManagedSourceAuthorization, useSourceConnections } from './hooks';
+import { useSourceAuthorization, useSourceConnections } from './hooks';
 import { canAuthorizeSource, sourceDisconnectProvider, usesManagedAuthorization, type SourceAuthorizationState } from './state';
 import { ModalDialog } from '../../components/dialogs/modal-dialog';
 import { ConfirmationDialog } from '../../components/dialogs/confirmation-dialog';
@@ -68,9 +68,9 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
   const [open, setOpen] = useState(false);
   const [disconnectPromptOpen, setDisconnectPromptOpen] = useState(false);
   const provider = connection.id;
-  const authorization = useManagedSourceAuthorization(connection);
+  const authorization = useSourceAuthorization(connection);
   const [grafanaToken, setGrafanaToken] = useState('');
-  const reconnecting = connection.state === 'error' || connection.state === 'reauth_required';
+  const reconnecting = connection.state === 'reauth_required';
   const disconnect = useMutation({
     mutationFn: () => sourceData.disconnect(sourceDisconnectProvider(provider)),
     onSuccess: () => { setDisconnectPromptOpen(false); queryClient.invalidateQueries({ queryKey: sourceQueryKeys.connections }); },
@@ -82,12 +82,10 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
         await sourceData.configureGrafana(grafanaToken);
         return null;
       }
-      // Figma and Atlassian authorize through Codex's own loopback OAuth, which
-      // opens the provider's browser window itself. Workbench keeps the returned
-      // URL so it can be opened manually if that window never appears.
+      // Figma and Atlassian authorize once through Workbench's loopback OAuth.
+      // Both coding agents then consume the same Workbench-owned connection.
       if (provider === 'figma' || provider === 'atlassian') {
-        if (reconnecting && provider === 'atlassian') await sourceData.disconnect('confluence');
-        const { url } = await sourceData.startManagedMcpOAuth(provider);
+        const { url } = await sourceData.startMcpOAuth(provider === 'atlassian' ? 'confluence' : provider);
         return url;
       }
       const popup = window.open('about:blank', `workbench-${provider}-oauth`, 'popup,width=720,height=760');

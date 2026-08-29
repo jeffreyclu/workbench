@@ -11,7 +11,7 @@ export const conversationQueryKeys = {
 export const conversationData = {
   get: (conversationId: string) => api.getSharedConversation(conversationId),
   list: (view: 'active' | 'archive', cursor?: string) => api.listSharedConversations(view, cursor),
-  listMessages: (conversationId: string) => api.listSharedMessages(conversationId),
+  listMessages: (conversationId: string, cursor?: string) => api.listSharedMessages(conversationId, cursor),
   listAgentEvents: (conversationId: string) => api.listAgentStreamEvents(conversationId),
   search: (query: string) => api.searchSharedConversations(query, 40),
 };

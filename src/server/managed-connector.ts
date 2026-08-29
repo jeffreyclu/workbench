@@ -1,11 +1,9 @@
 import { runAgentCommand } from './agent-runner.js';
 import type { SourceSignal } from './source-scanner.js';
 
-type ManagedSearchProvider = 'figma' | 'confluence' | 'grafana';
+type ManagedSearchProvider = 'grafana';
 
 const DESCRIPTIONS: Record<ManagedSearchProvider, { label: string; connector: string; scope: string }> = {
-  figma: { label: 'Figma', connector: 'Figma', scope: 'files, pages, components, or design nodes' },
-  confluence: { label: 'Atlassian', connector: 'Atlassian', scope: 'Jira issues or Confluence pages' },
   grafana: { label: 'Grafana', connector: 'Grafana', scope: 'dashboards, alerts, metrics, logs, or traces' },
 };
 
@@ -28,18 +26,6 @@ Return exactly one block and no other text:
   if (typeof parsed.error === 'string' && parsed.error) throw new Error(parsed.error);
   if (!Array.isArray(parsed.results)) throw new Error(`${label} connector returned malformed search results.`);
   return parsed.results.slice(0, 20).flatMap((result) => typeof result.title === 'string' && typeof result.summary === 'string' ? [{ provider, title: result.title.slice(0, 240), summary: result.summary.slice(0, 12_000), url: typeof result.url === 'string' ? result.url : null, occurredAt: null }] : []);
-}
-
-export function searchFigmaWithCodex(query: string, signal?: AbortSignal): Promise<SourceSignal[]> {
-  return searchWithCodexConnector('figma', query, signal);
-}
-
-export function scanFigmaRootsWithCodex(roots: string[], signal?: AbortSignal): Promise<SourceSignal[]> {
-  return searchWithCodexConnector('figma', `the configured Figma roots below. Inspect only these files, pages, or nodes and identify recent changes relevant to my open work. Do not search the wider Figma workspace.\n\n${roots.map((root) => `- ${root}`).join('\n')}`, signal);
-}
-
-export function searchAtlassianWithCodex(query: string, signal?: AbortSignal): Promise<SourceSignal[]> {
-  return searchWithCodexConnector('confluence', query, signal);
 }
 
 export function searchGrafanaWithCodex(query: string, signal?: AbortSignal): Promise<SourceSignal[]> {

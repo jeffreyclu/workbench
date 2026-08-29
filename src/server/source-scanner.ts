@@ -3,7 +3,6 @@ import { WorkItemRepository } from './repository.js';
 import { scanSlackMcp } from './slack-mcp.js';
 import { isMcpReauthenticationError, mcpAuthenticationMessage, scanRemoteMcp } from './remote-mcp.js';
 import { scanSlackWithCodex } from './slack-codex.js';
-import { scanFigmaRootsWithCodex, searchAtlassianWithCodex } from './managed-connector.js';
 import { assertApprovedMcpServer, createOutboundFetch, type OutboundPolicyName } from './outbound-policy.js';
 
 export interface SourceSignal { provider: string; title: string; summary: string; url: string | null; occurredAt: string | null; }
@@ -74,26 +73,9 @@ async function scanGrafana(settings: Record<string, string>, fetchForPolicy: Out
 
 const scanners: Partial<Record<SourceProvider, (settings: Record<string, string>, fetchForPolicy?: OutboundFetchFactory) => Promise<SourceSignal[]>>> = { github: scanGitHub, slack: scanSlackMcp, confluence: scanConfluence, grafana: scanGrafana, gmail: scanGmail };
 
-const MANAGED_SCAN_QUERY = 'recent updates relevant to my open work';
-
-function figmaRoots(settings: Record<string, string>): string[] {
-  try {
-    const parsed = JSON.parse(settings.figmaRoots ?? '[]');
-    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [];
-  } catch { return []; }
-}
-
-export function scanSource(provider: SourceProvider, settings: Record<string, string>, fetchForPolicy: OutboundFetchFactory = createOutboundFetch): Promise<SourceSignal[]> {
+export function scanSource(provider: SourceProvider, settings: Record<string, string>, fetchForPolicy: OutboundFetchFactory = createOutboundFetch, saveCredentials?: (stored: Record<string, unknown>) => void): Promise<SourceSignal[]> {
   if (provider === 'gmail' && settings.serverUrl) return Promise.reject(assertApprovedMcpServer('gmail', settings.serverUrl));
-  if ((provider === 'figma' || provider === 'confluence') && settings.mode === 'managed') {
-    if (provider === 'figma') {
-      const roots = figmaRoots(settings);
-      if (!roots.length) throw new Error('Figma Discovery needs at least one scoped file, page, or node. Add Figma scope in Sources.');
-      return scanFigmaRootsWithCodex(roots);
-    }
-    return searchAtlassianWithCodex(MANAGED_SCAN_QUERY);
-  }
-  if ((provider === 'slack' || provider === 'figma' || provider === 'confluence') && settings.serverUrl) return scanRemoteMcp(provider, settings);
+  if ((provider === 'slack' || provider === 'figma' || provider === 'confluence') && settings.serverUrl) return scanRemoteMcp(provider, settings, undefined, saveCredentials);
   const scanner = scanners[provider];
   if (!scanner) throw new Error(`${provider} source settings are incomplete. Reconnect this source.`);
   return scanner(settings, fetchForPolicy);
@@ -103,7 +85,7 @@ export async function scanConnectedSources(repository: WorkItemRepository): Prom
   const connections = repository.listSourceConnections();
   const results = await Promise.all(connections.map(async ({ provider }) => {
     try {
-      const signals = await scanSource(provider, repository.getSourceSettings(provider)!);
+      const signals = await scanSource(provider, repository.getSourceSettings(provider)!, createOutboundFetch, (next) => repository.updateSourceSettings(provider, next));
       repository.updateSourceScan(provider, null);
       return { signals, error: null };
     } catch (error) {

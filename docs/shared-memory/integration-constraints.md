@@ -26,6 +26,22 @@ The general lesson: when Jeffrey asks for an integration, the deliverable is one
 path with no tunnel dependency and no assistant-specific gap, not a working demo for a
 single provider in a single client.
 
+#### Figma and Atlassian MCP authentication is Workbench-owned (2026-08-29)
+
+Workbench must not treat a Codex subprocess as the credential broker for Figma or Atlassian.
+That path failed even while the same provider tools worked in the active Codex session, and
+generic “connector unavailable” search errors were surfaced as expired authorization. Jeffrey
+then had to reconnect both sources repeatedly on Aug 27, Aug 28, and Aug 29.
+
+The supported shape is one Workbench-owned remote MCP OAuth connection per provider. Agents never
+need or own a separate Figma or Atlassian connection. OAuth
+returns to the stable local Workbench port through `127.0.0.1`, with no public tunnel. Workbench
+persists access-token and refresh-token rotation from the MCP SDK so restarts do not restore stale
+credentials. Codex and Claude consume the resulting source context through Workbench rather than
+maintaining separate provider logins. Only a verified OAuth error may move a source to
+`reauth_required`; an ordinary search or connector failure keeps the source connected but unhealthy
+and retries through normal background scanning.
+
 ### No personal phone on corporate tailnet
 
 *Jeffrey will not enroll his personal phone in the Writer corporate Tailscale tailnet, so mobile access to local dev servers must use a transport that requires nothing installed on the phone.*

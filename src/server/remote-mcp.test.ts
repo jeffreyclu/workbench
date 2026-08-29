@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isMcpReauthenticationError, mcpAuthenticationMessage } from './remote-mcp.js';
+import { isMcpReauthenticationError, isMcpReauthenticationMessage, mcpAuthenticationMessage } from './remote-mcp.js';
 
 describe('MCP OAuth errors', () => {
   it('distinguishes expired credentials from ordinary connector failures', () => {
@@ -9,5 +9,7 @@ describe('MCP OAuth errors', () => {
     expect(mcpAuthenticationMessage('confluence')).toBe('Atlassian authorization expired. Reconnect this source.');
     expect(mcpAuthenticationMessage('gmail')).toBe('Google Workspace authorization expired. Reconnect this source.');
     expect(mcpAuthenticationMessage('slack')).toBe('Slack authorization expired. Reconnect this source.');
+    expect(isMcpReauthenticationMessage(mcpAuthenticationMessage('confluence'))).toBe(true);
+    expect(isMcpReauthenticationMessage('Atlassian search is unavailable through the connector.')).toBe(false);
   });
 });

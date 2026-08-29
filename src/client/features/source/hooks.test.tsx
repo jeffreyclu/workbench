@@ -3,7 +3,7 @@ import { act, renderHook } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrokerConnection } from '../../../shared/contracts.js';
-import { SOURCE_AUTHORIZATION_POLL_INTERVAL_MS, useManagedSourceAuthorization, useSourceConnections } from './hooks.js';
+import { SOURCE_AUTHORIZATION_POLL_INTERVAL_MS, useSourceAuthorization, useSourceConnections } from './hooks.js';
 
 const pendingFigmaConnection: BrokerConnection = {
   id: 'figma',
@@ -53,13 +53,13 @@ describe('useSourceConnections', () => {
   });
 });
 
-describe('useManagedSourceAuthorization', () => {
+describe('useSourceAuthorization', () => {
   it('polls while waiting and reaches authorized when the server connection changes', async () => {
     vi.useFakeTimers();
     const connectedFigma = { ...pendingFigmaConnection, state: 'connected' as const };
     const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ connections: [connectedFigma] }));
     vi.stubGlobal('fetch', fetchMock);
-    const { result } = renderHook(() => useManagedSourceAuthorization(pendingFigmaConnection), { wrapper: queryWrapper() });
+    const { result } = renderHook(() => useSourceAuthorization(pendingFigmaConnection), { wrapper: queryWrapper() });
 
     act(() => result.current.startAuthorization('https://example.com/oauth'));
     expect(result.current.state.status).toBe('awaiting-auth');
@@ -76,7 +76,7 @@ describe('useManagedSourceAuthorization', () => {
       .mockRejectedValueOnce(new Error('Network unavailable.'))
       .mockResolvedValueOnce(jsonResponse({ connections: [connectedFigma] }));
     vi.stubGlobal('fetch', fetchMock);
-    const { result } = renderHook(() => useManagedSourceAuthorization(pendingFigmaConnection), { wrapper: queryWrapper() });
+    const { result } = renderHook(() => useSourceAuthorization(pendingFigmaConnection), { wrapper: queryWrapper() });
 
     act(() => result.current.startAuthorization('https://example.com/oauth'));
     await act(async () => { await result.current.checkAuthorization(); });

@@ -483,6 +483,10 @@ export class WorkItemRepository {
     return this.sourceConnections.setSourceConnection(provider, label, settings);
   }
 
+  updateSourceSettings(provider: SourceProvider, settings: Record<string, unknown>): void {
+    this.sourceConnections.updateSourceSettings(provider, settings);
+  }
+
   updateSourceScan(provider: SourceProvider, error: string | null): void {
     this.sourceConnections.updateSourceScan(provider, error);
   }

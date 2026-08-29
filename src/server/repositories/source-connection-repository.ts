@@ -1,6 +1,8 @@
 import type { SourceConnection, SourceProvider } from '../../shared/contracts.js';
 import type { UnitOfWork } from '../unit-of-work.js';
 
+const isReauthenticationMessage = (message: string) => /authorization expired\. Reconnect this source\.$/.test(message);
+
 /**
  * Owns the `source_connections` table exclusively — connecting, scanning
  * status, and soft delete of a provider connection. Nothing else in the
@@ -14,7 +16,7 @@ export class SourceConnectionRepository {
 
   listSourceConnections(): SourceConnection[] {
     const rows = this.database.prepare('SELECT provider, label, last_scanned_at, last_error FROM source_connections WHERE deleted_at IS NULL ORDER BY provider').all() as Array<Record<string, string | null>>;
-    return rows.map((row) => ({ provider: row.provider as SourceProvider, connected: true, label: row.label!, lastScannedAt: row.last_scanned_at, lastError: row.last_error, configurationState: row.last_error ? 'reauth_required' as const : 'connected' as const, health: row.last_error ? 'unavailable' as const : row.last_scanned_at ? 'healthy' as const : 'unknown' as const }));
+    return rows.map((row) => ({ provider: row.provider as SourceProvider, connected: true, label: row.label!, lastScannedAt: row.last_scanned_at, lastError: row.last_error, configurationState: row.last_error && isReauthenticationMessage(row.last_error) ? 'reauth_required' as const : 'connected' as const, health: row.last_error ? 'unavailable' as const : row.last_scanned_at ? 'healthy' as const : 'unknown' as const }));
   }
 
   getSourceSettings(provider: SourceProvider): Record<string, string> | null {
@@ -28,6 +30,10 @@ export class SourceConnectionRepository {
       VALUES (?, ?, ?, ?, NULL) ON CONFLICT(provider) DO UPDATE SET label = excluded.label, settings_json = excluded.settings_json, connected_at = excluded.connected_at, last_error = NULL, deleted_at = NULL`)
       .run(provider, label, JSON.stringify(settings), now);
     return this.listSourceConnections().find((connection) => connection.provider === provider)!;
+  }
+
+  updateSourceSettings(provider: SourceProvider, settings: Record<string, unknown>): void {
+    this.database.prepare('UPDATE source_connections SET settings_json = ? WHERE provider = ? AND deleted_at IS NULL').run(JSON.stringify(settings), provider);
   }
 
   updateSourceScan(provider: SourceProvider, error: string | null): void {

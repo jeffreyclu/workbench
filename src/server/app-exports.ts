@@ -18,16 +18,16 @@ export function parseFollowUpPlan(output: string): z.infer<typeof followUpPlanSc
   return followUpPlanSchema.parse(JSON.parse(candidate));
 }
 
-/** Return the configured public OAuth base without trusting the request Host header. */
+/** Return a fixed loopback OAuth base without trusting the request Host header. */
 export function oauthCallbackBase(): string {
-  const configured = process.env.APP_API_ORIGIN?.trim();
+  const configured = process.env.MCP_OAUTH_CALLBACK_ORIGIN?.trim();
   if (configured) {
     try {
       const url = new URL(configured);
       if (url.protocol === 'http:' || url.protocol === 'https:') return configured;
     } catch { /* falls through to the local origin */ }
   }
-  return `http://localhost:${process.env.PORT ?? 4317}/api/source-connections`;
+  return `http://127.0.0.1:${process.env.PORT ?? 4317}/api/source-connections`;
 }
 
 export function rejectPreviewMutation(method: string, capabilities: RuntimeCapabilities): { error: string; code: string } | null {

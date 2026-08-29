@@ -72,7 +72,7 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(screen.queryByRole('dialog', { name: 'Decision details' })).toBeNull();
   });
 
-  it('renders the agent handoff before the review decision queue', async () => {
+  it('opens the styled agentic handoff modal on demand', async () => {
     const files: WorkspaceDiffFile[] = [{ path: 'src/app.ts', editorUrl: null, previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }];
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -87,9 +87,19 @@ describe('WorkspaceDiffView decision queue', () => {
       uncertainties: ['No completed test, build, typecheck, or lint command was observed by the runner.'], tradeoffs: [], createdAt: '2026-08-27T01:00:00.000Z',
     });
 
-    const handoff = await screen.findByRole('region', { name: 'Agent review handoff' });
-    const queue = await screen.findByRole('navigation', { name: /review decision queue/i });
-    expect(handoff.compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await screen.findByRole('navigation', { name: /review decision queue/i });
+    const trigger = screen.getByRole('button', { name: 'Agentic handoff' });
+    expect(trigger).toHaveClass('workspace-diff-handoff');
+    expect(screen.queryByRole('dialog', { name: 'Agentic handoff' })).toBeNull();
+    expect(screen.queryByText('Implemented the requested change.')).toBeNull();
+
+    fireEvent.click(trigger);
+    const handoff = screen.getByRole('dialog', { name: 'Agentic handoff' });
+    expect(handoff).toHaveClass('review-handoff-dialog');
+    expect(within(handoff).getByText('Implemented the requested change.')).toBeInTheDocument();
+
+    fireEvent.click(within(handoff).getByRole('button', { name: 'Close agentic handoff' }));
+    expect(screen.queryByRole('dialog', { name: 'Agentic handoff' })).toBeNull();
   });
 
   it('shows a retry action instead of an empty state when loading the workspace diff fails', async () => {

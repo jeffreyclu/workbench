@@ -15,7 +15,6 @@ import { CANCEL_FORCE_KILL_DELAY_MS, cancelAgentRun, classifyExecutionRobust, ex
 import { describeExecutionRouting } from '../activity-log.js';
 import { contextForPrompt, listBrokerConnections } from '../connection-broker.js';
 import { scanSource } from '../source-scanner.js';
-import { startManagedMcpLogin } from '../managed-mcp-login.js';
 import { LinearProvider } from '../providers/linear.js';
 import { startRemoteMcpOAuth } from '../remote-mcp.js';
 import type { WorkItemRepository } from '../repository.js';
@@ -210,8 +209,7 @@ export class WorkbenchAdminService {
   setFigmaScope(roots: string[]): ActionFailure | { roots: string[] } {
     const settings = this.repository.getSourceSettings('figma');
     if (!settings) return { status: 404, body: { error: 'Figma is not connected.' } };
-    this.repository.setSourceConnection('figma', 'Figma MCP · Codex', { ...settings, figmaRoots: JSON.stringify(roots) });
-    this.repository.setSourceConnection('figma', 'Figma MCP · Codex', { ...settings, figmaRoots: JSON.stringify(roots) });
+    this.repository.setSourceConnection('figma', 'Figma MCP · Workbench', { ...settings, figmaRoots: JSON.stringify(roots) });
     return { roots };
   }
 
@@ -222,15 +220,7 @@ export class WorkbenchAdminService {
     return { configured: true };
   }
 
-  async authorizeSource(input: { provider: 'confluence' | 'slack' | 'figma' | 'grafana' | 'gmail'; mode: 'remote' | 'managed'; serverUrl?: string }): Promise<ActionFailure | { url: string }> {
-    if (input.mode === 'managed') {
-      if (input.provider !== 'figma' && input.provider !== 'confluence') return { status: 400, body: { error: 'Managed authorization is available only for Figma and Atlassian.' } };
-      const managedProvider = input.provider === 'confluence' ? 'atlassian' : input.provider;
-      const login = await startManagedMcpLogin(managedProvider);
-      const stored = input.provider === 'figma' ? { key: 'figma' as const, label: 'Figma MCP · Codex' } : { key: 'confluence' as const, label: 'Atlassian MCP · Codex' };
-      void login.completion.then(() => this.repository.setSourceConnection(stored.key, stored.label, { mode: 'managed' })).catch(() => undefined);
-      return { url: login.url };
-    }
+  async authorizeSource(input: { provider: 'confluence' | 'slack' | 'figma' | 'grafana' | 'gmail'; serverUrl?: string }): Promise<ActionFailure | { url: string }> {
     if (input.provider === 'grafana') return { status: 400, body: { error: 'Add the Grafana service-account token in Sources.' } };
     const defaultUrl = input.provider === 'confluence' ? 'https://mcp.atlassian.com/v1/mcp/authv2'
       : input.provider === 'slack' ? 'https://mcp.slack.com/mcp'

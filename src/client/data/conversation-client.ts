@@ -1,4 +1,4 @@
-import type { AgentRun, AgentStreamEvent, ConversationPage, ExecutionPlan, RetrievedMemoryDetail, SessionFeedback, SessionFeedbackRating, SharedConversation, SharedMessage, SharedSearchResponse } from '../../shared/contracts';
+import type { AgentRun, AgentStreamEvent, ConversationPage, ExecutionPlan, RetrievedMemoryDetail, SessionFeedback, SessionFeedbackRating, SharedConversation, SharedMessage, SharedMessagePage, SharedSearchResponse } from '../../shared/contracts';
 import { request } from './request';
 
 export const conversationClient = {
@@ -32,7 +32,12 @@ export const conversationClient = {
   forkSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/fork`, { method: 'POST' }),
   deleteSharedConversation: (id: string) => request<void>(`/api/shared/conversations/${id}`, { method: 'DELETE' }),
   undeleteSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/undelete`, { method: 'POST' }),
-  listSharedMessages: (conversationId?: string) => request<{ messages: SharedMessage[] }>(conversationId ? `/api/shared/messages?conversationId=${encodeURIComponent(conversationId)}&limit=200` : '/api/shared/messages?limit=200'),
+  listSharedMessages: (conversationId?: string, cursor?: string, limit = 40) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (conversationId) params.set('conversationId', conversationId);
+    if (cursor) params.set('cursor', cursor);
+    return request<SharedMessagePage>(`/api/shared/messages?${params}`);
+  },
   listSharedMessageActivity: () => request<{ messages: Array<Pick<SharedMessage, 'id' | 'conversationId' | 'author' | 'status'>> }>('/api/shared/messages?activity=1'),
   createSharedMessage: (conversationId: string, body: string, dispatchTo: 'auto' | 'both' | 'codex' | 'claude' | 'none', attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }>, executionProfile: AgentRun['executionProfile'] = null, accountProfile?: string, executionKind?: AgentRun['kind']) => request<{ message: SharedMessage; replies: SharedMessage[] }>('/api/shared/messages', { method: 'POST', body: JSON.stringify({ conversationId, body, dispatchTo, attachments, executionProfile, accountProfile, executionKind }) }),
   cancelSharedReply: (id: string) => request<{ message: SharedMessage }>(`/api/shared/messages/${id}/cancel`, { method: 'POST' }),

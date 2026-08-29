@@ -21,7 +21,6 @@ export const sourceClient = {
   getFigmaScope: () => request<{ roots: string[] }>('/api/source-connections/figma/scope'),
   updateFigmaScope: (roots: string[]) => request<{ roots: string[] }>('/api/source-connections/figma/scope', { method: 'PUT', body: JSON.stringify({ roots }) }),
   startMcpOAuth: (provider: 'confluence' | 'slack' | 'figma' | 'gmail', serverUrl?: string) => request<{ url: string }>(`/api/source-connections/${provider}/mcp/oauth/start`, { method: 'POST', body: JSON.stringify({ serverUrl }) }),
-  startManagedMcpOAuth: (provider: 'figma' | 'atlassian') => request<{ url: string }>(`/api/source-connections/${provider}/managed/oauth/start`, { method: 'POST' }),
   configureGrafana: (token: string) => request<{ configured: true }>('/api/source-connections/grafana', { method: 'PUT', body: JSON.stringify({ token }) }),
   disconnectSource: (provider: 'confluence' | 'slack' | 'figma' | 'grafana' | 'gmail' | 'github') => request<void>(`/api/source-connections/${provider}`, { method: 'DELETE' }),
   getWorkspaceDiff: (scope: WorkspaceDiffScope) => request<{ diff: WorkspaceDiff }>(`${workspaceDiffBasePath(scope)}/workspace-diff`),

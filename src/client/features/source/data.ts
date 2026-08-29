@@ -9,8 +9,8 @@ export const sourceQueryKeys = {
 
 export const sourceData = {
   listConnections: api.listSourceConnections,
+  startMcpOAuth: api.startMcpOAuth,
   disconnect: api.disconnectSource,
-  startManagedMcpOAuth: api.startManagedMcpOAuth,
   configureGrafana: api.configureGrafana,
   getFigmaScope: api.getFigmaScope,
   updateFigmaScope: api.updateFigmaScope,

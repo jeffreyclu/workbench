@@ -10,12 +10,12 @@ import { assertApprovedMcpServer, createOutboundFetch } from './outbound-policy.
 interface StoredOAuth { serverUrl: string; tokens?: OAuthTokens; clientInformation?: OAuthClientInformationMixed }
 class WorkbenchOAuthProvider implements OAuthClientProvider {
   private verifier = ''; private authUrl: URL | null = null;
-  constructor(public readonly redirectUrl: string, private stored: StoredOAuth) {}
+  constructor(public readonly redirectUrl: string, private stored: StoredOAuth, private readonly onCredentialsChanged?: (stored: StoredOAuth) => void) {}
   get clientMetadata(): OAuthClientMetadata { return { client_name: 'Workbench', redirect_uris: [this.redirectUrl], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' }; }
   clientInformation() { return this.stored.clientInformation; }
-  saveClientInformation(value: OAuthClientInformationMixed) { this.stored.clientInformation = value; }
+  saveClientInformation(value: OAuthClientInformationMixed) { this.stored.clientInformation = value; this.onCredentialsChanged?.(this.snapshot()); }
   tokens() { return this.stored.tokens; }
-  saveTokens(value: OAuthTokens) { this.stored.tokens = value; }
+  saveTokens(value: OAuthTokens) { this.stored.tokens = value; this.onCredentialsChanged?.(this.snapshot()); }
   redirectToAuthorization(url: URL) { this.authUrl = url; }
   saveCodeVerifier(value: string) { this.verifier = value; }
   codeVerifier() { if (!this.verifier) throw new Error('MCP OAuth verifier is missing.'); return this.verifier; }
@@ -31,6 +31,10 @@ const pending = new Map<string, PendingMcp>();
 export function isMcpReauthenticationError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /refresh[_ ]token.*invalid|invalid[_ ]grant|token.*(?:expired|revoked)|unauthori[sz]ed|authentication required/i.test(message);
+}
+
+export function isMcpReauthenticationMessage(message: string): boolean {
+  return /authorization expired\. Reconnect this source\.$/.test(message);
 }
 
 export function mcpAuthenticationMessage(provider: SourceProvider): string {
@@ -68,10 +72,10 @@ export async function finishRemoteMcpOAuth(provider: RemoteMcpProvider, code: st
   return entry.oauth.snapshot();
 }
 
-export async function scanRemoteMcp(provider: RemoteMcpProvider, settings: Record<string, unknown>, requestedQuery?: string): Promise<SourceSignal[]> {
+export async function scanRemoteMcp(provider: RemoteMcpProvider, settings: Record<string, unknown>, requestedQuery?: string, saveCredentials?: (stored: Record<string, unknown>) => void): Promise<SourceSignal[]> {
   const stored = settings as unknown as StoredOAuth;
   if (!stored.serverUrl || !stored.tokens) throw new Error('MCP OAuth credentials are missing. Reconnect this source.');
-  const oauth = new WorkbenchOAuthProvider('http://localhost/unused', stored);
+  const oauth = new WorkbenchOAuthProvider('http://127.0.0.1/unused', stored, (next) => saveCredentials?.(next as unknown as Record<string, unknown>));
   const approvedServerUrl = assertApprovedMcpServer(provider, stored.serverUrl);
   const transport = new StreamableHTTPClientTransport(approvedServerUrl, { authProvider: oauth, fetch: createOutboundFetch(provider === 'slack' ? 'mcp-slack' : provider === 'figma' ? 'mcp-figma' : 'mcp-atlassian') });
   const client = new Client({ name: 'workbench', version: '0.1.0' });

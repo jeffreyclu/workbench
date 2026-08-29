@@ -40,7 +40,7 @@ import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from '../../components/markdown/markdown-composer.js';
 import { MarkdownCode, MarkdownPre } from '../../components/markdown/markdown-code.js';
 import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAGE, SELF_ASSIGNED_OWNER_MESSAGE } from '../../../shared/contracts';
-import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SessionFeedbackRating, SharedConversation, SharedMessage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
+import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SessionFeedbackRating, SharedConversation, SharedMessage, SharedMessagePage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
 import { api } from '../../data/api';
 import { ArtifactLibraryView } from '../artifacts/view';
 import { ConfirmationDialog } from '../../components/dialogs/confirmation-dialog';
@@ -357,8 +357,9 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const [mobileComposerOpen, setMobileComposerOpen] = useState(false);
   const mobileHeaderDragStartY = useRef<number | null>(null);
   const mobileComposerDragStartY = useRef<number | null>(null);
-  const THREAD_PAGE_SIZE = 5;
-  const [threadVisibleCount, setThreadVisibleCount] = useState(THREAD_PAGE_SIZE);
+  const MESSAGES_PAGE_SIZE = 40;
+  const [olderMessagePages, setOlderMessagePages] = useState<SharedMessagePage[]>([]);
+  const [isLoadingEarlierMessages, setIsLoadingEarlierMessages] = useState(false);
   const [hasNewActivityBelow, setHasNewActivityBelow] = useState(false);
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return;
@@ -568,13 +569,35 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     }
   }, [proposedPlan]);
   const messages = useQuery({
-    queryKey: ['shared-messages', conversationId], queryFn: () => api.listSharedMessages(conversationId!), enabled: Boolean(conversationId),
+    queryKey: ['shared-messages', conversationId], queryFn: () => api.listSharedMessages(conversationId!, undefined, MESSAGES_PAGE_SIZE), enabled: Boolean(conversationId),
     refetchInterval: (query) => query.state.data?.messages.some((message) => message.status === 'running' || message.status === 'queued') ? 750 : false,
   });
+  // The live page above always refetches on a 750ms poll while a reply is in
+  // flight; older pages never change once fetched (only the tail can still be
+  // running), so they're loaded once on demand and kept in local state instead
+  // of inside the polled query — otherwise every older page would be
+  // re-fetched on every poll tick as history grew.
+  const nextOlderMessagesCursor = olderMessagePages.length
+    ? olderMessagePages[olderMessagePages.length - 1].nextCursor
+    : messages.data?.nextCursor ?? null;
+  const hasEarlierMessages = Boolean(nextOlderMessagesCursor);
+  const loadEarlierMessages = async () => {
+    if (!conversationId || !nextOlderMessagesCursor || isLoadingEarlierMessages) return;
+    setIsLoadingEarlierMessages(true);
+    try {
+      const page = await api.listSharedMessages(conversationId, nextOlderMessagesCursor, MESSAGES_PAGE_SIZE);
+      setOlderMessagePages((current) => [...current, page]);
+    } finally {
+      setIsLoadingEarlierMessages(false);
+    }
+  };
   const MANUAL_EXECUTION_KIND_LABELS: Record<AgentRun['kind'], string> = {
     research: 'Research', analysis: 'Analysis', strategy: 'Strategy', execute: 'Execute', review: 'Review', bugfix: 'Bug fix',
   };
-  const allConversationMessages = messages.data?.messages ?? [];
+  const allConversationMessages = useMemo(
+    () => [...[...olderMessagePages].reverse().flatMap((page) => page.messages), ...(messages.data?.messages ?? [])],
+    [olderMessagePages, messages.data?.messages],
+  );
   const cacheSpendWarning = conversationCacheSpendWarning(allConversationMessages);
   const manualConversationExecutionMessage = selectedConversation?.workItemId
     ? null
@@ -599,12 +622,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       ? configured
       : [{ name: composerSelection.accountProfile }, ...configured];
   }, [composerSelection.accountProfile, agentAccounts.data?.accounts]);
-  // Keep the thread bounded to a handful of recent messages instead of an
-  // endless scroll; older history is revealed a page at a time on request.
-  const hasEarlierMessages = allConversationMessages.length > threadVisibleCount;
-  const conversationMessages = hasEarlierMessages
-    ? allConversationMessages.slice(allConversationMessages.length - threadVisibleCount)
-    : allConversationMessages;
+  const conversationMessages = allConversationMessages;
   // Accepted interjections are durable events in their target agent's activity
   // timeline. Repeating their standalone Jeffrey bubble after completion makes
   // the same input appear twice and breaks that timeline.
@@ -633,10 +651,11 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     }
     return rows;
   }, [renderedConversationMessages]);
-  // The visible thread is already capped to a handful of recent messages.
-  // Keeping even completed rows in document flow removes the virtualizer's
-  // cached-height transition: streamed Markdown can grow or settle at any
-  // time without another bubble ever reusing its vertical space.
+  const threadVirtualizer = useVirtualizer({
+    count: conversationRenderRows.length, getScrollElement: () => threadScrollRef.current,
+    estimateSize: () => 160, overscan: 8,
+  });
+  const threadVirtualItems = threadVirtualizer.getVirtualItems();
   useEffect(() => {
     if (!conversationId || selectionHydratedFor === conversationId) return;
     // The rail already has the selected conversation in the normal case. Do
@@ -1016,7 +1035,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   useEffect(() => {
     // Switching conversations always lands the reader at the newest message.
     isNearThreadBottomRef.current = true;
-    setThreadVisibleCount(THREAD_PAGE_SIZE);
+    setOlderMessagePages([]);
     setHasNewActivityBelow(false);
     setMobileHeaderOpen(false);
     setMobileComposerOpen(false);
@@ -1185,21 +1204,25 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           {!conversationDetail.isLoading && messages.isLoading && <ConversationThreadSkeleton />}
           {messages.error && <div className="list-state compact-state error-message">Could not load shared messages: {messages.error.message} <button type="button" className="button secondary compact" onClick={() => messages.refetch()}>Retry</button></div>}
           {cacheSpendWarning && <div className="conversation-cache-warning" role="status"><AlertTriangle size={14} aria-hidden="true" /><span>{cacheSpendWarning}</span></div>}
-          {!messages.isLoading && !messages.error && !selectedConversationMissing && messages.data?.messages.length === 0 && <div className="list-state compact-state">No messages yet. Ask Codex or Claude to get started.</div>}
+          {!messages.isLoading && !messages.error && !selectedConversationMissing && allConversationMessages.length === 0 && <div className="list-state compact-state">No messages yet. Ask Codex or Claude to get started.</div>}
           {hasEarlierMessages && (
             <button
               type="button"
               className="show-more-history-button"
+              disabled={isLoadingEarlierMessages}
               onClick={() => {
                 isNearThreadBottomRef.current = false;
-                setThreadVisibleCount((current) => current + THREAD_PAGE_SIZE);
+                void loadEarlierMessages();
               }}
             >
-              Show earlier messages ({allConversationMessages.length - threadVisibleCount} more)
+              {isLoadingEarlierMessages
+                ? 'Loading earlier messages…'
+                : `Show earlier messages${messages.data?.totalCount ? ` (${messages.data.totalCount - allConversationMessages.length} more)` : ''}`}
             </button>
           )}
-          <div className="thread-virtualizer thread-live-flow">
-          {conversationRenderRows.map((row) => {
+          <div className="thread-virtualizer thread-live-flow" style={{ position: 'relative', height: threadVirtualizer.getTotalSize() }}>
+          {threadVirtualItems.map((virtualRow) => {
+            const row = conversationRenderRows[virtualRow.index];
             const renderMessage = (message: SharedMessage, inGroup: boolean) => {
               const isAgentMessage = message.author === 'codex' || message.author === 'claude';
               const isQueuedMessage = message.status === 'queued';
@@ -1303,15 +1326,17 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
               </article>
               </div>;
             };
-            if (row.type === 'single') return renderMessage(row.message, false);
-            const runningCount = [row.a, row.b].filter((message) => message.status === 'running').length;
-            return <div key={`${row.a.id}-${row.b.id}`} className="thread-virtual-row reply-group">
-              <div className="reply-group-header">{runningCount > 0 ? `${runningCount} agent${runningCount > 1 ? 's' : ''} responding` : 'Codex + Claude replied'}</div>
-              <div className="reply-group-columns">
-                {renderMessage(row.a, true)}
-                {renderMessage(row.b, true)}
-              </div>
-            </div>;
+            const rowContent = row.type === 'single' ? renderMessage(row.message, false) : (() => {
+              const runningCount = [row.a, row.b].filter((message) => message.status === 'running').length;
+              return <div className="thread-virtual-row reply-group">
+                <div className="reply-group-header">{runningCount > 0 ? `${runningCount} agent${runningCount > 1 ? 's' : ''} responding` : 'Codex + Claude replied'}</div>
+                <div className="reply-group-columns">
+                  {renderMessage(row.a, true)}
+                  {renderMessage(row.b, true)}
+                </div>
+              </div>;
+            })();
+            return <div key={virtualRow.key} data-index={virtualRow.index} ref={threadVirtualizer.measureElement} style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualRow.start}px)` }}>{rowContent}</div>;
           })}
           </div>
           {completionPromptAvailable && <div className="completion-prompt" role="status"><span><strong>Preview approved successfully.</strong><small>Complete the linked task?</small>{completeLinkedTask.error && <small className="completion-prompt-error">Could not complete the task. Try again.</small>}</span><div><button type="button" className="button secondary compact" onClick={() => setDismissedCompletionPromptPromotionId(latestSuccessfulPromotion!.id)}>Not yet</button><button type="button" className="button primary compact" onClick={() => completeLinkedTask.mutate()} disabled={completeLinkedTask.isPending}>{completeLinkedTask.isPending ? <><LoaderCircle className="spin" size={12} /> Completing…</> : <><Check size={12} /> Complete task</>}</button></div></div>}

@@ -13,7 +13,7 @@ export function useSourceConnections() {
   return useQuery({ queryKey: sourceQueryKeys.connections, queryFn: sourceData.listConnections });
 }
 
-export function useManagedSourceAuthorization(connection: BrokerConnection) {
+export function useSourceAuthorization(connection: BrokerConnection) {
   const queryClient = useQueryClient();
   const [state, dispatch] = useReducer(reduceSourceAuthorization, initialSourceAuthorizationState);
   const previousConnectionState = useRef(connection.state);

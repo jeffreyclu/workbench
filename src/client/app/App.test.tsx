@@ -1113,7 +1113,9 @@ describe('shared room', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/shared/conversations/${conversationId}/workspace-diff`)).toBe(true);
 
     fireEvent.click(changes);
-    expect(await screen.findByRole('heading', { name: 'Review workspace decisions' })).toBeTruthy();
+    expect(await screen.findByText('Workspace review')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Review workspace decisions' })).toBeNull();
+    expect(screen.queryByText('Review behavior decisions in priority order before publishing these workspace changes.')).toBeNull();
     expect(await screen.findAllByRole('button', { name: /src\/client\/standalone\.tsx/ })).not.toHaveLength(0);
     expect(screen.getByLabelText('Conversation changes')).toBeTruthy();
   });
@@ -1152,7 +1154,7 @@ describe('shared room', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/github/pull-request-diff'))).toBe(true);
 
     fireEvent.click(changes);
-    expect(await screen.findByRole('heading', { name: 'Review workspace decisions' })).toBeTruthy();
+    expect(await screen.findByText('Workspace review')).toBeTruthy();
     // The linked pull request is an explicit review source, so it opens on demand rather than by default.
     fireEvent.click(screen.getByRole('button', { name: 'GitHub PR' }));
     fireEvent.change(await screen.findByLabelText('Pull request'), { target: { value: item.sourceUrl } });
@@ -1202,7 +1204,7 @@ describe('shared room', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/workspace-diff'))).toBe(true);
 
     fireEvent.click(changes);
-    expect(await screen.findByRole('heading', { name: 'Review workspace decisions' })).toBeTruthy();
+    expect(await screen.findByText('Workspace review')).toBeTruthy();
     expect(await screen.findAllByRole('button', { name: /src\/client\/feature\.tsx/ })).not.toHaveLength(0);
     expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/shared/conversations/${conversationId}/workspace-diff`)).toBe(true);
     expect(screen.queryByText('GitHub reports no changed files for this pull request.')).toBeNull();

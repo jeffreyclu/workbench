@@ -1076,17 +1076,17 @@ describe('destructive operations soft-delete instead of hard-deleting', () => {
     expect(response.status).toBe(404);
   });
 
-  it('rejects managed MCP authorization for a provider Codex login does not cover', async () => {
+  it('does not expose the removed agent-managed MCP authorization route', async () => {
     const response = await fetch(`${baseUrl}/api/source-connections/github/managed/oauth/start`, { method: 'POST' });
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(404);
   });
 
-  it('reports Atlassian as connected once a managed Codex login is stored', async () => {
+  it('does not treat a legacy agent-owned Atlassian marker as a Workbench connection', async () => {
     repository.setSourceConnection('confluence', 'Atlassian MCP · Codex', { mode: 'managed' });
 
     const response = await fetch(`${baseUrl}/api/source-connections`);
     const body = (await response.json()) as { connections: Array<{ id: string; state: string }> };
-    expect(body.connections.find((connection) => connection.id === 'atlassian')?.state).toBe('connected');
+    expect(body.connections.find((connection) => connection.id === 'atlassian')?.state).toBe('needs_auth');
   });
 
   it('reports Grafana as connected once a service-account token is stored', async () => {
@@ -1097,8 +1097,8 @@ describe('destructive operations soft-delete instead of hard-deleting', () => {
     expect(body.connections.find((connection) => connection.id === 'grafana')?.state).toBe('connected');
   });
 
-  it('persists Figma Discovery roots without replacing the managed connection settings', async () => {
-    repository.setSourceConnection('figma', 'Figma MCP · Codex', { mode: 'managed' });
+  it('persists Figma Discovery roots without replacing the Workbench connection settings', async () => {
+    repository.setSourceConnection('figma', 'Figma MCP · Workbench', { serverUrl: 'https://mcp.figma.com/mcp', tokens: 'stored-oauth' });
     const roots = ['https://www.figma.com/design/abc123/Workbench?node-id=1-2'];
 
     const saved = await fetch(`${baseUrl}/api/source-connections/figma/scope`, {
@@ -1106,7 +1106,7 @@ describe('destructive operations soft-delete instead of hard-deleting', () => {
     });
     expect(saved.status).toBe(200);
     expect(await saved.json()).toEqual({ roots });
-    expect(repository.getSourceSettings('figma')).toEqual({ mode: 'managed', figmaRoots: JSON.stringify(roots) });
+    expect(repository.getSourceSettings('figma')).toEqual({ serverUrl: 'https://mcp.figma.com/mcp', tokens: 'stored-oauth', figmaRoots: JSON.stringify(roots) });
 
     const loaded = await fetch(`${baseUrl}/api/source-connections/figma/scope`);
     expect(await loaded.json()).toEqual({ roots });
@@ -1229,12 +1229,12 @@ describe('API mutation audit middleware', () => {
 });
 
 describe('OAuth callback base origin', () => {
-  const originalAppApiOrigin = process.env.APP_API_ORIGIN;
+  const originalCallbackOrigin = process.env.MCP_OAUTH_CALLBACK_ORIGIN;
   const originalPort = process.env.PORT;
 
   afterEach(() => {
-    if (originalAppApiOrigin === undefined) delete process.env.APP_API_ORIGIN;
-    else process.env.APP_API_ORIGIN = originalAppApiOrigin;
+    if (originalCallbackOrigin === undefined) delete process.env.MCP_OAUTH_CALLBACK_ORIGIN;
+    else process.env.MCP_OAUTH_CALLBACK_ORIGIN = originalCallbackOrigin;
     if (originalPort === undefined) delete process.env.PORT;
     else process.env.PORT = originalPort;
   });
@@ -1242,26 +1242,26 @@ describe('OAuth callback base origin', () => {
   it('never derives the callback origin from a client-supplied Host', () => {
     // No request object is passed in at all — this asserts the function has no
     // avenue back to request.protocol/request.get('host').
-    delete process.env.APP_API_ORIGIN;
+    delete process.env.MCP_OAUTH_CALLBACK_ORIGIN;
     process.env.PORT = '4317';
-    expect(oauthCallbackBase()).toBe('http://localhost:4317/api/source-connections');
+    expect(oauthCallbackBase()).toBe('http://127.0.0.1:4317/api/source-connections');
   });
 
-  it('uses a validated APP_API_ORIGIN when it is an absolute http(s) URL', () => {
-    process.env.APP_API_ORIGIN = 'https://workbench.example.com/api/source-connections';
-    expect(oauthCallbackBase()).toBe('https://workbench.example.com/api/source-connections');
+  it('uses a validated MCP_OAUTH_CALLBACK_ORIGIN when explicitly configured', () => {
+    process.env.MCP_OAUTH_CALLBACK_ORIGIN = 'http://127.0.0.1:5180/api/source-connections';
+    expect(oauthCallbackBase()).toBe('http://127.0.0.1:5180/api/source-connections');
   });
 
-  it('falls back to the fixed local origin when APP_API_ORIGIN is malformed', () => {
-    process.env.APP_API_ORIGIN = 'not-a-url';
+  it('falls back to the fixed local origin when MCP_OAUTH_CALLBACK_ORIGIN is malformed', () => {
+    process.env.MCP_OAUTH_CALLBACK_ORIGIN = 'not-a-url';
     process.env.PORT = '4317';
-    expect(oauthCallbackBase()).toBe('http://localhost:4317/api/source-connections');
+    expect(oauthCallbackBase()).toBe('http://127.0.0.1:4317/api/source-connections');
   });
 
-  it('falls back to the fixed local origin when APP_API_ORIGIN uses a non-http(s) scheme', () => {
-    process.env.APP_API_ORIGIN = 'javascript:alert(1)';
+  it('falls back to the fixed local origin when MCP_OAUTH_CALLBACK_ORIGIN uses a non-http(s) scheme', () => {
+    process.env.MCP_OAUTH_CALLBACK_ORIGIN = 'javascript:alert(1)';
     process.env.PORT = '4317';
-    expect(oauthCallbackBase()).toBe('http://localhost:4317/api/source-connections');
+    expect(oauthCallbackBase()).toBe('http://127.0.0.1:4317/api/source-connections');
   });
 });
 

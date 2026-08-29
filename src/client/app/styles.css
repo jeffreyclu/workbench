@@ -361,6 +361,8 @@ nav { display: grid; gap: 3px; }
 .workspace-diff-refresh:hover:not(:disabled) { color: var(--acid); border-color: #596234; }.workspace-diff-refresh:disabled { opacity: .65; cursor: wait; }
 .workspace-diff-refresh-pending { color: #1d1305; border-color: #f4a340; background: #f4a340; box-shadow: 0 0 0 1px #f4a34033; }
 .workspace-diff-refresh-pending:hover:not(:disabled) { color: #1d1305; border-color: #ffc16e; background: #ffc16e; }
+.workspace-diff-handoff { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; color: #cbd8a0; border: 1px solid #4b5832; border-radius: 6px; background: #1b2114; cursor: pointer; font: 700 10px 'DM Mono'; }
+.workspace-diff-handoff:hover { color: #e6f8ae; border-color: #738b45; background: #252e19; }.workspace-diff-handoff:focus-visible { outline: 2px solid var(--acid); outline-offset: 2px; }
 .workspace-diff-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-start; gap: 7px; margin-top: 11px; }
 .workspace-review-source { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid #353530; border-radius: 7px; background: #10110f; }
 .workspace-review-source button { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; padding: 0 8px; color: #8d8c85; border: 0; border-radius: 4px; background: transparent; font: 700 10px 'DM Mono'; letter-spacing: .02em; }
@@ -422,9 +424,16 @@ nav { display: grid; gap: 3px; }
 .diff-block-disclosure::-webkit-details-marker { display: none; }.diff-block-disclosure svg { transition: transform var(--motion-fast) var(--motion-ease); }.diff-block-collapsed[open] > .diff-block-disclosure svg { transform: rotate(90deg); }
 .diff-block-disclosure:hover, .diff-block-disclosure:focus-visible { color: #d9d8d1; border-color: #596234; outline: 0; }.diff-block-disclosure small { color: #77766f; font: 500 9px 'DM Mono'; }
 .diff-review-layout { display: grid; grid-template-columns: minmax(0, 1fr); }
-.review-handoff-card { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 10px 14px; border-bottom: 1px solid #302f2b; background: #151513; }
-.review-handoff-card > header { display: flex; flex-basis: 100%; align-items: start; justify-content: space-between; gap: 12px; }.review-handoff-card > header > div { display: grid; gap: 3px; }.review-handoff-card strong { color: #deddd6; font-size: 13px; }.review-handoff-card header small, .review-handoff-card > header > span, .review-handoff-section > small { color: #85847d; font: 10px 'DM Mono'; }.review-handoff-card > header > span { flex: 0 0 auto; padding: 3px 6px; border: 1px solid #4e4d45; border-radius: 999px; }
-.review-handoff-section { flex: 1 1 180px; min-width: 0; }.review-handoff-section[open] { flex-basis: 100%; }.review-handoff-section h3, .review-handoff-section summary { margin: 0 0 5px; color: #aaa9a2; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }.review-handoff-section p { margin: 0 0 4px; color: #d0cfc8; font-size: 12px; }.review-handoff-section ul { display: grid; gap: 4px; margin: 0; padding-left: 17px; color: #aaa9a2; font-size: 11px; }.review-handoff-section code { overflow-wrap: anywhere; color: #d7d6cf; font: 10px 'DM Mono'; }.review-handoff-verification-passed { color: #9bc985; }.review-handoff-verification-failed { color: #e1a68f; }
+.review-handoff-dialog { width: min(760px, 100%); padding: 0; overflow: hidden; border-color: #454a38; background: #151612; }
+.review-handoff-dialog-header { display: grid; grid-template-columns: 44px minmax(0, 1fr) 36px; gap: 12px; align-items: center; padding: 18px 20px; border-bottom: 1px solid #35382d; background: linear-gradient(135deg, #242a19, #191a15 62%); }
+.review-handoff-dialog-icon { display: grid; width: 44px; height: 44px; place-items: center; color: #c7ed68; border: 1px solid #59683a; border-radius: 10px; background: #29321a; box-shadow: inset 0 1px #ffffff0b; }
+.review-handoff-dialog-header > div:nth-child(2) { display: grid; gap: 3px; min-width: 0; }.review-handoff-dialog-header span { color: #a7ba6d; font: 700 9px 'DM Mono'; letter-spacing: .1em; text-transform: uppercase; }.review-handoff-dialog-header h2 { margin: 0; color: #eff0e8; font-size: 19px; }.review-handoff-dialog-header small { color: #85877b; font: 10px 'DM Mono'; }
+.review-handoff-dialog-header > button { display: grid; width: 36px; height: 36px; place-items: center; padding: 0; color: #aaa9a2; border: 1px solid #45483d; border-radius: 8px; background: #20211d; cursor: pointer; }.review-handoff-dialog-header > button:hover, .review-handoff-dialog-header > button:focus-visible { color: #eef0e8; border-color: #6b744d; background: #292b24; outline: 0; }
+.review-handoff-card { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; max-height: calc(100dvh - 190px); padding: 16px 18px 20px; overflow-y: auto; }
+.review-handoff-section { min-width: 0; overflow: hidden; border: 1px solid #34362e; border-radius: 9px; background: #1b1c18; transition: border-color var(--motion-fast) var(--motion-ease), background var(--motion-fast) var(--motion-ease); }.review-handoff-section[open] { grid-column: 1 / -1; border-color: #4d5836; background: #1d2018; }
+.review-handoff-section summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; padding: 11px 13px; color: #c7c7be; cursor: pointer; list-style: none; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }.review-handoff-section summary::-webkit-details-marker { display: none; }.review-handoff-section summary::after { content: '+'; display: grid; flex: 0 0 22px; width: 22px; height: 22px; place-items: center; color: #aabd70; border: 1px solid #454a38; border-radius: 6px; background: #24271f; font: 14px/1 'DM Mono'; }.review-handoff-section[open] summary::after { content: '−'; }.review-handoff-section summary:hover { color: #eff0e8; background: #22241e; }.review-handoff-section summary:focus-visible { outline: 2px solid var(--acid); outline-offset: -2px; }
+.review-handoff-section p { margin: 0; padding: 0 13px 12px; color: #d8d8cf; font-size: 12px; line-height: 1.55; }.review-handoff-section ul { display: grid; gap: 7px; margin: 0; padding: 0 16px 14px 30px; color: #b8b8af; font-size: 11px; line-height: 1.5; }.review-handoff-section code { overflow-wrap: anywhere; color: #e0e0d8; font: 10px 'DM Mono'; }.review-handoff-section > small { display: block; padding: 0 13px 13px; color: #85877d; font: 10px 'DM Mono'; }.review-handoff-verification-passed { color: #9bc985; }.review-handoff-verification-failed { color: #e1a68f; }
+@media (max-width: 640px) { .review-handoff-dialog { width: 100%; }.review-handoff-dialog-header { grid-template-columns: 40px minmax(0, 1fr) 44px; padding: 14px; }.review-handoff-dialog-icon { width: 40px; height: 40px; }.review-handoff-dialog-header > button { width: 44px; height: 44px; }.review-handoff-card { grid-template-columns: 1fr; max-height: calc(100dvh - 164px); padding: 12px; }.review-handoff-section[open] { grid-column: auto; } }
 .diff-review-summary { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 10px 14px; border-bottom: 1px solid #302f2b; background: #171715; }
 .diff-review-summary > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .diff-review-summary strong { color: #deddd6; font-size: 13px; }
@@ -555,16 +564,6 @@ nav { display: grid; gap: 3px; }
    coordinates and needs its own frame — the card it wraps has none. */
 .decision-popover { z-index: 40; max-height: min(74vh, 620px); overflow-y: auto; overscroll-behavior: contain; border: 1px solid #45443e; border-radius: 9px; box-shadow: 0 14px 38px #000a; }
 .decision-popover:focus-visible { outline: 2px solid var(--acid); outline-offset: 2px; }
-/* With a diagram attached the outer element is only a rail: the chrome moves
-   onto each half so the panel and the diagram read as two sheets side by side. */
-.decision-popover.with-aside { display: flex; align-items: flex-start; gap: 10px; max-height: none; overflow: visible; border: 0; border-radius: 0; box-shadow: none; }
-.decision-popover.with-aside > .decision-popover-panel { flex: 0 0 336px; width: 336px; max-height: min(74vh, 620px); overflow-y: auto; overscroll-behavior: contain; border: 1px solid #45443e; border-radius: 9px; box-shadow: 0 14px 38px #000a; }
-.decision-popover-aside { flex: 0 0 306px; width: 306px; max-height: min(74vh, 620px); overflow: auto; overscroll-behavior: contain; border: 1px solid #45443e; border-radius: 9px; box-shadow: 0 14px 38px #000a; background: var(--panel, #1c1b18); }
-.decision-relationship-diagram { display: flex; flex-direction: column; gap: 8px; padding: 12px 13px 13px; }
-.decision-relationship-diagram > header { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
-.decision-relationship-diagram > header small { margin-left: auto; font-weight: 400; opacity: 0.7; }
-.decision-relationship-diagram .change-map-canvas { overflow: auto; }
-.decision-relationship-diagram .change-map-explanation { margin: 0; font-size: 11.5px; }
 .decision-popover .diff-review-decision-card { padding: 14px 15px 15px; border-radius: 9px; }
 .diff-review-load-error { padding: 14px; border: 1px solid #5b3935; border-radius: 7px; background: #211716; }.diff-review-load-error strong { color: #e1a68f; }.diff-review-load-error p { color: #aaa9a2; }
 .diff-review-workbench { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; border-top: 1px solid #252522; }
@@ -1668,8 +1667,6 @@ nav { display: grid; gap: 3px; }
   .artifact-event > div, .artifact-comment > div { min-width: 0; }
   .artifact-comment > div { flex-wrap: wrap; gap: 4px 8px; }
   .insight-sections { gap: 12px; padding-top: 14px; }
-  .insight-window-toggle { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
-  .insight-window-toggle button { min-width: 0; min-height: 44px; padding-inline: 6px; }
   .insight-overall-row, .insight-agent-grid, .insight-reliability-grid, .insight-token-summary { grid-template-columns: 1fr; }
   .insight-overall-stat { min-height: 104px; padding: 15px; }
   .insight-section { padding: 15px; }

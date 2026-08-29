@@ -105,8 +105,8 @@ Use **Sources** only to inspect connection state or start the appropriate authen
 | Linear | Search and resolve issues/projects; seed tasks from existing descriptions | Configure a personal API key in `.env`. Provider fields remain provider-owned. |
 | GitHub | Search Writer, Writer Internal, and WriterColab issues and pull requests; resolve pasted links | Uses the configured authenticated connector. |
 | Slack | Resolve pasted Slack links and search when creating a task | Uses the managed authenticated MCP connector; Workbench does **not** require a Slack app or Slack client secrets. |
-| Figma | Resolve pasted design links for agent work | Uses the managed Figma MCP connection. Starting Figma auth should open the provider’s authorization window once. |
-| Atlassian | Search and resolve Jira and Confluence links | Uses the configured remote MCP connection. Refresh the Sources view after authorization if the status is stale. |
+| Figma | Resolve pasted design links for agent work | Uses one Workbench-owned MCP connection shared by Codex and Claude. OAuth returns through a loopback callback on this Mac, and refreshed credentials are persisted automatically. |
+| Atlassian | Search and resolve Jira and Confluence links | Uses the same Workbench-owned remote MCP path, with loopback OAuth and persisted token refresh. |
 | Google Workspace | Planned Docs, Drive, and Gmail context | Disabled until Writer IT provides an approved connector. |
 
 ### Linear configuration

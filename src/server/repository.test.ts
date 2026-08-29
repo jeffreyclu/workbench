@@ -981,6 +981,31 @@ describe('WorkItemRepository', () => {
     expect(repository.listSourceConnections()).toEqual([]);
   });
 
+  it('persists rotated MCP credentials without treating a transient scan failure as expired authorization', () => {
+    repository.setSourceConnection('confluence', 'Atlassian MCP · Workbench', {
+      serverUrl: 'https://mcp.atlassian.com/v1/mcp/authv2',
+      tokens: JSON.stringify({ access_token: 'old', refresh_token: 'old-refresh' }),
+    });
+    repository.updateSourceSettings('confluence', {
+      serverUrl: 'https://mcp.atlassian.com/v1/mcp/authv2',
+      tokens: { access_token: 'new', refresh_token: 'new-refresh' },
+    });
+    repository.updateSourceScan('confluence', 'Atlassian search is unavailable through the connector.');
+
+    expect(repository.getSourceSettings('confluence')).toEqual({
+      serverUrl: 'https://mcp.atlassian.com/v1/mcp/authv2',
+      tokens: { access_token: 'new', refresh_token: 'new-refresh' },
+    });
+    expect(repository.listSourceConnections()).toEqual([
+      expect.objectContaining({ provider: 'confluence', configurationState: 'connected', health: 'unavailable' }),
+    ]);
+
+    repository.markSourceReauthRequired('confluence', 'Atlassian authorization expired. Reconnect this source.');
+    expect(repository.listSourceConnections()).toEqual([
+      expect.objectContaining({ provider: 'confluence', configurationState: 'reauth_required' }),
+    ]);
+  });
+
   it('distinguishes incomplete archives from completed archives and preserves conversation history', () => {
     const incomplete = repository.create({ title: 'Paused work', description: 'Useful context', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const completed = repository.create({ title: 'Shipped work', description: 'Finished context', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });

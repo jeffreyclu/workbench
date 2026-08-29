@@ -493,3 +493,26 @@ permission grant tied to that specific request, and auto-deny it before it execu
 `PUSH` command as the permission grant for the current git push. Passive,
 read-only lookups (checking PR/CI status, reading a Slack thread) are lower-risk than mutations, but
 when in doubt about whether a call counts as "acting," treat it as requiring permission.
+
+### Always name the surface where Jeffrey can see finished work
+
+Jeffrey's correction (2026-08-29), verbatim: "ok where am i supposed to fucking see these changes??"
+He had just been handed several "done, verified" reports covering client and server work, none of
+which told him a URL. The reports were accurate about the code and useless for actually looking at
+it, because Workbench's local topology hides the gap: the app Jeffrey habitually visits at
+**http://localhost:5180 is a promoted release**, served from a frozen snapshot under
+`.workbench-runtime/releases/<id>/` (prebuilt `client/` assets plus a copied `src/server`), not from
+the working tree. Editing files in `~/dev/workbench` changes nothing at :5180 until a new promotion
+is cut. `vite.config.ts` asks for port 5180 too, so when the release runtime already holds it the dev
+server silently lands on **:5181**, and nothing tells Jeffrey his changes moved to a different port.
+
+The rule: a completion report is not finished until it says where to look. State the exact URL, and
+state which categories of change are and are not visible there. In this repo that means distinguishing
+client changes — visible immediately on the working-tree dev server with HMR — from server changes,
+which are not visible until promotion, because the preview server proxies `/api` to the promoted
+runtime rather than running the working-tree server. When the honest answer is "nowhere yet, this
+needs a promotion," say that plainly instead of letting "done and verified" imply it is observable.
+
+Verify the surface rather than assuming it. Grepping the running release's built asset for a selector
+or string that only exists in the working tree is a cheap, decisive test of whether Jeffrey's browser
+is being served the new code.

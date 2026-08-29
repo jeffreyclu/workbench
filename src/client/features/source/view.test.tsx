@@ -151,7 +151,7 @@ describe('SourcesDialog managed authorization', () => {
     let authorized = false;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === '/api/source-connections/figma/managed/oauth/start' && init?.method === 'POST') {
+      if (url === '/api/source-connections/figma/mcp/oauth/start' && init?.method === 'POST') {
         return jsonResponse({ url: 'https://example.com/figma-oauth' });
       }
       if (url === '/api/source-connections') {
@@ -183,7 +183,7 @@ describe('SourcesDialog managed authorization', () => {
     let failConnectionCheck = false;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === '/api/source-connections/figma/managed/oauth/start' && init?.method === 'POST') {
+      if (url === '/api/source-connections/figma/mcp/oauth/start' && init?.method === 'POST') {
         return jsonResponse({ url: 'https://example.com/figma-oauth' });
       }
       if (url === '/api/source-connections') {

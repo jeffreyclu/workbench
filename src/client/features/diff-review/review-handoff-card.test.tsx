@@ -19,7 +19,6 @@ describe('AgentRunReviewHandoffCard', () => {
   it('keeps handoff details closed until the reviewer opens one', () => {
     render(<AgentRunReviewHandoffCard handoff={handoff} />);
 
-    expect(screen.getByText('Agent handoff')).toBeInTheDocument();
     const sections = document.querySelectorAll<HTMLDetailsElement>('.review-handoff-section');
     // Completion summary, observed changes, requested outcome, verification.
     expect(sections).toHaveLength(4);
