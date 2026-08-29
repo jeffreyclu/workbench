@@ -135,6 +135,15 @@ export function latestConversationExecutionMessage(messages: SharedMessage[]): S
   ) ?? null;
 }
 
+/**
+ * Unlike latestConversationExecutionMessage, this does not require the
+ * message to already carry a kind — it is the target the manual-conversation
+ * dropdown classifies when no turn has been classified yet.
+ */
+export function latestConversationAgentMessage(messages: SharedMessage[]): SharedMessage | null {
+  return [...messages].reverse().find((message) => message.author === 'codex' || message.author === 'claude') ?? null;
+}
+
 type ConversationTaskPickerProps = {
   tasks: WorkItem[];
   isLoading: boolean;
@@ -573,7 +582,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const cacheSpendWarning = conversationCacheSpendWarning(allConversationMessages);
   const manualConversationExecutionMessage = selectedConversation?.workItemId
     ? null
-    : latestConversationExecutionMessage(allConversationMessages);
+    : latestConversationAgentMessage(allConversationMessages);
   const manualConversationExecutionKind = manualConversationExecutionMessage?.kind ?? null;
   // A pasted pull-request link is enough to review it: resolving one must not
   // require the conversation to be linked to a work item first.
