@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
 import { changeTypeLabel, isReviewChangeType, type ReviewChangeType } from '../shared/change-type.js';
+import { auditCitations, citationAuditNote, type CoverageEvidence } from '../shared/coverage-evidence.js';
 
 export type ReviewAssistAction = 'explain' | 'what_could_break' | 'compare_task_intent' | 'score_risk';
 
@@ -16,6 +17,9 @@ export type ReviewAssistDecision = {
    * review surface — but deliberately ignored here: see `hashRequest`. */
   state: string;
   hunks: Array<{ filePath: string; location: string; lines: string[] }>;
+  /** Test hunks from elsewhere in the same review that name this decision's new
+   * declarations. Optional because a stale tab still posts the old payload. */
+  coverageEvidence?: CoverageEvidence;
 };
 
 export type ReviewAssistTaskIntent = { title: string; description: string } | null;
@@ -39,13 +43,15 @@ const CHANGES_AGENT_SYSTEM_PROMPT = [
   // damaging thing this surface can do — a fabricated all-clear is worse than
   // no answer.
   'You are shown only the hunks in this message. You cannot see the rest of the file, the pre-change version, call sites, or the test suite. Never assert anything about code you were not shown: say "not visible here" and name what would have to be checked.',
+  'A message may carry a "Companion test hunks" block. Those hunks are from the same review but a different decision: they are evidence about the change, never part of it. Judge them only as coverage, and never score or critique them as if they were the change itself.',
+  'Cite code as [path:line] using a path and a line number that appear in this message — for example [src/foo.ts:42]. A citation to a file or line you were not shown is a fabrication, so cite nothing rather than guess a number.',
   'Follow the instruction at the top of the message exactly. No preamble, no markdown headings, no restating the diff back verbatim.',
 ].join(' ');
 
 /** Bumped whenever the system prompt or an action directive changes what a good
  * answer looks like. It is part of the cache key, so a corrected rubric
  * recomputes stale answers once instead of serving the old judgement forever. */
-const ASSIST_PROMPT_VERSION = 3;
+const ASSIST_PROMPT_VERSION = 4;
 
 // Answer length is the dominant latency term once the session is primed:
 // measured on this machine a warm turn spends ~0.9s on session overhead and the
@@ -66,8 +72,8 @@ const ACTION_DIRECTIVES: Record<ReviewAssistAction, string> = {
  * one names the evidence the model does not have, because the alternative is
  * that it invents it. */
 const CHANGE_TYPE_DIRECTIVES: Record<ReviewChangeType, string> = {
-  new_code: 'This is brand-new code. Coverage first: for every visible branch — guard, catch, early return, loop, switch arm — name the test line in this diff that exercises it, or mark it UNCOVERED. If no test file appears in this diff, say coverage is not visible rather than guessing either way. Then judge correctness, naming, and complexity of the new logic itself.',
-  extension: 'This extends existing logic rather than rewriting it. Ask which previously handled inputs now take the new path, and whether the existing behavior is preserved for everything else.',
+  new_code: 'This is brand-new code. Coverage first: for every visible branch — guard, catch, early return, loop, switch arm — emit one line pairing the logic with its proof, as [logic path:line] <- [test path:line], or mark the branch UNCOVERED with no test citation. Draw test citations from the companion test hunks when they are supplied. If no test hunk names this code at all, say coverage is not visible rather than guessing either way. Then judge correctness, naming, and complexity of the new logic itself.',
+  extension: 'This extends existing logic rather than rewriting it. Ask which previously handled inputs now take the new path, and whether the existing behavior is preserved for everything else. Cite the added branch as [path:line], and cite a companion test line for it when one is supplied.',
   behavior_edit: 'This edits existing behavior in place. State the old behavior and the new behavior in one line each, then name who would notice the difference.',
   refactor_pure: 'This looks like a behavior-preserving refactor. Compare old and new on the same axes and in the same order: signature, error handling, ordering and control flow, complexity. Name every difference that is not cosmetic. Call sites are not visible here — do not claim they are updated.',
   replacement: 'This replaces an existing implementation. Compare the removed and added versions on signature, error handling, edge cases, and ordering, then say which callers must be re-checked. Callers are not visible here — list them as unverified rather than as fine.',
@@ -147,6 +153,19 @@ function buildPrompt(action: ReviewAssistAction, decision: ReviewAssistDecision,
     `Decision: ${decision.behavior}`,
     `Diff:\n${hunkText}`,
   ];
+  const evidence = decision.coverageEvidence;
+  if (evidence && evidence.hunks.length > 0) {
+    const evidenceText = evidence.hunks
+      .map((hunk) => `${hunk.filePath} (${hunk.location}) — exercises ${hunk.symbols.join(', ')}:\n${hunk.lines.join('\n')}`)
+      .join('\n\n');
+    parts.push(`Companion test hunks (same review, different decision — evidence only, not part of this change):\n${evidenceText}`);
+  }
+  // Stated as a searched-and-not-found fact, because the model cannot tell the
+  // difference between "no test exists" and "the test was not put in front of
+  // me" — and left to guess, it has picked either one.
+  if (evidence && evidence.uncitedSymbols.length > 0) {
+    parts.push(`The whole review was searched: no test hunk anywhere in it mentions ${evidence.uncitedSymbols.join(', ')}. Treat those as uncovered, not as unverifiable.`);
+  }
   if (action === 'score_risk') parts.push(`Defensible range for this change type: ${CHANGE_TYPE_RISK_BANDS[changeType]}. Leave it only for a reason you state in the second line.`);
   if (action === 'compare_task_intent') {
     parts.push(taskIntent ? `Task title: ${taskIntent.title}\nTask description: ${taskIntent.description}` : 'No task is linked to this review; say so and note that alignment cannot be judged.');
@@ -359,6 +378,17 @@ function runOneOffTurn(prompt: string): Promise<string> {
  * window, or after a restart — pays for it twice. `onDelta` streams the answer
  * as it is generated so the reviewer reads the first sentence about a second
  * in, instead of staring at a spinner until the whole turn completes. */
+/** Appends the deterministic citation check to an answer before it is cached,
+ * so a reviewer never has to take a cited line on trust. `score_risk` is
+ * exempt: its two-line shape is a parsing contract with the client, and a third
+ * line would break the badge. It asks for no citations anyway. */
+function withCitationAudit(action: ReviewAssistAction, decision: ReviewAssistDecision, answer: string): string {
+  if (action === 'score_risk') return answer;
+  const supplied = [...decision.hunks, ...(decision.coverageEvidence?.hunks ?? [])];
+  const note = citationAuditNote(auditCitations(answer, supplied));
+  return note ? `${answer}\n\n${note}` : answer;
+}
+
 export async function requestReviewAssist(
   database: WorkbenchDatabase,
   action: ReviewAssistAction,
@@ -369,7 +399,8 @@ export async function requestReviewAssist(
   const hash = hashRequest(action, decision, taskIntent);
   const cached = readCached(database, hash);
   if (cached) return cached;
-  const answer = await runTurn(buildPrompt(action, decision, taskIntent), onDelta);
+  const raw = await runTurn(buildPrompt(action, decision, taskIntent), onDelta);
+  const answer = withCitationAudit(action, decision, raw);
   writeCached(database, hash, answer);
   return answer;
 }

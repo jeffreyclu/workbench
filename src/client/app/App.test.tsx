@@ -1425,7 +1425,10 @@ describe('shared room', () => {
     const composer = screen.getByLabelText('Message Codex or Claude').closest('form');
     expect(composer).toHaveClass('is-mobile-composer-collapsed');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Expand conversation tray' }));
+    const trayGrabber = screen.getByRole('button', { name: 'Expand conversation tray' });
+    expect(trayGrabber.querySelector('svg')).toBeNull();
+    expect(trayGrabber.querySelector('span')).not.toBeNull();
+    fireEvent.click(trayGrabber);
     expect(heading.closest('header')).not.toHaveClass('is-mobile-header-collapsed');
     expect(screen.getByRole('button', { name: 'Collapse conversation tray' })).toBeInTheDocument();
     const executionType = await screen.findByRole('button', { name: 'Execution type: Execute' });
@@ -1872,7 +1875,9 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Execution type: Execute' }));
-    fireEvent.change(screen.getByLabelText('Execution type'), { target: { value: 'review' } });
+    const executionMenu = screen.getByRole('listbox', { name: 'Execution type' });
+    expect(within(executionMenu).getByRole('option', { name: 'Execute' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(within(executionMenu).getByRole('option', { name: 'Review' }));
     const attachmentInput = document.querySelector('#conversation-composer input[type="file"]') as HTMLInputElement;
     fireEvent.change(attachmentInput, { target: { files: [new File(['review'], 'change.txt', { type: 'text/plain' })] } });
     fireEvent.submit(screen.getByLabelText('Message Codex or Claude').closest('form')!);

@@ -34,8 +34,11 @@ function cacheKey(decisionId: string, taskIntent: ReviewAssistTaskIntent) {
 /** Cache-only reads: a reviewer (or another window) who already asked this
  * exact question about this exact decision sees the answer the instant the
  * decision opens, with no model spend and no click required. */
-export function useCachedReviewAssistAnswers(decision: ReviewDecision | null, taskIntent: ReviewAssistTaskIntent) {
-  const decisionPayload = decision ? reviewAssistDecisionPayload(decision) : null;
+export function useCachedReviewAssistAnswers(decision: ReviewDecision | null, taskIntent: ReviewAssistTaskIntent, siblings: ReviewDecision[] = []) {
+  // Siblings feed the coverage-evidence pack, which is part of the server's
+  // cache key. Reading with a different sibling set than the background scorer
+  // wrote with would miss every cached answer, so both pass the whole review.
+  const decisionPayload = decision ? reviewAssistDecisionPayload(decision, siblings) : null;
   return useQuery({
     queryKey: cacheKey(decision?.id ?? '', taskIntent),
     enabled: Boolean(decisionPayload),
@@ -56,20 +59,20 @@ export function useCachedReviewAssistAnswers(decision: ReviewDecision | null, ta
  * is closed most of the time, and warming that only ran while the popover was
  * open would make every first click pay the cold start this exists to prevent.
  */
-export function useReviewAssistPrefetch(decision: ReviewDecision | null, taskIntent: ReviewAssistTaskIntent, autoScore: AutoScoreResult | undefined): void {
+export function useReviewAssistPrefetch(decision: ReviewDecision | null, taskIntent: ReviewAssistTaskIntent, autoScore: AutoScoreResult | undefined, siblings: ReviewDecision[] = []): void {
   const queryClient = useQueryClient();
   // Subscribing to the cache read rather than peeking at it: the popover that
   // used to own this query is closed most of the time, so nothing else would
   // populate the cache and every dwell would re-ask a question the server has
   // already answered.
-  const cached = useCachedReviewAssistAnswers(decision, taskIntent);
+  const cached = useCachedReviewAssistAnswers(decision, taskIntent, siblings);
   const hasScore = Boolean(cached.data?.score_risk ?? autoScore?.answer);
   const hasExplanation = Boolean(cached.data?.explain);
   // The decision and task intent fully determine the request, so the payload
   // travels by ref and the effect keys off their identity instead of re-firing
   // on every parent render.
   const prefetchInput = useRef<{ decisionPayload: ReturnType<typeof reviewAssistDecisionPayload> | null; taskIntent: ReviewAssistTaskIntent }>({ decisionPayload: null, taskIntent });
-  prefetchInput.current = { decisionPayload: decision ? reviewAssistDecisionPayload(decision) : null, taskIntent };
+  prefetchInput.current = { decisionPayload: decision ? reviewAssistDecisionPayload(decision, siblings) : null, taskIntent };
   const decisionId = decision?.id ?? '';
   const prefetchKey = `${decisionId}|${taskIntent?.title ?? ''}|${taskIntent?.description ?? ''}`;
 

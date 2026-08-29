@@ -45,7 +45,7 @@ const COMMENT_LINE = /^(?:\/\/|\/\*|\*|<!--|-->)/;
  * a phantom deletion. */
 const DECLARATION = /(?:^|[^\w$])(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|interface|enum)\s+([A-Za-z_$][\w$]*)|export\s+(?:const|let|var|type)\s+([A-Za-z_$][\w$]*)/g;
 
-function splitChangedLines(lines: string[]): { added: string[]; removed: string[] } {
+export function splitChangedLines(lines: string[]): { added: string[]; removed: string[] } {
   const added: string[] = [];
   const removed: string[] = [];
   for (const line of lines) {
@@ -56,7 +56,10 @@ function splitChangedLines(lines: string[]): { added: string[]; removed: string[
   return { added, removed };
 }
 
-function declaredNames(lines: string[]): Set<string> {
+/** Exported so the coverage-evidence pack names symbols exactly the way the
+ * classifier does: if the two disagreed, a decision could be classed new code
+ * for a declaration the evidence pack then failed to look for. */
+export function declaredNames(lines: string[]): Set<string> {
   const names = new Set<string>();
   for (const line of lines) {
     for (const match of line.matchAll(DECLARATION)) names.add(match[1] ?? match[2]);
@@ -192,4 +195,11 @@ export function changeTypeLabel(type: ReviewChangeType): string {
 
 export function isReviewChangeType(value: string): value is ReviewChangeType {
   return (REVIEW_CHANGE_TYPES as readonly string[]).includes(value);
+}
+
+/** One definition of "test code" for the whole review pipeline. The classifier
+ * uses it to reach `test_only`; the coverage-evidence pack uses it to decide
+ * which sibling hunks may be offered as proof that new logic is exercised. */
+export function isTestPath(filePath: string): boolean {
+  return TEST_PATH.test(filePath);
 }

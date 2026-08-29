@@ -1724,6 +1724,32 @@ describe('WorkItemRepository', () => {
       expect(repository.scheduleRunRetry(run.id, 'owner-a', 0)).toBe(false);
     });
 
+    it('prepareRunRetry restores the automatic retry budget so a manually retried run is still recoverable', () => {
+      const run = createQueuedRun();
+      // Burn the automatic budget the way transient agent errors do.
+      repository.claimRun(run.id, 'owner-a', 60_000);
+      repository.scheduleRunRetry(run.id, 'owner-a', 0);
+      repository.claimRun(run.id, 'owner-a', 60_000);
+      repository.scheduleRunRetry(run.id, 'owner-a', 0);
+      expect(repository.getRun(run.id)?.attempt).toBe(2);
+      repository.updateRun(run.id, { status: 'failed', completedAt: new Date().toISOString() });
+
+      // A deliberate human retry starts a fresh attempt, so it must not inherit
+      // an exhausted budget: before this reset, `attempt` climbed past
+      // max_attempts (rows reached attempt 7 and 8 against a cap of 3) and the
+      // run lost every form of automatic recovery.
+      const retried = repository.prepareRunRetry(run.id)!;
+      expect(retried.status).toBe('queued');
+      expect(retried.attempt).toBe(0);
+
+      // Automatic recovery works again: both a transient-error retry and a lost
+      // lease requeue the run instead of failing it outright.
+      repository.claimRun(run.id, 'owner-b', 60_000);
+      expect(repository.scheduleRunRetry(run.id, 'owner-b', 0)).toBe(true);
+      repository.claimRun(run.id, 'owner-b', -1);
+      expect(repository.reclaimExpired(0).recoveredRunIds).toContain(run.id);
+    });
+
     it('reclaimExpired retries a non-execute run whose lease expired and fails an execute run instead', () => {
       const analysisRun = createQueuedRun();
       repository.claimRun(analysisRun.id, 'dead-owner', -1);

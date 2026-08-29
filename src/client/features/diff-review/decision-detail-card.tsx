@@ -19,7 +19,7 @@ export type { ReviewAssistAction, ReviewAssistTaskIntent };
  * lives on the block's gutter marker instead, so the panel only carries what
  * has to be asked for.
  */
-export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', children }: {
+export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', decisions = [], children }: {
   decision: ReviewDecision;
   taskIntent: ReviewAssistTaskIntent;
   /** Result of the background pass that scores a diff once its agent comes to
@@ -28,9 +28,13 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
    * and failed — that arrives with `error` set and stays retryable. */
   autoScore?: AutoScoreResult;
   titleId?: string;
+  /** Every decision in the review. Supplies the coverage-evidence pack, which
+   * is how a new function's tests — always a different decision, since they
+   * live in a different file — reach the model at all. */
+  decisions?: ReviewDecision[];
   children: ReactNode;
 }) {
-  const decisionPayload = reviewAssistDecisionPayload(decision);
+  const decisionPayload = reviewAssistDecisionPayload(decision, decisions);
 
   // Streamed text is held separately from the mutation result so a turn in
   // flight is readable as it arrives; the mutation still owns the final,
@@ -47,7 +51,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
   // the time and warming that stopped with it would leave every first click
   // paying a cold start. This read shares that hook's query, so an answer
   // already warmed is on screen the moment the popover opens.
-  const cachedAssistAnswers = useCachedReviewAssistAnswers(decision, taskIntent);
+  const cachedAssistAnswers = useCachedReviewAssistAnswers(decision, taskIntent, decisions);
   const cachedScore = cachedAssistAnswers.data?.score_risk ?? autoScore?.answer ?? undefined;
 
   // The freshest score wins: a just-finished rescore before the cache read that

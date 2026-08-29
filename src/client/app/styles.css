@@ -459,13 +459,6 @@ nav { display: grid; gap: 3px; }
 .change-map-node-title { fill: #deddd6; font: 12px 'DM Mono'; }
 .change-map-node-file { fill: #85847d; font: 10px 'DM Mono'; }
 .change-map-node-counts { fill: #77766f; font: 9px 'DM Mono'; }
-/* The same AI risk band the gutter dot shows, so severity reads off the
-   diagram without opening each node. */
-.change-map-node-risk-dot { --band: #8a8980; fill: var(--band); stroke: #131311; stroke-width: 1; }
-.change-map-node-risk-dot.band-low { --band: #8bbd75; }
-.change-map-node-risk-dot.band-elevated { --band: #d6bd76; }
-.change-map-node-risk-dot.band-high { --band: #e1a68f; }
-.change-map-node-risk-dot.band-signals { --band: #77766f; }
 .change-map-edge, .change-map-arrow, .change-map-legend li { --relation-tone: #56554e; }
 .change-map-edge.relation-passes-parameter, .change-map-arrow.relation-passes-parameter, .change-map-legend li.relation-passes-parameter { --relation-tone: #e5b769; }
 .change-map-edge.relation-implements, .change-map-arrow.relation-implements, .change-map-legend li.relation-implements { --relation-tone: #c69bd8; }
@@ -868,10 +861,10 @@ nav { display: grid; gap: 3px; }
 .card-classification-control.disclosure { position: relative; }
 .card-classification-control.disclosure .icon-button { color: #d7ccff; border-color: #5a4f83; }
 .card-classification-control.disclosure .icon-button:hover { color: #fff; background: #25203a; }
-/* MANUAL LEGACY-AFFECTING: The conversation review bar shares this disclosure.
-   Keep the expanded task type in flex flow so it reserves space and moves the
-   adjacent pin instead of painting over it. */
-.card-classification-popover { display: inline-flex; align-items: stretch; width: max-content; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
+.classification-kind-menu { position: fixed; z-index: 60; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; width: min(300px, calc(100vw - 24px)); padding: 6px; background: #171715; border: 1px solid #45443e; border-radius: 10px; box-shadow: 0 16px 40px #000c; }
+.classification-kind-option { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 44px; padding: 0 12px; color: #d9d8d0; background: transparent; border: 0; border-radius: 7px; font: 700 11px/1 'DM Mono'; text-align: left; }
+.classification-kind-option:hover, .classification-kind-option:focus-visible { color: #fff; background: #292925; outline: none; }
+.classification-kind-option[aria-selected="true"] { color: var(--acid); background: #252b18; }
 .run-card pre { max-height: 360px; overflow: auto; margin: 0; padding: 13px; color: #bdbcb5; background: #0d0d0c; font: 10px/1.65 'DM Mono'; white-space: pre-wrap; word-break: break-word; }
 .run-card .run-prompt { margin: 0; padding: 10px 12px; color: #77766f; font-size: 10px; font-style: italic; }
 .run-card .run-prompt { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
@@ -1423,8 +1416,11 @@ nav { display: grid; gap: 3px; }
     position: relative; z-index: 2; flex: 0 0 auto; width: calc(100% - 24px);
     margin: 0 12px calc(8px + env(safe-area-inset-bottom, 0px));
   }
-  .mobile-chrome-controls { position: fixed; top: 12px; left: 50%; z-index: 7; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0; transform: translateX(-50%); }
-  .mobile-chrome-toggle { width: 44px; height: 44px; background: #171715; border-color: #373731; border-radius: 8px; box-shadow: 0 6px 16px #0009; }
+  .mobile-chrome-controls { position: fixed; top: 0; left: 50%; z-index: 7; display: flex; align-items: center; justify-content: center; padding: 0; transform: translateX(-50%); }
+  .mobile-conversation-toggle { display: grid; place-items: center; width: 76px; height: 44px; padding: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; cursor: grab; touch-action: pan-y; }
+  .mobile-conversation-toggle span { width: 38px; height: 4px; background: #73736b; border-radius: 999px; box-shadow: 0 2px 8px #000b; }
+  .mobile-conversation-toggle:active { cursor: grabbing; }
+  .mobile-conversation-toggle:focus-visible { outline: 2px solid var(--acid); outline-offset: -8px; border-radius: 999px; }
   .agent-console-header:not(.is-mobile-header-collapsed) + .mobile-chrome-controls .mobile-conversation-toggle { display: none; }
   .mobile-composer-toggle {
     position: fixed; right: 14px; bottom: calc(var(--mobile-nav) + env(safe-area-inset-bottom, 0px) + 14px); z-index: 9;

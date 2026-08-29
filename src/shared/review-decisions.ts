@@ -1,4 +1,5 @@
 import type { DiffHunkReview, DiffHunkReviewState, WorkspaceDiffFile } from './contracts.js';
+import { buildCoverageEvidence, type CoverageEvidence } from './coverage-evidence.js';
 import { classifyChangeType, type ReviewChangeType } from './change-type.js';
 
 /** Decision derivation is shared, not client-only: the server's background
@@ -314,18 +315,29 @@ export function reviewStateShortLabel(state: DiffHunkReviewState | null): string
 /** The one place a decision is turned into an AI-assist request payload. Both
  * the reviewer's click and the background scorer go through it, so a decision
  * hashes to the same cache key from either side. */
-export function reviewAssistDecisionPayload(decision: ReviewDecision): {
+export function reviewAssistDecisionPayload(decision: ReviewDecision, allDecisions: ReviewDecision[] = []): {
   behavior: string;
   state: string;
   changeType: ReviewChangeType;
   secondaryChangeTypes: ReviewChangeType[];
   hunks: Array<{ filePath: string; location: string; lines: string[] }>;
+  coverageEvidence: CoverageEvidence;
 } {
+  const hunks = decision.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines }));
+  // Siblings come from the whole review, not just neighbouring decisions: a new
+  // function and the test that exercises it land in different files and are
+  // therefore always split into different decisions. Without this the assist
+  // worker — which has no repo access and sees one decision per turn — could
+  // never answer "is this tested?" with anything but "not visible here".
+  const siblings = allDecisions
+    .filter((other) => other.id !== decision.id)
+    .flatMap((other) => other.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines })));
   return {
     behavior: decision.behavior,
     state: reviewStateLabel(decision.state),
     changeType: decision.changeType,
     secondaryChangeTypes: decision.secondaryChangeTypes,
-    hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines })),
+    hunks,
+    coverageEvidence: buildCoverageEvidence(hunks, siblings),
   };
 }

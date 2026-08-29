@@ -330,6 +330,19 @@ export const reviewAssistRequestSchema = z.object({
       location: z.string().min(1).max(200),
       lines: z.array(z.string().max(4_000)).max(200),
     })).min(1).max(50),
+    // Defaulted for the same reason as `changeType`: a tab opened before this
+    // field existed still posts the old payload, and answering without the
+    // coverage pack is strictly better than rejecting the request.
+    coverageEvidence: z.object({
+      symbols: z.array(z.string().min(1).max(200)).max(12),
+      hunks: z.array(z.object({
+        filePath: z.string().min(1).max(2_000),
+        location: z.string().min(1).max(200),
+        lines: z.array(z.string().max(4_000)).max(200),
+        symbols: z.array(z.string().min(1).max(200)).max(12),
+      })).max(4),
+      uncitedSymbols: z.array(z.string().min(1).max(200)).max(12),
+    }).default({ symbols: [], hunks: [], uncitedSymbols: [] }),
   }),
   taskIntent: z.object({
     title: z.string().max(2_000),

@@ -226,6 +226,11 @@ targets.
 conversation close X is part of that same 44px control system. It remains
 fixed in the top-right but must not retain an undersized 32px exception.
 
+*Correction from Jeffrey, 2026-08-29.* The collapsed conversation-tray trigger
+is the exception to the dark square control treatment: show a simple centered
+floating grab bar with a transparent full-size accessible button target, not a
+panel icon or visible button chrome. It opens on tap or downward swipe.
+
 *Decision from Jeffrey, 2026-08-27.* The constrained one-line title in the
 expanded phone conversation tray scrolls horizontally on touch; it does not
 ellipsis. Keep the title bounded between the floating review switch and close
@@ -243,6 +248,10 @@ from both Conversation and Changes. It is not a Changes-only control; retain
 it whenever phone chrome is active and the composer sheet is closed.
 
 *Correction from Jeffrey, 2026-08-24.* A responsive control strip cannot assume its desktop child count. The shared-room composer has attachment, model, account, recipient, and send controls. At phone widths, give all five explicit grid areas; do not allow a fifth control to spill into an implicit offscreen grid column. Keep model, account, and recipient visible and separately selectable. Use short visible option labels and a single compact row when it fits. The visible per-message telemetry badge is only `agent · account profile · cost`; model, token counts, requested-vs-actual routing, and other provenance remain in its hover title rather than consuming layout space.
+
+### Phone tray classification controls use an in-app chooser
+
+*Correction from Jeffrey, 2026-08-29.* Do not open a native `<select>` from the phone conversation tray for execution type or linked-task type. Mobile Safari renders that compact control as an oversized platform popup covering most of the conversation. Keep desktop and ordinary card selects native, but make tray disclosure controls open the shared portal-backed listbox: a bounded two-column / three-row menu with six 44px options, visible selected state, keyboard navigation, Escape and outside-click dismissal, and focus returned to the trigger after selection or cancellation.
 
 ### Composer dropdown choices are conversation preferences, not message history
 

@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkItem } from '../../../shared/contracts';
 import { SortableQueueItem, TaskClassificationSelect } from './index';
 import { projectTheme } from '../../components/project/project-color';
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const item: WorkItem = {
   id: '00000000-0000-4000-8000-000000000001', title: 'Conversation task', description: '', status: 'ready', priority: 2, queuePosition: 0,
@@ -42,17 +42,30 @@ describe('TaskClassificationSelect', () => {
   it('keeps the disclosure variant collapsed to an icon toggle until opened', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(JSON.stringify({ classification: { kind: 'bugfix' } }), { headers: { 'Content-Type': 'application/json' } }))));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { container } = render(<QueryClientProvider client={client}><TaskClassificationSelect itemId={item.id} kind={item.classificationKind} disclosure /></QueryClientProvider>);
-    const { findByRole, getByRole, queryByRole } = within(container);
+    render(<QueryClientProvider client={client}><TaskClassificationSelect itemId={item.id} kind={item.classificationKind} disclosure /></QueryClientProvider>);
 
-    expect(queryByRole('combobox', { name: 'Task type' })).toBeNull();
-    const toggle = getByRole('button', { name: 'Task type: Execute' });
+    expect(screen.queryByRole('listbox', { name: 'Task type' })).toBeNull();
+    const toggle = screen.getByRole('button', { name: 'Task type: Execute' });
 
     fireEvent.click(toggle);
 
-    const select = await findByRole('combobox', { name: 'Task type' });
-    fireEvent.change(select, { target: { value: 'bugfix' } });
+    const menu = await screen.findByRole('listbox', { name: 'Task type' });
+    expect(within(menu).getByRole('option', { name: 'Execute' }).getAttribute('aria-selected')).toBe('true');
+    fireEvent.click(within(menu).getByRole('option', { name: 'Bug fix' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/work-items/${item.id}/classify`, expect.objectContaining({ method: 'POST', body: JSON.stringify({ kind: 'bugfix' }) })));
+  });
+
+  it('closes the disclosure menu with Escape and returns focus to its toggle', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><TaskClassificationSelect itemId={item.id} kind={item.classificationKind} disclosure /></QueryClientProvider>);
+    const toggle = screen.getByRole('button', { name: 'Task type: Execute' });
+
+    fireEvent.click(toggle);
+    const menu = screen.getByRole('listbox', { name: 'Task type' });
+    fireEvent.keyDown(menu, { key: 'Escape' });
+
+    expect(screen.queryByRole('listbox', { name: 'Task type' })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(toggle));
   });
 });
 

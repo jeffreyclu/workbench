@@ -1,7 +1,8 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { AlertTriangle, Bot, Check, Clock, GripVertical, LoaderCircle, Sparkles, User } from 'lucide-react';
-import { useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { createPortal } from 'react-dom';
 import type { AgentRun, Assignee, WorkItem } from '../../../shared/contracts';
 import { ProjectColorDot, projectTheme } from '../../components/project/project-color';
 import { useTaskClassification } from '../../features/queue/hooks';
@@ -14,25 +15,81 @@ function AssigneeIcon({ assignee }: { assignee: Assignee }) {
 const CLASSIFICATION_LABELS: Record<AgentRun['kind'], string> = {
   research: 'Research', analysis: 'Analysis', strategy: 'Strategy', execute: 'Execute', review: 'Review', bugfix: 'Bug fix',
 };
+const CLASSIFICATION_KINDS = Object.keys(CLASSIFICATION_LABELS) as AgentRun['kind'][];
 
 export function ClassificationKindDisclosure({ kind, onChange, pending = false, label = 'Task type', ariaLabel }: {
   kind?: string | null; onChange: (kind: AgentRun['kind']) => void; pending?: boolean; label?: string; ariaLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
-  if (kind && !['research', 'analysis', 'strategy', 'execute', 'review', 'bugfix'].includes(kind)) return null;
-  const selectedKind = (kind ?? 'execute') as AgentRun['kind'];
-  const select = <select className="card-classification-select" aria-label={ariaLabel ?? label} value={selectedKind} autoFocus onChange={(event) => { onChange(event.target.value as AgentRun['kind']); setOpen(false); }} onBlur={() => setOpen(false)} disabled={pending}>
-    <option value="research">Research</option><option value="analysis">Analysis</option><option value="strategy">Strategy</option><option value="execute">Execute</option><option value="review">Review</option><option value="bugfix">Bug fix</option>
-  </select>;
+  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const listboxId = useId();
+  const validKind = !kind || CLASSIFICATION_KINDS.includes(kind as AgentRun['kind']);
+  const selectedKind = (validKind ? kind ?? 'execute' : 'execute') as AgentRun['kind'];
+
+  const closeMenu = useCallback((restoreFocus = false) => {
+    setOpen(false);
+    setAnchor(null);
+    if (restoreFocus) window.requestAnimationFrame(() => buttonRef.current?.focus());
+  }, []);
+  const openMenu = () => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const menuWidth = Math.min(300, window.innerWidth - 24);
+    const menuHeight = 154;
+    const below = rect.bottom + 8;
+    const top = below + menuHeight <= window.innerHeight - 12 ? below : Math.max(12, rect.top - menuHeight - 8);
+    const left = Math.min(Math.max(12, rect.left + (rect.width - menuWidth) / 2), window.innerWidth - menuWidth - 12);
+    setAnchor({ top, left });
+    setOpen(true);
+  };
+  useEffect(() => {
+    if (!open) return;
+    menuRef.current?.querySelector<HTMLElement>(`[data-kind="${selectedKind}"]`)?.focus();
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!menuRef.current?.contains(target) && !buttonRef.current?.contains(target)) closeMenu();
+    };
+    const handleViewportChange = () => closeMenu();
+    document.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('resize', handleViewportChange);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('resize', handleViewportChange);
+    };
+  }, [closeMenu, open, selectedKind]);
+
+  const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeMenu(true);
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const options = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])];
+    if (!options.length) return;
+    const current = options.indexOf(document.activeElement as HTMLElement);
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? options.length - 1
+        : event.key === 'ArrowDown' ? (current + 1 + options.length) % options.length
+          : (current - 1 + options.length) % options.length;
+    options[next]?.focus();
+  };
+
+  if (!validKind) return null;
 
   return <span className="card-classification-control disclosure" onClick={(event) => event.stopPropagation()}>
-    {open
-      ? <span className="card-classification-popover">
-        <span className="card-classification"><Bot size={10} /> {label}</span>
-        {select}
-        {pending && <LoaderCircle className="spin card-classification-spinner" size={10} />}
-      </span>
-      : <button type="button" className="icon-button" aria-expanded={open} aria-label={ariaLabel ?? `${label}: ${CLASSIFICATION_LABELS[selectedKind]}`} title={ariaLabel ?? `${label}: ${CLASSIFICATION_LABELS[selectedKind]}`} onClick={() => setOpen(true)}><Bot size={13} /></button>}
+    <button ref={buttonRef} type="button" className="icon-button" aria-haspopup="listbox" aria-controls={open ? listboxId : undefined} aria-expanded={open} aria-label={ariaLabel ?? `${label}: ${CLASSIFICATION_LABELS[selectedKind]}`} title={ariaLabel ?? `${label}: ${CLASSIFICATION_LABELS[selectedKind]}`} disabled={pending} onClick={() => open ? closeMenu() : openMenu()}>{pending ? <LoaderCircle className="spin" size={13} /> : <Bot size={13} />}</button>
+    {open && anchor && createPortal(
+      <div ref={menuRef} id={listboxId} className="classification-kind-menu" role="listbox" aria-label={ariaLabel ?? label} style={anchor} onKeyDown={handleMenuKeyDown}>
+        {CLASSIFICATION_KINDS.map((optionKind) => <button key={optionKind} type="button" role="option" data-kind={optionKind} aria-selected={optionKind === selectedKind} className="classification-kind-option" onClick={() => { onChange(optionKind); closeMenu(true); }}>
+          <span>{CLASSIFICATION_LABELS[optionKind]}</span>{optionKind === selectedKind && <Check size={14} aria-hidden="true" />}
+        </button>)}
+      </div>,
+      document.body,
+    )}
   </span>;
 }
 

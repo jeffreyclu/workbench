@@ -107,7 +107,7 @@ async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreSco
       let answer: string | null = null;
       let error: string | null = null;
       try {
-        answer = await requestReviewAssist(repository.database, 'score_risk', reviewAssistDecisionPayload(decision), null);
+        answer = await requestReviewAssist(repository.database, 'score_risk', reviewAssistDecisionPayload(decision, decisions), null);
       } catch (failure) {
         // A failed turn is reported as a failure the reviewer can retry from
         // the panel, never as an absent or neutral score.
@@ -194,7 +194,7 @@ async function cachedScoreEntries(repository: WorkItemRepository, scope: ReviewS
   const decisions = buildReviewDecisions(diff.files, repository.listDiffHunkReviews(scope, diff.revision));
   const entries: ReviewScoreEntry[] = [];
   for (const decision of decisions) {
-    const answer = lookupReviewAssist(repository.database, 'score_risk', reviewAssistDecisionPayload(decision), null);
+    const answer = lookupReviewAssist(repository.database, 'score_risk', reviewAssistDecisionPayload(decision, decisions), null);
     if (answer) entries.push({ decisionId: decision.id, ordinal: decision.ordinal, answer, error: null });
   }
   return entries;

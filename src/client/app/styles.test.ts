@@ -154,7 +154,9 @@ describe('conversation view controls', () => {
 
     expect(phoneRules).not.toContain('mobile-conversation-disclosure');
     expect(phoneRules).not.toContain('mobile-composer-disclosure');
-    expect(phoneRules).toContain('.mobile-chrome-toggle { width: 44px; height: 44px; background: #171715; border-color: #373731; border-radius: 8px;');
+    expect(phoneRules).toContain('.mobile-chrome-controls { position: fixed; top: 0; left: 50%;');
+    expect(phoneRules).toContain('.mobile-conversation-toggle { display: grid; place-items: center; width: 76px; height: 44px; padding: 0; background: transparent; border: 0;');
+    expect(phoneRules).toContain('.mobile-conversation-toggle span { width: 38px; height: 4px; background: #73736b; border-radius: 999px;');
     expect(phoneRules).toContain('.agent-console .shared-composer.is-mobile-composer-collapsed { display: none; }');
     expect(phoneRules).toContain('.mobile-composer-backdrop { position: fixed; inset: 0; z-index: 10;');
     expect(phoneRules).toContain('.agent-console .conversation-review-layout.layout-changes .shared-composer.mobile-composer-sheet,\n  .agent-console .shared-composer.mobile-composer-sheet {');
@@ -187,12 +189,14 @@ describe('conversation view controls', () => {
     expect(pinRule).toContain('box-shadow: 0 6px 16px #0009');
   });
 
-  it('reserves space for the expanded task-type control so it displaces the pin', () => {
-    const popoverRule = styles.match(/^\.card-classification-popover\s*\{[^}]*\}/m)?.[0] ?? '';
+  it('uses a bounded in-app classification menu instead of a native phone picker', () => {
+    const menuRule = styles.match(/^\.classification-kind-menu\s*\{[^}]*\}/m)?.[0] ?? '';
+    const optionRule = styles.match(/^\.classification-kind-option\s*\{[^}]*\}/m)?.[0] ?? '';
 
-    expect(popoverRule).toContain('display: inline-flex');
-    expect(popoverRule).toContain('width: max-content');
-    expect(popoverRule).not.toContain('position: absolute');
+    expect(menuRule).toContain('position: fixed');
+    expect(menuRule).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))');
+    expect(menuRule).toContain('width: min(300px, calc(100vw - 24px))');
+    expect(optionRule).toContain('min-height: 44px');
   });
 
   it('keeps the mobile composer action as a safe-area-aware bottom-right action', () => {

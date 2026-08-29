@@ -231,11 +231,23 @@ export class RunRepository {
    * row actually transitioned back to `queued`; the caller (which also owns
    * reopening the linked chat bubble in `shared_messages`) uses that to
    * decide whether to touch the message at all.
+   *
+   * `attempt` resets to zero because it is the *automatic* retry budget, not a
+   * lifetime counter: it is only ever incremented by `scheduleRetry` (transient
+   * agent errors) and by `reclaimExpired` (a lost lease), and both refuse to act
+   * once `attempt + 1 >= max_attempts`. Carrying the count across a deliberate
+   * human retry therefore burned that budget permanently — a run retried three
+   * times had no automatic recovery left, so the next lease blip failed it
+   * outright with "Retry attempts exhausted after interruption." instead of
+   * requeueing it, and the UI rendered nonsense like "attempt 9 of 3". A manual
+   * retry is a fresh deliberate attempt and starts a fresh budget; the history
+   * of how often a human retried lives durably in the `execution_retried`
+   * activity entries, not in this column.
    */
   reopenForRetry(id: string): boolean {
     return Number(this.database.prepare(`UPDATE agent_runs
       SET status = 'queued', error = '', started_at = NULL, completed_at = NULL,
-          owner_id = NULL, lease_expires_at = NULL, next_attempt_at = NULL, attempt = attempt + 1,
+          owner_id = NULL, lease_expires_at = NULL, next_attempt_at = NULL, attempt = 0,
           cancel_requested = 0, cancel_requested_at = NULL
       WHERE id = ? AND status IN ('failed', 'canceled')`).run(id).changes) > 0;
   }
