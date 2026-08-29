@@ -4,6 +4,8 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { createWorkbenchMcpServer, type WorkbenchAdminActions } from './workbench-mcp.js';
+import { setEmbedder } from './memory-index.js';
+import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 
 describe('Workbench MCP', () => {
   let database: WorkbenchDatabase;
@@ -103,6 +105,7 @@ describe('Workbench MCP', () => {
       'propose_execution_plan',
       'publish_artifact',
       'queue_linear_work_item',
+      'recall_context',
       'reorder_stack',
       'resolve_discovery',
       'resolve_execution_plan',
@@ -141,6 +144,33 @@ describe('Workbench MCP', () => {
     expect(archive.items).toContainEqual(expect.objectContaining({ id: first.id, completionStatus: 'completed' }));
     await callData('set_work_item_lifecycle', { workItemId: first.id, action: 'restore' });
     expect(repository.get(first.id)).toEqual(expect.objectContaining({ archivedAt: null, completionStatus: 'incomplete' }));
+  });
+
+  it('recalls deduplicated project context without leaking another project', async () => {
+    setEmbedder(deterministicTestEmbedder);
+    try {
+      const target = repository.create({ title: 'Connector cache contract', description: 'Invalidate the profile cache before refetching the connector list.', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
+      const other = repository.create({ title: 'Unrelated billing cache', description: 'Preserve invoice cache behavior.', priority: 1, status: 'ready', projectName: 'Billing', workspacePath: null, dueDate: null });
+      const conversation = repository.createConversation('Connector cache investigation', target.id);
+      repository.createSharedMessage('jeffrey', 'The settled decision is to invalidate the profile cache before refetch.', 'completed', conversation.id);
+      repository.addActivity(target.id, 'codex', 'decision', 'Invalidate the profile cache before refetching connector profiles.');
+      repository.addActivity(other.id, 'claude', 'decision', 'Do not invalidate the invoice cache.');
+
+      const recalled = await callData<{ scopeApplied: string; results: Array<{ title: string; body: string; workItemId: string | null }> }>('recall_context', {
+        query: 'profile cache invalidation before connector refetch',
+        scope: 'auto',
+        workItemId: target.id,
+        limit: 8,
+      });
+
+      expect(recalled.scopeApplied).toBe('project');
+      expect(recalled.results.length).toBeGreaterThan(0);
+      expect(recalled.results.every((result) => result.workItemId === target.id)).toBe(true);
+      expect(recalled.results.some((result) => /invalidate the profile cache/i.test(result.body))).toBe(true);
+      expect(recalled.results.some((result) => /invoice/i.test(result.body))).toBe(false);
+    } finally {
+      setEmbedder(null);
+    }
   });
 
   it('creates and updates only local task state, then exposes the same canonical detail', async () => {

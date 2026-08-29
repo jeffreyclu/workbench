@@ -671,7 +671,7 @@ export class WorkItemRepository {
    * the request path (a poller keyed off a watermark) rather than doing it
    * here.
    */
-  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; projectKey?: string } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null }>> {
+  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; projectKey?: string; conversationId?: string; workItemId?: string; sources?: string[] } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null }>> {
     if (query.trim().length < 2) return [];
     if (options.refresh !== false) {
       try {
@@ -682,7 +682,13 @@ export class WorkItemRepository {
       }
     }
     const safeLimit = Math.max(1, Math.min(100, limit));
-    const results = await searchMemory(this.database, query, { limit: safeLimit, projectKey: options.projectKey });
+    const results = await searchMemory(this.database, query, {
+      limit: safeLimit,
+      projectKey: options.projectKey,
+      conversationId: options.conversationId,
+      workItemId: options.workItemId,
+      sources: options.sources,
+    });
     const excludedBody = options.excludeExactBody?.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
     return results.map((result) => ({
       source: legacyMemorySource(result.source),

@@ -444,7 +444,7 @@ type MemoryDocumentRow = {
  * Never throws on the embedding side -- a model failure or an empty
  * embeddings table just falls back to the FTS ranking alone.
  */
-export async function searchMemory(database: WorkbenchDatabase, query: string, options: { limit?: number; sources?: string[]; projectKey?: string } = {}): Promise<MemorySearchResult[]> {
+export async function searchMemory(database: WorkbenchDatabase, query: string, options: { limit?: number; sources?: string[]; projectKey?: string; conversationId?: string; workItemId?: string } = {}): Promise<MemorySearchResult[]> {
   const trimmed = query.trim();
   if (trimmed.length < 2) return [];
   // API consumers can request a single lookahead row to report whether the
@@ -500,13 +500,20 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
   // selection. Otherwise unrelated high-frequency transcripts can displace
   // the linked project's evidence before it has a chance to be deduplicated.
   const projectKey = options.projectKey?.trim() || null;
+  const conversationId = options.conversationId?.trim() || null;
+  const workItemId = options.workItemId?.trim() || null;
+  const sourceValues = sourceFilter ? [...sourceFilter] : [];
+  const sourceClause = sourceValues.length ? `AND source IN (${sourceValues.map(() => '?').join(',')})` : '';
   const documents = database.prepare(`
     SELECT * FROM memory_documents
     WHERE id IN (${placeholders})
       AND (? IS NULL OR work_item_id IN (
         SELECT id FROM work_items WHERE project_key = ? AND deleted_at IS NULL
       ))
-  `).all(...documentIds, projectKey, projectKey) as MemoryDocumentRow[];
+      AND (? IS NULL OR conversation_id = ?)
+      AND (? IS NULL OR work_item_id = ?)
+      ${sourceClause}
+  `).all(...documentIds, projectKey, projectKey, conversationId, conversationId, workItemId, workItemId, ...sourceValues) as MemoryDocumentRow[];
   const documentById = new Map(documents.map((doc) => [doc.id, doc]));
 
   const results: MemorySearchResult[] = [];

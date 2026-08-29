@@ -1222,15 +1222,12 @@ describe('WorkItemRepository', () => {
     expect(source?.prompt).not.toContain('Earlier Codex answer');
   });
 
-  it('shares one retrieval snapshot between concurrent Codex and Claude replies', async () => {
+  it('does not run ambient retrieval before concurrent Codex and Claude replies', async () => {
     const task = repository.create({ title: 'Connectors retrieval', description: '', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
     const conversation = repository.createConversation('Concurrent retrieval', task.id);
     repository.createSharedMessage('jeffrey', 'The durable fact has several relevant details.', 'completed', conversation.id);
     repository.createSharedMessage('jeffrey', 'Continue the durable fact investigation.', 'queued', conversation.id, [], 'both');
-    const matches = Array.from({ length: 12 }, (_, index) => ({
-      source: 'message', title: `Relevant ${index + 1}`, body: `Durable detail ${index + 1}: ${'evidence '.repeat(24)}`, createdAt: '2026-08-25T00:00:00.000Z', score: 0.03 - index * 0.001, conversationId: null, workItemId: null,
-    }));
-    const retrieval = vi.spyOn(repository, 'searchActivityMemory').mockResolvedValue(matches);
+    const retrieval = vi.spyOn(repository, 'searchActivityMemory');
     const previousPath = process.env.PATH;
     const { directory, log } = fakeAgentDirectory("printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'", "printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'");
     try {
@@ -1241,17 +1238,9 @@ describe('WorkItemRepository', () => {
         if (Date.now() > deadline) throw new Error('Timed out waiting for concurrent replies.');
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
-      expect(retrieval).toHaveBeenCalledOnce();
-      expect(retrieval).toHaveBeenCalledWith('Continue the durable fact investigation.', 400, {
-        excludeExactBody: 'Continue the durable fact investigation.',
-        projectKey: 'connectors',
-      });
+      expect(retrieval).not.toHaveBeenCalled();
       expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(expect.arrayContaining(['claude', 'codex']));
-      const injectedTitles = replies.map((reply) => repository.getRetrievedMemoryDetail(reply.id)?.items.map((item) => item.title));
-      // The prompt budget deliberately trims the tail; the dual recipients
-      // must receive the same bounded snapshot, not every raw candidate.
-      expect(injectedTitles[0]).toEqual(injectedTitles[1]);
-      expect(injectedTitles[0]).toEqual(expect.arrayContaining(['Relevant 1', 'Relevant 2']));
+      expect(replies.map((reply) => repository.getRetrievedMemoryDetail(reply.id))).toEqual([null, null]);
     } finally {
       process.env.PATH = previousPath;
       rmSync(directory, { recursive: true, force: true });

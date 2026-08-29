@@ -6,7 +6,7 @@ import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, buildSharedReplyPrompt, classificationForLinkedItem, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, latestHumanMessageForSharedReply, memoryQueryForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, buildSharedReplyPrompt, classificationForLinkedItem, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const temporaryDirectories: string[] = [];
@@ -79,12 +79,12 @@ describe('compactConversationHistory', () => {
     expect(history).not.toContain(`turn-0 ${'x'.repeat(500)}`);
   });
 
-  it('caps the scoped brief and relies on retrieved memory for older detail', () => {
+  it('caps the scoped brief and points older detail to on-demand recall', () => {
     const brief = `start ${'x'.repeat(2_800)} end`;
     const compacted = compactSharedBrief(brief);
 
     expect(compacted.length).toBeLessThanOrEqual(800);
-    expect(compacted).toContain('characters compacted; use retrieved memory');
+    expect(compacted).toContain('characters compacted; use recall_context');
     expect(compacted).toContain('start');
     expect(compacted).toContain('end');
   });
@@ -93,26 +93,6 @@ describe('compactConversationHistory', () => {
     const compacted = compactKeyPoints(`Opening detail\n${'x'.repeat(2_000)}\nDecision: retrieve only relevant memories, up to 100.\n${'y'.repeat(2_000)}`, 250);
 
     expect(compacted).toContain('Decision: retrieve only relevant memories, up to 100.');
-  });
-
-  it('grounds a short follow-up retrieval query in the preceding user decision', () => {
-    const messages = [
-      message(0, 'Cut prompt tokens, but do not lose durable decisions.'),
-      message(1, 'I found the shared-room history budget is 3,000 characters.'),
-      message(2, 'Yes, do it.'),
-    ];
-
-    expect(memoryQueryForSharedReply(messages)).toBe('Cut prompt tokens, but do not lose durable decisions.\nYes, do it.');
-  });
-
-  it('does not contaminate a standalone question with an unrelated prior control turn', () => {
-    const messages = [
-      message(0, 'Approve the Workbench preview.'),
-      message(1, 'That preview is now live.'),
-      message(2, 'What are my hobbies?'),
-    ];
-
-    expect(memoryQueryForSharedReply(messages)).toBe('What are my hobbies?');
   });
 
   it('resolves continue to the preceding concrete human objective without adopting agent narration', () => {
@@ -187,7 +167,7 @@ describe('compactConversationHistory', () => {
       exclusions: ['Do not add a passive badge or persistence.'],
       continuation: false,
     }));
-    const prompt = buildSharedReplyPrompt('codex', 'Old shared hypothesis: add a badge.', '', messages, undefined, [], null, undefined, grounding);
+    const prompt = buildSharedReplyPrompt('codex', 'Old shared hypothesis: add a badge.', '', messages, undefined, null, undefined, grounding);
 
     expect(grounding.source).toBe('haiku');
     expect(prompt).toContain('AUTHORITATIVE CURRENT OBJECTIVE');
@@ -201,7 +181,6 @@ describe('compactConversationHistory', () => {
     const grounding = fallbackTurnGrounding([message(0, 'Commit and push the finished fix.')]);
     const prompt = buildResumedSharedReplyPrompt(
       'Current repository: /tmp/project',
-      [],
       'conversation',
       'Supervisor-issued external-action capability: Commit and push once.',
       grounding,
@@ -245,7 +224,7 @@ describe('compactConversationHistory', () => {
     ];
 
     const current = latestHumanMessageForSharedReply(messages);
-    const prompt = buildSharedReplyPrompt('claude', 'Shared context.', '', messages, { item: task, run }, [], null, 'Supervisor-issued external-action capability: Update GitHub PR description.');
+    const prompt = buildSharedReplyPrompt('claude', 'Shared context.', '', messages, { item: task, run }, null, 'Supervisor-issued external-action capability: Update GitHub PR description.');
 
     expect(current).toBe('Update the GitHub PR description to include the Loom demo.');
     expect(precedingHumanMessageForSharedReply(messages)).toBe('Discuss the PR description, but do not post anything.');
@@ -254,16 +233,12 @@ describe('compactConversationHistory', () => {
     database.close();
   });
 
-  it('injects only memory matches that clear the query-relative relevance threshold', () => {
-    const retrieved = Array.from({ length: 9 }, (_, index) => ({
-      source: 'message', title: `Memory ${index + 1}`, body: `Detail ${index + 1}`, createdAt: '2026-08-25T00:00:00.000Z', score: index < 3 ? 0.03 - index * 0.001 : 0.01,
-    }));
+  it('exposes durable recall as an agent tool instead of ambient prompt injection', () => {
+    const prompt = buildSharedReplyPrompt('codex', 'Shared context.', '', [], undefined, 'conversation-id');
 
-    const prompt = buildSharedReplyPrompt('codex', 'Shared context.', '', [], undefined, retrieved);
-
-    expect(prompt).toContain('Retrieved memory (5 relevant matches');
-    expect(prompt).toContain('Memory 5');
-    expect(prompt).not.toContain('Memory 6');
+    expect(prompt).toContain('Conversation ID: conversation-id');
+    expect(prompt).toContain('recall_context');
+    expect(prompt).not.toContain('Retrieved memory (');
   });
 
   it('keeps an unlinked conversation in the Workbench workspace', () => {
@@ -294,7 +269,7 @@ describe('compactConversationHistory', () => {
     const run = repository.createRun(task.id, 'execute', 'codex', 'codex', 'Implement the fix.');
 
     const denied = buildSharedReplyPrompt('codex', 'Shared context.', '', [], { item: task, run });
-    const granted = buildSharedReplyPrompt('codex', 'Shared context.', '', [], { item: task, run }, [], null, 'Supervisor-issued external-action capability: Commit and push the changes.');
+    const granted = buildSharedReplyPrompt('codex', 'Shared context.', '', [], { item: task, run }, null, 'Supervisor-issued external-action capability: Commit and push the changes.');
 
     expect(denied).toContain('No external mutation capability is issued');
     expect(granted).toContain('Supervisor-issued external-action capability');
