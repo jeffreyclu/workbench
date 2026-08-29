@@ -21,6 +21,7 @@ const map: ChangeMap = {
   edges: [{
     id: 'type->consumer', fromId: 'type', toId: 'consumer', relation: 'references-type', symbols: ['WorkspaceRef'],
     change: 'added',
+    prior: null,
     explanation: 'Decision 2 references the changed type WorkspaceRef from decision 1.',
   }],
   omittedEdges: 0,

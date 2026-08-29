@@ -11,7 +11,7 @@ function node(id: string, ordinal: number, degree = 1): ChangeMapNode {
 }
 
 function edge(fromId: string, toId: string, relation: ChangeMapEdge['relation'] = 'calls'): ChangeMapEdge {
-  return { id: `${fromId}->${toId}`, fromId, toId, relation, change: 'added', symbols: [], explanation: `${fromId} to ${toId}` };
+  return { id: `${fromId}->${toId}`, fromId, toId, relation, change: 'added', prior: null, symbols: [], explanation: `${fromId} to ${toId}` };
 }
 
 /** A chain a → b → c plus the long edge a → c that skips a column, which is the

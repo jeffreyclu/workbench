@@ -20,6 +20,7 @@ const map: ChangeMap = {
   edges: [{
     id: 'type->consumer', fromId: 'type', toId: 'consumer', relation: 'references-type', symbols: ['WorkspaceRef'],
     change: 'added',
+    prior: null,
     explanation: 'Decision 2 references the changed type WorkspaceRef from decision 1.',
   }],
   omittedEdges: 0,
@@ -68,7 +69,7 @@ describe('diff review change navigation', () => {
     const largeMap: ChangeMap = {
       nodes: [...map.nodes, ...extraNodes],
       edges: [...map.edges, ...extraNodes.map((item) => ({
-        id: `type->${item.id}`, fromId: 'type', toId: item.id, relation: 'uses' as const, change: 'added' as const, symbols: [], explanation: `type relates to ${item.id}`,
+        id: `type->${item.id}`, fromId: 'type', toId: item.id, relation: 'uses' as const, change: 'added' as const, prior: null, symbols: [], explanation: `type relates to ${item.id}`,
       }))],
       omittedEdges: 0,
     };

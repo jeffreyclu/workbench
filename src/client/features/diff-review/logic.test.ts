@@ -106,8 +106,8 @@ describe('diff review queue logic', () => {
     const changeMap: ChangeMap = {
       nodes: [node(isolated, 0), node(declaration, 1), node(dependent, 1), node(hub, 2)],
       edges: [
-        { id: 'hub->declaration', fromId: hub.id, toId: declaration.id, relation: 'calls', change: 'added', symbols: ['declare'], explanation: '' },
-        { id: 'declaration->dependent', fromId: declaration.id, toId: dependent.id, relation: 'calls', change: 'added', symbols: ['depend'], explanation: '' },
+        { id: 'hub->declaration', fromId: hub.id, toId: declaration.id, relation: 'calls', change: 'added', prior: null, symbols: ['declare'], explanation: '' },
+        { id: 'declaration->dependent', fromId: declaration.id, toId: dependent.id, relation: 'calls', change: 'added', prior: null, symbols: ['depend'], explanation: '' },
       ],
       omittedEdges: 0,
     };
