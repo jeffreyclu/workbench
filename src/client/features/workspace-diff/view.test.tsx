@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
+import type { AgentRunReviewHandoff, DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { WorkspaceDiffView } from './view.js';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -23,10 +23,10 @@ function workspaceDiff(files: WorkspaceDiffFile[], revision = 'review-revision')
 /** This surface never scores decisions ambiently; assistance is on demand from
  * the detail card instead. Tests only stub the requests this view actually
  * makes, so a stray `/api/diff-confidence` call would fail as unexpected. */
-function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, pullRequestUrlCandidates?: string[]) {
+function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, reviewHandoff?: AgentRunReviewHandoff | null, pullRequestUrlCandidates?: string[]) {
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} pullRequestUrlCandidates={pullRequestUrlCandidates} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} reviewHandoff={reviewHandoff} pullRequestUrlCandidates={pullRequestUrlCandidates} /></QueryClientProvider>);
 }
 
 afterEach(() => {
@@ -34,14 +34,6 @@ afterEach(() => {
   window.localStorage.clear();
   vi.unstubAllGlobals();
 });
-
-/** The decision detail is a popover; the navigator toggle opens it for the
- * currently selected decision from any viewport width. */
-async function openDecisionDetail() {
-  await screen.findByRole('button', { name: 'View decision' });
-  fireEvent.click(screen.getByRole('button', { name: 'View decision' }));
-  return screen.findByRole('dialog', { name: 'Decision details' });
-}
 
 describe('WorkspaceDiffView decision queue', () => {
   it('uses arrow navigation and opens the decision panel in a modal on phones', async () => {
@@ -76,6 +68,26 @@ describe('WorkspaceDiffView decision queue', () => {
     fireEvent.keyDown(dialog, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Decision details' })).toBeNull();
     expect(screen.getByRole('button', { name: 'View decision' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('renders the agent handoff before the review decision queue', async () => {
+    const files: WorkspaceDiffFile[] = [{ path: 'src/app.ts', editorUrl: null, previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff(files) });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock, false, {
+      agentRunId: 'run-1', formatVersion: 1, summary: 'Implemented the requested change.', changes: [], acceptanceCriteria: [], contractChanges: [], verification: [],
+      uncertainties: ['No completed test, build, typecheck, or lint command was observed by the runner.'], tradeoffs: [], createdAt: '2026-08-27T01:00:00.000Z',
+    });
+
+    const handoff = await screen.findByRole('region', { name: 'Agent review handoff' });
+    const queue = await screen.findByRole('navigation', { name: /review decision queue/i });
+    expect(handoff.compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('shows a retry action instead of an empty state when loading the workspace diff fails', async () => {
@@ -146,17 +158,15 @@ describe('WorkspaceDiffView decision queue', () => {
 
     const picker = await screen.findByLabelText('Workspace');
     fireEvent.change(picker, { target: { value: repositoryB } });
-    await screen.findByText('src/b.ts', { selector: 'code' });
-    await openDecisionDetail();
-    expect(screen.getByRole('heading', { name: 'Changes behavior in src/b.ts.' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Decision 2.*behavior in/ }));
+    await screen.findByRole('heading', { name: 'Changes behavior in src/b.ts.' });
+    fireEvent.click(screen.getByRole('button', { name: /Decision 2/ }));
 
     cleanup();
     selectedPath = repositoryA;
     renderView(fetchMock);
 
     await waitFor(() => expect(screen.getByLabelText('Workspace')).toHaveValue(repositoryB));
-    expect(screen.getByRole('button', { name: /Decision 2.*behavior in/ })).toHaveAttribute('aria-current', 'step');
+    expect(screen.getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
   });
 
   it('orders the queue deterministically by source order, with no ambient AI scoring', async () => {
@@ -180,10 +190,9 @@ describe('WorkspaceDiffView decision queue', () => {
     // Priority order is purely deterministic by source order (ordinal): decision 1 opens first.
     expect(screen.getByRole('button', { name: /Decision 1.*local/ })).toHaveAttribute('aria-current', 'step');
     expect(screen.getByText('src/local.ts', { selector: 'code' })).toBeInTheDocument();
-    await openDecisionDetail();
     // Deterministic risk signals still surface on the detail card (Phase 1 stays visible by
     // default); they never gate or reorder the queue, and no ambient AI request ever fires for them.
-    expect(screen.getByRole('heading', { name: 'Risk' })).toBeInTheDocument();
+    expect(screen.getByText('Risk signals')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Refresh changes' })).toHaveClass('workspace-diff-refresh-pending');
 
     const decisionQueue = screen.getByRole('navigation', { name: 'Review decision queue' });
@@ -242,7 +251,6 @@ describe('WorkspaceDiffView decision queue', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Decision 2.*behavior/ }));
     expect(diffPane.querySelector('.diff-review-diff-block.active')).toHaveTextContent('@@ -10,3 +10,3 @@ secondBehavior');
-    await openDecisionDetail();
     expect(screen.getByRole('heading', { name: 'Changes behavior in src/local.ts.' })).toBeInTheDocument();
 
     // Clicking a block inside the diff selects that decision too.
@@ -297,12 +305,11 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
-    await openDecisionDetail();
+    await screen.findByRole('heading', { name: 'Changes behavior in src/local.ts.' });
     fireEvent.click(screen.getByRole('button', { name: 'Explain this decision' }));
     await screen.findByText('This decision only touches local formatting.');
 
     fireEvent.click(screen.getByRole('button', { name: /Decision 2.*behavior/ }));
-    await openDecisionDetail();
     expect(screen.queryByText('This decision only touches local formatting.')).toBeNull();
   });
 
@@ -330,14 +337,14 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
-    await openDecisionDetail();
-    expect(screen.getByRole('heading', { name: 'Changes behavior in src/reviewed.ts.' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/reviewed.ts.' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
     expect(await screen.findByText('@@ -10 +10 @@ secondBehavior')).toBeInTheDocument();
     expect(putBodies[0]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -1 +1 @@ firstBehavior' }], state: 'reviewed' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
     expect(await screen.findByText('@@ -20 +20 @@ thirdBehavior')).toBeInTheDocument();
+    expect(screen.getByText('Commented', { selector: '.diff-review-completion-state' })).toBeInTheDocument();
     expect(putBodies[1]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -10 +10 @@ secondBehavior' }], state: 'reviewed' });
     expect(await screen.findByLabelText('3 decisions across 1 file, 3 completed')).toHaveTextContent('3 completed');
   });
@@ -355,8 +362,7 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
-    await openDecisionDetail();
-    expect(screen.getByRole('heading', { name: 'Changes behavior in src/failure.ts.' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/failure.ts.' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not save this decision. Database busy.');
     expect(screen.getByRole('heading', { name: 'Changes behavior in src/failure.ts.' })).toBeInTheDocument();
@@ -377,7 +383,6 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
     expect(screen.getByLabelText('Workspace diff history')).toHaveValue('recorded-version');
     expect(screen.getByText(/Agent run run-123/)).toBeInTheDocument();
-    await openDecisionDetail();
     expect(screen.getByRole('heading', { name: 'Adds behavior in src/preserved.ts.' })).toBeInTheDocument();
   });
 });
@@ -406,18 +411,16 @@ describe('WorkspaceDiffView pull-request source', () => {
       if (url.includes('/api/review-auto-score')) return json({ scores: [] });
       throw new Error(`Unexpected request: ${url}`);
     });
-    renderView(fetchMock, false, [pullRequestUrl]);
+    renderView(fetchMock, false, null, [pullRequestUrl]);
 
-    await openDecisionDetail();
-    expect(screen.getByRole('heading', { name: 'Changes behavior in src/local.ts.' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/local.ts.' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'GitHub PR' }));
     const picker = await screen.findByLabelText('Pull request');
     expect(within(picker).getByRole('option', { name: 'acme/web #42' })).toBeInTheDocument();
 
     fireEvent.change(picker, { target: { value: pullRequestUrl } });
 
-    await openDecisionDetail();
-    expect(screen.getByRole('heading', { name: 'Changes behavior in src/page-1.ts.' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/page-1.ts.' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Selectable scopes' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Changes behavior in src/local.ts.' })).toBeNull();
 
@@ -444,21 +447,20 @@ describe('WorkspaceDiffView pull-request source', () => {
       if (url.includes('/api/review-auto-score')) return json({ scores: [] });
       throw new Error(`Unexpected request: ${url}`);
     });
-    renderView(fetchMock, false, [pullRequestUrl]);
+    renderView(fetchMock, false, null, [pullRequestUrl]);
 
     fireEvent.click(await screen.findByRole('button', { name: 'GitHub PR' }));
     const picker = await screen.findByLabelText('Pull request');
     fireEvent.change(picker, { target: { value: pullRequestUrl } });
-    await openDecisionDetail();
-    expect(screen.getByRole('heading', { name: 'Changes behavior in src/page-one.ts.' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Decision 2.*behavior in/ }));
+    await screen.findByRole('heading', { name: 'Changes behavior in src/page-one.ts.' });
+    fireEvent.click(screen.getByRole('button', { name: /Decision 2/ }));
 
     cleanup();
-    renderView(fetchMock, false, [pullRequestUrl]);
+    renderView(fetchMock, false, null, [pullRequestUrl]);
 
     expect(await screen.findByRole('heading', { name: 'Selectable scopes' })).toBeInTheDocument();
     expect(screen.getByLabelText('Pull request')).toHaveValue(pullRequestUrl);
-    expect(screen.getByRole('button', { name: /Decision 2.*behavior in/ })).toHaveAttribute('aria-current', 'step');
+    expect(screen.getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
   });
 
   it('opens the linked pull request when the local checkout has nothing to review', async () => {
@@ -472,10 +474,9 @@ describe('WorkspaceDiffView pull-request source', () => {
       if (url.includes('/api/review-auto-score')) return json({ scores: [] });
       throw new Error(`Unexpected request: ${url}`);
     });
-    renderView(fetchMock, false, [pullRequestUrl]);
+    renderView(fetchMock, false, null, [pullRequestUrl]);
 
-    await openDecisionDetail();
-    expect(screen.getByRole('heading', { name: 'Changes behavior in src/page-1.ts.' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Changes behavior in src/page-1.ts.' })).toBeInTheDocument();
     // Paged pull requests keep their explicit load-more control in the queue.
     expect(screen.getByRole('button', { name: 'Load 100 more files' })).toBeInTheDocument();
   });
