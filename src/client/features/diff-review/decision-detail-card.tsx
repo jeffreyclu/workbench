@@ -1,45 +1,24 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Check, Circle, MessageSquare, TriangleAlert } from 'lucide-react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { sourceClient, type ReviewAssistActionName } from '../../data/source-client.js';
+import { memo, useState, type ReactNode } from 'react';
+import { useMutation } from '@tanstack/react-query';
+import { sourceClient } from '../../data/source-client.js';
 import type { ReviewDecision } from './logic.js';
-import { aiRiskBand, parseAiRiskScore, reviewAssistDecisionPayload, reviewStateLabel, riskSignalLabel } from './logic.js';
+import { aiRiskBand, parseAiRiskScore, reviewAssistDecisionPayload } from './logic.js';
 import type { AutoScoreResult } from './auto-score.js';
+import { ACTION_LABELS, EXPLAIN_ACTIONS, useCachedReviewAssistAnswers, type ReviewAssistAction, type ReviewAssistTaskIntent } from './review-assist.js';
 
-/** Mirrors the queue's state icons so the same decision reads the same way in
- * both places — the reviewer should recognise "already handled" from the card
- * without re-reading the word. */
-function CompletionIcon({ state }: { state: ReviewDecision['state'] }) {
-  if (state === 'reviewed') return <Check size={12} aria-hidden="true" />;
-  if (state === 'needs_changes') return <TriangleAlert size={12} aria-hidden="true" />;
-  if (state === 'commented') return <MessageSquare size={12} aria-hidden="true" />;
-  return <Circle size={10} aria-hidden="true" />;
-}
+export type { ReviewAssistAction, ReviewAssistTaskIntent };
 
-export type ReviewAssistAction = ReviewAssistActionName;
-export type ReviewAssistTaskIntent = { title: string; description: string } | null;
-
-/** Long enough that arrowing through a queue of decisions costs nothing, short
- * enough that the answer is usually ready by the time a reviewer has read the
- * hunk and reached for the button. */
-const PREFETCH_DWELL_MS = 1_200;
-
-const ACTION_LABELS: Record<ReviewAssistAction, string> = {
-  score_risk: 'Score risk',
-  explain: 'Explain this decision',
-  what_could_break: 'What could break?',
-  compare_task_intent: 'Compare against task intent',
-};
-
-const ASSIST_ACTIONS = Object.keys(ACTION_LABELS) as ReviewAssistAction[];
-/** Every action is cached and prefetched alike, but only the read-and-explain
- * questions belong in the assist row — the score has its own control. */
-const EXPLAIN_ACTIONS = ASSIST_ACTIONS.filter((action) => action !== 'score_risk');
-
-/** Assistance is on demand only: nothing here fires until the reviewer clicks
+/**
+ * Assistance is on demand only: nothing here fires until the reviewer clicks
  * one of these buttons, and a failed turn stays visible with its own retry
- * rather than folding into a neutral placeholder. */
-export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, children }: {
+ * rather than folding into a neutral placeholder.
+ *
+ * This is popover content now, not a standing column. What a reviewer can read
+ * off the code itself — which change this is, its state, its risk signals —
+ * lives on the block's gutter marker instead, so the panel only carries what
+ * has to be asked for.
+ */
+export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', children }: {
   decision: ReviewDecision;
   taskIntent: ReviewAssistTaskIntent;
   /** Result of the background pass that scores a diff once its agent comes to
@@ -47,6 +26,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
    * has reached this decision yet, which is different from a pass that tried
    * and failed — that arrives with `error` set and stays retryable. */
   autoScore?: AutoScoreResult;
+  titleId?: string;
   children: ReactNode;
 }) {
   const decisionPayload = reviewAssistDecisionPayload(decision);
@@ -55,7 +35,6 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
   // flight is readable as it arrives; the mutation still owns the final,
   // persisted answer and the error state.
   const [streamedAnswer, setStreamedAnswer] = useState('');
-  const queryClient = useQueryClient();
   const assist = useMutation({
     mutationFn: (action: ReviewAssistAction) => {
       setStreamedAnswer('');
@@ -63,57 +42,12 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
     },
   });
 
-  // Cache-only reads on mount: a reviewer (or another window) who already
-  // asked this exact question about this exact decision sees the answer the
-  // instant the hunk opens, with no model spend and no click required. A
-  // question nobody has asked yet still needs the on-demand button below.
-  const cachedAssistAnswers = useQuery({
-    queryKey: ['review-assist-cache', decision.id, taskIntent?.title, taskIntent?.description],
-    queryFn: async () => {
-      const results = await Promise.all(ASSIST_ACTIONS.map((action) => sourceClient.lookupReviewAssist({ action, decision: decisionPayload, taskIntent }).then((response) => [action, response.answer] as const)));
-      return Object.fromEntries(results.filter(([, answer]) => answer !== null)) as Partial<Record<ReviewAssistAction, string>>;
-    },
-  });
-
-  // Warming the two questions reviewers ask most — how risky is this, and what
-  // is it — for the one decision they are actually reading. A warm model
-  // session still needs a few seconds to write an answer, so the only way a
-  // click can be instant is for the answer to already exist. This stays
-  // deliberately narrow: the focused decision only, after a dwell, never a
-  // score bubble on every hunk in the diff.
+  // Warming lives in the review view, not here: this panel is closed most of
+  // the time and warming that stopped with it would leave every first click
+  // paying a cold start. This read shares that hook's query, so an answer
+  // already warmed is on screen the moment the popover opens.
+  const cachedAssistAnswers = useCachedReviewAssistAnswers(decision, taskIntent);
   const cachedScore = cachedAssistAnswers.data?.score_risk ?? autoScore?.answer ?? undefined;
-  const cachedExplanation = cachedAssistAnswers.data?.explain;
-  // The decision and task intent fully determine the request, so the payload
-  // travels by ref and the effect keys off their identity instead of re-firing
-  // on every parent render.
-  const prefetchInput = useRef({ decisionPayload, taskIntent });
-  prefetchInput.current = { decisionPayload, taskIntent };
-  const prefetchKey = `${decision.id}|${taskIntent?.title ?? ''}|${taskIntent?.description ?? ''}`;
-  useEffect(() => {
-    if (cachedAssistAnswers.isPending) return;
-    const wanted: ReviewAssistAction[] = [];
-    if (!cachedScore) wanted.push('score_risk');
-    if (!cachedExplanation) wanted.push('explain');
-    if (wanted.length === 0) return;
-    let cancelled = false;
-    const decisionId = prefetchKey.split('|')[0];
-    const timer = setTimeout(() => {
-      const { decisionPayload: payload, taskIntent: intent } = prefetchInput.current;
-      // Sequential, not concurrent: two prefetches at once would take both warm
-      // sessions and leave a real click paying a cold start — the exact case
-      // the warm pool exists to prevent. The score goes first because it is the
-      // shortest answer and the number a reviewer scans for.
-      void wanted.reduce((chain, action) => chain.then(async () => {
-        if (cancelled) return;
-        await sourceClient.streamReviewAssist({ action, decision: payload, taskIntent: intent }, () => {});
-        if (!cancelled) await queryClient.invalidateQueries({ queryKey: ['review-assist-cache', decisionId] });
-      }), Promise.resolve())
-        // A failed prefetch stays silent: the reviewer never asked for it, and
-        // clicking the button still surfaces the failure with its own retry.
-        .catch(() => {});
-    }, PREFETCH_DWELL_MS);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [prefetchKey, cachedScore, cachedExplanation, cachedAssistAnswers.isPending, queryClient]);
 
   // The freshest score wins: a just-finished rescore before the cache read that
   // will eventually agree with it.
@@ -126,26 +60,19 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
   const autoScoreError = !riskScore && !unparsedScoreAnswer ? autoScore?.error : null;
   const scoringNow = assist.isPending && assist.variables === 'score_risk';
 
-  return <article className="diff-review-decision-card" aria-labelledby="diff-review-decision-title">
+  return <article className="diff-review-decision-card" aria-labelledby={titleId}>
     <header>
       <div>
-        <span className="diff-review-decision-eyebrow">Behavior decision</span>
-        <h3 id="diff-review-decision-title">{decision.behavior}</h3>
+        <span className="diff-review-decision-eyebrow">Decision {decision.ordinal}</span>
+        <h3 id={titleId}>{decision.behavior}</h3>
       </div>
-      <span className={`diff-review-completion-state state-${decision.state ?? 'pending'}`}><CompletionIcon state={decision.state} />{reviewStateLabel(decision.state)}</span>
     </header>
-    <section className="diff-review-exact-change" aria-labelledby="diff-review-exact-change-title">
-      <h4 id="diff-review-exact-change-title">Exact change</h4>
-      <div>
-        <small>Highlighted in the diff · {decision.hunks.length === 1 ? decision.hunks[0].location : `${decision.hunks.length} hunks`} · <b>+{decision.additions}</b> <i>−{decision.deletions}</i></small>
-      </div>
-    </section>
     <section className="diff-review-ai-risk" aria-labelledby="diff-review-risk-title">
       {/* The score action lives beside the number it produces, not in the assist
         * row: it answers a different question, and its label swaps width once a
         * score exists, which reflowed that row on every rescore. */}
       <div className="diff-review-ai-risk-head">
-        <h4 id="diff-review-risk-title">Risk signals</h4>
+        <h4 id="diff-review-risk-title">Risk</h4>
         <button
           type="button"
           className="diff-review-ai-risk-action"
@@ -168,11 +95,6 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
               : autoScoreError
                 ? <small className="diff-review-ai-risk-reason is-error" role="alert">Background scoring failed: {autoScoreError} Use Score risk to retry.</small>
                 : <small className="diff-review-ai-risk-reason">Not scored yet.</small>}
-      </div>
-      <div>
-        {decision.riskSignals.length === 0
-          ? <p>No elevated risk signals detected.</p>
-          : decision.riskSignals.map((signal) => <span key={signal} className="diff-review-queue-risk-score">{riskSignalLabel(signal)}</span>)}
       </div>
     </section>
     <section className="diff-review-ai-assist" aria-labelledby="diff-review-ai-assist-title">

@@ -27,7 +27,7 @@ describe('diff review change navigation', () => {
   it('keeps the full overview collapsed until requested', () => {
     render(<DiffReviewChangeMap map={map} selectedId="type" onSelect={() => {}} />);
 
-    const toggle = screen.getByRole('button', { name: /Change map/ });
+    const toggle = screen.getByRole('button', { name: /Full change diagram/ });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('group', { name: 'Change map diagram' })).toBeNull();
 
@@ -46,7 +46,7 @@ describe('diff review change navigation', () => {
     };
     render(<DiffReviewChangeMap map={largeMap} selectedId="type" onSelect={() => {}} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /Change map/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Full change diagram/ }));
     expect(screen.getByText('Focused on change 1 · 4 direct relationships')).toBeInTheDocument();
     const showAll = screen.getByRole('button', { name: `Show all ${largeMap.nodes.length} changes` });
     fireEvent.click(showAll);

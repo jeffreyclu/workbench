@@ -36,10 +36,13 @@ function renderCard(taskIntent: { title: string; description: string } | null = 
 }
 
 describe('diff review decision detail', () => {
-  it('identifies the highlighted hunk in the exact-change card', () => {
+  it('names which decision the popover is describing', () => {
+    // Where the change is now reads off the block's gutter marker; the panel only
+    // has to say which decision it belongs to and what that decision does.
     renderCard();
 
-    expect(screen.getByText(/Highlighted in the diff.*Line 2/)).toBeInTheDocument();
+    expect(screen.getByText('Decision 1')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Changes example in src/example.ts.' })).toBeInTheDocument();
   });
 
   it('disables comparing against task intent when no task is linked', () => {

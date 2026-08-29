@@ -30,12 +30,15 @@ describe('diff review decision queue', () => {
   it('marks every settled decision so a reviewer coming back around can see it was handled', () => {
     render(<DiffReviewDecisionQueue decisions={decisions} selectedId={decisions[0].id} onSelect={vi.fn()} />);
 
+    // Chips are too small for written state, so the redundant non-colour cue is the
+    // per-state icon plus the state written into the accessible name.
     const buttons = screen.getAllByRole('button');
     expect(buttons[0].className).not.toContain('settled');
-    expect(buttons[0]).toHaveTextContent('To do');
-    for (const [index, label] of [[1, 'Done'], [2, 'Changes'], [3, 'Noted']] as const) {
+    expect(buttons[0]).toHaveAccessibleName(/Pending/);
+    for (const [index, label] of [[1, 'Approved'], [2, 'Needs changes'], [3, 'Commented']] as const) {
       expect(buttons[index].className).toContain('settled');
-      expect(buttons[index]).toHaveTextContent(label);
+      expect(buttons[index]).toHaveAccessibleName(new RegExp(label));
+      expect(buttons[index].querySelector('svg')).toBeInTheDocument();
     }
   });
 
@@ -46,7 +49,7 @@ describe('diff review decision queue', () => {
     expect(buttons[1].className).toContain('state-reviewed');
     expect(buttons[2].className).toContain('state-needs_changes');
     expect(buttons[3].className).toContain('state-commented');
-    expect(screen.getByLabelText('Needs changes')).toHaveClass('state-needs_changes');
+    expect(buttons[2]).toHaveAccessibleName(/Needs changes/);
   });
 
   it('reports how much of the queue is already reviewed', () => {

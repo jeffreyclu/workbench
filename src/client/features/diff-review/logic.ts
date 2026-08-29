@@ -1,5 +1,4 @@
 import type { DiffHunkReviewState, WorkspaceDiffFile } from '../../../shared/contracts.js';
-import type { DiffDecisionFollowUpReference } from '../diff-confidence.js';
 // Derivation lives in shared code so the server's background scorer builds the
 // same decisions, with the same ids, as the queue the reviewer is reading.
 export { REVIEW_RISK_SIGNALS, buildReviewDecisions, reviewAssistDecisionPayload, reviewStateLabel, reviewStateShortLabel } from '../../../shared/review-decisions.js';
@@ -33,22 +32,6 @@ export function riskSignalLabel(signal: ReviewRiskSignal): string {
   if (signal === 'cross_file') return 'Cross-file';
   if (signal === 'error_path') return 'Error path';
   return signal[0].toUpperCase() + signal.slice(1);
-}
-
-/** Turns one queue decision into the context the agent receives in the
- * composer for "Request fix": the reviewer discusses the decision, not a
- * detached line range, so every hunk it spans travels with the behaviour and
- * review state. This surface no longer computes an ambient AI score, so
- * `assessment` is always null here — the reviewer's own on-demand AI answers,
- * if any, are theirs to paste in separately. */
-export function reviewDecisionFollowUpReference(decision: ReviewDecision): DiffDecisionFollowUpReference {
-  return {
-    ordinal: decision.ordinal,
-    behavior: decision.behavior,
-    assessment: null,
-    state: reviewStateLabel(decision.state),
-    hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, location: hunk.location, lines: hunk.lines })),
-  };
 }
 
 export interface ReviewDiffLine {

@@ -2,7 +2,7 @@ import { memo, useMemo, useState, type KeyboardEvent } from 'react';
 import { ChevronDown, ChevronRight, Network } from 'lucide-react';
 import { CHANGE_RELATIONS, CHANGE_RELATION_LABELS, type ChangeMap, type ChangeRelation } from '../../../shared/change-map.js';
 import { CHANGE_MAP_NODE_HEIGHT, CHANGE_MAP_NODE_WIDTH, layoutChangeMap } from './change-map-layout.js';
-import { selectFocusedChangeMap } from './change-map-logic.js';
+import { plainRelationText, selectFocusedChangeMap } from './change-map-logic.js';
 
 const CHANGE_MAP_FOCUS_LIMIT = 4;
 
@@ -11,12 +11,8 @@ const CHANGE_MAP_FOCUS_LIMIT = 4;
  * everything that moved for it — and shares its selection with the queue and
  * the diff pane, so clicking a node is the same act as clicking its decision.
  *
- * Backticks in edge explanations come from the shared builder, which writes
- * them for prose contexts. Here the text is already monospace, so they are
- * stripped rather than rendered as literal characters. */
-function plainText(explanation: string): string {
-  return explanation.replace(/`/g, '');
-}
+ * Relationships now read primarily as inline links inside the diff itself; the
+ * diagram stays as the opt-in whole-diff view for wide refactors. */
 
 function truncate(value: string, limit: number): string {
   return value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
@@ -64,7 +60,7 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
       <button type="button" className="change-map-toggle" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
         {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
         <Network size={14} aria-hidden="true" />
-        <span>Change map</span>
+        <span>Full change diagram</span>
         <small>{layout.edges.length === 0
           ? 'No relationships found between these changes'
           : `${layout.edges.length} ${layout.edges.length === 1 ? 'relationship' : 'relationships'} across ${relatedCount} of ${layout.nodes.length} changes`}</small>
@@ -96,7 +92,7 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
                 d={edge.path}
                 role="button"
                 tabIndex={0}
-                aria-label={`${CHANGE_RELATION_LABELS[edge.relation]}: ${plainText(edge.explanation)}`}
+                aria-label={`${CHANGE_RELATION_LABELS[edge.relation]}: ${plainRelationText(edge.explanation)}`}
                 onClick={() => setSelectedEdgeId(active ? null : edge.id)}
                 onKeyDown={(event) => activate(event, () => setSelectedEdgeId(active ? null : edge.id))}
               />
@@ -127,7 +123,7 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
       </div>
       <p className="change-map-explanation" role="status">
         {selectedEdge
-          ? plainText(selectedEdge.explanation)
+          ? plainRelationText(selectedEdge.explanation)
           : layout.edges.length === 0
             ? 'Nothing in this diff references anything else in it. Each change stands alone.'
             : 'Select a line to read why two changes are related, or a box to open that decision.'}
