@@ -542,9 +542,10 @@ export type UpsertDiffHunkReviewsInput = z.infer<typeof upsertDiffHunkReviewsSch
  * Deliberately its own table rather than a column on `diff_hunk_reviews`. A
  * shared table would make Changes read rows addressed at a granularity it does
  * not speak, and the Review surface exists precisely so that Changes keeps
- * working exactly as it does today. Reviewing a block here does not mark its
- * hunk reviewed there; reconciling the two is a later decision, not a silent
- * coupling. */
+ * working exactly as it does today. Answering every block of a hunk
+ * now reconciles up to the hunk row Changes reads, but that projection lives in
+ * the Review surface: Changes still reads only its own table at its own
+ * granularity, and a half-answered hunk is never claimed. */
 export interface DiffBlockReview {
   id: string;
   revision: string;

@@ -11,7 +11,9 @@ import { DiffReviewFileDiffPane, type DiffReadingMode } from '../diff-review/fil
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { buildFileDiffHunks } from '../diff-review/logic.js';
 import { readReviewStackReadingMode, writeReviewStackBlock, writeReviewStackReadingMode } from '../../lib/preferences.js';
-import { indexReviewBlocks, toBlockLevelFiles } from './review-blocks.js';
+import { useUpsertDiffHunkReview } from '../workspace-diff/hooks.js';
+import { indexReviewBlocks, reviewBlockStorageKey, toBlockLevelFiles } from './review-blocks.js';
+import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
 import { ReviewQueueList } from './review-queue-list.js';
 import { REVIEW_TIER_LABELS } from './review-routing.js';
@@ -68,6 +70,10 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   const revision = files.length > 0 ? source.source?.revision : undefined;
   const blockReviews = useDiffBlockReviews(scope, revision);
   const upsertBlockReview = useUpsertDiffBlockReview(scope, revision);
+  // The Changes-owned writer, reused rather than reimplemented: reconciling a
+  // hunk has to land in the same table and invalidate the same cache Changes
+  // reads, or the two surfaces would disagree until a reload.
+  const upsertHunkReviews = useUpsertDiffHunkReview(scope, revision);
 
   // Only verdicts whose block still hashes the same are applied: a block whose
   // lines were rewritten under an unchanged range asks its question again
@@ -138,9 +144,19 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     for (const identity of active.identities) {
       upsertBlockReview.mutate({ filePath: identity.filePath, blockRange: identity.range, contentHash: identity.contentHash, state });
     }
+    // Reconcile with Changes. A block verdict is Review's unit, but Changes
+    // addresses hunks, so a hunk is only claimed once every block inside it has
+    // an answer. The projection is computed from the rows plus the verdict just
+    // written, so it does not wait for the block-review query to come back.
+    const blockVerdicts = new Map<string, DiffHunkReviewState>();
+    for (const review of blockReviews.data?.reviews ?? []) blockVerdicts.set(reviewBlockStorageKey(review.filePath, review.blockRange, review.contentHash), review.state);
+    const before = projectHunkVerdicts(files, blockVerdicts);
+    for (const identity of active.identities) blockVerdicts.set(identity.storageKey, state);
+    for (const group of groupHunkVerdictsByState(newlyProjectedHunkVerdicts(before, projectHunkVerdicts(files, blockVerdicts)))) upsertHunkReviews.mutate(group);
+
     const next = nextUnsettledBlockId(queue, active.decision.id);
     if (next) selectBlock(next);
-  }, [active, queue, revision, selectBlock, upsertBlockReview]);
+  }, [active, blockReviews.data, files, queue, revision, selectBlock, upsertBlockReview, upsertHunkReviews]);
 
   const changedLoc = useMemo(() => files.reduce((total, file) => total + file.additions + file.deletions, 0), [files]);
   const selectNextDecision = useCallback(() => {

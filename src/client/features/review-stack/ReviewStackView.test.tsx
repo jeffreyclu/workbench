@@ -98,7 +98,7 @@ describe('ReviewStackView', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(/1 to judge · 1 settled automatically/);
   });
 
-  it('records a verdict against the block, not the hunk', async () => {
+  it('records the verdict at block identity first, not at hunk identity', async () => {
     const calls = renderReview();
     fireEvent.click(await screen.findByRole('button', { name: /Reviewed/ }));
     await waitFor(() => {
@@ -107,6 +107,18 @@ describe('ReviewStackView', () => {
       expect(write?.url).not.toContain('hunk-reviews');
       expect(write?.body).toMatchObject({ filePath: 'src/server/auth.ts', state: 'reviewed', revision: 'rev-1' });
       expect((write?.body as { contentHash: string }).contentHash).toBeTruthy();
+    });
+  });
+
+  it('reconciles a fully answered hunk back into the Changes surface', async () => {
+    const calls = renderReview();
+    fireEvent.click(await screen.findByRole('button', { name: /Reviewed/ }));
+    await waitFor(() => {
+      // The auth hunk holds a single block, so answering that block answers the
+      // whole hunk. Changes addresses hunks, so it is the parent hunk range that
+      // travels back, not the block range Review records against.
+      const write = calls.find((call) => call.method === 'PUT' && call.url.includes('hunk-reviews'));
+      expect(write?.body).toMatchObject({ revision: 'rev-1', state: 'reviewed', hunks: [{ filePath: 'src/server/auth.ts', hunkRange: '@@ -20,4 +20,6 @@ export function authorize(request) {' }] });
     });
   });
 

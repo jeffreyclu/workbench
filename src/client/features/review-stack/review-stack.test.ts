@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { LOGIC_HAZARD_REASONS, type WorkspaceDiffFile } from '../../../shared/contracts.js';
+import { LOGIC_HAZARD_REASONS, type DiffHunkReviewState, type WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { buildChangeMap } from '../../../shared/change-map.js';
 import { buildReviewDecisions, splitPatchHunks } from '../../../shared/review-decisions.js';
-import { blockContentHash, indexReviewBlocks, splitPatchBlocks, toBlockLevelFiles } from './review-blocks.js';
+import { blockContentHash, indexReviewBlocks, reviewBlockStorageKey, splitPatchBlocks, toBlockLevelFiles } from './review-blocks.js';
+import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
 import { splitHunkIntoLogicBlocks } from './logic-blocks.js';
 import { blockObligations } from './review-obligations.js';
 import { gravestHazard, isFormattingOnlyChange, isImportOnlyChange, routeReviewBlock, settleObligations } from './review-routing.js';
@@ -632,5 +633,48 @@ describe('spending on what the compiler found', () => {
     expect(queue[0].analysis).toEqual({ effect: 'branch', score: 20, hazards: ['boundary_moved'] });
     expect(queue[0].routing.tier).toBe('T2');
     expect(queue[0].routing.reason).toBe(LOGIC_HAZARD_REASONS.boundary_moved);
+  });
+});
+
+describe('projecting block verdicts onto the hunks Changes addresses', () => {
+  const target = file('src/api.ts', MULTI_CONSTRUCT_PATCH);
+  const blocks = splitPatchBlocks(target);
+  const hunkRange = splitPatchHunks(target)[0].range;
+  const keyFor = (index: number) => reviewBlockStorageKey(target.path, blocks[index].range, blockContentHash(blocks[index].lines));
+  const allReviewed = () => new Map<string, DiffHunkReviewState>(blocks.map((_, index) => [keyFor(index), 'reviewed']));
+
+  it('says nothing about a hunk whose blocks are only half answered', () => {
+    expect(blocks.length).toBeGreaterThan(1);
+    expect(projectHunkVerdicts([target], new Map<string, DiffHunkReviewState>([[keyFor(0), 'reviewed']]))).toEqual([]);
+  });
+
+  it('claims the hunk once every block is answered, at the gravest verdict given', () => {
+    expect(projectHunkVerdicts([target], allReviewed())).toEqual([{ filePath: 'src/api.ts', hunkRange, state: 'reviewed' }]);
+    expect(projectHunkVerdicts([target], allReviewed().set(keyFor(1), 'needs_changes'))).toEqual([{ filePath: 'src/api.ts', hunkRange, state: 'needs_changes' }]);
+    expect(projectHunkVerdicts([target], allReviewed().set(keyFor(1), 'commented'))).toEqual([{ filePath: 'src/api.ts', hunkRange, state: 'commented' }]);
+  });
+
+  it('ignores a verdict recorded against content that has since changed', () => {
+    const stale = new Map<string, DiffHunkReviewState>(blocks.map((block) => [reviewBlockStorageKey(target.path, block.range, 'stale-hash'), 'reviewed']));
+    expect(projectHunkVerdicts([target], stale)).toEqual([]);
+  });
+
+  it('writes only what moved, so answering one block does not rewrite settled hunks', () => {
+    const before = [{ filePath: 'src/api.ts', hunkRange, state: 'reviewed' as DiffHunkReviewState }];
+    expect(newlyProjectedHunkVerdicts(before, before)).toEqual([]);
+    const moved = [{ filePath: 'src/api.ts', hunkRange, state: 'needs_changes' as DiffHunkReviewState }];
+    expect(newlyProjectedHunkVerdicts(before, moved)).toEqual(moved);
+    expect(newlyProjectedHunkVerdicts([], moved)).toEqual(moved);
+  });
+
+  it('groups a delta into one request per state', () => {
+    expect(groupHunkVerdictsByState([
+      { filePath: 'a.ts', hunkRange: '@@ -1 +1 @@', state: 'reviewed' },
+      { filePath: 'b.ts', hunkRange: '@@ -2 +2 @@', state: 'needs_changes' },
+      { filePath: 'c.ts', hunkRange: '@@ -3 +3 @@', state: 'reviewed' },
+    ])).toEqual([
+      { state: 'reviewed', hunks: [{ filePath: 'a.ts', hunkRange: '@@ -1 +1 @@' }, { filePath: 'c.ts', hunkRange: '@@ -3 +3 @@' }] },
+      { state: 'needs_changes', hunks: [{ filePath: 'b.ts', hunkRange: '@@ -2 +2 @@' }] },
+    ]);
   });
 });
