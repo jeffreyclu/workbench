@@ -110,6 +110,14 @@ export function escalateRouting(routing: ReviewRouting, reason: string): ReviewR
   return { tier, reason, autoSettled: false };
 }
 
+/** The model was asked and answered that it could not tell. This goes
+ * straight to study rather than one step up: a cheaper turn has already been
+ * bought and came back short, so the next thing that can settle the block is
+ * a person reading it. */
+export function escalateRoutingToStudy(routing: ReviewRouting, reason: string): ReviewRouting {
+  return { tier: 'T3', reason, autoSettled: false };
+}
+
 export function tierRank(tier: ReviewTier): number {
   return REVIEW_TIERS.indexOf(tier);
 }

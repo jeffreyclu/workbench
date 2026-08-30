@@ -6,6 +6,7 @@ import { buildReviewDecisions } from '../../../shared/review-decisions.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import type { ReviewAssistTaskIntent } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
+import { useCachedReviewAssistAnswers } from '../diff-review/review-assist.js';
 import { DecisionRelationshipDiagram } from '../diff-review/decision-relationship-diagram.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
@@ -15,6 +16,7 @@ import { indexReviewBlocks, toBlockLevelFiles } from './review-blocks.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
 import { ReviewQueueList } from './review-queue-list.js';
 import { REVIEW_TIER_LABELS } from './review-routing.js';
+import { useBlockAssistAnswers } from './use-block-assist.js';
 import { useDiffBlockReviews, useUpsertDiffBlockReview } from './use-block-reviews.js';
 import { useReviewSource } from './use-review-source.js';
 
@@ -55,7 +57,10 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
 
   const decisions = useMemo(() => buildReviewDecisions(blockFiles, currentReviews), [blockFiles, currentReviews]);
   const changeMap = useMemo(() => buildChangeMap(decisions), [decisions]);
-  const queue = useMemo(() => buildReviewQueue(decisions, changeMap, blocks), [decisions, changeMap, blocks]);
+  // Escalation input, declared before the queue that consumes it and filled
+  // by the lookup below once a block is open.
+  const assist = useBlockAssistAnswers(revision);
+  const queue = useMemo(() => buildReviewQueue(decisions, changeMap, blocks, assist.answers), [decisions, changeMap, blocks, assist.answers]);
   const progress = useMemo(() => reviewQueueProgress(queue), [queue]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -78,6 +83,19 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   const activeFilePath = active?.decision.hunks[0]?.filePath ?? null;
   const activeFile = blockFiles.find((file) => file.path === activeFilePath) ?? null;
   const fileHunks = useMemo(() => activeFile ? buildFileDiffHunks(activeFile) : [], [activeFile]);
+
+  // Cache-only, and keyed to the tier routing first priced the block at rather
+  // than the tier it currently shows: an escalated block still reads back the
+  // cheaper answer that escalated it, so the escalation holds instead of
+  // flickering off the moment it takes effect. No model turn is spawned here —
+  // this reads only answers the reviewer already asked for.
+  const cachedAssist = useCachedReviewAssistAnswers(active?.decision ?? null, taskIntent, decisions, active?.assistTier ?? null);
+  const activeId = active?.decision.id ?? null;
+  const cachedAnswers = useMemo(() => Object.values(cachedAssist.data ?? {}), [cachedAssist.data]);
+  const rememberAssist = assist.remember;
+  useEffect(() => {
+    if (activeId) rememberAssist(activeId, cachedAnswers);
+  }, [activeId, cachedAnswers, rememberAssist]);
 
   const saveVerdict = (state: DiffHunkReviewState) => {
     if (!active || !revision) return;

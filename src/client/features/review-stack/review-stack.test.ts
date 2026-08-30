@@ -6,6 +6,7 @@ import { blockContentHash, indexReviewBlocks, splitPatchBlocks, toBlockLevelFile
 import { blockObligations } from './review-obligations.js';
 import { isFormattingOnlyChange, isImportOnlyChange, routeReviewBlock } from './review-routing.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
+import { assistEscalationReason } from './review-escalation.js';
 
 function file(path: string, patch: string): WorkspaceDiffFile {
   return { path, status: 'modified', additions: 0, deletions: 0, previousPath: null, patch, isBinary: false, editorUrl: null };
@@ -200,5 +201,49 @@ describe('the queue', () => {
     const next = nextUnsettledBlockId(queue, unsettled[0].decision.id);
     expect(settled).not.toContain(next);
     expect(next).toBe(unsettled[1].decision.id);
+  });
+});
+
+describe('escalation from a delegated answer', () => {
+  const files = [file('src/sync.ts', SMALL_PATCH)];
+
+  function queueFor(assistAnswers?: Map<string, readonly (string | null)[]>) {
+    const blockFiles = toBlockLevelFiles(files);
+    const decisions = buildReviewDecisions(blockFiles, []);
+    return buildReviewQueue(decisions, buildChangeMap(decisions), indexReviewBlocks(files), assistAnswers);
+  }
+
+  it('reads low confidence and the evidence the model lacked out of an answer', () => {
+    expect(assistEscalationReason('It changes a retry count.\n\nCONFIDENCE: low\nMISSING: the caller that sets the timeout'))
+      .toBe('Delegated answer was not confident: the caller that sets the timeout');
+    expect(assistEscalationReason('It changes a retry count.\n\nCONFIDENCE: high')).toBeNull();
+    // Every Changes answer, and every answer cached before tiering existed,
+    // arrives without a marker. Reading that as doubt would send the whole
+    // queue to study.
+    expect(assistEscalationReason('It changes a retry count.')).toBeNull();
+    expect(assistEscalationReason(null)).toBeNull();
+  });
+
+  it('sends a block the model could not settle straight to study, without moving the tier it is asked at', () => {
+    const before = queueFor()[0];
+    expect(before.routing.tier).not.toBe('T3');
+    expect(before.routing.autoSettled).toBe(false);
+
+    const escalated = queueFor(new Map([[before.decision.id, ['CONFIDENCE: low\nMISSING: the retry budget it feeds']]]))[0];
+
+    expect(escalated.routing.tier).toBe('T3');
+    expect(escalated.routing.reason).toContain('the retry budget it feeds');
+    // Still asked at the tier that produced the answer: looking it up at T3
+    // would miss the answer that caused the escalation and drop the block back
+    // on the next render.
+    expect(escalated.assistTier).toBe(before.routing.tier);
+  });
+
+  it('leaves a confident answer ranked where routing put it', () => {
+    const before = queueFor()[0];
+    const unchanged = queueFor(new Map([[before.decision.id, ['CONFIDENCE: high']]]))[0];
+
+    expect(unchanged.routing.tier).toBe(before.routing.tier);
+    expect(unchanged.routing.reason).toBe(before.routing.reason);
   });
 });

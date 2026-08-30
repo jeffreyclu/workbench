@@ -143,6 +143,20 @@ invalidates old entries naturally — **no migration needed**.
 
 Escalate T1 → T3 when the model reports low confidence or names evidence it lacks.
 
+**Built.** The tier now enters the assist cache hash *and* the prompt — keying it
+without spending it differently would be two cache entries for one answer. Untiered
+Changes requests append nothing, so their prompts stay byte-identical and no cached
+answer is invalidated. A tiered answer signs off with `CONFIDENCE: high|low` and, when
+low, a `MISSING:` line; the review stack reads that back and routes the block to T3.
+
+Escalation is looked up at the tier the block was *first* priced at, not its current
+one — a lookup keyed on the escalated tier would miss the answer that caused the
+escalation and oscillate. Answers accumulate per revision, so an escalation survives
+the reviewer moving to another block.
+
+Still open: the rank-quality corpus (Risk 1). An escalated block is re-asked at T3
+only when the reviewer asks again — nothing re-spends automatically.
+
 ---
 
 ## Phase 5 — The map, on demand

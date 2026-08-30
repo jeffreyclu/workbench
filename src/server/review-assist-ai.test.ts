@@ -424,3 +424,38 @@ describe('reference-claim audit', () => {
     expect(await requestReviewAssist(openDatabase(':memory:'), 'score_risk', deletion, null)).toBe('SCORE: 55\nAll call sites are updated.');
   });
 });
+
+describe('tiered depth', () => {
+  /** The prompt actually sent for the real turn. The first write is the pool's
+   * priming turn, which carries no question. */
+  async function promptFor(tier: 'T1' | 'T3' | null) {
+    vi.resetModules();
+    const writes: string[] = [];
+    vi.doMock('node:child_process', () => ({ spawn: mockStreamingWorker('An answer.', [], writes) }));
+    const { requestReviewAssist } = await import('./review-assist-ai.js');
+    await requestReviewAssist(openDatabase(':memory:'), 'explain', decision, null, undefined, tier);
+    return writes.find((write) => write.includes('Adds a retry to the sync client.')) ?? '';
+  }
+
+  it('asks a study block a harder question than a skim block, and asks both to report confidence', async () => {
+    const skim = await promptFor('T1');
+    const study = await promptFor('T3');
+
+    expect(skim).toContain('Depth: skim');
+    expect(study).toContain('Depth: study');
+    // The whole point of keying the tier: two tiers must be two questions. If
+    // these matched, the cache would hold two entries for one answer and the
+    // tier would be pure spend.
+    expect(skim).not.toBe(study);
+    for (const prompt of [skim, study]) expect(prompt).toContain('CONFIDENCE:');
+  });
+
+  it('leaves an untiered request byte-identical to the prompt Changes has always sent', async () => {
+    const untiered = await promptFor(null);
+
+    expect(untiered).toContain('Adds a retry to the sync client.');
+    expect(untiered).not.toContain('Depth:');
+    expect(untiered).not.toContain('CONFIDENCE:');
+    expect(untiered).not.toContain('MISSING:');
+  });
+});

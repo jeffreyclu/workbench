@@ -2,7 +2,6 @@ import { memo, useState } from 'react';
 import { Check, ChevronRight, MessageSquare, TriangleAlert } from 'lucide-react';
 import type { DiffHunkReviewState } from '../../../shared/contracts.js';
 import { changeTypeLabel } from '../../../shared/change-type.js';
-import { REVIEW_TIER_LABELS } from './review-routing.js';
 import type { ReviewQueueEntry } from './review-queue.js';
 
 function StateGlyph({ state }: { state: DiffHunkReviewState | null }) {

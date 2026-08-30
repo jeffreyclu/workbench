@@ -2,7 +2,8 @@ import type { ChangeMap } from '../../../shared/change-map.js';
 import type { ReviewDecision } from '../../../shared/review-decisions.js';
 import { blockObligations, type ReviewObligation } from './review-obligations.js';
 import { blockRelationships, relationshipEscalation, warrantsRelationshipMap, type ReviewRelationships } from './review-relationships.js';
-import { escalateRouting, routeReviewBlock, tierRank, type ReviewRouting } from './review-routing.js';
+import { assistAnswersEscalationReason } from './review-escalation.js';
+import { escalateRouting, escalateRoutingToStudy, routeReviewBlock, tierRank, type ReviewRouting, type ReviewTier } from './review-routing.js';
 import type { ReviewBlockIdentity } from './review-blocks.js';
 
 export interface ReviewQueueEntry {
@@ -14,6 +15,12 @@ export interface ReviewQueueEntry {
    * re-emitted at block level (binary, whole-file placeholder). */
   identities: ReviewBlockIdentity[];
   routing: ReviewRouting;
+  /** The tier routing priced this block at before anything escalated it.
+   * Assist answers are bought and cached per tier, and an escalation is read
+   * back out of an answer bought at this tier — so a lookup that used the
+   * escalated tier would miss the very answer that caused the escalation, drop
+   * the block back to its old tier, and oscillate there forever. */
+  assistTier: ReviewTier;
   obligations: ReviewObligation[];
   relationships: ReviewRelationships;
   /** Whether this block has earned the relationship map's cost. */
@@ -39,19 +46,33 @@ function compareEntries(left: ReviewQueueEntry, right: ReviewQueueEntry): number
   return left.decision.ordinal - right.decision.ordinal;
 }
 
-export function buildReviewQueue(decisions: ReviewDecision[], map: ChangeMap, blocks: Map<string, ReviewBlockIdentity>): ReviewQueueEntry[] {
+export function buildReviewQueue(
+  decisions: ReviewDecision[],
+  map: ChangeMap,
+  blocks: Map<string, ReviewBlockIdentity>,
+  /** Assist answers already paid for, by decision id. Only what the reviewer
+   * has opened is ever in here; an empty map is the normal case and ranks
+   * exactly as it did before tiered answers existed. */
+  assistAnswers: ReadonlyMap<string, readonly (string | null | undefined)[]> = new Map(),
+): ReviewQueueEntry[] {
   const entries = decisions.map((decision): ReviewQueueEntry => {
     const obligations = blockObligations(decision);
     const relationships = blockRelationships(map, decision.id);
     let routing = routeReviewBlock(decision, obligations);
+    const assistTier = routing.tier;
     // Discovering broader impact is the one thing routing cannot see from the
     // patch alone, so it is applied after the neighbourhood is known.
     const escalation = routing.autoSettled ? null : relationshipEscalation(relationships);
     if (escalation) routing = escalateRouting(routing, escalation);
+    // Last, and it overrides the rest: every earlier step is a guess made from
+    // the patch, while this one is a turn that actually read the block and
+    // reported it could not settle it.
+    const unconfident = routing.autoSettled ? null : assistAnswersEscalationReason(assistAnswers.get(decision.id) ?? []);
+    if (unconfident) routing = escalateRoutingToStudy(routing, unconfident);
     return {
       decision,
       identities: decision.hunks.flatMap((hunk) => { const identity = blocks.get(hunk.id); return identity ? [identity] : []; }),
-      routing, obligations, relationships,
+      routing, assistTier, obligations, relationships,
       showsMap: warrantsRelationshipMap(routing, relationships),
     };
   });

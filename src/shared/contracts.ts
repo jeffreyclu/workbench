@@ -349,6 +349,16 @@ const reviewAssistLinesSchema = z.array(z.string())
 export const REVIEW_ASSIST_TIERS = ['T0', 'T1', 'T2', 'T3'] as const;
 export type ReviewAssistTier = typeof REVIEW_ASSIST_TIERS[number];
 
+/** The line a tiered answer signs off with, so the review stack can tell an
+ * answer the model stands behind from one it could not. Only tiered requests
+ * are asked for it: a Changes answer gains no trailer it did not have before.
+ * Both prefixes live here because the server writes the instruction and the
+ * review stack reads the result, and a marker defined twice drifts. */
+export const REVIEW_ASSIST_CONFIDENCE_PREFIX = 'CONFIDENCE:';
+/** Names what the model needed and was not given, on the line after a low
+ * confidence marker. What it names is the reason the block escalates. */
+export const REVIEW_ASSIST_MISSING_PREFIX = 'MISSING:';
+
 export const reviewAssistRequestSchema = z.object({
   action: z.enum(['explain', 'what_could_break', 'compare_task_intent', 'score_risk']),
   decision: z.object({
