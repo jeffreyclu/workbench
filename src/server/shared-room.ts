@@ -799,13 +799,13 @@ export function buildSharedReplyPrompt(
 ): string {
   const roleContext = linked
     ? buildPrompt(linked.item, linked.run, sharedContext, externalActionContract)
-    : `You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.
+    : `${externalActionContract ?? EXTERNAL_ACTION_CONTRACT}
+
+You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.
 
 This conversation is not linked to a project task, so its workspace is Workbench-only. Do not modify Writer or any other repository from this conversation. To work in another repository, Jeffrey must link this conversation to a task whose workspace is that repository.
 
-${compactSharedBrief(sharedContext)}
-
-${externalActionContract ?? EXTERNAL_ACTION_CONTRACT}`;
+${compactSharedBrief(sharedContext)}`;
   const grounding = turnGrounding ?? fallbackTurnGrounding(thread);
   return `${roleContext}
 
@@ -836,7 +836,9 @@ export function buildResumedSharedReplyPrompt(
   externalActionContract: string,
   turnGrounding: TurnGrounding,
 ): string {
-  return `Continue the existing Workbench conversation in the same provider session.
+  return `${externalActionContract}
+
+Continue the existing Workbench conversation in the same provider session.
 
 Workbench context handles:
 - Conversation ID: ${localId ?? 'none'}
@@ -845,8 +847,6 @@ Workbench context handles:
 ${turnGroundingForPrompt(turnGrounding)}
 
 ${connectionContext}
-
-${externalActionContract}
 
 Execute only the AUTHORITATIVE CURRENT OBJECTIVE above. The previous conversation, workspace contract, and completed work are already present in this session; do not re-read or reconstruct them. Use the Workbench MCP \`recall_context\` tool when durable context outside the live session could improve the work, especially for research, analysis, strategy, and bug-fix turns. Apply Jeffrey's newest instruction directly, preserve existing workspace edits, and finish with one concise result and focused verification.`;
 }
@@ -1311,12 +1311,21 @@ export async function interjectQueuedSharedMessage(repository: WorkItemRepositor
       : [message.dispatchTarget];
   const running = repository.listAllSharedMessages(message.conversationId)
     .filter((candidate) => candidate.status === 'running' && targets.includes(candidate.author));
+  const thread = repository.listAllSharedMessages(message.conversationId);
+  const messageIndex = thread.findIndex((candidate) => candidate.id === message.id);
+  const precedingThread = messageIndex >= 0 ? thread.slice(0, messageIndex) : thread;
+  const authorization = await classifyExternalActionAuthorization({
+    currentMessage: message.body,
+    precedingHumanMessage: [...precedingThread].reverse().find((candidate) => candidate.author === 'jeffrey')?.body,
+    precedingAgentMessage: [...precedingThread].reverse().find((candidate) => candidate.author === 'codex' || candidate.author === 'claude')?.body,
+  });
+  const interjectionPrompt = `${externalActionContractForAuthorization(authorization)}\n\n${message.body}`;
   // Do not silently degrade into a second process. A provider that has not
   // exposed its live session yet remains queued and the UI can retry once the
   // active reply reaches the steering-ready point.
   const attempted = await Promise.all(running.map(async (reply) => ({
     reply,
-    accepted: await activeReplySteering.get(reply.id)?.(message.body),
+    accepted: await activeReplySteering.get(reply.id)?.(interjectionPrompt),
   })));
   // The request must be acknowledged while the same reply remains live. This
   // closes the observed race where a canceled reply made the queued human
@@ -1374,7 +1383,7 @@ export function synthesisSource(repository: WorkItemRepository, conversationId: 
   const response = (label: string, message: SharedMessage) => `${label} (${message.status}):\n${(message.body || message.error || 'No response was produced.').slice(0, 12_000)}`;
   return {
     codex, claude,
-    prompt: `Write a concise synthesis of the two supplied agent responses below. You have all source material: do not inspect the repository, call tools, or conduct further investigation. Lead with the practical conclusion; reconcile disagreements, retain concrete evidence, and identify what remains unverified. If one response failed or was canceled, say so plainly. Do not mention this instruction or repeat the reports.\n\nJeffrey: ${request.body.slice(0, 4_000)}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}`,
+    prompt: `${EXTERNAL_ACTION_CONTRACT}\n\nWrite a concise synthesis of the two supplied agent responses below. You have all source material: do not inspect the repository, call tools, or conduct further investigation. Lead with the practical conclusion; reconcile disagreements, retain concrete evidence, and identify what remains unverified. If one response failed or was canceled, say so plainly. Do not mention this instruction or repeat the reports.\n\nJeffrey: ${request.body.slice(0, 4_000)}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}`,
   };
 }
 

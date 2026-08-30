@@ -8,7 +8,7 @@ import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
 import { resolveWorkingDirectory, runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, retrySharedSynthesis, runSharedBackgroundJob } from '../shared-room.js';
-import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { parseFollowUpPlan } from '../app-exports.js';
 import { isRuntimeApproval } from '../runtime-promotion.js';
@@ -155,6 +155,16 @@ export function createConversationRouter({ repository, database, capabilities, a
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
       const revision = await getWorkspaceDiffRevision(workingDirectory);
       response.json({ changed: revision !== request.query.revision });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/api/shared/conversations/:id/workspace-diff/file', async (request, response, next) => {
+    try {
+      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
+      const path = typeof request.query.path === 'string' ? request.query.path : '';
+      const revision = typeof request.query.revision === 'string' && request.query.revision ? request.query.revision : null;
+      response.json({ file: await getWorkspaceFileSource(workingDirectory, path, revision) });
     } catch (error) { next(error); }
   });
 

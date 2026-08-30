@@ -406,6 +406,7 @@ describe('classifyExecution', () => {
     expect(CACHE_HANDOFF_INSTRUCTION).toContain('do not start another tool');
     expect(hasCacheHandoff(`${CACHE_HANDOFF_MARKER} saved`)).toBe(true);
     const continuation = cacheContinuationPrompt('x'.repeat(20_000), 'y'.repeat(20_000));
+    expect(continuation.startsWith(EXTERNAL_ACTION_CONTRACT)).toBe(true);
     expect(continuation.length).toBeLessThan(21_000);
     expect(addUsage(
       { inputTokens: null, cacheCreationInputTokens: 2, cacheReadInputTokens: 5, outputTokens: null },
@@ -413,11 +414,24 @@ describe('classifyExecution', () => {
     )).toEqual({ inputTokens: 3, cacheCreationInputTokens: 2, cacheReadInputTokens: 12, outputTokens: null });
   });
 
+  it('keeps a granted one-turn capability first across a cache continuation', () => {
+    const capability = externalActionContractForAuthorization({ granted: true, operation: 'Publish the approved artifact.' });
+    const continuation = cacheContinuationPrompt(`${capability}\n\nDo the work.`, 'Checkpoint saved.');
+    expect(continuation.startsWith(capability)).toBe(true);
+  });
+
   it('injects the explicit-order external-source guardrail into every work-item prompt', () => {
     const prompt = buildPrompt(item('Fix a component'), { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun);
-    expect(prompt).toContain(EXTERNAL_ACTION_CONTRACT);
+    expect(prompt.startsWith(EXTERNAL_ACTION_CONTRACT)).toBe(true);
     expect(prompt).toContain('Workspace isolation:');
     expect(prompt).toContain('Never create or update `docs/shared-memory*`');
+  });
+
+  it('puts a granted one-turn capability first in fresh and resumed work-item prompts', () => {
+    const capability = 'Supervisor-issued external-action capability: Publish the approved artifact.';
+    const run = { agent: 'claude', kind: 'execute', instructions: 'Publish it.' } as AgentRun;
+    expect(buildPrompt(item('Publish artifact'), run, '', capability).startsWith(capability)).toBe(true);
+    expect(buildResumedPrompt(item('Publish artifact'), run, capability).startsWith(capability)).toBe(true);
   });
 
   it('uses one model judgment, including immediate pending-operation context, for external authorization', async () => {
@@ -428,6 +442,15 @@ describe('classifyExecution', () => {
     expect(externalActionContractForAuthorization(granted)).toContain('Supervisor-issued external-action capability');
     const denied = await classifyExternalActionAuthorization({ currentMessage: 'Sounds good.', precedingHumanMessage: 'Update GitHub PR #14337.' }, async () => '{"granted":false,"operation":null}');
     expect(externalActionContractForAuthorization(denied)).toBe(EXTERNAL_ACTION_CONTRACT);
+  });
+
+  it('retries an invalid authorization envelope instead of silently treating it as a denial', async () => {
+    const outputs = ['not json', '{"granted":true,"operation":"Publish the approved timesheet."}'];
+    const decision = await classifyExternalActionAuthorization(
+      { currentMessage: 'publish it' },
+      async () => outputs.shift() ?? '',
+    );
+    expect(decision).toEqual({ granted: true, operation: 'Publish the approved timesheet.' });
   });
 
   it('sends both agents the same reasoning effort for a given tier', () => {

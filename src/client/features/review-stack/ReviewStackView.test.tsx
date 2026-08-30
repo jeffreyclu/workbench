@@ -25,6 +25,19 @@ const IMPORT_PATCH = [
   ' export const x = 1;',
 ].join('\n');
 
+/** The file `AUTH_PATCH` changes, whole. Lines 20–24 are the patch's new side;
+ * everything else is the surrounding code the patch window crops away. */
+const AUTH_FILE = [
+  ...Array.from({ length: 19 }, (_, index) => `const filler${index + 1} = ${index + 1};`),
+  'export function authorize(request) {',
+  '  if (!request.token) return request.internal === true;',
+  '  if (request.token === "*") return true;',
+  '  return verify(request.token);',
+  '}',
+  'export const AUDIT = true;',
+  '',
+].join('\n');
+
 function file(path: string, patch: string): WorkspaceDiffFile {
   return { path, status: 'modified', additions: 2, deletions: 1, previousPath: null, patch, isBinary: false, editorUrl: null };
 }
@@ -55,6 +68,7 @@ function renderReview(reviewDiff = diff) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : null });
+    if (url.includes('/workspace-diff/file')) return json({ file: { path: 'src/server/auth.ts', revision: null, content: AUTH_FILE, unavailable: null } });
     if (url.includes('/workspace-diff/snapshots')) return json({ snapshots: [] });
     if (url.includes('/workspace-diff/block-reviews')) return init?.method === 'PUT'
       ? json({ review: { id: 'r1', revision: 'rev-1', filePath: 'src/server/auth.ts', blockRange: '@@', contentHash: 'h', state: 'reviewed', note: null, updatedAt: '2026-01-01' } })
@@ -222,5 +236,31 @@ describe('ReviewStackView', () => {
     await screen.findByRole('button', { name: /Reviewed/ });
     fireEvent.keyDown(document, { key: 'r' });
     await waitFor(() => expect(calls.some((call) => call.method === 'PUT' && (call.body as { state: string }).state === 'reviewed')).toBe(true));
+  });
+
+  it('opens the whole file when the surrounding code is the argument', async () => {
+    renderReview();
+    await screen.findByRole('region', { name: /what this block claims/i });
+    fireEvent.keyDown(document, { key: 'o' });
+    await screen.findByRole('button', { name: /final code/i });
+    // final → diff → whole file: one key, three magnifications of one block.
+    fireEvent.keyDown(document, { key: 'd' });
+    await screen.findByRole('button', { name: /^diff$/i });
+    fireEvent.keyDown(document, { key: 'd' });
+
+    expect(await screen.findByRole('button', { name: /whole file/i })).toBeInTheDocument();
+    const rows = await waitFor(() => {
+      const found = Array.from(document.querySelectorAll('.review-full-file-row'));
+      expect(found.length).toBeGreaterThan(0);
+      return found;
+    });
+    // The patch window stops three lines out; the file does not. Line 1 is
+    // nowhere in the diff and is exactly the context a refactor is judged on.
+    expect(rows.some((row) => row.textContent?.includes('const filler1 = 1;'))).toBe(true);
+    expect(rows.some((row) => row.textContent?.includes('export const AUDIT = true;'))).toBe(true);
+    // Only the added lines are marked, at their real line numbers in the file.
+    const changed = Array.from(document.querySelectorAll('.review-full-file-row.changed'));
+    expect(changed.map((row) => row.getAttribute('data-line'))).toEqual(['21', '22']);
+    expect(document.querySelector('.review-full-file-row.removed')).not.toBeNull();
   });
 });

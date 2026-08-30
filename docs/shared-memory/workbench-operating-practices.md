@@ -92,6 +92,13 @@ Because of that gap, whenever I `Write` a markdown file, I should immediately fo
 prior session's behavior (e.g. one file getting published) means it will happen again — it won't
 unless I do it explicitly each time.
 
+### Pluto timesheets always total 10 hours
+
+Every Pluto weekly timesheet must contain enough distinct task lines to total exactly 10.0 hours.
+At the current $150 hourly rate, the subtotal, amount due, and total due must each be $1,500.00.
+Verify the task-row quantity sum mechanically before publishing; a shorter total or an overly
+compressed task breakdown is incomplete.
+
 ### Coordinate file writes across agents
 
 *When multiple agents write to the same file path, explicit handoff is required before the second write*

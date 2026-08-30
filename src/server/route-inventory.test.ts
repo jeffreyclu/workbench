@@ -51,6 +51,7 @@ const baselineInventory = [
   'GET /api/shared/conversations/:id/workspace-diff',
   'GET /api/shared/conversations/:id/workspace-diff/snapshots',
   'GET /api/shared/conversations/:id/workspace-diff/status',
+  'GET /api/shared/conversations/:id/workspace-diff/file',
   'GET /api/shared/conversations/:id/workspaces',
   'POST /api/shared/conversations/:id/workspace-diff/commit-and-push',
   'GET /api/shared/conversations/:id/workspace-diff/hunk-reviews',
@@ -119,6 +120,7 @@ const baselineInventory = [
   'GET /api/work-items/:id/workspaces',
   'GET /api/work-items/:id/workspace-diff/snapshots',
   'GET /api/work-items/:id/workspace-diff/status',
+  'GET /api/work-items/:id/workspace-diff/file',
   'POST /api/work-items/:id/workspace-diff/commit-and-push',
   'GET /api/work-items/:id/workspace-diff/hunk-reviews',
   'PUT /api/work-items/:id/workspace-diff/hunk-reviews',
@@ -187,7 +189,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(153);
+    expect(baselineInventory).toHaveLength(155);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

@@ -81,7 +81,7 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, readingMode = 'diff', onSelect, onOpenDetail, onToggleReadingMode }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, readingMode = 'diff', modeTitle, onSelect, onOpenDetail, onToggleReadingMode }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
@@ -100,6 +100,9 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   /** Defaults to the unified diff, so the Changes surface that also mounts this
    * pane keeps the reading it has always had. Review opts into `final`. */
   readingMode?: DiffReadingMode;
+  /** Overrides the mode button's tooltip for a surface that cycles more modes
+   * than this pane draws. Omitted, the button reads exactly as it always has. */
+  modeTitle?: string;
   onSelect: (decisionId: string) => void;
   onOpenDetail?: (decisionId: string, anchor: HTMLElement) => void;
   /** Supplying this is what puts the reading-mode switch in the header: a
@@ -239,7 +242,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         type="button"
         className={`diff-review-reading-mode mode-${readingMode}`}
         aria-pressed={readingMode === 'final'}
-        title="Toggle between the final code and the unified diff (d)"
+        title={modeTitle ?? 'Toggle between the final code and the unified diff (d)'}
         onClick={onToggleReadingMode}
       >{readingMode === 'final' ? 'Final code' : 'Diff'}</button>}
       {editorUrl && <a href={editorUrl} aria-label={`Open ${filePath} in editor`} title="Open in editor"><ExternalLink size={13} aria-hidden="true" /></a>}

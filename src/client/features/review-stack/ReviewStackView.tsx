@@ -10,9 +10,12 @@ import { useCachedReviewAssistAnswers } from '../diff-review/review-assist.js';
 import { DiffReviewFileDiffPane, type DiffReadingMode } from '../diff-review/file-diff-pane.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { buildFileDiffHunks } from '../diff-review/logic.js';
-import { readReviewStackReadingMode, writeReviewStackBlock, writeReviewStackReadingMode } from '../../lib/preferences.js';
-import { useUpsertDiffHunkReview } from '../workspace-diff/hooks.js';
+import { readReviewStackReadingMode, writeReviewStackBlock, writeReviewStackReadingMode, type ReviewStackReadingMode } from '../../lib/preferences.js';
+import { useUpsertDiffHunkReview, useWorkspaceFileSource } from '../workspace-diff/hooks.js';
 import { blockClaim } from './review-claims.js';
+import { reviewSourceKind } from './source.js';
+import { fileSourceRevision } from './review-full-file.js';
+import { ReviewFullFilePane } from './review-full-file-pane.js';
 import { indexReviewBlocks, reviewBlockStorageKey, toBlockLevelFiles } from './review-blocks.js';
 import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
@@ -26,6 +29,10 @@ import { useBlockAssistAnswers } from './use-block-assist.js';
 import { useDiffBlockReviews, useUpsertDiffBlockReview } from './use-block-reviews.js';
 import { useReviewSource } from './use-review-source.js';
 import { adjacentDecisionId, adjacentFileDecisionId, useReviewKeyboardNavigation } from './use-review-keyboard-navigation.js';
+
+/** One tooltip for the one key that cycles all three readings, so the button
+ * never claims a two-way toggle Review no longer has. */
+const READING_MODE_TITLE = 'Cycle the reading: final code, unified diff, whole file (d)';
 
 const STOPPING_POINT_LOC = 400;
 
@@ -55,9 +62,14 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   // judge a block that was rewritten wholesale.
   // The default is 'final', but the reviewer's own last choice outranks it and
   // survives remounting, switching conversations and reloading.
-  const [readingMode, setReadingMode] = useState<DiffReadingMode>(() => readReviewStackReadingMode() ?? 'final');
+  const [readingMode, setReadingMode] = useState<ReviewStackReadingMode>(() => readReviewStackReadingMode() ?? 'final');
+  // Three readings of the same block, widening each time: the finished
+  // construct, the two-sided diff, then the whole file the construct sits in.
+  // One key cycles them because they answer the same question at different
+  // magnifications, not three separate questions.
   const toggleReadingMode = useCallback(() => {
-    const next: DiffReadingMode = readingMode === 'final' ? 'diff' : 'final';
+    const order: ReviewStackReadingMode[] = ['final', 'diff', 'file'];
+    const next = order[(order.indexOf(readingMode) + 1) % order.length];
     setReadingMode(next);
     writeReviewStackReadingMode(next);
   }, [readingMode]);
@@ -128,6 +140,17 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   const activeFilePath = active?.decision.hunks[0]?.filePath ?? null;
   const activeFile = blockFiles.find((file) => file.path === activeFilePath) ?? null;
   const fileHunks = useMemo(() => activeFile ? buildFileDiffHunks(activeFile) : [], [activeFile]);
+  // Whole-file reading needs the file itself, and only a local source has one:
+  // a pull request's after-state lives on a head revision this checkout may
+  // never have fetched, so asking would read the local copy of the same path
+  // and mark the pull request's changes on the wrong text.
+  const wholeFileReadable = source.sourceId ? reviewSourceKind(source.sourceId) !== 'pull-request' : false;
+  const fileSourceQuery = useWorkspaceFileSource(
+    scope,
+    activeFile?.path ?? null,
+    fileSourceRevision(source.source?.revision),
+    codeOpen && readingMode === 'file' && wholeFileReadable,
+  );
 
   // Only an escalated block pays for the map. Everything below — the
   // neighbourhood walk, the import scan, the layout — is skipped entirely for a
@@ -267,7 +290,27 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
             <button type="button" className="button secondary compact" onClick={toggleCode} aria-expanded={codeOpen} aria-controls="review-block-code-pane" aria-keyshortcuts="o">
               {codeOpen ? 'Hide the code' : 'Read the code to falsify this'} <kbd>o</kbd>
             </button>
-            {codeOpen && <div id="review-block-code-pane"><DiffReviewFileDiffPane
+            {codeOpen && <div id="review-block-code-pane">{readingMode === 'file'
+            ? <div className="review-full-file-shell">
+                <button
+                  type="button"
+                  className="diff-review-reading-mode mode-file"
+                  title={READING_MODE_TITLE}
+                  onClick={toggleReadingMode}
+                >Whole file</button>
+                {wholeFileReadable
+                  ? <ReviewFullFilePane
+                      filePath={activeFile.path}
+                      file={fileSourceQuery.data?.file ?? null}
+                      isLoading={fileSourceQuery.isLoading}
+                      error={fileSourceQuery.error ? 'This file could not be read.' : null}
+                      hunks={fileHunks}
+                      activeDecisionId={active.decision.id}
+                      onSelect={selectBlock}
+                    />
+                  : <p className="review-full-file-note">A pull request has no local copy of this file, so it cannot be read whole here.</p>}
+              </div>
+            : <DiffReviewFileDiffPane
             filePath={activeFile.path}
             editorUrl={activeFile.editorUrl ?? null}
             hunks={fileHunks}
@@ -276,9 +319,10 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
             selectionTick={selectionTick}
             changeMap={changeMap}
             readingMode={readingMode}
+            modeTitle={READING_MODE_TITLE}
             onSelect={selectBlock}
             onToggleReadingMode={toggleReadingMode}
-          /></div>}
+          />}</div>}
           </div>}
         </div>}
       </div>}

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, parseWorkspacePatch, resolveWorkspaceRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceFileSource, parseWorkspacePatch, resolveWorkspaceRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -163,5 +163,51 @@ describe('binary detection', () => {
       'Binary files a/logo.png and b/logo.png differ',
     ].join('\n');
     expect(parseWorkspacePatch(patch)[0].isBinary).toBe(true);
+  });
+});
+
+
+describe('whole-file source', () => {
+  it('reads the working-tree copy when no revision is named', async () => {
+    const workspace = temporaryGitWorkspace();
+    writeFileSync(join(workspace, 'file.ts'), 'export const one = 1;\n');
+    execFileSync('git', ['add', 'file.ts'], { cwd: workspace });
+    execFileSync('git', ['commit', '--quiet', '-m', 'initial'], { cwd: workspace });
+    // The uncommitted after-state only exists on disk, which is why an
+    // uncommitted diff has to read the working tree rather than a commit.
+    writeFileSync(join(workspace, 'file.ts'), 'export const one = 2;\n');
+
+    const source = await getWorkspaceFileSource(workspace, 'file.ts');
+    expect(source).toMatchObject({ path: 'file.ts', revision: null, content: 'export const one = 2;\n', unavailable: null });
+  });
+
+  it('reads a named commit rather than the working tree', async () => {
+    const workspace = temporaryGitWorkspace();
+    writeFileSync(join(workspace, 'file.ts'), 'export const one = 1;\n');
+    execFileSync('git', ['add', 'file.ts'], { cwd: workspace });
+    execFileSync('git', ['commit', '--quiet', '-m', 'initial'], { cwd: workspace });
+    const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workspace, encoding: 'utf8' }).trim();
+    writeFileSync(join(workspace, 'file.ts'), 'export const one = 2;\n');
+
+    const source = await getWorkspaceFileSource(workspace, 'file.ts', commit);
+    expect(source.content).toBe('export const one = 1;\n');
+  });
+
+  it('refuses a path that climbs out of the workspace', async () => {
+    const workspace = temporaryGitWorkspace();
+    const escaped = await getWorkspaceFileSource(workspace, '../../etc/passwd');
+    expect(escaped).toMatchObject({ content: null, unavailable: 'That path cannot be read.' });
+    const absolute = await getWorkspaceFileSource(workspace, '/etc/passwd');
+    expect(absolute).toMatchObject({ content: null, unavailable: 'That path cannot be read.' });
+  });
+
+  it('reports an unreadable file as a reason rather than throwing', async () => {
+    const workspace = temporaryGitWorkspace();
+    const missing = await getWorkspaceFileSource(workspace, 'gone.ts');
+    expect(missing).toMatchObject({ content: null, unavailable: 'This file is not in the working tree.' });
+
+    writeFileSync(join(workspace, 'logo.png'), Buffer.from([0x89, 0x50, 0x00, 0x01]));
+    const binary = await getWorkspaceFileSource(workspace, 'logo.png');
+    expect(binary).toMatchObject({ content: null, unavailable: 'This file is binary.' });
   });
 });

@@ -6,6 +6,7 @@ import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
+import { EXTERNAL_ACTION_CONTRACT } from './agent-runner.js';
 import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
@@ -196,6 +197,7 @@ describe('compactConversationHistory', () => {
     expect(prompt).toContain('Commit and push the finished fix.');
     expect(prompt).toContain('Current repository: /tmp/project');
     expect(prompt).toContain('Supervisor-issued external-action capability');
+    expect(prompt.startsWith('Supervisor-issued external-action capability')).toBe(true);
     expect(prompt).toContain('Current reply message ID: message-id');
     expect(prompt).toContain('already present in this session');
     expect(prompt).not.toContain('Reference-only conversation transcript:');
@@ -281,6 +283,8 @@ describe('compactConversationHistory', () => {
 
     expect(denied).toContain('No external mutation capability is issued');
     expect(granted).toContain('Supervisor-issued external-action capability');
+    expect(denied.startsWith(EXTERNAL_ACTION_CONTRACT)).toBe(true);
+    expect(granted.startsWith('Supervisor-issued external-action capability')).toBe(true);
     database.close();
   });
 

@@ -187,14 +187,14 @@ export function writeReviewStackSource(scope: string, source: string): void {
   }
 }
 
-/** Structurally the diff pane's `DiffReadingMode`. Declared here so preference
- * storage does not depend on a feature component. */
-export type ReviewStackReadingMode = 'diff' | 'final';
+/** The diff pane's `DiffReadingMode`, plus Review's own whole-file reading.
+ * Declared here so preference storage does not depend on a feature component. */
+export type ReviewStackReadingMode = 'diff' | 'final' | 'file';
 
 export function readReviewStackReadingMode(): ReviewStackReadingMode | null {
   try {
     const value = window.localStorage.getItem(reviewStackReadingModeStorageKey);
-    return value === 'diff' || value === 'final' ? value : null;
+    return value === 'diff' || value === 'final' || value === 'file' ? value : null;
   } catch {
     return null;
   }

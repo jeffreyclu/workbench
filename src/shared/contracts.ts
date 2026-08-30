@@ -492,6 +492,20 @@ export interface WorkspaceDiff {
   publish: WorkspacePublishStatus;
 }
 
+/** One file read whole, for reviewing a block in its real surroundings rather
+ * than in a three-line patch window.
+ *
+ * `content` is null whenever the file cannot be read as one page — deleted,
+ * binary, absent from the revision, oversized — and `unavailable` then carries
+ * the reason to show. The patch is unaffected either way. */
+export interface WorkspaceFileSource {
+  path: string;
+  /** The commit read, or null when the working-tree copy was read. */
+  revision: string | null;
+  content: string | null;
+  unavailable: string | null;
+}
+
 /** An immutable, previously reviewed workspace diff. */
 export interface WorkspaceDiffSnapshot {
   id: string;

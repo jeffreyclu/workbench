@@ -8,6 +8,7 @@ export const workspaceDiffQueryKeys = {
   detail: (scope: WorkspaceDiffScope) => ['workspace-diff', scopeKey(scope)] as const,
   snapshots: (scope: WorkspaceDiffScope) => ['workspace-diff-snapshots', scopeKey(scope)] as const,
   status: (scope: WorkspaceDiffScope, revision: string) => ['workspace-diff-status', scopeKey(scope), revision] as const,
+  fileSource: (scope: WorkspaceDiffScope, filePath: string, revision: string | null) => ['workspace-diff-file-source', scopeKey(scope), filePath, revision] as const,
   hunkReviews: (scope: WorkspaceDiffScope, revision: string | undefined) => ['workspace-diff-hunk-reviews', scopeKey(scope), revision] as const,
 };
 
@@ -15,6 +16,7 @@ export const workspaceDiffData = {
   get: (scope: WorkspaceDiffScope) => api.getWorkspaceDiff(scope),
   getSnapshots: (scope: WorkspaceDiffScope) => api.getWorkspaceDiffSnapshots(scope),
   getStatus: (scope: WorkspaceDiffScope, revision: string) => api.getWorkspaceDiffStatus(scope, revision),
+  getFileSource: (scope: WorkspaceDiffScope, filePath: string, revision: string | null) => api.getWorkspaceFileSource(scope, filePath, revision),
   getHunkReviews: (scope: WorkspaceDiffScope, revision: string) => api.getDiffHunkReviews(scope, revision),
   upsertHunkReview: (scope: WorkspaceDiffScope, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string }) => api.upsertDiffHunkReview(scope, input),
   upsertHunkReviews: (scope: WorkspaceDiffScope, input: UpsertDiffHunkReviewsInput) => api.upsertDiffHunkReviews(scope, input),

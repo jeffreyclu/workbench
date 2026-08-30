@@ -14,6 +14,8 @@ import { assistEscalationReason } from './review-escalation.js';
 import { buildReviewPlaceMap, type ReviewPlaceMap } from './review-places.js';
 import { placeMapAsChangeMap, placeRiskBand } from './review-map-overlays.js';
 import { highlightReviewPlace, highlightReviewRelationship, selectReviewBlock } from './review-selection.js';
+import { buildFileDiffHunks } from '../diff-review/logic.js';
+import { fileSourceRevision, toFullFileReading } from './review-full-file.js';
 
 function file(path: string, patch: string): WorkspaceDiffFile {
   return { path, status: 'modified', additions: 0, deletions: 0, previousPath: null, patch, isBinary: false, editorUrl: null };
@@ -696,5 +698,78 @@ describe('the claim a block makes', () => {
 
     const repeated = blockClaim({ changeType: 'refactor_pure', secondaryChangeTypes: ['refactor_pure', 'refactor_pure'] });
     expect(repeated.also).toHaveLength(0);
+  });
+});
+
+
+/** A rewritten body inside a file whose surrounding lines never changed —
+ * the case whole-file reading exists for. */
+const GREET_PATCH = [
+  '@@ -1,6 +1,7 @@ function greet(name) {',
+  ' const a = 1;',
+  ' const b = 2;',
+  ' function greet(name) {',
+  "-  return 'hi ' + name;",
+  '+  const trimmed = name.trim();',
+  '+  return `hi ${trimmed}`;',
+  ' }',
+  ' const c = 3;',
+].join('\n');
+
+const GREET_FILE = [
+  'const a = 1;',
+  'const b = 2;',
+  'function greet(name) {',
+  '  const trimmed = name.trim();',
+  '  return `hi ${trimmed}`;',
+  '}',
+  'const c = 3;',
+  'const d = 4;',
+  '',
+].join('\n');
+
+function greetHunks() {
+  return buildFileDiffHunks(file('src/greet.ts', GREET_PATCH));
+}
+
+describe('whole-file reading', () => {
+  it('reads a commit revision from a recorded diff and the working tree otherwise', () => {
+    expect(fileSourceRevision('commit:9f3768e')).toBe('9f3768e');
+    // A working-tree revision is a content hash, and no commit holds that text.
+    expect(fileSourceRevision('3b1f0a2c')).toBeNull();
+    expect(fileSourceRevision(null)).toBeNull();
+  });
+
+  it('keeps the unchanged surroundings and marks only the changed lines', () => {
+    const reading = toFullFileReading(GREET_FILE, greetHunks());
+    expect(reading.aligned).toBe(true);
+    const lines = reading.rows.filter((row) => row.type === 'line');
+    // The whole file, not the patch window: lines 7 and 8 are outside the hunk.
+    expect(lines).toHaveLength(8);
+    expect(lines.filter((row) => row.type === 'line' && row.changed).map((row) => row.lineNumber)).toEqual([4, 5]);
+    expect(lines.find((row) => row.type === 'line' && row.lineNumber === 8)).toMatchObject({ text: 'const d = 4;', changed: false });
+  });
+
+  it('marks where deleted lines used to be, above the line that replaced them', () => {
+    const rows = toFullFileReading(GREET_FILE, greetHunks()).rows;
+    const removedIndex = rows.findIndex((row) => row.type === 'removed');
+    expect(rows[removedIndex]).toMatchObject({ type: 'removed', lineNumber: 4 });
+    expect(rows[removedIndex + 1]).toMatchObject({ type: 'line', lineNumber: 4 });
+  });
+
+  it('offers each changed region as a jump target', () => {
+    const changes = toFullFileReading(GREET_FILE, greetHunks()).changes;
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ firstLine: 4, lastLine: 5, label: 'function greet(name) {' });
+  });
+
+  it('refuses to place changes in a file that has moved on since the diff', () => {
+    // The reviewer's file gained a line above the block, so every new-side
+    // number in the patch now points one line short. Marking anyway would
+    // call innocent code the change.
+    const stale = `const zero = 0;\n${GREET_FILE}`;
+    const reading = toFullFileReading(stale, greetHunks());
+    expect(reading.aligned).toBe(false);
+    expect(reading.rows).toEqual([]);
   });
 });

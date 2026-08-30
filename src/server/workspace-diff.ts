@@ -1,9 +1,10 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import type { WorkspaceDiff, WorkspaceDiffFile, WorkspacePublishResult, WorkspacePublishStatus } from '../shared/contracts.js';
+import type { WorkspaceDiff, WorkspaceDiffFile, WorkspaceFileSource, WorkspacePublishResult, WorkspacePublishStatus } from '../shared/contracts.js';
 import { patchLogicBoundaries } from './review-logic-primitives.js';
 
 const execFile = promisify(execFileCallback);
@@ -257,6 +258,45 @@ export async function getWorkspaceHeadCommit(workspacePath: string): Promise<str
   } catch {
     return null;
   }
+}
+
+/** How much of a file whole-file reading will carry. A pane that has to render
+ * a megabyte of source stops being a reading surface, and the patch window is
+ * still there — so an oversized file declines rather than degrading the pane. */
+const MAX_FILE_SOURCE_BYTES = 512 * 1024;
+
+/** The whole text of one file, so a block can be read in its real surroundings.
+ *
+ * A patch carries three lines of context: enough to see that code changed,
+ * not enough to judge a refactor whose meaning lives in the code around it.
+ * A `revision` reads that commit's copy; omitting it reads the working tree,
+ * because an uncommitted diff's after-state is the file on disk and no commit
+ * holds it yet.
+ *
+ * Unreadable is an ordinary answer rather than an error. A file can be
+ * deleted, binary, absent from the commit, or simply too large to read as one
+ * page; the caller gets a reason it can show and keeps the patch it already
+ * has. */
+export async function getWorkspaceFileSource(workspacePath: string, filePath: string, revision?: string | null): Promise<WorkspaceFileSource> {
+  const repository = resolveWorkspaceRepository(workspacePath);
+  const answer = (content: string | null, unavailable: string | null): WorkspaceFileSource =>
+    ({ path: filePath, revision: revision ?? null, content, unavailable });
+  // The path arrives from a URL, so it is checked as input rather than trusted
+  // because a diff produced it: no absolute path and no parent traversal.
+  if (!filePath || isAbsolute(filePath) || filePath.split('/').includes('..')) return answer(null, 'That path cannot be read.');
+
+  let text: string;
+  if (revision) {
+    try { text = (await git(repository, ['show', `${revision}:${filePath}`])).stdout; }
+    catch { return answer(null, 'This file is not in that revision.'); }
+  } else {
+    const absolute = resolve(repository, filePath);
+    if (!isWithinWorkspace(repository, absolute) || !existsSync(absolute)) return answer(null, 'This file is not in the working tree.');
+    text = await readFile(absolute, 'utf8');
+  }
+  if (text.includes('\0')) return answer(null, 'This file is binary.');
+  if (Buffer.byteLength(text, 'utf8') > MAX_FILE_SOURCE_BYTES) return answer(null, 'This file is too large to read whole.');
+  return answer(text, null);
 }
 
 function gitFailure(error: unknown) {

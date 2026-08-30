@@ -36,7 +36,7 @@ import { assessDiffBlocks, lookupDiffConfidenceBlocks } from '../diff-confidence
 import { lookupReviewAssist, requestReviewAssist } from '../review-assist-ai.js';
 import { ensureReviewAutoScore, reviewAutoScoreView } from '../review-auto-score.js';
 import { findStaleReferences } from '../stale-references.js';
-import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceHeadCommit } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
@@ -221,6 +221,18 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
       const revision = await getWorkspaceDiffRevision(workingDirectory);
       response.json({ changed: revision !== request.query.revision });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/api/work-items/:id/workspace-diff/file', async (request, response, next) => {
+    try {
+      const item = repository.get(request.params.id);
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      const workingDirectory = taskWorkingDirectory(item.id);
+      if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
+      const path = typeof request.query.path === 'string' ? request.query.path : '';
+      const revision = typeof request.query.revision === 'string' && request.query.revision ? request.query.revision : null;
+      response.json({ file: await getWorkspaceFileSource(workingDirectory, path, revision) });
     } catch (error) { next(error); }
   });
   router.post('/api/work-items/:id/workspace-diff/commit-and-push', async (request, response, next) => {

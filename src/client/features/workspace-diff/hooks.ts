@@ -67,3 +67,19 @@ export function useUpsertDiffHunkReview(scope: WorkspaceDiffScope, revision: str
     },
   });
 }
+
+/** One file read whole, fetched only while the reviewer is actually reading it
+ * that way. Keyed on path and revision, so switching blocks inside a file the
+ * reader already has costs nothing and a committed revision — which cannot
+ * change — stays cached. */
+export function useWorkspaceFileSource(scope: WorkspaceDiffScope | null, filePath: string | null, revision: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: workspaceDiffQueryKeys.fileSource(scope ?? { workItemId: '' }, filePath ?? '', revision),
+    queryFn: () => workspaceDiffData.getFileSource(scope!, filePath!, revision),
+    enabled: Boolean(scope) && Boolean(filePath) && enabled,
+    // A committed revision is immutable; the working tree is re-read whenever
+    // the reader comes back to it.
+    staleTime: revision ? Infinity : 0,
+    refetchOnWindowFocus: revision ? false : 'always',
+  });
+}
