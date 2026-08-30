@@ -116,7 +116,11 @@ export function hunkLocation(range: string): string {
   return count <= 1 ? `Line ${start}` : `Lines ${start}\u2013${start + count - 1}`;
 }
 
-function hunkContext(range: string): string | null {
+/** Git names the enclosing construct in the tail of a hunk header (`@@ ... @@ <decl>`).
+ *
+ * Exported because the final-state reading needs it too: a block shown as
+ * post-change code is a fragment, and this is the declaration it lives in. */
+export function hunkContext(range: string): string | null {
   const context = range.match(/^@@[^@]*@@\s*(.+)$/)?.[1]?.trim();
   return context ? context.slice(0, 160) : null;
 }

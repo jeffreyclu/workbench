@@ -283,4 +283,45 @@ describe('final-state reading mode', () => {
     expect(container.querySelector('.diff-line.final.removed')?.textContent).toContain('1 line removed');
     expect(screen.getByRole('button', { name: /final code/i })).toHaveAttribute('aria-pressed', 'true');
   });
+
+  it('names the enclosing construct when the block is only its inside', () => {
+    // A hunk deep inside a function carries three lines of context and no
+    // signature, which is the fragment problem the anchor exists to fix.
+    const inner = buildFileDiffHunks({
+      path: 'src/example.ts',
+      patch: ['@@ -40,3 +40,4 @@ function example()', '   const next = read();', '+  if (!next) return null;', '   return next;'].join('\n'),
+      isBinary: false,
+    });
+    const { container } = render(<DiffReviewFileDiffPane
+      filePath="src/example.ts"
+      editorUrl={null}
+      hunks={inner}
+      decisions={[{ ...decision(null), id: inner[0].decisionId, hunks: [{ id: inner[0].decisionId }] } as ReviewDecision]}
+      activeDecisionId={inner[0].decisionId}
+      readingMode="final"
+      onSelect={() => {}}
+      onToggleReadingMode={() => {}}
+    />);
+
+    const anchor = container.querySelector('.diff-line.final.anchor');
+    expect(anchor?.textContent).toContain('function example()');
+    // The anchor leads, so the fragment is read inside its construct.
+    expect(container.querySelector('.diff-line.final')).toBe(anchor);
+    // The block already opens with its construct, so that one is not doubled.
+    expect(render(<DiffReviewFileDiffPane
+      filePath="src/example.ts"
+      editorUrl={null}
+      hunks={hunks}
+      decisions={[decision(null)]}
+      activeDecisionId={hunks[0].decisionId}
+      readingMode="final"
+      onSelect={() => {}}
+      onToggleReadingMode={() => {}}
+    />).container.querySelector('.diff-line.final.anchor')).toBeNull();
+  });
+
+  it('never anchors in the unified diff, so Changes is unaffected', () => {
+    const { container } = renderPane(hunks[0].decisionId);
+    expect(container.querySelector('.anchor')).toBeNull();
+  });
 });

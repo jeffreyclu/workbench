@@ -324,7 +324,12 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
           {hunk.lines.length === 0
             ? <p className="muted">No text patch is available for this file.</p>
             : readingMode === 'final'
-              ? toFinalStateRows(hunk.lines).map((row) => row.type === 'removed'
+              ? toFinalStateRows(hunk.lines, hunk.enclosing).map((row) => row.type === 'anchor'
+                ? <div key={row.key} className="diff-line final anchor">
+                  <span aria-hidden="true">⋯</span>
+                  <span><SyntaxHighlight code={row.text} language={language} className="diff-line-code" /></span>
+                </div>
+                : row.type === 'removed'
                 ? <div key={row.key} className="diff-line final removed">
                   <span aria-hidden="true">−</span>
                   <span>{row.count} {row.count === 1 ? 'line' : 'lines'} removed</span>

@@ -16,7 +16,7 @@ export type { ExternalSurfaceEvidence } from '../../../shared/external-surface.j
 export { EMPTY_STALE_REFERENCE_REPORT } from '../../../shared/stale-reference-contract.js';
 export type { StaleReference, StaleReferenceReport } from '../../../shared/stale-reference-contract.js';
 export type { CoverageEvidence, ReferenceEvidence } from '../../../shared/coverage-evidence.js';
-import { countChangedLines, hunkLocation, splitPatchHunks } from '../../../shared/review-decisions.js';
+import { countChangedLines, hunkContext, hunkLocation, splitPatchHunks } from '../../../shared/review-decisions.js';
 import type { ReviewDecision, ReviewRiskSignal } from '../../../shared/review-decisions.js';
 
 
@@ -69,6 +69,9 @@ export interface ReviewDiffHunk {
   decisionId: string;
   range: string;
   location: string;
+  /** The construct git names in the hunk header, when it named one. A block is
+   * a fragment of a file; this is the declaration it sits inside. */
+  enclosing: string | null;
   additions: number;
   deletions: number;
   lines: ReviewDiffLine[];
@@ -104,7 +107,7 @@ export function buildFileDiffHunks(file: Pick<WorkspaceDiffFile, 'path' | 'patch
       return line;
     });
     const counts = countChangedLines(hunk.lines);
-    return { decisionId: `${file.path}::${hunk.range}`, range: hunk.range, location: hunkLocation(hunk.range), additions: counts.additions, deletions: counts.deletions, lines };
+    return { decisionId: `${file.path}::${hunk.range}`, range: hunk.range, location: hunkLocation(hunk.range), enclosing: hunkContext(hunk.range), additions: counts.additions, deletions: counts.deletions, lines };
   });
 }
 

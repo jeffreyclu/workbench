@@ -40,4 +40,38 @@ describe('toFinalStateRows', () => {
   it('returns nothing for an empty block', () => {
     expect(toFinalStateRows([])).toEqual([]);
   });
+
+  it('names the enclosing construct when the block only shows its inside', () => {
+    const rows = toFinalStateRows([
+      line('context', '   const next = read();', 40),
+      line('addition', '+  if (!next) return null;', 41),
+    ], 'export function routeReviewBlock(block: Block) {');
+    expect(rows[0]).toEqual({
+      type: 'anchor',
+      key: 'context-   const next = read();-anchor',
+      text: 'export function routeReviewBlock(block: Block) {',
+    });
+    expect(rows).toHaveLength(3);
+  });
+
+  it('does not repeat a construct the block already opens with', () => {
+    const rows = toFinalStateRows([
+      line('addition', '+export function routeReviewBlock(block: Block) {', 12),
+      line('addition', '+  return tier;', 13),
+    ], 'export function routeReviewBlock(bloc');
+    expect(rows.some((row) => row.type === 'anchor')).toBe(false);
+  });
+
+  it('anchors a block that only deletes, since the marker alone says nothing', () => {
+    const rows = toFinalStateRows([line('deletion', '-  legacy();', null)], 'function boot() {');
+    expect(rows).toEqual([
+      { type: 'anchor', key: 'deletion--  legacy();-removed-anchor', text: 'function boot() {' },
+      { type: 'removed', key: 'deletion--  legacy();-removed', count: 1 },
+    ]);
+  });
+
+  it('adds nothing when git named no construct', () => {
+    const lines = [line('addition', '+import x from "y";', 1)];
+    expect(toFinalStateRows(lines, null)).toEqual(toFinalStateRows(lines));
+  });
 });

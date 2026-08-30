@@ -417,6 +417,9 @@ nav { display: grid; gap: 3px; }
 .diff-line.final > span:last-child { padding-left: 8px; text-indent: 0; }
 .diff-line.final > span:first-child { color: #77766f; text-align: right; user-select: none; border-right: 1px solid #242421; }
 .diff-line.final.addition > span:first-child { color: #8fb59c; background: #1b3626; border-right-color: #1b3626; }
+.diff-line.final.anchor { background: #1c1c19; color: #8b8a82; border-bottom: 1px solid #242421; }
+.diff-line.final.anchor > span:first-child { color: #55544e; background: #201f1c; border-right-color: #242421; }
+.diff-line.final.anchor .diff-line-code { opacity: 0.72; }
 .diff-line.final.removed { background: #2d1f23; color: #c9a3a7; font: 10px 'DM Mono'; font-style: italic; }
 .diff-line.final.removed > span:first-child { color: #c9a3a7; background: #3b252b; border-right-color: #3b252b; }
 .diff-line-marker { padding-right: 2px; user-select: none; }
