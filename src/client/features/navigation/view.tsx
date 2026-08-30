@@ -38,6 +38,15 @@ export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: Memo
   useEffect(() => {
     if (open) inputRef.current?.focus();
   }, [open]);
+  useEffect(() => {
+    function handleGlobalKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key.toLowerCase() !== 'k' || !(event.metaKey || event.ctrlKey)) return;
+      event.preventDefault();
+      setOpen(true);
+    }
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
   function closeOverlay() {
     setQuery('');
     setOpen(false);
@@ -64,7 +73,7 @@ export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: Memo
       : Math.max(current === -1 ? selectableResults.length - 1 : current - 1, 0));
   }
   return <div className="global-search">
-    <button type="button" className="icon-button global-search-trigger" aria-label="Search everything" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
+    <button type="button" className="icon-button global-search-trigger" aria-label="Search everything" title="Search everything (⌘K)" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
       <Search size={15} />
     </button>
     {open && createPortal(
