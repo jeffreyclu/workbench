@@ -408,6 +408,24 @@ export const reviewAssistRequestSchema = z.object({
   tier: z.enum(REVIEW_ASSIST_TIERS).nullable().default(null),
 });
 
+/** One logic-block boundary the TypeScript compiler found inside a diff: the
+ * line a primitive starts on in the file as the patch leaves it.
+ *
+ * The wire shape is deliberately loose where the server is strict. `effect`
+ * and `hazards` are unions in the analysis module, but that module imports the
+ * TypeScript compiler and the client is a browser bundle, so the unions stay
+ * server side and the boundary crosses as plain strings. */
+export interface DiffLogicBoundary {
+  /** 1-based, in the file as the patch leaves it. */
+  line: number;
+  /** The construct as a reviewer would name it, taken from the syntax. */
+  label: string;
+  effect: string;
+  /** What this costs to get wrong. What the review queue ranks on. */
+  score: number;
+  hazards: string[];
+}
+
 /** A read-only snapshot of the uncommitted changes in a task's local workspace. */
 export interface WorkspaceDiffFile {
   path: string;
@@ -419,6 +437,10 @@ export interface WorkspaceDiffFile {
   previousPath: string | null;
   patch: string | null;
   isBinary: boolean;
+  /** Where the compiler says the thoughts in this patch begin. Absent when the
+   * file is binary, is not a language the parser speaks, or is too large to be
+   * worth parsing; the Review splitter falls back to its indentation heuristic. */
+  logicBlocks?: DiffLogicBoundary[];
 }
 
 export interface WorkspaceDiff {

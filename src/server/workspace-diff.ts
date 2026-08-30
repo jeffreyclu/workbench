@@ -4,6 +4,7 @@ import { existsSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { WorkspaceDiff, WorkspaceDiffFile, WorkspacePublishResult, WorkspacePublishStatus } from '../shared/contracts.js';
+import { patchLogicBoundaries } from './review-logic-primitives.js';
 
 const execFile = promisify(execFileCallback);
 // Workspace diffs in the Writer monorepo routinely exceed Node's 1 MiB
@@ -107,9 +108,20 @@ export function parseWorkspacePatch(patch: string, statuses = new Map<string, Ch
     const status = statuses.get(newPath) ?? statuses.get(oldPath) ?? (section.includes('new file mode') ? 'added' : section.includes('deleted file mode') ? 'removed' : 'modified');
     const path = status === 'removed' ? oldPath : newPath;
     const body = lines.join('\n');
-    const isBinary = /Binary files .* differ|GIT binary patch/.test(body);
+    // Anchored, because these markers are lines Git emits at body level - never
+    // inside a hunk, where every line carries a leading space, `+` or `-`. Left
+    // unanchored, any source file that merely mentions them (this one does, just
+    // above) was read as binary and had its patch dropped to null: no diff to
+    // read, and no boundaries for the Review splitter to cut on.
+    const isBinary = /^Binary files .* differ$|^GIT binary patch$/m.test(body);
     const counts = changedLines(body);
-    return { path, status, additions: counts.additions, deletions: counts.deletions, previousPath: status === 'renamed' ? oldPath : null, patch: isBinary ? null : `diff --git ${header}\n${body}`, isBinary };
+    const patchText = isBinary ? null : `diff --git ${header}\n${body}`;
+    // The boundaries travel with the file because the split happens in the
+    // browser, where the TypeScript compiler cannot go. Every diff source
+    // funnels through this parse, so attaching here covers the working tree,
+    // a recorded commit, and anything the repo selector gains later.
+    const logicBlocks = patchText ? patchLogicBoundaries(path, patchText) : [];
+    return { path, status, additions: counts.additions, deletions: counts.deletions, previousPath: status === 'renamed' ? oldPath : null, patch: patchText, isBinary, ...(logicBlocks.length > 0 ? { logicBlocks } : {}) };
   }).filter((file) => file.path);
 }
 

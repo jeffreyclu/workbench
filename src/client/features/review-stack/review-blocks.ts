@@ -11,8 +11,8 @@ import { splitHunkIntoLogicBlocks } from './logic-blocks.js';
  * silently orphan review state Jeffrey already recorded. Review keeps its own
  * splitter, its own ids and its own table, and shared derivation stays at hunk
  * granularity. */
-export function splitPatchBlocks(file: Pick<WorkspaceDiffFile, 'patch' | 'isBinary'>): PatchHunk[] {
-  return splitPatchHunks(file).flatMap(splitHunkIntoLogicBlocks);
+export function splitPatchBlocks(file: Pick<WorkspaceDiffFile, 'patch' | 'isBinary' | 'logicBlocks'>): PatchHunk[] {
+  return splitPatchHunks(file).flatMap((hunk) => splitHunkIntoLogicBlocks(hunk, file.logicBlocks));
 }
 
 /** FNV-1a. Not a security hash — it exists so a block's recorded verdict is

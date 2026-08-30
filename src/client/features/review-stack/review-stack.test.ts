@@ -3,6 +3,7 @@ import type { WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { buildChangeMap } from '../../../shared/change-map.js';
 import { buildReviewDecisions, splitPatchHunks } from '../../../shared/review-decisions.js';
 import { blockContentHash, indexReviewBlocks, splitPatchBlocks, toBlockLevelFiles } from './review-blocks.js';
+import { splitHunkIntoLogicBlocks } from './logic-blocks.js';
 import { blockObligations } from './review-obligations.js';
 import { isFormattingOnlyChange, isImportOnlyChange, routeReviewBlock } from './review-routing.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
@@ -380,5 +381,73 @@ describe('review selection', () => {
   it('drops map-local highlights when the queue moves to another block', () => {
     const moved = selectReviewBlock('src/b.ts::1');
     expect(moved).toEqual({ blockId: 'src/b.ts::1', nodeId: null, relationshipId: null });
+  });
+});
+
+describe('compiler-driven block boundaries', () => {
+  const lines = [
+    ' export function handle(request: Request) {',
+    '   const user = request.user;',
+    '+  if (!user) {',
+    '+    throw new Error("no user");',
+    '+  }',
+    '+  const rows = [];',
+    '+  for (const id of request.ids) {',
+    '+    rows.push(await load(id));',
+    '+  }',
+    '+  await db.write(rows);',
+    '+  logger.info("wrote", rows.length);',
+    '+  cache.delete(user.id);',
+    '+  metrics.count("handled");',
+    '+  const summary = rows.length;',
+    '+  return summary;',
+    '   return null;',
+    ' }',
+  ];
+  const hunk = { range: '@@ -10,4 +10,18 @@ export function handle(request: Request) {', lines };
+  // The shape `patchLogicBoundaries` produces for this patch, kept as data so
+  // the splitter is tested without dragging the TypeScript compiler into a
+  // browser-bundle module.
+  const boundaries = [
+    { line: 12, label: 'if (!user)', effect: 'guard', score: 9, hazards: [] },
+    { line: 15, label: 'const rows = [];', effect: 'literal', score: 0, hazards: [] },
+    { line: 16, label: 'for (... of request.ids)', effect: 'loop', score: 12, hazards: [] },
+    { line: 19, label: 'await db.write(rows);', effect: 'persistence', score: 10, hazards: [] },
+    { line: 22, label: 'metrics.count("handled");', effect: 'external_call', score: 4, hazards: [] },
+  ];
+
+  it('cuts a hunk the indentation heuristic leaves whole', () => {
+    expect(splitHunkIntoLogicBlocks(hunk)).toHaveLength(1);
+    expect(splitHunkIntoLogicBlocks(hunk, boundaries).length).toBeGreaterThan(1);
+  });
+
+  it('names each block from the syntax rather than the first line matching a pattern', () => {
+    const contexts = splitHunkIntoLogicBlocks(hunk, boundaries).slice(1).map((block) => block.range.split('@@')[2].trim());
+    expect(contexts).toContain('await db.write(rows);');
+  });
+
+  it('loses no line and keeps the header arithmetic exact', () => {
+    const blocks = splitHunkIntoLogicBlocks(hunk, boundaries);
+    expect(blocks.flatMap((block) => block.lines)).toEqual(lines);
+    let oldLine = 10;
+    let newLine = 10;
+    for (const block of blocks) {
+      const header = block.range.match(/^@@ -(\d+),(\d+) \+(\d+),(\d+) @@/);
+      expect(header).not.toBeNull();
+      expect(Number(header![1])).toBe(oldLine);
+      expect(Number(header![3])).toBe(newLine);
+      oldLine += Number(header![2]);
+      newLine += Number(header![4]);
+    }
+    expect(newLine - 10).toBe(lines.filter((line) => !line.startsWith('-')).length);
+  });
+
+  it('falls back to the heuristic when the parser had nothing to say about the file', () => {
+    expect(splitHunkIntoLogicBlocks(hunk, [])).toEqual(splitHunkIntoLogicBlocks(hunk));
+  });
+
+  it('leaves a hunk too small to be worth splitting alone, however it was analyzed', () => {
+    const small = { range: '@@ -1,1 +1,3 @@', lines: [' const a = 1;', '+const b = 2;', '+const c = 3;'] };
+    expect(splitHunkIntoLogicBlocks(small, [{ line: 2, label: 'const b = 2;', effect: 'literal', score: 0, hazards: [] }])).toEqual([small]);
   });
 });

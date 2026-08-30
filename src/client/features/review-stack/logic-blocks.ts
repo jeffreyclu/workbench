@@ -11,6 +11,8 @@
  * because a deletion's braces belong to the old file and an addition's to the
  * new one; requiring both to be balanced is what stops a cut landing inside a
  * body that only looks closed from one side. */
+import type { DiffLogicBoundary } from '../../../shared/contracts.js';
+
 export interface PatchHunk { range: string; lines: string[] }
 
 /** Below this a hunk is already one thought — cutting it would cost queue
@@ -89,11 +91,15 @@ function parseHunkHeader(range: string): HunkHeader | null {
  * behaviour derivation, so a block that opens on its own declaration names
  * itself instead of inheriting the enclosing function every sibling block also
  * claims. `@` is stripped because the slot terminates on it. */
+function sanitizeContext(text: string): string {
+  return text.replace(/@@/g, '@').replace(/[\r\n]+/g, ' ').slice(0, 120).trim();
+}
+
 function blockContext(lines: string[], fallback: string): string {
   for (const line of lines) {
     const code = lineCode(line).trim();
     if (!code || !CONSTRUCT_START.test(code)) continue;
-    const cleaned = code.replace(/@@/g, '@').replace(/[\r\n]+/g, ' ').slice(0, 120).trim();
+    const cleaned = sanitizeContext(code);
     if (cleaned) return cleaned;
   }
   return fallback;
@@ -112,27 +118,20 @@ function countSides(lines: string[]): { oldCount: number; newCount: number; chan
   return { oldCount, newCount, changed };
 }
 
-/**
- * Split one patch hunk into the logic blocks inside it.
+/** Where the indentation heuristic thinks a thought starts.
  *
- * Every block is emitted with a real, recomputed `@@` header covering its own
- * line range, so it is indistinguishable from a hunk to everything downstream:
- * ids stay `path::@@ …`, line numbers stay correct, and a hunk that is not
- * split keeps its original header byte-for-byte — which is what preserves the
- * review state already saved against it.
- */
-export function splitHunkIntoLogicBlocks(hunk: PatchHunk): PatchHunk[] {
-  const header = parseHunkHeader(hunk.range);
-  if (!header) return [hunk];
-  if (countSides(hunk.lines).changed <= MIN_CHANGED_LINES_TO_SPLIT) return [hunk];
-
+ * This is the fallback, not the default: it is what answers for a file the
+ * parser does not speak - a diff of Markdown, CSS, a lockfile, or anything
+ * whose patch was too large to parse - and for a hunk the compiler found no
+ * boundary inside. */
+function heuristicCuts(hunk: PatchHunk): number[] {
   const codes = hunk.lines.map(lineCode);
   const indents = codes.map(indentOf);
   const finiteIndents = indents.filter((indent) => Number.isFinite(indent));
-  if (finiteIndents.length === 0) return [hunk];
+  if (finiteIndents.length === 0) return [];
   const baseIndent = Math.min(...finiteIndents);
 
-  const boundaries: number[] = [];
+  const cuts: number[] = [];
   let newDepth = 0;
   let oldDepth = 0;
   let changedInBlock = 0;
@@ -145,7 +144,7 @@ export function splitHunkIntoLogicBlocks(hunk: PatchHunk): PatchHunk[] {
     const opensConstruct = atBaseIndent && CONSTRUCT_START.test(code.trim());
     const overrun = atBaseIndent && changedInBlock >= MAX_CHANGED_LINES_PER_BLOCK;
     if (sawContent && balanced && changedInBlock >= MIN_CHANGED_LINES_PER_BLOCK && (opensConstruct || overrun)) {
-      boundaries.push(index);
+      cuts.push(index);
       changedInBlock = 0;
       sawContent = false;
     }
@@ -154,31 +153,117 @@ export function splitHunkIntoLogicBlocks(hunk: PatchHunk): PatchHunk[] {
     if (kind !== 'context') changedInBlock += 1;
     if (code.trim()) sawContent = true;
   });
-  if (boundaries.length === 0) return [hunk];
+  return cuts;
+}
 
-  const segments: string[][] = [];
+/** Where the TypeScript compiler says a thought starts.
+ *
+ * The boundaries arrive as line numbers in the file as the patch leaves it, so
+ * this walks the hunk counting new-side lines and cuts where one lands on a
+ * primitive's first line. Bracket balance is not checked and does not need to
+ * be: a primitive start *is* a statement start, which is the property the
+ * heuristic was approximating with brace counting in the first place.
+ *
+ * A deletion occupies no line in the after file, so it can never open a block -
+ * the line it is attributed to is the one that now sits there, and that line
+ * carries the boundary itself. */
+function compilerCuts(hunk: PatchHunk, header: HunkHeader, boundaries: readonly DiffLogicBoundary[]): {
+  cuts: number[];
+  labels: Map<number, string>;
+} {
+  const starts = new Map<number, string>();
+  for (const boundary of boundaries) starts.set(boundary.line, boundary.label);
+
+  const cuts: number[] = [];
+  const labels = new Map<number, string>();
+  let newLine = header.newStart;
+  let changedInBlock = 0;
+  let sawContent = false;
+  hunk.lines.forEach((line, index) => {
+    const kind = lineKind(line);
+    const label = kind === 'deletion' ? undefined : starts.get(newLine);
+    if (index > 0 && sawContent && changedInBlock >= MIN_CHANGED_LINES_PER_BLOCK && label !== undefined) {
+      cuts.push(index);
+      labels.set(index, label);
+      changedInBlock = 0;
+      sawContent = false;
+    }
+    if (kind !== 'deletion') newLine += 1;
+    if (kind !== 'context') changedInBlock += 1;
+    if (lineCode(line).trim()) sawContent = true;
+  });
+  return { cuts, labels };
+}
+
+/** Turn cut points into blocks with real, recomputed `@@` headers.
+ *
+ * Both oracles end here, so a block is emitted identically however it was
+ * found: same ids, same line arithmetic, same fold of trailing context. That
+ * is what lets the boundary source change underneath the Review surface
+ * without moving the addresses its recorded verdicts are keyed on. */
+function assemble(
+  hunk: PatchHunk,
+  header: HunkHeader,
+  cuts: number[],
+  contextFor: (startIndex: number, lines: string[]) => string,
+): PatchHunk[] {
+  if (cuts.length === 0) return [hunk];
+
+  const segments: { lines: string[]; startIndex: number }[] = [];
   let start = 0;
-  for (const boundary of [...boundaries, hunk.lines.length]) {
-    segments.push(hunk.lines.slice(start, boundary));
-    start = boundary;
+  for (const cut of [...cuts, hunk.lines.length]) {
+    segments.push({ lines: hunk.lines.slice(start, cut), startIndex: start });
+    start = cut;
   }
   // A segment with nothing changed in it is trailing context, not a decision:
   // it is folded back into the block whose change it explains.
-  const merged: string[][] = [];
+  const merged: { lines: string[]; startIndex: number }[] = [];
   for (const segment of segments) {
-    if (merged.length > 0 && countSides(segment).changed === 0) merged[merged.length - 1].push(...segment);
+    if (merged.length > 0 && countSides(segment.lines).changed === 0) merged[merged.length - 1].lines.push(...segment.lines);
     else merged.push(segment);
   }
   if (merged.length < 2) return [hunk];
 
   let oldLine = header.oldStart;
   let newLine = header.newStart;
-  return merged.map((lines, index) => {
-    const { oldCount, newCount } = countSides(lines);
-    const context = index === 0 ? header.context : blockContext(lines, header.context);
+  return merged.map((segment, index) => {
+    const { oldCount, newCount } = countSides(segment.lines);
+    const context = index === 0 ? header.context : contextFor(segment.startIndex, segment.lines);
     const range = `@@ -${oldLine},${oldCount} +${newLine},${newCount} @@${context ? ` ${context}` : ''}`;
     oldLine += oldCount;
     newLine += newCount;
-    return { range, lines };
+    return { range, lines: segment.lines };
   });
+}
+
+/**
+ * Split one patch hunk into the logic blocks inside it.
+ *
+ * `boundaries` are what the TypeScript compiler found in this file's changed
+ * regions, computed on the server because the parser cannot ship to a browser
+ * bundle. When they are present they decide the cuts and name the blocks; the
+ * indentation heuristic answers only for the files and hunks they cannot cover,
+ * so a parseable file is never cut by a pattern match again.
+ *
+ * Every block is emitted with a real, recomputed `@@` header covering its own
+ * line range, so it is indistinguishable from a hunk to everything downstream:
+ * ids stay `path::@@ ...`, line numbers stay correct, and a hunk that is not
+ * split keeps its original header byte-for-byte - which is what preserves the
+ * review state already saved against it.
+ */
+export function splitHunkIntoLogicBlocks(hunk: PatchHunk, boundaries?: readonly DiffLogicBoundary[]): PatchHunk[] {
+  const header = parseHunkHeader(hunk.range);
+  if (!header) return [hunk];
+  if (countSides(hunk.lines).changed <= MIN_CHANGED_LINES_TO_SPLIT) return [hunk];
+
+  if (boundaries && boundaries.length > 0) {
+    const { cuts, labels } = compilerCuts(hunk, header, boundaries);
+    const blocks = assemble(hunk, header, cuts, (startIndex, lines) => {
+      const label = sanitizeContext(labels.get(startIndex) ?? '');
+      return label || blockContext(lines, header.context);
+    });
+    if (blocks.length > 1) return blocks;
+  }
+
+  return assemble(hunk, header, heuristicCuts(hunk), (_startIndex, lines) => blockContext(lines, header.context));
 }

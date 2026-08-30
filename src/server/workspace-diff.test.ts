@@ -126,3 +126,42 @@ describe('workspace diff parsing', () => {
     expect(execFileSync('git', ['rev-list', '--count', '@{upstream}..HEAD'], { cwd: workspace, encoding: 'utf8' }).trim()).toBe('0');
   });
 });
+
+describe('binary detection', () => {
+  it('keeps the patch of a text file whose own contents name the binary markers', () => {
+    const patch = [
+      'diff --git a/src/server/workspace-diff.ts b/src/server/workspace-diff.ts',
+      'index 111..222 100644',
+      '--- a/src/server/workspace-diff.ts',
+      '+++ b/src/server/workspace-diff.ts',
+      '@@ -100,3 +100,4 @@',
+      '     const isBinary = /Binary files .* differ|GIT binary patch/.test(body);',
+      '+    const logicBlocks = patchLogicBoundaries(path, body);',
+      '     const counts = changedLines(body);',
+    ].join('\n');
+    const [file] = parseWorkspacePatch(patch);
+    expect(file.isBinary).toBe(false);
+    expect(file.patch).not.toBeNull();
+  });
+
+  it('still reads a real binary patch as binary', () => {
+    const patch = [
+      'diff --git a/logo.png b/logo.png',
+      'index 111..222 100644',
+      'GIT binary patch',
+      'literal 120',
+    ].join('\n');
+    const [file] = parseWorkspacePatch(patch);
+    expect(file.isBinary).toBe(true);
+    expect(file.patch).toBeNull();
+  });
+
+  it('still reads a non-binary-flag binary diff as binary', () => {
+    const patch = [
+      'diff --git a/logo.png b/logo.png',
+      'index 111..222 100644',
+      'Binary files a/logo.png and b/logo.png differ',
+    ].join('\n');
+    expect(parseWorkspacePatch(patch)[0].isBinary).toBe(true);
+  });
+});
