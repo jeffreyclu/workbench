@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ClipboardCheck, ExternalLink, FileDiff, GitPullRequest, History, RefreshCw, X } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ModalDialog } from '../../components/dialogs/modal-dialog.js';
@@ -26,6 +26,9 @@ import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
 import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
 import { workspaceDiffQueryKeys } from './data.js';
 import { readWorkspaceDiffSelection, writeWorkspaceDiffDecision, writeWorkspaceDiffSource } from '../../lib/preferences.js';
+import { adjacentFileDecisionId, adjacentPendingDecisionId, useWorkspaceDiffKeyboardNavigation } from './use-keyboard-navigation.js';
+
+const STOPPING_POINT_LOC = 400;
 
 /** The parts of a diff this review surface reads, whichever source produced
  * it. A local workspace diff satisfies it directly; a pull request is adapted
@@ -45,6 +48,12 @@ function DiffSkeleton() {
   </section>;
 }
 
+/**
+ * b13bf425-4047-4b22-b7c3-85317d6819fe LEGACY-AFFECTING: Changes now exposes
+ * the same large-diff stopping cue and linear keyboard review flow as Review.
+ * The new controls delegate to Changes' existing selection and hunk-review
+ * mutation so its source handling, persistence, and auto-advance stay intact.
+ */
 export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, reviewHandoff, taskIntent = null, pullRequestUrlCandidates }: {
   scope: WorkspaceDiffScope;
   isRunning?: boolean;
@@ -216,6 +225,8 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   });
   const selectedDecision = orderedDecisions.find((decision) => decision.id === selectedDecisionId) ?? orderedDecisions[0] ?? null;
   const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
+  const changedLoc = useMemo(() => displayedDiff?.files.reduce((total, file) => total + file.additions + file.deletions, 0) ?? 0, [displayedDiff?.files]);
+  const changedFilePaths = useMemo(() => displayedDiff?.files.map((file) => file.path) ?? [], [displayedDiff?.files]);
   // The same AI score the detail panel shows, reduced to a band for the gutter
   // dot, so severity is readable straight off the diff instead of only after
   // opening each decision.
@@ -256,13 +267,13 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     if (displayedDiff?.revision && selectedDecisionId) writeWorkspaceDiffDecision(preferenceScope, displayedDiff.revision, selectedDecisionId);
   }, [displayedDiff?.revision, preferenceScope, selectedDecisionId]);
 
-  const recordDecisionState = (decision: ReviewDecision, state: DiffHunkReviewState) =>
+  const recordDecisionState = useCallback((decision: ReviewDecision, state: DiffHunkReviewState) =>
     upsertHunkReview.mutateAsync({
       hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, hunkRange: hunk.hunkRange })),
       state,
-    });
+    }), [upsertHunkReview]);
 
-  const saveDecision = async (decision: ReviewDecision, state: DiffHunkReviewState) => {
+  const saveDecision = useCallback(async (decision: ReviewDecision, state: DiffHunkReviewState) => {
     const nextId = nextPendingDecisionId(orderedDecisions, decision.id, changeMap);
     try {
       await recordDecisionState(decision, state);
@@ -272,13 +283,13 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     } catch {
       // The mutation exposes its stable request error beside the actions.
     }
-  };
+  }, [changeMap, orderedDecisions, recordDecisionState]);
 
   const openDecisionDetail = (decisionId: string, anchor: DecisionPopoverAnchor, anchorAttribute = 'data-decision-marker') => {
     setDetailAnchor((current) => (current?.decisionId === decisionId ? null : { decisionId, anchor, anchorAttribute }));
   };
 
-  const selectDecision = (decisionId: string) => {
+  const selectDecision = useCallback((decisionId: string) => {
     if (selectedDecisionId && selectedDecisionId !== decisionId) setCameFromDecisionId(selectedDecisionId);
     setSelectedDecisionId(decisionId);
     // Selecting elsewhere closes an open popover, but the marker selects its own
@@ -286,7 +297,38 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     // otherwise the marker would clear and immediately reopen, never toggling.
     setDetailAnchor((current) => (current && current.decisionId === decisionId ? current : null));
     setSelectionTick((tick) => tick + 1);
-  };
+  }, [selectedDecisionId]);
+
+  const selectPreviousDecision = useCallback(() => {
+    const id = adjacentPendingDecisionId(orderedDecisions, selectedDecision?.id ?? null, -1);
+    if (id) selectDecision(id);
+  }, [orderedDecisions, selectDecision, selectedDecision?.id]);
+  const selectNextDecision = useCallback(() => {
+    const id = adjacentPendingDecisionId(orderedDecisions, selectedDecision?.id ?? null, 1);
+    if (id) selectDecision(id);
+  }, [orderedDecisions, selectDecision, selectedDecision?.id]);
+  const selectPreviousFile = useCallback(() => {
+    const id = adjacentFileDecisionId(orderedDecisions, changedFilePaths, selectedFile?.path ?? null, -1);
+    if (id) selectDecision(id);
+  }, [changedFilePaths, orderedDecisions, selectDecision, selectedFile?.path]);
+  const selectNextFile = useCallback(() => {
+    const id = adjacentFileDecisionId(orderedDecisions, changedFilePaths, selectedFile?.path ?? null, 1);
+    if (id) selectDecision(id);
+  }, [changedFilePaths, orderedDecisions, selectDecision, selectedFile?.path]);
+  const markSelectedReviewed = useCallback(() => {
+    if (selectedDecision) void saveDecision(selectedDecision, 'reviewed');
+  }, [saveDecision, selectedDecision]);
+  // b13bf425-4047-4b22-b7c3-85317d6819fe LEGACY-AFFECTING: Shortcuts call
+  // the same selection and verdict paths as the existing Changes controls.
+  useWorkspaceDiffKeyboardNavigation({
+    decisions: orderedDecisions,
+    filePaths: changedFilePaths,
+    activeId: selectedDecision?.id ?? null,
+    activeFilePath: selectedFile?.path ?? null,
+    canMarkReviewed: Boolean(selectedDecision && reviewRevision && !upsertHunkReview.isPending),
+    onSelect: selectDecision,
+    onMarkReviewed: markSelectedReviewed,
+  });
 
   // Switching source resets the queue: decision ids belong to one diff.
   const selectSource = (value: string) => {
@@ -371,6 +413,9 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
         <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={refreshSource} disabled={isRefreshing}><RefreshCw size={13} className={isRefreshing ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>
       </div>
     </header>
+    {changedLoc > STOPPING_POINT_LOC && <aside className="review-stopping-point" role="note" aria-label="Suggested stopping point">
+      <strong>{changedLoc} changed lines.</strong> This is a good stopping point: save your decisions and continue with a fresh pass.
+    </aside>}
     {isHandoffOpen && <ModalDialog className="review-handoff-dialog" labelledBy="review-handoff-dialog-title" onClose={() => setIsHandoffOpen(false)}>
       <header className="review-handoff-dialog-header">
         <div className="review-handoff-dialog-icon"><ClipboardCheck size={20} /></div>
@@ -392,6 +437,13 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                 {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
                 {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
                 {selectedDecision && <>
+                  <nav className="review-flow-controls" aria-label="Changes keyboard shortcuts">
+                    <button type="button" onClick={selectPreviousDecision} aria-keyshortcuts="k">Previous flagged <kbd>k</kbd></button>
+                    <button type="button" onClick={selectNextDecision} aria-keyshortcuts="j">Next flagged <kbd>j</kbd></button>
+                    <button type="button" onClick={selectPreviousFile} aria-keyshortcuts="[">Previous file <kbd>[</kbd></button>
+                    <button type="button" onClick={selectNextFile} aria-keyshortcuts="]">Next file <kbd>]</kbd></button>
+                    <span>Mark reviewed <kbd>r</kbd></span>
+                  </nav>
                   <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} commentCounts={isPullRequestSource ? commentCounts : undefined} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">

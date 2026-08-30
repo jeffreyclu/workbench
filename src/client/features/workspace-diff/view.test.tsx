@@ -49,6 +49,76 @@ afterEach(() => {
 });
 
 describe('WorkspaceDiffView decision queue', () => {
+  it('suggests a stopping point only after more than 400 changed lines', async () => {
+    const renderAtSize = (additions: number) => {
+      const file: WorkspaceDiffFile = {
+        path: 'src/large-change.ts', previousPath: null, status: 'modified', additions, deletions: 0, isBinary: false,
+        patch: '@@ -1 +1 @@ largeChange\n-before\n+after',
+      };
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+        if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+        if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], `large-${additions}`) });
+        if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+        throw new Error(`Unexpected request: ${url}`);
+      });
+      renderView(fetchMock);
+    };
+
+    renderAtSize(400);
+    await screen.findByRole('navigation', { name: 'Review decision queue' });
+    expect(screen.queryByRole('note', { name: 'Suggested stopping point' })).not.toBeInTheDocument();
+    cleanup();
+
+    renderAtSize(401);
+    expect(await screen.findByRole('note', { name: 'Suggested stopping point' })).toHaveTextContent('401 changed lines');
+  });
+
+  it('moves through pending blocks and changed files, then marks the active block reviewed', async () => {
+    const files: WorkspaceDiffFile[] = [
+      {
+        path: 'src/first.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
+        patch: '@@ -1 +1 @@ firstChange\n-before\n+after\n@@ -10 +10 @@ secondChange\n-old\n+new',
+      },
+      {
+        path: 'src/second.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false,
+        patch: '@@ -1 +1 @@ thirdChange\n-before\n+after',
+      },
+    ];
+    const writes: Array<{ state: string; hunks: Array<{ filePath: string }> }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff(files, 'keyboard-flow') });
+      if (url.endsWith('/workspace-diff/hunk-reviews/batch') && init?.method === 'PUT') {
+        writes.push(JSON.parse(String(init.body)) as { state: string; hunks: Array<{ filePath: string }> });
+        return json({ reviews: [] });
+      }
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    await screen.findByRole('navigation', { name: 'Changes keyboard shortcuts' });
+    const selectedName = () => selectedDecisionChip().getAttribute('aria-label');
+    expect(selectedName()).toMatch(/^Decision 1/);
+
+    fireEvent.keyDown(document, { key: 'j' });
+    await waitFor(() => expect(selectedName()).toMatch(/^Decision 2/));
+    fireEvent.keyDown(document, { key: 'k' });
+    await waitFor(() => expect(selectedName()).toMatch(/^Decision 1/));
+    fireEvent.keyDown(document, { key: ']' });
+    await waitFor(() => expect(selectedName()).toMatch(/^Decision 3/));
+    fireEvent.keyDown(document, { key: '[' });
+    await waitFor(() => expect(selectedName()).toMatch(/^Decision 1/));
+
+    fireEvent.keyDown(document, { key: 'r' });
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toMatchObject({ state: 'reviewed', hunks: [{ filePath: 'src/first.ts' }] });
+  });
+
   it('does not add phone-only decision navigation or a modal', async () => {
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     const file: WorkspaceDiffFile = {
