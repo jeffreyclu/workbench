@@ -1,6 +1,6 @@
 import type { WorkspaceDiffFile } from '../../../shared/contracts.js';
-import { splitPatchHunks, type PatchHunk } from '../../../shared/review-decisions.js';
-import { splitHunkIntoLogicBlocks } from './logic-blocks.js';
+import { splitPatchHunks } from '../../../shared/review-decisions.js';
+import { splitHunkIntoLogicBlocks, type BlockAnalysis, type LogicBlock } from './logic-blocks.js';
 
 /** The reviewable blocks of a file: its hunks, each cut into the individual
  * logic blocks inside it.
@@ -11,7 +11,7 @@ import { splitHunkIntoLogicBlocks } from './logic-blocks.js';
  * silently orphan review state Jeffrey already recorded. Review keeps its own
  * splitter, its own ids and its own table, and shared derivation stays at hunk
  * granularity. */
-export function splitPatchBlocks(file: Pick<WorkspaceDiffFile, 'patch' | 'isBinary' | 'logicBlocks'>): PatchHunk[] {
+export function splitPatchBlocks(file: Pick<WorkspaceDiffFile, 'patch' | 'isBinary' | 'logicBlocks'>): LogicBlock[] {
   return splitPatchHunks(file).flatMap((hunk) => splitHunkIntoLogicBlocks(hunk, file.logicBlocks));
 }
 
@@ -40,6 +40,11 @@ export interface ReviewBlockIdentity {
   range: string;
   contentHash: string;
   storageKey: string;
+  /** What the compiler read inside this block, or null when it could not read
+   * the file. This is how priority reaches the queue: the identity index is
+   * already built per block from the same split the blocks came from, so the
+   * reading travels on the address instead of on a second parallel map. */
+  analysis: BlockAnalysis | null;
 }
 
 export function reviewBlockStorageKey(filePath: string, range: string, contentHash: string): string {
@@ -75,6 +80,7 @@ export function indexReviewBlocks(files: WorkspaceDiffFile[]): Map<string, Revie
       index.set(decisionId, {
         decisionId, filePath: file.path, range: block.range, contentHash,
         storageKey: reviewBlockStorageKey(file.path, block.range, contentHash),
+        analysis: block.analysis,
       });
     }
   }

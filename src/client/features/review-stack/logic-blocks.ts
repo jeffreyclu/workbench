@@ -15,6 +15,26 @@ import type { DiffLogicBoundary } from '../../../shared/contracts.js';
 
 export interface PatchHunk { range: string; lines: string[] }
 
+/** What the TypeScript compiler read inside one block. Effects and hazards are
+ * plain strings here for the same reason they are on the wire: the module that
+ * names them imports the compiler and cannot ship to a browser bundle. */
+export interface BlockAnalysis {
+  /** The effect of the costliest primitive in the block. */
+  effect: string;
+  /** What the block costs to get wrong. What the Review queue ranks on. */
+  score: number;
+  /** Every hazard found anywhere in the block, deduplicated and sorted. */
+  hazards: string[];
+}
+
+/** A block, plus the compiler's reading of it. `analysis` is null whenever no
+ * boundary lands inside: an unparseable file, a language the parser does not
+ * speak, or a block that only deletes. That is the ordinary case and it ranks
+ * exactly as the queue did before the parser existed. */
+export interface LogicBlock extends PatchHunk {
+  analysis: BlockAnalysis | null;
+}
+
 /** Below this a hunk is already one thought — cutting it would cost queue
  * positions without separating anything. */
 const MIN_CHANGED_LINES_TO_SPLIT = 12;
@@ -251,7 +271,7 @@ function assemble(
  * split keeps its original header byte-for-byte - which is what preserves the
  * review state already saved against it.
  */
-export function splitHunkIntoLogicBlocks(hunk: PatchHunk, boundaries?: readonly DiffLogicBoundary[]): PatchHunk[] {
+function cutHunk(hunk: PatchHunk, boundaries?: readonly DiffLogicBoundary[]): PatchHunk[] {
   const header = parseHunkHeader(hunk.range);
   if (!header) return [hunk];
   if (countSides(hunk.lines).changed <= MIN_CHANGED_LINES_TO_SPLIT) return [hunk];
@@ -266,4 +286,34 @@ export function splitHunkIntoLogicBlocks(hunk: PatchHunk, boundaries?: readonly 
   }
 
   return assemble(hunk, header, heuristicCuts(hunk), (_startIndex, lines) => blockContext(lines, header.context));
+}
+
+/** Give each emitted block the compiler's reading of the lines inside it.
+ *
+ * Attribution is by line span, not by which boundary opened the cut, for two
+ * reasons: a block holds more than the primitive that starts it, and a hunk the
+ * heuristic cut still deserves whatever the parser found inside those lines.
+ *
+ * Score is the max and not the sum — a block is as dangerous as the worst
+ * thing in it, and summing would float one long block above two genuinely
+ * separate risks. Hazards are unioned, because each is a different question. */
+function attachAnalysis(blocks: PatchHunk[], boundaries: readonly DiffLogicBoundary[] | undefined): LogicBlock[] {
+  if (!boundaries || boundaries.length === 0) return blocks.map((block) => ({ ...block, analysis: null }));
+  return blocks.map((block) => {
+    const header = parseHunkHeader(block.range);
+    if (!header) return { ...block, analysis: null };
+    const end = header.newStart + countSides(block.lines).newCount;
+    const inside = boundaries.filter((boundary) => boundary.line >= header.newStart && boundary.line < end);
+    if (inside.length === 0) return { ...block, analysis: null };
+    const worst = inside.reduce((left, right) => (right.score > left.score ? right : left));
+    const hazards = [...new Set(inside.flatMap((boundary) => boundary.hazards))].sort();
+    return { ...block, analysis: { effect: worst.effect, score: worst.score, hazards } };
+  });
+}
+
+/** Split one patch hunk into its logic blocks, each carrying what the compiler
+ * read inside it. Cutting and reading are separate passes so that a block found
+ * by the heuristic is analysed exactly like one found by the parser. */
+export function splitHunkIntoLogicBlocks(hunk: PatchHunk, boundaries?: readonly DiffLogicBoundary[]): LogicBlock[] {
+  return attachAnalysis(cutHunk(hunk, boundaries), boundaries);
 }

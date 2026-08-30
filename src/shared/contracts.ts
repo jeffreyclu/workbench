@@ -426,6 +426,43 @@ export interface DiffLogicBoundary {
   hazards: string[];
 }
 
+/** The hazard vocabulary, and what each hazard costs to get wrong.
+ *
+ * It lives here rather than beside the analysis that finds them because both
+ * sides need it: the server weighs a primitive's score with it, and the Review
+ * queue routes and explains a block with it. The analysis module imports the
+ * TypeScript compiler and so cannot ship to a browser bundle — a copy on the
+ * client would be a second vocabulary drifting from the one doing the finding. */
+export const LOGIC_HAZARD_WEIGHT = {
+  guard_removed: 12,
+  error_swallowed: 10,
+  await_in_loop: 7,
+  condition_inverted: 7,
+  boundary_moved: 5,
+  loop_bound_changed: 5,
+  return_path_added: 3,
+} as const;
+
+export type LogicHazardName = keyof typeof LOGIC_HAZARD_WEIGHT;
+
+/** Said in the reviewer's words, because this is what the queue shows as the
+ * reason a block was routed where it was. */
+export const LOGIC_HAZARD_REASONS: Record<LogicHazardName, string> = {
+  guard_removed: 'A guard that used to reject input is gone.',
+  error_swallowed: 'A failure is caught and not reported.',
+  await_in_loop: 'Each iteration waits for the last — this is sequential I/O.',
+  condition_inverted: 'A condition changed sense, so the paths swapped.',
+  boundary_moved: 'A comparison boundary moved, so the edge case changed.',
+  loop_bound_changed: 'The iteration bound changed.',
+  return_path_added: 'A new way out of the function.',
+};
+
+/** Hazards cross the wire as plain strings, so the client narrows before it
+ * weighs one. An unknown name is a server newer than this bundle, not a bug. */
+export function isLogicHazard(name: string): name is LogicHazardName {
+  return Object.prototype.hasOwnProperty.call(LOGIC_HAZARD_WEIGHT, name);
+}
+
 /** A read-only snapshot of the uncommitted changes in a task's local workspace. */
 export interface WorkspaceDiffFile {
   path: string;

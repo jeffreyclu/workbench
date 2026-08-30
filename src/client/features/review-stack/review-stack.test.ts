@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkspaceDiffFile } from '../../../shared/contracts.js';
+import { LOGIC_HAZARD_REASONS, type WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { buildChangeMap } from '../../../shared/change-map.js';
 import { buildReviewDecisions, splitPatchHunks } from '../../../shared/review-decisions.js';
 import { blockContentHash, indexReviewBlocks, splitPatchBlocks, toBlockLevelFiles } from './review-blocks.js';
 import { splitHunkIntoLogicBlocks } from './logic-blocks.js';
 import { blockObligations } from './review-obligations.js';
-import { isFormattingOnlyChange, isImportOnlyChange, routeReviewBlock } from './review-routing.js';
+import { gravestHazard, isFormattingOnlyChange, isImportOnlyChange, routeReviewBlock } from './review-routing.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
 import { assistEscalationReason } from './review-escalation.js';
 import { buildReviewPlaceMap, type ReviewPlaceMap } from './review-places.js';
@@ -448,6 +448,88 @@ describe('compiler-driven block boundaries', () => {
 
   it('leaves a hunk too small to be worth splitting alone, however it was analyzed', () => {
     const small = { range: '@@ -1,1 +1,3 @@', lines: [' const a = 1;', '+const b = 2;', '+const c = 3;'] };
-    expect(splitHunkIntoLogicBlocks(small, [{ line: 2, label: 'const b = 2;', effect: 'literal', score: 0, hazards: [] }])).toEqual([small]);
+    const blocks = splitHunkIntoLogicBlocks(small, [{ line: 2, label: 'const b = 2;', effect: 'literal', score: 0, hazards: [] }]);
+    expect(blocks.map(({ range, lines }) => ({ range, lines }))).toEqual([small]);
+  });
+
+  it('reads each block by the lines inside it rather than by the file it came from', () => {
+    const blocks = splitHunkIntoLogicBlocks(hunk, boundaries);
+    const persistence = blocks.find((block) => block.range.includes('await db.write'));
+    expect(persistence?.analysis?.effect).toBe('persistence');
+    // If attribution were file-wide every block would carry the same number,
+    // and ranking on it would be ranking on which file a block is in.
+    expect(new Set(blocks.map((block) => block.analysis?.score ?? null)).size).toBeGreaterThan(1);
+  });
+
+  it('unions the hazards inside a block and keeps the worst primitive as its score', () => {
+    const small = { range: '@@ -1,1 +1,3 @@', lines: [' const a = 1;', '+const b = 2;', '+const c = 3;'] };
+    const [block] = splitHunkIntoLogicBlocks(small, [
+      { line: 2, label: 'const b = 2;', effect: 'literal', score: 3, hazards: ['return_path_added'] },
+      { line: 3, label: 'const c = 3;', effect: 'guard', score: 21, hazards: ['guard_removed', 'return_path_added'] },
+    ]);
+    expect(block.analysis).toEqual({ effect: 'guard', score: 21, hazards: ['guard_removed', 'return_path_added'] });
+  });
+
+  it('says nothing about a block no boundary lands in', () => {
+    expect(splitHunkIntoLogicBlocks(hunk)[0].analysis).toBeNull();
+  });
+});
+
+describe('spending on what the compiler found', () => {
+  const decisionFor = (subject: WorkspaceDiffFile) => buildReviewDecisions([subject], [])[0];
+  const CLAMP_PATCH = (name: string) => [
+    `@@ -12,3 +12,5 @@ export function ${name}(items) {`,
+    ` export function ${name}(items) {`,
+    '-  return items.length;',
+    '+  if (items.length > 10) {',
+    '+    return 10;',
+    '+  }',
+    ' }',
+  ].join('\n');
+  const clamped = (path: string, name: string, score: number, hazards: string[]): WorkspaceDiffFile => ({
+    ...file(path, CLAMP_PATCH(name)),
+    logicBlocks: [{ line: 13, label: `if (items.length > 10)`, effect: 'branch', score, hazards }],
+  });
+
+  it('weighs the gravest hazard on a block and ignores a name it does not know', () => {
+    expect(gravestHazard(['return_path_added', 'guard_removed', 'boundary_moved'])).toBe('guard_removed');
+    expect(gravestHazard(['time_travel'])).toBeNull();
+    expect(gravestHazard([])).toBeNull();
+  });
+
+  it('buys reading time for a grave hazard and only a delegated turn for a light one', () => {
+    const decision = decisionFor(file('src/render.ts', CLAMP_PATCH('render')));
+    const grave = routeReviewBlock(decision, blockObligations(decision), { effect: 'guard', score: 21, hazards: ['guard_removed'] });
+    expect(grave.tier).toBe('T3');
+    expect(grave.reason).toBe(LOGIC_HAZARD_REASONS.guard_removed);
+    const light = routeReviewBlock(decision, blockObligations(decision), { effect: 'return_value', score: 7, hazards: ['return_path_added'] });
+    expect(light.tier).toBe('T2');
+    expect(light.autoSettled).toBe(false);
+  });
+
+  it('keeps trusting a proof that the code did not change over a hazard reported on it', () => {
+    const decision = decisionFor(file('src/app.ts', [
+      '@@ -1,2 +1,3 @@',
+      ' import { a } from "./a.js";',
+      '+import { b } from "./b.js";',
+      ' export const x = 1;',
+    ].join('\n')));
+    expect(routeReviewBlock(decision, blockObligations(decision), { effect: 'guard', score: 21, hazards: ['guard_removed'] }).tier).toBe('T0');
+  });
+
+  it('routes exactly as it did before the parser existed when nothing was found', () => {
+    const decision = decisionFor(file('src/render.ts', CLAMP_PATCH('render')));
+    expect(routeReviewBlock(decision, blockObligations(decision), { effect: 'branch', score: 40, hazards: [] }))
+      .toEqual(routeReviewBlock(decision, blockObligations(decision)));
+  });
+
+  it('puts the costlier block first inside one tier, and says why', () => {
+    const files = [clamped('src/cheap.ts', 'cheap', 7, ['boundary_moved']), clamped('src/costly.ts', 'costly', 20, ['boundary_moved'])];
+    const decisions = buildReviewDecisions(toBlockLevelFiles(files), []);
+    const queue = buildReviewQueue(decisions, buildChangeMap(decisions), indexReviewBlocks(files));
+    expect(queue.map((entry) => entry.decision.filePaths[0])).toEqual(['src/costly.ts', 'src/cheap.ts']);
+    expect(queue[0].analysis).toEqual({ effect: 'branch', score: 20, hazards: ['boundary_moved'] });
+    expect(queue[0].routing.tier).toBe('T2');
+    expect(queue[0].routing.reason).toBe(LOGIC_HAZARD_REASONS.boundary_moved);
   });
 });

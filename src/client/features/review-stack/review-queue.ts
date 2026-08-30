@@ -5,6 +5,7 @@ import { blockRelationships, relationshipEscalation, warrantsRelationshipMap, ty
 import { assistAnswersEscalationReason } from './review-escalation.js';
 import { escalateRouting, escalateRoutingToStudy, routeReviewBlock, tierRank, type ReviewRouting, type ReviewTier } from './review-routing.js';
 import type { ReviewBlockIdentity } from './review-blocks.js';
+import type { BlockAnalysis } from './logic-blocks.js';
 
 export interface ReviewQueueEntry {
   decision: ReviewDecision;
@@ -25,15 +26,34 @@ export interface ReviewQueueEntry {
   relationships: ReviewRelationships;
   /** Whether this block has earned the relationship map's cost. */
   showsMap: boolean;
+  /** The compiler's reading of every block this entry covers, merged. Null
+   * when none of them could be parsed. */
+  analysis: BlockAnalysis | null;
+}
+
+/** An entry can cover several blocks, so its analysis is the worst of them: a
+ * queue position is earned by the most dangerous thing standing at it, and the
+ * hazards of all of them, because each is a separate question to answer. */
+function mergeAnalysis(identities: ReviewBlockIdentity[]): BlockAnalysis | null {
+  const found = identities.flatMap((identity) => (identity.analysis ? [identity.analysis] : []));
+  if (found.length === 0) return null;
+  const worst = found.reduce((left, right) => (right.score > left.score ? right : left));
+  return {
+    effect: worst.effect,
+    score: worst.score,
+    hazards: [...new Set(found.flatMap((analysis) => analysis.hazards))].sort(),
+  };
 }
 
 /** Ranked by attention deserved, not by file order.
  *
  * Already-judged blocks sink, then auto-settled ones, so what is left at the
  * top is only what is still owed an answer. Within that, tier decides —
- * routing has already priced each block — and relationship degree breaks ties,
- * because a change other changes hang off is the one worth understanding
- * first. Source ordinal keeps every remaining tie stable across renders. */
+ * routing has already priced each block — and then the compiler's own score,
+ * which is what a block costs to get wrong measured from the syntax rather than
+ * from the router's rules. Relationship degree breaks what is left, because a
+ * change other changes hang off is the one worth understanding first, and
+ * source ordinal keeps every remaining tie stable across renders. */
 function compareEntries(left: ReviewQueueEntry, right: ReviewQueueEntry): number {
   const judged = Number(left.decision.state !== null) - Number(right.decision.state !== null);
   if (judged !== 0) return judged;
@@ -41,6 +61,8 @@ function compareEntries(left: ReviewQueueEntry, right: ReviewQueueEntry): number
   if (settled !== 0) return settled;
   const tier = tierRank(right.routing.tier) - tierRank(left.routing.tier);
   if (tier !== 0) return tier;
+  const score = (right.analysis?.score ?? 0) - (left.analysis?.score ?? 0);
+  if (score !== 0) return score;
   const degree = right.relationships.degree - left.relationships.degree;
   if (degree !== 0) return degree;
   return left.decision.ordinal - right.decision.ordinal;
@@ -58,7 +80,9 @@ export function buildReviewQueue(
   const entries = decisions.map((decision): ReviewQueueEntry => {
     const obligations = blockObligations(decision);
     const relationships = blockRelationships(map, decision.id);
-    let routing = routeReviewBlock(decision, obligations);
+    const identities = decision.hunks.flatMap((hunk) => { const identity = blocks.get(hunk.id); return identity ? [identity] : []; });
+    const analysis = mergeAnalysis(identities);
+    let routing = routeReviewBlock(decision, obligations, analysis);
     const assistTier = routing.tier;
     // Discovering broader impact is the one thing routing cannot see from the
     // patch alone, so it is applied after the neighbourhood is known.
@@ -70,10 +94,9 @@ export function buildReviewQueue(
     const unconfident = routing.autoSettled ? null : assistAnswersEscalationReason(assistAnswers.get(decision.id) ?? []);
     if (unconfident) routing = escalateRoutingToStudy(routing, unconfident);
     return {
-      decision,
-      identities: decision.hunks.flatMap((hunk) => { const identity = blocks.get(hunk.id); return identity ? [identity] : []; }),
-      routing, assistTier, obligations, relationships,
+      decision, identities, routing, assistTier, obligations, relationships,
       showsMap: warrantsRelationshipMap(routing, relationships),
+      analysis,
     };
   });
   return entries.sort(compareEntries);

@@ -1,4 +1,6 @@
+import { LOGIC_HAZARD_REASONS, LOGIC_HAZARD_WEIGHT, isLogicHazard, type LogicHazardName } from '../../../shared/contracts.js';
 import type { ReviewDecision } from '../../../shared/review-decisions.js';
+import type { BlockAnalysis } from './logic-blocks.js';
 import { heaviestObligation, type ReviewObligation } from './review-obligations.js';
 
 /** The attention a block is routed to.
@@ -20,6 +22,23 @@ export interface ReviewRouting {
   reason: string;
   /** T0 only: settled by proof, collapsed out of the way, still reachable. */
   autoSettled: boolean;
+}
+
+/** At or above this weight, a hazard is not a note to leave on a settled
+ * block: it is the reason to read it. Below it the block still leaves T0 — a
+ * hazard is never nothing — but a bounded delegated read answers it. */
+const HAZARD_STUDY_WEIGHT = 7;
+
+/** The costliest hazard the compiler put on a block, or null when it found
+ * none. Unknown names are skipped rather than trusted: a hazard this bundle
+ * does not know is a newer server, and weighing it would be a guess. */
+export function gravestHazard(hazards: readonly string[]): LogicHazardName | null {
+  let worst: LogicHazardName | null = null;
+  for (const hazard of hazards) {
+    if (!isLogicHazard(hazard)) continue;
+    if (worst === null || LOGIC_HAZARD_WEIGHT[hazard] > LOGIC_HAZARD_WEIGHT[worst]) worst = hazard;
+  }
+  return worst;
 }
 
 /** Bigger than this is not one thought regardless of what it touches. */
@@ -76,12 +95,30 @@ export function isGeneratedOutput(decision: Pick<ReviewDecision, 'filePaths'>): 
 
 /** Route a block to the attention it deserves, deterministically. No model is
  * consulted here: routing decides whether a model is consulted at all. */
-export function routeReviewBlock(decision: ReviewDecision, obligations: ReviewObligation[]): ReviewRouting {
+export function routeReviewBlock(
+  decision: ReviewDecision,
+  obligations: ReviewObligation[],
+  /** What the compiler read inside the block. Null whenever the file could not
+   * be parsed, which is the ordinary case and routes exactly as before. */
+  analysis: BlockAnalysis | null = null,
+): ReviewRouting {
   if (isGeneratedOutput(decision)) return { tier: 'T0', reason: 'Generated output — review its source, not this.', autoSettled: true };
   if (isFormattingOnlyChange(decision)) return { tier: 'T0', reason: 'Whitespace only — the code is byte-identical.', autoSettled: true };
   if (isImportOnlyChange(decision)) return { tier: 'T0', reason: 'Imports only — the compiler proves this one.', autoSettled: true };
   if (decision.changeType === 'move_rename' && isPureRelocation(decision)) {
     return { tier: 'T0', reason: 'Moved unchanged — every line survives on both sides.', autoSettled: true };
+  }
+
+  // Above every heuristic below, and below every proof above. The four rules
+  // already passed are proofs that the code did not change; a hazard is a proof
+  // read off the AST that it did, so it outranks obligations guessed from text.
+  const hazard = gravestHazard(analysis?.hazards ?? []);
+  if (hazard) {
+    return {
+      tier: LOGIC_HAZARD_WEIGHT[hazard] >= HAZARD_STUDY_WEIGHT ? 'T3' : 'T2',
+      reason: LOGIC_HAZARD_REASONS[hazard],
+      autoSettled: false,
+    };
   }
 
   const heaviest = heaviestObligation(obligations);

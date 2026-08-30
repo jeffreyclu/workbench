@@ -1,5 +1,5 @@
 import ts from 'typescript';
-import type { DiffLogicBoundary } from '../shared/contracts.js';
+import { LOGIC_HAZARD_REASONS, LOGIC_HAZARD_WEIGHT, type DiffLogicBoundary, type LogicHazardName } from '../shared/contracts.js';
 
 /** Why the TypeScript compiler and not a pattern set.
  *
@@ -61,35 +61,14 @@ const EFFECT_WEIGHT: Record<LogicEffect, number> = {
 };
 
 /** A structural fact that makes a block more dangerous than its effect alone.
- * Each is read off the AST, never off text. */
-export type LogicHazard =
-  | 'guard_removed'
-  | 'error_swallowed'
-  | 'await_in_loop'
-  | 'condition_inverted'
-  | 'boundary_moved'
-  | 'loop_bound_changed'
-  | 'return_path_added';
+ * Each is read off the AST, never off text. The names and their weights are
+ * declared in the shared contract because the Review queue routes on them too;
+ * this module is the only thing that can *find* them. */
+export type LogicHazard = LogicHazardName;
 
-const HAZARD_WEIGHT: Record<LogicHazard, number> = {
-  guard_removed: 12,
-  error_swallowed: 10,
-  await_in_loop: 7,
-  condition_inverted: 7,
-  boundary_moved: 5,
-  loop_bound_changed: 5,
-  return_path_added: 3,
-};
+const HAZARD_WEIGHT: Record<LogicHazard, number> = LOGIC_HAZARD_WEIGHT;
 
-export const HAZARD_REASONS: Record<LogicHazard, string> = {
-  guard_removed: 'A guard that used to reject input is gone.',
-  error_swallowed: 'A failure is caught and not reported.',
-  await_in_loop: 'Each iteration waits for the last — this is sequential I/O.',
-  condition_inverted: 'A condition changed sense, so the paths swapped.',
-  boundary_moved: 'A comparison boundary moved, so the edge case changed.',
-  loop_bound_changed: 'The iteration bound changed.',
-  return_path_added: 'A new way out of the function.',
-};
+export const HAZARD_REASONS: Record<LogicHazard, string> = LOGIC_HAZARD_REASONS;
 
 export interface LogicPrimitive {
   /** 1-based, in the file as the patch leaves it. */
