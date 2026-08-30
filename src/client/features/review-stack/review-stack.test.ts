@@ -7,6 +7,9 @@ import { blockObligations } from './review-obligations.js';
 import { isFormattingOnlyChange, isImportOnlyChange, routeReviewBlock } from './review-routing.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
 import { assistEscalationReason } from './review-escalation.js';
+import { buildReviewPlaceMap, type ReviewPlaceMap } from './review-places.js';
+import { placeMapAsChangeMap, placeRiskBand } from './review-map-overlays.js';
+import { highlightReviewPlace, highlightReviewRelationship, selectReviewBlock } from './review-selection.js';
 
 function file(path: string, patch: string): WorkspaceDiffFile {
   return { path, status: 'modified', additions: 0, deletions: 0, previousPath: null, patch, isBinary: false, editorUrl: null };
@@ -245,5 +248,137 @@ describe('escalation from a delegated answer', () => {
 
     expect(unchanged.routing.tier).toBe(before.routing.tier);
     expect(unchanged.routing.reason).toBe(before.routing.reason);
+  });
+});
+
+/** A producer, a consumer that imports it, and an import of a module the patch
+ * never touches — the smallest diff that has surroundings at all. */
+const PRODUCER_PATCH = [
+  '@@ -1,2 +1,7 @@',
+  " import { helper } from './unchanged.js';",
+  ' ',
+  '+export function parseBody(raw) {',
+  '+  if (!raw) return null;',
+  '+  return helper(raw);',
+  '+}',
+  '+',
+].join('\n');
+
+const CONSUMER_PATCH = [
+  '@@ -1,2 +1,7 @@',
+  " import { parseBody } from './a.js';",
+  ' ',
+  '+export function handle(request) {',
+  '+  const body = parseBody(request.body);',
+  '+  return { ok: body !== null, body };',
+  '+}',
+  '+',
+].join('\n');
+
+function placeFixture() {
+  const files = [file('src/a.ts', PRODUCER_PATCH), file('src/b.ts', CONSUMER_PATCH)];
+  const blockFiles = toBlockLevelFiles(files);
+  const blocks = indexReviewBlocks(files);
+  const decisions = buildReviewDecisions(blockFiles, []);
+  const map = buildChangeMap(decisions);
+  const queue = buildReviewQueue(decisions, map, blocks);
+  return { files, map, queue, decisions };
+}
+
+describe('review place map', () => {
+  it('places the open block and draws the modules it imports but does not change', () => {
+    const { files, map, queue } = placeFixture();
+    const focus = queue.find((entry) => entry.decision.filePaths.includes('src/a.ts'));
+    expect(focus).toBeDefined();
+
+    const placeMap = buildReviewPlaceMap(map, queue, files, focus!.decision.id);
+
+    expect(placeMap.focusPlaceId).toBe('src/a');
+    const own = placeMap.places.find((place) => place.id === 'src/a');
+    expect(own?.changed).toBe(true);
+    expect(own?.blockIds).toContain(focus!.decision.id);
+
+    // The module was never in the diff, so nothing in the change graph could
+    // have produced it: it exists because the patch's own import line says so.
+    const surrounding = placeMap.places.find((place) => place.id === 'src/unchanged');
+    expect(surrounding?.changed).toBe(false);
+    expect(surrounding?.blockIds).toEqual([]);
+    expect(placeMap.links.some((link) => link.fromId === 'src/a' && link.toId === 'src/unchanged')).toBe(true);
+  });
+
+  it('is empty for a block that is not in the queue', () => {
+    const { files, map, queue } = placeFixture();
+    expect(buildReviewPlaceMap(map, queue, files, 'src/nowhere.ts::@@ -1 +1 @@').places).toEqual([]);
+  });
+
+  it('never draws a place twice for the same module', () => {
+    const { files, map, queue } = placeFixture();
+    const focus = queue[0];
+    const placeMap = buildReviewPlaceMap(map, queue, files, focus.decision.id);
+    expect(new Set(placeMap.places.map((place) => place.id)).size).toBe(placeMap.places.length);
+  });
+});
+
+describe('review map overlays', () => {
+  const placeMap: ReviewPlaceMap = {
+    focusPlaceId: 'src/a',
+    omitted: 0,
+    links: [],
+    places: [
+      {
+        id: 'src/a', path: 'src/a.ts', label: 'a.ts', changed: true, blockIds: ['src/a.ts::1'],
+        additions: 4, deletions: 0, symbols: [{ name: 'parseBody', kind: 'value', change: 'added' }],
+        riskSignals: ['auth'], tier: 'T3', state: 'accepted', answers: 2,
+      },
+      {
+        id: 'src/unchanged', path: 'src/unchanged.ts', label: 'unchanged.ts', changed: false, blockIds: [],
+        additions: 0, deletions: 0, symbols: [], riskSignals: [], tier: null, state: null, answers: 0,
+      },
+    ],
+  };
+
+  it('reads risk, priority, verdict and spend off the same drawing', () => {
+    const on = placeMapAsChangeMap(placeMap, { risk: true, priority: true, state: true, spend: true });
+    expect(on.riskBands.get('src/a')).toBe('high');
+    expect(on.map.nodes[0].label).toBe('T3 · a.ts');
+    expect(on.map.nodes[0].state).toBe('accepted');
+    expect(on.map.nodes[0].symbols[0].name).toBe('2 answers');
+  });
+
+  it('drops every reading when the overlays are off, and keeps the places', () => {
+    const off = placeMapAsChangeMap(placeMap, { risk: false, priority: false, state: false, spend: false });
+    expect(off.riskBands.size).toBe(0);
+    expect(off.map.nodes[0].label).toBe('a.ts');
+    expect(off.map.nodes[0].state).toBeNull();
+    expect(off.map.nodes[0].symbols.map((symbol) => symbol.name)).toEqual(['parseBody']);
+    expect(off.map.nodes.map((node) => node.id)).toEqual(['src/a', 'src/unchanged']);
+  });
+
+  it('bands a place with only weaker signals below one that touches auth or data', () => {
+    expect(placeRiskBand(['auth'])).toBe('high');
+    expect(placeRiskBand(['persistence'])).toBe('high');
+    expect(placeRiskBand(['cross_file'])).toBe('medium');
+    expect(placeRiskBand([])).toBeNull();
+  });
+});
+
+describe('review selection', () => {
+  it('lets the map highlight without ever moving the block', () => {
+    const selection = selectReviewBlock('src/a.ts::1');
+    const place = highlightReviewPlace(selection, 'src/unchanged');
+    expect(place).toEqual({ blockId: 'src/a.ts::1', nodeId: 'src/unchanged', relationshipId: null });
+
+    const edge = highlightReviewRelationship(place, 'src/a->src/unchanged:imports:added');
+    expect(edge.blockId).toBe('src/a.ts::1');
+    expect(edge.relationshipId).toBe('src/a->src/unchanged:imports:added');
+
+    // Clicking the highlighted place again clears the highlight rather than
+    // re-selecting, so the drawing returns to following the queue.
+    expect(highlightReviewPlace(edge, 'src/unchanged').nodeId).toBeNull();
+  });
+
+  it('drops map-local highlights when the queue moves to another block', () => {
+    const moved = selectReviewBlock('src/b.ts::1');
+    expect(moved).toEqual({ blockId: 'src/b.ts::1', nodeId: null, relationshipId: null });
   });
 });

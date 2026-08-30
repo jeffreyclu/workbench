@@ -7,7 +7,6 @@ import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import type { ReviewAssistTaskIntent } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
 import { useCachedReviewAssistAnswers } from '../diff-review/review-assist.js';
-import { DecisionRelationshipDiagram } from '../diff-review/decision-relationship-diagram.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { buildFileDiffHunks } from '../diff-review/logic.js';
@@ -16,6 +15,10 @@ import { indexReviewBlocks, toBlockLevelFiles } from './review-blocks.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
 import { ReviewQueueList } from './review-queue-list.js';
 import { REVIEW_TIER_LABELS } from './review-routing.js';
+import { DEFAULT_REVIEW_MAP_OVERLAYS, type ReviewMapOverlays } from './review-map-overlays.js';
+import { ReviewPlaceMapPanel } from './review-place-map.js';
+import { buildReviewPlaceMap } from './review-places.js';
+import { highlightReviewPlace, highlightReviewRelationship, selectReviewBlock, type ReviewSelection } from './review-selection.js';
 import { useBlockAssistAnswers } from './use-block-assist.js';
 import { useDiffBlockReviews, useUpsertDiffBlockReview } from './use-block-reviews.js';
 import { useReviewSource } from './use-review-source.js';
@@ -63,18 +66,22 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   const queue = useMemo(() => buildReviewQueue(decisions, changeMap, blocks, assist.answers), [decisions, changeMap, blocks, assist.answers]);
   const progress = useMemo(() => reviewQueueProgress(queue), [queue]);
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // One selection, with one writer per field: the queue writes the block, the
+  // map writes only what is highlighted inside itself.
+  const [selection, setSelection] = useState<ReviewSelection | null>(null);
+  const [overlays, setOverlays] = useState<ReviewMapOverlays>(DEFAULT_REVIEW_MAP_OVERLAYS);
   const [selectionTick, setSelectionTick] = useState(0);
+  const selectedId = selection?.blockId ?? null;
   useEffect(() => {
     // Open on the top of the queue, and recover when the diff changes under a
     // selection that no longer exists.
     if (queue.length === 0) return;
     if (selectedId && queue.some((entry) => entry.decision.id === selectedId)) return;
-    setSelectedId(queue.find((entry) => !entry.routing.autoSettled)?.decision.id ?? queue[0].decision.id);
+    setSelection(selectReviewBlock(queue.find((entry) => !entry.routing.autoSettled)?.decision.id ?? queue[0].decision.id));
   }, [queue, selectedId]);
 
   const selectBlock = (decisionId: string) => {
-    setSelectedId(decisionId);
+    setSelection(selectReviewBlock(decisionId));
     setSelectionTick((tick) => tick + 1);
     if (revision) writeReviewStackBlock(source.preferenceScope, revision, decisionId);
   };
@@ -83,6 +90,13 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   const activeFilePath = active?.decision.hunks[0]?.filePath ?? null;
   const activeFile = blockFiles.find((file) => file.path === activeFilePath) ?? null;
   const fileHunks = useMemo(() => activeFile ? buildFileDiffHunks(activeFile) : [], [activeFile]);
+
+  // Only an escalated block pays for the map. Everything below — the
+  // neighbourhood walk, the import scan, the layout — is skipped entirely for a
+  // block routing already settled, which is most of the queue.
+  const placeMap = useMemo(() => active?.showsMap && selectedId
+    ? buildReviewPlaceMap(changeMap, queue, files, selectedId, assist.answers)
+    : null, [active?.showsMap, selectedId, changeMap, queue, files, assist.answers]);
 
   // Cache-only, and keyed to the tier routing first priced the block at rather
   // than the tier it currently shows: an escalated block still reads back the
@@ -144,7 +158,14 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
 
           {/* The map is a camera for the critical parts, not a dashboard: it is
               drawn only for a block that earned it. */}
-          {active.showsMap && <DecisionRelationshipDiagram map={changeMap} decisionId={active.decision.id} onSelect={selectBlock} />}
+          {placeMap && selection && <ReviewPlaceMapPanel
+            placeMap={placeMap}
+            overlays={overlays}
+            selection={selection}
+            onToggleOverlay={(overlay) => setOverlays((current) => ({ ...current, [overlay]: !current[overlay] }))}
+            onHighlightPlace={(placeId) => setSelection((current) => (current ? highlightReviewPlace(current, placeId) : current))}
+            onHighlightRelationship={(relationshipId) => setSelection((current) => (current ? highlightReviewRelationship(current, relationshipId) : current))}
+          />}
 
           {activeFile && <DiffReviewFileDiffPane
             filePath={activeFile.path}
