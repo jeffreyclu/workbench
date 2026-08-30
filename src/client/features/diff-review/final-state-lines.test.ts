@@ -15,7 +15,11 @@ describe('toFinalStateRows', () => {
       line('addition', '+  return 2;', 2),
       line('context', ' }', 3),
     ]);
-    expect(rows.map((row) => row.type === 'line' ? row.line.text : `removed:${row.count}`))
+    expect(rows.map((row) => {
+      if (row.type === 'line') return row.line.text;
+      if (row.type === 'removed') return `removed:${row.count}`;
+      return `anchor:${row.text}`;
+    }))
       .toEqual([' function f() {', 'removed:1', '+  return 2;', ' }']);
   });
 
