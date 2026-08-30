@@ -328,7 +328,7 @@ describe('review map overlays', () => {
       {
         id: 'src/a', path: 'src/a.ts', label: 'a.ts', changed: true, blockIds: ['src/a.ts::1'],
         additions: 4, deletions: 0, symbols: [{ name: 'parseBody', kind: 'value', change: 'added' }],
-        riskSignals: ['auth'], tier: 'T3', state: 'accepted', answers: 2,
+        riskSignals: ['auth'], tier: 'T3', state: 'reviewed', answers: 2,
       },
       {
         id: 'src/unchanged', path: 'src/unchanged.ts', label: 'unchanged.ts', changed: false, blockIds: [],
@@ -341,7 +341,7 @@ describe('review map overlays', () => {
     const on = placeMapAsChangeMap(placeMap, { risk: true, priority: true, state: true, spend: true });
     expect(on.riskBands.get('src/a')).toBe('high');
     expect(on.map.nodes[0].label).toBe('T3 · a.ts');
-    expect(on.map.nodes[0].state).toBe('accepted');
+    expect(on.map.nodes[0].state).toBe('reviewed');
     expect(on.map.nodes[0].symbols[0].name).toBe('2 answers');
   });
 
