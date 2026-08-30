@@ -238,15 +238,20 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       query: z.string().trim().min(2).max(1_000).describe('A focused semantic query describing the decision, implementation, failure, constraint, preference, or related work to recall.'),
       scope: z.enum(['auto', 'conversation', 'task', 'project', 'all']).default('auto').describe('auto prefers project-wide history when a project can be inferred, then conversation/task context, then all memory. Choose all for genuinely cross-project recall.'),
       conversationId: z.string().uuid().optional().describe('Current conversation handle from the task prompt. Required for conversation scope.'),
+      messageId: z.string().uuid().optional().describe('Current assistant reply handle from the task prompt. Pass this for a conversation reply so Workbench can show the query and results in that bubble\'s RAG badge.'),
       workItemId: z.string().uuid().optional().describe('Current work-item handle from the task prompt. Required for task scope and usable to infer project scope.'),
       projectName: z.string().trim().min(1).max(200).optional().describe('Current project name from the task prompt. Required for project scope unless workItemId or a linked conversation supplies it.'),
       sources: z.array(memorySourceSchema).min(1).max(9).optional().describe('Optional source restriction. Omit for the normal durable corpus; include audit only when operational mutation history specifically matters.'),
       limit: z.number().int().min(1).max(20).default(8),
     },
     annotations: readOnlyAnnotations,
-  }, async ({ query, scope, conversationId, workItemId, projectName, sources, limit }) => runTool('recall_context', async () => {
+  }, async ({ query, scope, conversationId, messageId, workItemId, projectName, sources, limit }) => runTool('recall_context', async () => {
     const conversation = conversationId ? repository.getConversation(conversationId) : null;
     if (conversationId && !conversation) throw new ToolFailure('NOT_FOUND', 'Conversation not found.');
+    const message = messageId ? repository.getSharedMessageById(messageId) : null;
+    if (messageId && !message) throw new ToolFailure('NOT_FOUND', 'Conversation message not found.');
+    if (message && conversationId && message.conversationId !== conversationId) throw new ToolFailure('INVALID_ARGUMENT', 'messageId does not belong to conversationId.');
+    if (message && message.author !== 'codex' && message.author !== 'claude') throw new ToolFailure('INVALID_ARGUMENT', 'messageId must identify an assistant reply.');
     const explicitItem = workItemId ? requireWorkItem(repository, workItemId) : null;
     const linkedItem = !explicitItem && conversation?.workItemId ? repository.get(conversation.workItemId) : null;
     const contextualItem = explicitItem ?? linkedItem;
@@ -275,6 +280,12 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       seen.add(key);
       return true;
     }).slice(0, limit);
+    if (message) {
+      repository.updateSharedMessage(message.id, {
+        retrievedMemoryCount: results.length,
+        retrievedMemoryDetail: { query, items: results.map(({ source, title, body, createdAt }) => ({ source, title, body, createdAt })) },
+      });
+    }
     return {
       query,
       scopeApplied: appliedScope,

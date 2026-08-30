@@ -335,6 +335,7 @@ export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', e
 Task: ${compactPromptSection(item.title, 300)}
 Work item ID: ${item.id}
 Conversation ID: ${run.conversationId ?? 'none'}
+Current reply message ID: ${run.messageId ?? 'none'}
 Source: ${item.sourceIdentifier ?? item.source}
 Project: ${item.projectName ?? 'none'}
 Status: ${item.status}
@@ -375,6 +376,7 @@ export function buildResumedPrompt(item: WorkItem, run: AgentRun, externalAction
 Task: ${compactPromptSection(item.title, 300)}
 Work item ID: ${item.id}
 Conversation ID: ${run.conversationId ?? 'none'}
+Current reply message ID: ${run.messageId ?? 'none'}
 Status: ${item.status}
 Current strategy:
 ${compactPromptSection(item.strategy || 'No strategy yet.', 1_500)}

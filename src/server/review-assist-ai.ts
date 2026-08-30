@@ -51,10 +51,13 @@ const CHANGES_AGENT_SYSTEM_PROMPT = [
   'Follow the instruction at the top of the message exactly. No preamble, no markdown headings, no restating the diff back verbatim.',
 ].join(' ');
 
-/** Bumped whenever the system prompt or an action directive changes what a good
- * answer looks like. It is part of the cache key, so a corrected rubric
- * recomputes stale answers once instead of serving the old judgement forever. */
-const ASSIST_PROMPT_VERSION = 6;
+/** Bumped whenever the system prompt, an action directive, or the spend behind
+ * a tier changes what a good answer looks like. It is part of the cache key, so
+ * a corrected rubric recomputes stale answers once instead of serving the old
+ * judgement forever. Bumped to 7 when the tiers started buying different
+ * models: every T2 and T3 answer already cached was produced by the cheap turn
+ * and would otherwise keep being served with the deep tier's authority. */
+const ASSIST_PROMPT_VERSION = 7;
 
 // Answer length is the dominant latency term once the session is primed:
 // measured on this machine a warm turn spends ~0.9s on session overhead and the
@@ -124,6 +127,36 @@ const TIER_DIRECTIVES: Record<ReviewAssistTier, string> = {
   T2: 'Depth: read. A human reads this block after you. Say what they would otherwise have to work out for themselves, and skip what the diff already makes plain.',
   T3: 'Depth: study. This one is costly to get wrong. Work through what it changes, what depends on it, and what would have to be true for it to be safe — and name which of those you could not check.',
 };
+
+/** What each tier actually costs. The directives above only ask the model to
+ * look harder; until this existed every one of them was answered by the same
+ * haiku/low turn, so 'study this one' and 'skim this one' differed in wording
+ * alone while the cache filed them under separate keys — precisely the two
+ * entries, one answer trade the comment above warns against.
+ *
+ * T0 and T1 hold the pool's own configuration, because they are the
+ * interactive path and must keep landing on a warm session. Only T2 and T3,
+ * which routing hands out sparingly, pay for a cold one.
+ *
+ * The timeout climbs with the tier because it has to: thinking for longer is
+ * the thing a deep tier is buying, and leaving all four at the skim's 30s would
+ * have converted every study into a timeout instead of a better answer. */
+type AssistSpend = { model: string; effort: string; timeoutMs: number };
+
+const DEFAULT_SPEND: AssistSpend = { model: 'haiku', effort: 'low', timeoutMs: 30_000 };
+
+const TIER_SPEND: Record<ReviewAssistTier, AssistSpend> = {
+  T0: DEFAULT_SPEND,
+  T1: DEFAULT_SPEND,
+  T2: { model: 'sonnet', effort: 'medium', timeoutMs: 90_000 },
+  T3: { model: 'opus', effort: 'high', timeoutMs: 180_000 },
+};
+
+/** An untiered request is a Changes question, which has always been the cheap
+ * turn — it keeps the pool's spend exactly, so nothing about Changes moves. */
+function spendFor(tier: ReviewAssistTier | null): AssistSpend {
+  return tier ? TIER_SPEND[tier] : DEFAULT_SPEND;
+}
 
 /** The escalation hinge. A cheap tier is only worth buying if its answer can
  * admit it was too cheap; without this, an under-informed skim reads exactly
@@ -269,7 +302,6 @@ type AssistWorker = {
   primeWaiters: PrimeWaiter[];
 };
 
-const TURN_TIMEOUT_MS = 30_000;
 const PRIME_TIMEOUT_MS = 20_000;
 /** Primed sessions stay resident for the life of the runtime, because an
  * idle-shutdown timer only guarantees that the next reviewer pays the cold
@@ -332,9 +364,9 @@ function handleWorkerLine(worker: AssistWorker, line: string): void {
   ensureWarmPool();
 }
 
-function startWorker(): AssistWorker {
+function startWorker(spend: AssistSpend = DEFAULT_SPEND, prime = true): AssistWorker {
   const child = spawn('claude', [
-    '-p', '--verbose', '--model', 'haiku', '--effort', 'low', '--tools', '',
+    '-p', '--verbose', '--model', spend.model, '--effort', spend.effort, '--tools', '',
     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '',
     '--no-session-persistence', '--no-chrome', '--include-partial-messages',
     '--system-prompt', CHANGES_AGENT_SYSTEM_PROMPT,
@@ -357,7 +389,10 @@ function startWorker(): AssistWorker {
   child.once('exit', () => stop(new Error('AI review assist stopped unexpectedly.')));
   child.once('error', stop);
   child.stdin.on('error', stop);
-  writeTurn(worker, PRIME_PROMPT);
+  // A dedicated deep-tier session answers one question and is retired, so
+  // priming it would buy a whole extra turn to save nothing.
+  if (prime) writeTurn(worker, PRIME_PROMPT);
+  else worker.primed = true;
   return worker;
 }
 
@@ -386,38 +421,46 @@ function whenPrimed(worker: AssistWorker): Promise<void> {
   });
 }
 
-function dispatchTurn(worker: AssistWorker, prompt: string, onDelta?: (text: string) => void): Promise<string> {
+function dispatchTurn(worker: AssistWorker, prompt: string, timeoutMs: number, onDelta?: (text: string) => void): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const pending: PendingTurn = { resolve, reject, timeout: null, onDelta };
     pending.timeout = setTimeout(() => {
       if (worker.active !== pending) return;
       worker.active = null;
-      reject(new Error(`AI review assist timed out after ${TURN_TIMEOUT_MS / 1_000} seconds.`));
+      reject(new Error(`AI review assist timed out after ${timeoutMs / 1_000} seconds.`));
       disposeWorker(worker, new Error('AI review assist worker retired after a timeout.'));
       ensureWarmPool();
-    }, TURN_TIMEOUT_MS);
+    }, timeoutMs);
     pending.timeout.unref();
     worker.active = pending;
     writeTurn(worker, prompt);
   });
 }
 
-async function runTurn(prompt: string, onDelta?: (text: string) => void): Promise<string> {
+async function runTurn(prompt: string, spend: AssistSpend, onDelta?: (text: string) => void): Promise<string> {
+  if (spend !== DEFAULT_SPEND) {
+    // The pool is haiku. Handing a deep tier a pooled session would return a
+    // skim under the expensive tier's cache key, which is worse than not
+    // offering the tier at all — so it gets its own session at its own model.
+    // It starts cold, which is a rounding error against the turn it is buying,
+    // and it still streams, so the reviewer is not left on a spinner.
+    return dispatchTurn(startWorker(spend, false), prompt, spend.timeoutMs, onDelta);
+  }
   const worker = takeWorker();
   try {
     await whenPrimed(worker);
   } catch {
     // The warm session died or never came up. A one-off process is slower but
     // still answers, and a genuine model failure still surfaces to the client.
-    return runOneOffTurn(prompt);
+    return runOneOffTurn(prompt, spend);
   }
-  return dispatchTurn(worker, prompt, onDelta);
+  return dispatchTurn(worker, prompt, spend.timeoutMs, onDelta);
 }
 
-function runOneOffTurn(prompt: string): Promise<string> {
+function runOneOffTurn(prompt: string, spend: AssistSpend): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn('claude', [
-      '-p', '--model', 'haiku', '--effort', 'low', '--tools', '',
+      '-p', '--model', spend.model, '--effort', spend.effort, '--tools', '',
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '',
       '--no-session-persistence', '--no-chrome', '--system-prompt', CHANGES_AGENT_SYSTEM_PROMPT,
       '--output-format', 'json',
@@ -427,8 +470,8 @@ function runOneOffTurn(prompt: string): Promise<string> {
     let stderr = '';
     const timeout = setTimeout(() => {
       child.kill('SIGTERM');
-      reject(new Error('AI review assist timed out after 30 seconds.'));
-    }, TURN_TIMEOUT_MS);
+      reject(new Error(`AI review assist timed out after ${spend.timeoutMs / 1_000} seconds.`));
+    }, spend.timeoutMs);
     timeout.unref();
 
     child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
@@ -496,7 +539,7 @@ export async function requestReviewAssist(
   const existing = inFlightRequests.get(hash);
   if (existing) return existing;
   const request = (async () => {
-    const raw = await runTurn(buildPrompt(action, decision, taskIntent, tier), onDelta);
+    const raw = await runTurn(buildPrompt(action, decision, taskIntent, tier), spendFor(tier), onDelta);
     const answer = withAnswerAudits(action, decision, raw);
     writeCached(database, hash, answer);
     return answer;

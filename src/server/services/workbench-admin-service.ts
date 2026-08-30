@@ -165,6 +165,12 @@ export class WorkbenchAdminService {
     if (!explicitlyAssigned.length) this.repository.updateAutomaticAgentAssignees(item.id, agents);
     let conversation = this.repository.getOrCreateWorkConversation(item.id, item.title);
     conversation = this.repository.setConversationExecutionProfile(conversation.id, executionProfile) ?? conversation;
+    if (explicitlyAssigned.length) {
+      const dispatchTarget = explicitlyAssigned.length > 1 ? 'both' : explicitlyAssigned[0];
+      conversation = this.repository.setConversationComposerPreferences(conversation.id, {
+        preferredDispatchTarget: dispatchTarget,
+      }) ?? conversation;
+    }
     this.repository.createSharedMessage('system', `Execute: ${item.title}`, 'completed', conversation.id);
     const accountProfile = options.accountProfile ?? defaultAccountProfileForTask(item);
     const runs = agents.map((agent) => {

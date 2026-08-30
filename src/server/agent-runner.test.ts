@@ -923,11 +923,12 @@ describe('classifyExecution', () => {
 
   it('passes context handles to the agent without ambient retrieval payloads', () => {
     const task = item('Continue the token-bloat fix');
-    const run = { agent: 'codex', kind: 'analysis', instructions: 'Assess prior approaches.', conversationId: 'conversation-id' } as AgentRun;
+    const run = { agent: 'codex', kind: 'analysis', instructions: 'Assess prior approaches.', conversationId: 'conversation-id', messageId: 'message-id' } as AgentRun;
     const prompt = buildPrompt(task, run, 'Current shared brief.');
 
     expect(prompt).toContain(`Work item ID: ${task.id}`);
     expect(prompt).toContain('Conversation ID: conversation-id');
+    expect(prompt).toContain('Current reply message ID: message-id');
     expect(prompt).toContain('recall_context');
     expect(prompt).not.toContain('Retrieved memory (');
   });

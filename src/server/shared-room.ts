@@ -795,6 +795,7 @@ export function buildSharedReplyPrompt(
   localId?: string | null,
   externalActionContract?: string,
   turnGrounding?: TurnGrounding,
+  messageId?: string | null,
 ): string {
   const roleContext = linked
     ? buildPrompt(linked.item, linked.run, sharedContext, externalActionContract)
@@ -810,6 +811,7 @@ ${externalActionContract ?? EXTERNAL_ACTION_CONTRACT}`;
 
 Workbench context handles:
 - Conversation ID: ${localId ?? 'none'}
+- Current reply message ID: ${messageId ?? linked?.run.messageId ?? 'none'}
 - Work item ID: ${linked?.item.id ?? 'none'}
 - Project: ${linked?.item.projectName ?? 'none'}
 
@@ -830,12 +832,15 @@ Execute only the AUTHORITATIVE CURRENT OBJECTIVE above. Answer Jeffrey concisely
 export function buildResumedSharedReplyPrompt(
   connectionContext: string,
   localId: string | null,
+  messageId: string | null,
   externalActionContract: string,
   turnGrounding: TurnGrounding,
 ): string {
   return `Continue the existing Workbench conversation in the same provider session.
 
-Workbench context handle: conversation ID ${localId ?? 'none'}.
+Workbench context handles:
+- Conversation ID: ${localId ?? 'none'}
+- Current reply message ID: ${messageId ?? 'none'}
 
 ${turnGroundingForPrompt(turnGrounding)}
 
@@ -1106,12 +1111,13 @@ export async function replyInSharedRoom(
       target.conversationId,
       externalActionContract,
       turnGrounding,
+      messageId,
     );
     const resumeProviderId = agent === 'codex'
       ? linkedConversation?.codexThreadId ?? null
       : linkedConversation?.claudeSessionId ?? null;
     const prompt = resumeProviderId
-      ? buildResumedSharedReplyPrompt(connectionContext, target.conversationId, externalActionContract, turnGrounding)
+      ? buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding)
       : freshPrompt;
     if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'prompt', {
       promptChars: prompt.length,

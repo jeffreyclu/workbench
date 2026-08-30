@@ -188,6 +188,7 @@ describe('compactConversationHistory', () => {
     const prompt = buildResumedSharedReplyPrompt(
       'Current repository: /tmp/project',
       'conversation',
+      'message-id',
       'Supervisor-issued external-action capability: Commit and push once.',
       grounding,
     );
@@ -195,6 +196,7 @@ describe('compactConversationHistory', () => {
     expect(prompt).toContain('Commit and push the finished fix.');
     expect(prompt).toContain('Current repository: /tmp/project');
     expect(prompt).toContain('Supervisor-issued external-action capability');
+    expect(prompt).toContain('Current reply message ID: message-id');
     expect(prompt).toContain('already present in this session');
     expect(prompt).not.toContain('Reference-only conversation transcript:');
   });

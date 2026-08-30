@@ -177,6 +177,33 @@ describe('Workbench MCP', () => {
     }
   });
 
+  it('records selective recall results on the assistant reply for the RAG badge', async () => {
+    setEmbedder(deterministicTestEmbedder);
+    try {
+      const task = repository.create({ title: 'RAG badge', description: 'Show retrieved context in the reply header.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+      const conversation = repository.createConversation('RAG badge regression', task.id);
+      repository.createSharedMessage('jeffrey', 'The RAG badge must show the retrieved result.', 'completed', conversation.id);
+      const reply = repository.createSharedMessage('codex', '', 'running', conversation.id);
+
+      const recalled = await callData<{ results: Array<{ source: string; title: string; body: string; createdAt: string }> }>('recall_context', {
+        query: 'RAG badge retrieved result',
+        scope: 'conversation',
+        conversationId: conversation.id,
+        messageId: reply.id,
+        limit: 8,
+      });
+
+      expect(recalled.results.length).toBeGreaterThan(0);
+      expect(repository.getSharedMessageById(reply.id)?.retrievedMemoryCount).toBe(recalled.results.length);
+      expect(repository.getRetrievedMemoryDetail(reply.id)).toEqual({
+        query: 'RAG badge retrieved result',
+        items: recalled.results.map(({ source, title, body, createdAt }) => ({ source, title, body, createdAt })),
+      });
+    } finally {
+      setEmbedder(null);
+    }
+  });
+
   it('creates and updates only local task state, then exposes the same canonical detail', async () => {
     const created = await callData<{ item: { id: string; source: string } }>('create_work_item', {
       title: 'Expose Workbench through MCP',
