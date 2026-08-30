@@ -482,6 +482,27 @@ export interface GitHubPullRequestFile {
   isBinary: boolean;
 }
 
+export interface GitHubPullRequestReviewComment {
+  id: number;
+  path: string;
+  line: number | null;
+  body: string;
+  author: string | null;
+  createdAt: string;
+  url: string;
+}
+
+export interface GitHubPullRequestCommentsSummary {
+  /** False when the comments fetch itself failed; counts below are then unusable. */
+  available: boolean;
+  /** True when more review comments exist beyond the loaded page, so `total`/`byPath` undercount. */
+  partial: boolean;
+  total: number | null;
+  byPath: Record<string, number>;
+  comments: GitHubPullRequestReviewComment[];
+  error: string | null;
+}
+
 export interface GitHubPullRequestDiff {
   url: string;
   repository: string;
@@ -498,6 +519,16 @@ export interface GitHubPullRequestDiff {
   additions: number;
   deletions: number;
   nextPage: number | null;
+  state: 'open' | 'closed' | 'merged';
+  draft: boolean;
+  /** GitHub's mergeable_state, or 'unknown' while GitHub is still computing it. */
+  mergeableState: string;
+  /** Approximated from individual review states (GitHub only exposes the authoritative
+   * review_decision through GraphQL). Null when no reviews exist or the reviews fetch failed. */
+  reviewDecision: 'approved' | 'changes_requested' | 'review_required' | null;
+  /** Set when the reviews fetch failed, so a null reviewDecision above isn't mistaken for "no reviews". */
+  reviewDecisionError: string | null;
+  comments: GitHubPullRequestCommentsSummary;
 }
 
 export const sourceProviderSchema = z.enum(['github', 'slack', 'figma', 'confluence', 'grafana', 'gmail']);

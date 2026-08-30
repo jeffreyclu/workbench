@@ -23,10 +23,12 @@ function StateIcon({ state }: { state: ReviewDecision['state'] }) {
  * state-coloured fill, a distinct icon, and the written state in its accessible
  * name — because colour alone is not readable for everyone.
  */
-export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ decisions, selectedId, onSelect }: {
+export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ decisions, selectedId, onSelect, commentCounts }: {
   decisions: ReviewDecision[];
   selectedId: string;
   onSelect: (decisionId: string) => void;
+  /** GitHub review-comment count per decision, keyed by decision id. Present only for a pull-request source. */
+  commentCounts?: Map<string, number>;
 }) {
   const settled = decisions.filter((decision) => decision.state !== null).length;
   const selectedButton = useRef<HTMLButtonElement | null>(null);
@@ -47,18 +49,20 @@ export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ d
       <ol>{decisions.map((decision) => {
         const selected = decision.id === selectedId;
         const risks = decision.riskSignals.map(riskSignalLabel);
+        const commentCount = commentCounts?.get(decision.id) ?? 0;
         return <li key={decision.id}>
           <button
             type="button"
             ref={selected ? selectedButton : undefined}
             className={`state-${decision.state ?? 'pending'}${decision.state === null ? '' : ' settled'}${selected ? ' selected' : ''}`}
             aria-current={selected ? 'step' : undefined}
-            aria-label={`Decision ${decision.ordinal}: ${decision.behavior} — ${reviewStateLabel(decision.state)}${risks.length > 0 ? ` · ${risks.length} risk signals` : ''}`}
+            aria-label={`Decision ${decision.ordinal}: ${decision.behavior} — ${reviewStateLabel(decision.state)}${risks.length > 0 ? ` · ${risks.length} risk signals` : ''}${commentCount > 0 ? ` · ${commentCount} review comments` : ''}`}
             onClick={() => onSelect(decision.id)}
           >
             <b>{decision.ordinal}</b>
             <StateIcon state={decision.state} />
             {risks.length > 0 && <span className="diff-review-queue-risk-dot" title={risks.join(', ')} aria-hidden="true" />}
+            {commentCount > 0 && <span className="diff-review-queue-comment-count" title={`${commentCount} GitHub review comments`} aria-hidden="true"><MessageSquare size={9} />{commentCount}</span>}
             {selected && <small>{decision.behavior}</small>}
           </button>
         </li>;

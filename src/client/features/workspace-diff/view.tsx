@@ -227,6 +227,17 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     }
     return bands;
   }, [autoScores.results]);
+  // GitHub review comments are keyed by file path; a decision can span several
+  // files, so its badge sums whichever of those paths carry loaded comments.
+  const commentCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (!pullRequest?.comments?.available) return counts;
+    for (const decision of orderedDecisions) {
+      const total = decision.filePaths.reduce((sum, path) => sum + (pullRequest.comments.byPath[path] ?? 0), 0);
+      if (total > 0) counts.set(decision.id, total);
+    }
+    return counts;
+  }, [orderedDecisions, pullRequest?.comments]);
   // The popover follows the marker that opened it rather than the selection.
   // They are normally the same decision, but a refetch can reconcile the
   // selection onto a different one — and gating the panel on that equality
@@ -338,7 +349,14 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   return <section className="workspace-diff" aria-label={isPullRequestSource ? 'Pull request changes' : 'Current workspace changes'}>
     <header>
       {isPullRequestSource
-        ? <div><span className="workspace-diff-eyebrow"><GitPullRequest size={14} /> {pullRequest ? `${pullRequest.repository} #${pullRequest.number}` : selectedPullRequestUrl ? pullRequestLabel(selectedPullRequestUrl) : 'GitHub pull request'}</span><h2>{pullRequest?.title ?? 'Review pull-request decisions'}</h2><small>{displayedDiff?.branch}</small><p>Review behavior decisions in priority order for this pull-request revision. Decisions are recorded against its head commit, so new commits return their hunks to review.</p>{selectedPullRequestUrl && <small className="workspace-diff-provenance"><a href={selectedPullRequestUrl} target="_blank" rel="noreferrer">Open on GitHub <ExternalLink size={13} /></a></small>}</div>
+        ? <div><span className="workspace-diff-eyebrow"><GitPullRequest size={14} /> {pullRequest ? `${pullRequest.repository} #${pullRequest.number}` : selectedPullRequestUrl ? pullRequestLabel(selectedPullRequestUrl) : 'GitHub pull request'}</span><h2>{pullRequest?.title ?? 'Review pull-request decisions'}</h2><small>{displayedDiff?.branch}</small>{pullRequest && <p className="workspace-diff-pr-status">
+              <span className={`workspace-diff-pr-badge workspace-diff-pr-badge-${pullRequest.state}`}>{pullRequest.draft ? 'Draft' : pullRequest.state === 'open' ? 'Open' : pullRequest.state === 'merged' ? 'Merged' : 'Closed'}</span>
+              {pullRequest.state === 'open' && pullRequest.mergeableState !== 'unknown' && <span className="workspace-diff-pr-mergeable">{pullRequest.mergeableState}</span>}
+              {pullRequest.reviewDecision && <span className={`workspace-diff-pr-review-decision workspace-diff-pr-review-decision-${pullRequest.reviewDecision}`}>{pullRequest.reviewDecision === 'approved' ? 'Approved' : pullRequest.reviewDecision === 'changes_requested' ? 'Changes requested' : 'Review required'}</span>}
+              {pullRequest.comments?.available
+                ? <span className="workspace-diff-pr-comments">{pullRequest.comments.total} review comment{pullRequest.comments.total === 1 ? '' : 's'}{pullRequest.comments.partial ? ' (partial)' : ''}</span>
+                : <span className="workspace-diff-pr-comments muted">Comments unavailable</span>}
+            </p>}<p>Review behavior decisions in priority order for this pull-request revision. Decisions are recorded against its head commit, so new commits return their hunks to review.</p>{selectedPullRequestUrl && <small className="workspace-diff-provenance"><a href={selectedPullRequestUrl} target="_blank" rel="noreferrer">Open on GitHub <ExternalLink size={13} /></a></small>}</div>
         : <div><span className="workspace-diff-eyebrow"><FileDiff size={14} /> {selectedSnapshot ? 'Recorded version' : 'Workspace review'}</span>{selectedSnapshot && <><h2>Workspace review record</h2><div className="workspace-diff-record-metadata"><small>{displayedDiff?.branch}</small><span>Captured {new Date(selectedSnapshot.capturedAt).toLocaleString()}. This record is preserved in the history.</span><small>{selectedSnapshot.originatingAgentRunId ? `Agent run ${selectedSnapshot.originatingAgentRunId}` : 'No originating agent run recorded'}{selectedSnapshot.commitHash ? ` · Commit ${selectedSnapshot.commitHash.slice(0, 12)}` : ' · No commit recorded'}</small></div></>}</div>}
       <div className="workspace-diff-actions">
         <div className="workspace-review-source" role="group" aria-label="Review source">
@@ -374,7 +392,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                 {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
                 {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
                 {selectedDecision && <>
-                  <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} />
+                  <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} commentCounts={isPullRequestSource ? commentCounts : undefined} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">
                     {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} />}

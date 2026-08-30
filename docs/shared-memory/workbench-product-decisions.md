@@ -273,6 +273,50 @@ show declarations before the implementations or call sites that depend on them,
 then use source order as the deterministic tie-breaker. Settled decisions remain
 after pending work.
 
+### Code review is an automation-first attention stack
+
+*Decision from Jeffrey, 2026-08-29.* Treat each logical code block as a discrete
+review task in an attention stack. A Git diff hunk is only a transport boundary,
+not a review unit: when one hunk adds or changes several logic blocks, split it
+into separate tasks for the individual functions, branches, effects, handlers,
+state transitions, or other coherent behaviors. Do not collapse dozens of lines
+of new code into one decision merely because Git emitted one hunk.
+
+Workbench should automatically review and settle the blocks that can be
+established mechanically or with high confidence; the human should not spend
+time repeating work the system can complete. Blocks that require experienced
+judgment remain in the queue, ordered by how much attention they deserve.
+
+The highest-priority blocks need the deepest assistance, not merely a higher
+score: run the relevant review heuristics, provide grounded AI analysis, and
+attach the existing AI-powered visualizations that help explain relationships,
+behavior, and blast radius. Lower-priority blocks should receive cheaper,
+shallower treatment or be automatically cleared when their obligations are
+actually proven. The product succeeds when it reduces the amount Jeffrey must
+review personally while concentrating his time and the most expensive analysis
+on the code where human judgment matters most.
+
+*Implementation boundary from Jeffrey, 2026-08-29.* Do not retrofit this
+attention stack into the existing **Changes** view. Add it as a third,
+independent conversation surface alongside **Conversation** and **Changes**.
+The new review surface may use Changes as its base and import stable data,
+diff-rendering, evidence, and visualization primitives where their contracts
+fit, but Changes keeps its current behavior and review model. Semantic-block
+state, automated settlements, priority routing, and tiered AI analysis belong
+to the new surface and must not change what an existing Changes user sees.
+
+*Visual reasoning correction from Jeffrey, 2026-08-29, revised after immediate
+clarification.* The prioritized semantic-block queue remains the primary review
+surface. The relationship visualizer is a critical helper reserved for the
+most important paths, analogous to a surgeon using a camera where visibility is
+needed rather than for every step. High-priority blocks receive the system-level
+relationship view—callers, state, effects, tests, risks, and AI findings—alongside
+their detailed code analysis. Low-priority or mechanically settled blocks do
+not pay the rendering, analysis, or attention cost of a relationship map unless
+they escalate. Queue selection controls which critical path the visualizer
+shows; the map helps reason about that selected path but does not replace the
+queue as the review workflow.
+
 ### Mobile composer closes as a bottom sheet
 
 *Decision from Jeffrey, 2026-08-27.* When expanded on phones, the composer is
@@ -1099,3 +1143,22 @@ static channel here.
 # Confidence assessments support direct follow-up context
 
 *Decision from Jeffrey, 2026-08-26.* A confidence bubble in a code diff is an interactive details control, not just a score. Its details show the model's concise visible-code reasoning and a **Follow up** action. Follow up must carry the exact logical diff block, file location, confidence, and reasoning into the conversation draft so the next agent turn has the original code context. Use the existing message draft and canonical send path; do not invent a fake file upload or a separate backend persistence model for this context.
+
+### The relationship map is a selective helper for critical paths
+
+*Decision from Jeffrey, 2026-08-29. Supersedes the same-day claim that the
+visualizer is the primary reasoning surface — that claim was wrong and Jeffrey
+corrected it twice.* Queue-first is correct. The prioritized semantic-block
+queue is the review workflow; the relationship map is a critical helper Jeffrey
+opens on the most important paths only, the way a surgeon uses a camera for the
+critical parts of a procedure rather than for every step. Do not restructure the
+review surface so the map is the spine, and do not make the queue a derived
+ordering of camera positions.
+
+What survives from the earlier framing is only the map's internal modeling.
+When a map is drawn for a critical block, node identity should be a place in the
+system — a module or symbol that exists whether or not it changed — so unchanged
+surroundings can be shown and the change reads as an overlay rather than as the
+whole graph. Risk, priority, review state, and tokens spent are overlay layers on
+that view. But the map is built on demand for escalated blocks; low-priority or
+mechanically settled blocks never pay its analysis or rendering cost.

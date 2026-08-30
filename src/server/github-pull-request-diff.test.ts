@@ -10,17 +10,49 @@ describe('GitHub pull-request diffs', () => {
   it('loads PR metadata and patches with the configured GitHub credential', async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const endpoint = String(input);
-      if (endpoint.endsWith('/pulls/24')) return new Response(JSON.stringify({ html_url: 'https://github.com/writer/workbench/pull/24', title: 'Render diffs', number: 24, base: { ref: 'main' }, head: { ref: 'feature/diff', sha: 'a'.repeat(40) }, changed_files: 2, additions: 8, deletions: 3 }), { status: 200 });
-    if (endpoint.includes('page=1')) return new Response(JSON.stringify([{ filename: 'src/a.ts', status: 'modified', additions: 8, deletions: 3, patch: '@@ -1 +1 @@\n-old\n+new' }, { filename: 'image.png', status: 'modified', additions: 0, deletions: 0 }]), { status: 200 });
+      if (endpoint.endsWith('/pulls/24')) return new Response(JSON.stringify({ html_url: 'https://github.com/writer/workbench/pull/24', title: 'Render diffs', number: 24, base: { ref: 'main' }, head: { ref: 'feature/diff', sha: 'a'.repeat(40) }, changed_files: 2, additions: 8, deletions: 3, state: 'open', merged: false, draft: false, mergeable_state: 'clean' }), { status: 200 });
+    if (endpoint.includes('/files') && endpoint.includes('page=1')) return new Response(JSON.stringify([{ filename: 'src/a.ts', status: 'modified', additions: 8, deletions: 3, patch: '@@ -1 +1 @@\n-old\n+new' }, { filename: 'image.png', status: 'modified', additions: 0, deletions: 0 }]), { status: 200 });
+      if (endpoint.includes('/reviews')) return new Response(JSON.stringify([{ state: 'APPROVED', user: { login: 'reviewer' }, submitted_at: '2026-01-01T00:00:00Z' }]), { status: 200 });
+      if (endpoint.includes('/comments')) return new Response(JSON.stringify([{ id: 1, path: 'src/a.ts', line: 3, body: 'Nice', user: { login: 'reviewer' }, created_at: '2026-01-01T00:00:00Z', html_url: 'https://github.com/writer/workbench/pull/24#comment-1' }]), { status: 200 });
       return new Response(JSON.stringify([]), { status: 200 });
     });
     const diff = await getGitHubPullRequestDiff('https://github.com/writer/workbench/pull/24', { token: 'secret', fetchForPolicy: () => fetchImpl as typeof fetch });
-    expect(diff).toMatchObject({ repository: 'writer/workbench', number: 24, baseRef: 'main', headRef: 'feature/diff', headSha: 'a'.repeat(40), revision: 'a'.repeat(40), changedFiles: 2 });
+    expect(diff).toMatchObject({ repository: 'writer/workbench', number: 24, baseRef: 'main', headRef: 'feature/diff', headSha: 'a'.repeat(40), revision: 'a'.repeat(40), changedFiles: 2, state: 'open', draft: false, mergeableState: 'clean', reviewDecision: 'approved' });
     expect(diff.files).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'src/a.ts', isBinary: false }),
       expect.objectContaining({ path: 'image.png', isBinary: true }),
     ]));
+    expect(diff.comments).toMatchObject({ available: true, partial: false, total: 1, byPath: { 'src/a.ts': 1 } });
     expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ headers: expect.objectContaining({ Authorization: 'Bearer secret' }) });
+  });
+
+  it('reports a merged, closed PR state and a zero-comment PR without miscounting', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const endpoint = String(input);
+      if (endpoint.endsWith('/pulls/24')) return new Response(JSON.stringify({ html_url: 'https://github.com/writer/workbench/pull/24', title: 'Merged', number: 24, base: { ref: 'main' }, head: { ref: 'feature/merged', sha: 'd'.repeat(40) }, changed_files: 1, additions: 1, deletions: 0, state: 'closed', merged: true, draft: false, mergeable_state: null }), { status: 200 });
+      if (endpoint.includes('/reviews')) return new Response(JSON.stringify([]), { status: 200 });
+      if (endpoint.includes('/comments')) return new Response(JSON.stringify([]), { status: 200 });
+      return new Response(JSON.stringify([{ filename: 'src/a.ts', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1 +1 @@\n-old\n+new' }]), { status: 200 });
+    });
+    const diff = await getGitHubPullRequestDiff('https://github.com/writer/workbench/pull/24', { token: 'secret', fetchForPolicy: () => fetchImpl as typeof fetch });
+    expect(diff).toMatchObject({ state: 'merged', mergeableState: 'unknown', reviewDecision: null });
+    expect(diff.comments).toMatchObject({ available: true, partial: false, total: 0, byPath: {} });
+  });
+
+  it('degrades to comments unavailable, without failing the diff, when the comments fetch fails', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const endpoint = String(input);
+      if (endpoint.endsWith('/pulls/24')) return new Response(JSON.stringify({ html_url: 'https://github.com/writer/workbench/pull/24', title: 'Rate limited', number: 24, base: { ref: 'main' }, head: { ref: 'feature/rl', sha: 'e'.repeat(40) }, changed_files: 1, additions: 1, deletions: 0, state: 'open', merged: false, draft: false, mergeable_state: 'clean' }), { status: 200 });
+      if (endpoint.includes('/reviews')) return new Response('', { status: 403 });
+      if (endpoint.includes('/comments')) return new Response('', { status: 403 });
+      return new Response(JSON.stringify([{ filename: 'src/a.ts', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1 +1 @@\n-old\n+new' }]), { status: 200 });
+    });
+    const diff = await getGitHubPullRequestDiff('https://github.com/writer/workbench/pull/24', { token: 'secret', fetchForPolicy: () => fetchImpl as typeof fetch });
+    expect(diff.files).toHaveLength(1);
+    expect(diff.reviewDecision).toBeNull();
+    expect(diff.reviewDecisionError).toMatch(/Reconnect GitHub/);
+    expect(diff.comments).toMatchObject({ available: false, total: null, byPath: {} });
+    expect(diff.comments.error).toMatch(/Reconnect GitHub/);
   });
 
   it('returns one page at a time and exposes a next page for large pull requests', async () => {

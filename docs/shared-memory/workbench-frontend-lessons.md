@@ -712,6 +712,16 @@ last completed whitespace-delimited token; render the entire body immediately
 when the run finishes. This preserves the typewriter motion without broken
 prose or transient malformed Markdown.
 
+### Growing stream paragraphs keep a stable React key
+
+*Confirmed 2026-08-29.* Live activity rows were keyed with both their stream
+position and their full paragraph text. Every network chunk changed that text,
+so React remounted the row and restarted its typewriter from the beginning,
+visibly replaying already-rendered words. Live stream blocks are append-only;
+key each row by its absolute stream position so text growth updates the existing
+typewriter instance and preserves its revealed prefix. A regression must assert
+both DOM-node identity and visible-prefix continuity across a growing chunk.
+
 ### The 2026-08-24 typewriter fix above was not the whole story: `agent-runner.ts` was also overwriting, not accumulating, the final message body
 
 *Confirmed 2026-08-24.* After the typewriter word-boundary fix, Jeffrey still saw

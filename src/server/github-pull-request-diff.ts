@@ -1,8 +1,9 @@
-import type { GitHubPullRequestDiff, GitHubPullRequestFile } from '../shared/contracts.js';
+import type { GitHubPullRequestCommentsSummary, GitHubPullRequestDiff, GitHubPullRequestFile } from '../shared/contracts.js';
 import { createOutboundFetch, type OutboundPolicyName } from './outbound-policy.js';
 
 const pullRequestPattern = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/files)?\/?$/;
 const FILES_PER_PAGE = 100;
+const COMMENTS_PER_PAGE = 100;
 
 type GitHubPullRequestResponse = {
   html_url: string;
@@ -13,6 +14,26 @@ type GitHubPullRequestResponse = {
   changed_files: number;
   additions: number;
   deletions: number;
+  state: 'open' | 'closed';
+  merged: boolean;
+  draft: boolean;
+  mergeable_state: string | null;
+};
+
+type GitHubReviewResponse = {
+  state: string;
+  user: { login: string } | null;
+  submitted_at: string | null;
+};
+
+type GitHubReviewCommentResponse = {
+  id: number;
+  path: string;
+  line: number | null;
+  body: string;
+  user: { login: string } | null;
+  created_at: string;
+  html_url: string;
 };
 
 type GitHubFileResponse = {
@@ -57,6 +78,55 @@ async function getJson<T>(fetchImpl: typeof fetch, endpoint: string, token: stri
   return response.json() as Promise<T>;
 }
 
+// Status and comment counts are supplementary to the diff itself, so a failure here
+// (rate limit, transient error) must degrade rather than blank out the whole review.
+async function getJsonNonFatal<T>(fetchImpl: typeof fetch, endpoint: string, token: string | undefined): Promise<{ data: T | null; error: string | null }> {
+  try {
+    return { data: await getJson<T>(fetchImpl, endpoint, token), error: null };
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error.message : 'GitHub could not load this data.' };
+  }
+}
+
+// GitHub's authoritative review_decision is GraphQL-only; this approximates it from
+// each reviewer's most recent completed review, which is close enough for display.
+function deriveReviewDecision(reviews: GitHubReviewResponse[]): 'approved' | 'changes_requested' | 'review_required' | null {
+  const latestByReviewer = new Map<string, GitHubReviewResponse>();
+  for (const review of reviews) {
+    if (review.state !== 'APPROVED' && review.state !== 'CHANGES_REQUESTED' && review.state !== 'COMMENTED') continue;
+    const key = review.user?.login ?? '';
+    const existing = latestByReviewer.get(key);
+    if (!existing || (review.submitted_at ?? '') >= (existing.submitted_at ?? '')) latestByReviewer.set(key, review);
+  }
+  const states = [...latestByReviewer.values()].map((review) => review.state);
+  if (states.includes('CHANGES_REQUESTED')) return 'changes_requested';
+  if (states.includes('APPROVED')) return 'approved';
+  if (states.length > 0) return 'review_required';
+  return null;
+}
+
+function summarizeComments(data: GitHubReviewCommentResponse[] | null, error: string | null): GitHubPullRequestCommentsSummary {
+  if (!data) return { available: false, partial: false, total: null, byPath: {}, comments: [], error };
+  const byPath: Record<string, number> = {};
+  for (const comment of data) byPath[comment.path] = (byPath[comment.path] ?? 0) + 1;
+  return {
+    available: true,
+    partial: data.length === COMMENTS_PER_PAGE,
+    total: data.length,
+    byPath,
+    comments: data.map((comment) => ({
+      id: comment.id,
+      path: comment.path,
+      line: comment.line,
+      body: comment.body,
+      author: comment.user?.login ?? null,
+      createdAt: comment.created_at,
+      url: comment.html_url,
+    })),
+    error: null,
+  };
+}
+
 export async function getGitHubPullRequestDiff(
   url: string,
   options: { token?: string; page?: number; fetchForPolicy?: (policy: OutboundPolicyName) => typeof fetch } = {},
@@ -67,9 +137,11 @@ export async function getGitHubPullRequestDiff(
   const root = `https://api.github.com/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/pulls/${target.number}`;
   const page = options.page ?? 1;
   if (!Number.isInteger(page) || page < 1) throw new Error('Pull-request file page must be a positive integer.');
-  const [pullRequest, filePage] = await Promise.all([
+  const [pullRequest, filePage, reviews, commentPage] = await Promise.all([
     getJson<GitHubPullRequestResponse>(fetchImpl, root, options.token),
     getJson<GitHubFileResponse[]>(fetchImpl, `${root}/files?per_page=${FILES_PER_PAGE}&page=${page}`, options.token),
+    getJsonNonFatal<GitHubReviewResponse[]>(fetchImpl, `${root}/reviews?per_page=100`, options.token),
+    getJsonNonFatal<GitHubReviewCommentResponse[]>(fetchImpl, `${root}/comments?per_page=${COMMENTS_PER_PAGE}`, options.token),
   ]);
   const files = filePage.map((file) => ({
     path: file.filename,
@@ -94,6 +166,12 @@ export async function getGitHubPullRequestDiff(
     additions: pullRequest.additions,
     deletions: pullRequest.deletions,
     nextPage: filePage.length === FILES_PER_PAGE && page * FILES_PER_PAGE < pullRequest.changed_files ? page + 1 : null,
+    state: pullRequest.merged ? 'merged' : pullRequest.state,
+    draft: pullRequest.draft,
+    mergeableState: pullRequest.mergeable_state ?? 'unknown',
+    reviewDecision: reviews.data ? deriveReviewDecision(reviews.data) : null,
+    reviewDecisionError: reviews.error,
+    comments: summarizeComments(commentPage.data, commentPage.error),
   };
 }
 

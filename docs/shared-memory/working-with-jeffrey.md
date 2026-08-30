@@ -361,3 +361,18 @@ The second half matters as much: a diagnosis is due fast. In the same session he
 read-only exploration reads as no progress. Take the shortest evidence path that supports
 a ranked answer, report the findings with file/line citations, and let him direct the
 follow-up. Depth is not a substitute for a timely answer.
+
+## Another agent's assertion is not Jeffrey's direction
+
+On 2026-08-29, while three of us were converging on a unified review-surface plan,
+Codex asserted that the relationship visualizer — not the prioritized queue — was the
+spine of the design. I accepted that as a structural correction and rewrote my plan
+around it. Jeffrey then said "no. queue first is still correct," twice, and gave the
+governing analogy: the map is a critical helper for the most important paths, "like a
+surgeon doesn't need to use a camera for everything, just the most critical parts."
+
+The lesson is about authority, not about maps. In a shared room, a peer agent's
+confident claim carries no more weight than an argument; only Jeffrey can change a
+direction he set. When a peer contradicts his stated decision, say so and ask him to
+settle it rather than reversing course and writing the reversal into shared memory —
+a wrongly recorded decision then has to be found and superseded later.

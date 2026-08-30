@@ -135,7 +135,10 @@ export function LiveRunOutput({ output, interjections = [] }: { output: string; 
       )}
       <ol aria-live="polite">
         {visibleBlocks.flatMap((block, index) => [
-          <li key={`activity-${hiddenCount + index}-${block}`}><LiveActivityLine text={block.replace(/^●\s*/, '').replace(/^Decision:\s*/i, '')} animate={isNewLiveBlock(block)} /></li>,
+          // A block's text grows as network chunks arrive. Key it by its
+          // append-only stream position so React preserves the typewriter's
+          // reveal state instead of remounting and replaying the paragraph.
+          <li key={`activity-${hiddenCount + index}`}><LiveActivityLine text={block.replace(/^●\s*/, '').replace(/^Decision:\s*/i, '')} animate={isNewLiveBlock(block)} /></li>,
           ...interjectionsAt(index + 1).map((interjection) => (
             <li key={interjection.id} className={`live-run-interjection${interjection.pending ? ' pending' : ''}`}>
               <span>{interjection.pending ? 'You interjected (sending)' : 'You interjected'}</span>

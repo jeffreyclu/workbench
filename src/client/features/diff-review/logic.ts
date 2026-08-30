@@ -16,7 +16,7 @@ export type { ExternalSurfaceEvidence } from '../../../shared/external-surface.j
 export { EMPTY_STALE_REFERENCE_REPORT } from '../../../shared/stale-reference-contract.js';
 export type { StaleReference, StaleReferenceReport } from '../../../shared/stale-reference-contract.js';
 export type { CoverageEvidence, ReferenceEvidence } from '../../../shared/coverage-evidence.js';
-import { countChangedLines, hunkLocation, splitPatchHunks } from '../../../shared/review-decisions.js';
+import { countChangedLines, hunkLocation, splitPatchBlocks } from '../../../shared/review-decisions.js';
 import type { ReviewDecision, ReviewRiskSignal } from '../../../shared/review-decisions.js';
 
 
@@ -83,7 +83,7 @@ function hunkStart(range: string, side: 'old' | 'new'): number | null {
  * review surface renders every line of it — reviewers judge a change in its
  * surrounding context, not as detached lines. */
 export function buildFileDiffHunks(file: Pick<WorkspaceDiffFile, 'path' | 'patch' | 'isBinary'>): ReviewDiffHunk[] {
-  return splitPatchHunks(file).map((hunk) => {
+  return splitPatchBlocks(file).map((hunk) => {
     let oldLine = hunkStart(hunk.range, 'old');
     let newLine = hunkStart(hunk.range, 'new');
     const lines: ReviewDiffLine[] = hunk.lines.map((text, index) => {

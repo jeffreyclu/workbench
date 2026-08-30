@@ -94,6 +94,18 @@ describe('splitAgentResponse', () => {
     expect(container.querySelector('.agent-response')).toBeNull();
   });
 
+  it('continues a growing paragraph without remounting or replaying its revealed prefix', () => {
+    const { container, rerender } = render(<AgentMessageBody body="First paragraph" running />);
+    const paragraph = container.querySelector('.live-run-output li');
+
+    expect(paragraph).toHaveTextContent('First paragraph');
+
+    rerender(<AgentMessageBody body="First paragraph continues with streamed text" running />);
+
+    expect(container.querySelector('.live-run-output li')).toBe(paragraph);
+    expect(paragraph).toHaveTextContent('First paragraph');
+  });
+
   it('uses separate activity items for progress blocks', async () => {
     const { container, rerender } = render(<AgentMessageBody body="Hello" running />);
     rerender(<AgentMessageBody body={'● Inspecting repository\n\n● Running tests'} running />);
