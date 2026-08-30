@@ -41,6 +41,19 @@ export function gravestHazard(hazards: readonly string[]): LogicHazardName | nul
   return worst;
 }
 
+/** What the compiler reads when nothing in the block executes. Both effects
+ * weigh zero because the type checker has already proved them, so no quantity
+ * of them adds up to a question worth asking a person. */
+const NON_RUNNING_EFFECTS = new Set(['declaration', 'literal']);
+
+/** True only when the compiler read the block and found nothing that runs. A
+ * null analysis proves nothing — an unparsed file routes on text exactly as it
+ * did before the parser existed. The score is checked as well as the effect so
+ * that a hazard, which always carries weight, can never be routed away here. */
+function readsAsNonRunning(analysis: BlockAnalysis | null): boolean {
+  return analysis !== null && analysis.score === 0 && NON_RUNNING_EFFECTS.has(analysis.effect);
+}
+
 /** Bigger than this is not one thought regardless of what it touches. */
 const STUDY_CHANGED_LINES = 40;
 /** Under this, a proof-settled block is small enough that reading it costs
@@ -130,6 +143,17 @@ export function routeReviewBlock(
   }
   if (heaviest === 'ai') {
     return { tier: 'T1', reason: 'Bounded question — delegated.', autoSettled: false };
+  }
+
+  // Every rule below is guessed from the patch text: `public_api` fires on the
+  // word `export`, `error_path` on the word `error` in a comment, and size is
+  // length rather than risk. Once the compiler has read the block and found
+  // nothing that runs, those guesses are describing text rather than behaviour
+  // — a pure `export interface` would otherwise buy the same study as a
+  // rewritten auth check. The proof outranks the guess, so a non-running block
+  // is skimmed and never costs Jeffrey's reading time.
+  if (readsAsNonRunning(analysis)) {
+    return { tier: 'T1', reason: 'Nothing here runs — types and literals the compiler already checks.', autoSettled: false };
   }
 
   const humanObligations = obligations.filter((obligation) => obligation.settledBy === 'human');

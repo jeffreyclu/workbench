@@ -523,6 +523,39 @@ describe('spending on what the compiler found', () => {
       .toEqual(routeReviewBlock(decision, blockObligations(decision)));
   });
 
+  it('stops a text-guessed risk signal buying study for a block the compiler says never runs', () => {
+    const decision = decisionFor(file('src/shared/contracts.ts', [
+      '@@ -1,3 +1,5 @@',
+      ' export interface ReviewContract {',
+      '+  /** what a caller must handle when this errors */',
+      '+  failureMode: string;',
+      '   id: string;',
+      ' }',
+    ].join('\n')));
+    // The regex reads `export interface` in a `contracts.` path and calls it a
+    // public API, so without the compiler this outranks real business logic.
+    expect(decision.riskSignals).toContain('public_api');
+    expect(routeReviewBlock(decision, blockObligations(decision)).tier).toBe('T3');
+
+    const read = routeReviewBlock(decision, blockObligations(decision), { effect: 'declaration', score: 0, hazards: [] });
+    expect(read.tier).toBe('T1');
+    expect(read.autoSettled).toBe(false);
+    expect(read.reason).toMatch(/Nothing here runs/);
+  });
+
+  it('never routes away a declaration that carries a hazard, because the hazard has weight', () => {
+    const decision = decisionFor(file('src/shared/contracts.ts', [
+      '@@ -1,3 +1,4 @@',
+      ' export interface ReviewContract {',
+      '+  failureMode: string;',
+      '   id: string;',
+      ' }',
+    ].join('\n')));
+    const routing = routeReviewBlock(decision, blockObligations(decision), { effect: 'declaration', score: 12, hazards: ['guard_removed'] });
+    expect(routing.tier).toBe('T3');
+    expect(routing.reason).toBe(LOGIC_HAZARD_REASONS.guard_removed);
+  });
+
   it('puts the costlier block first inside one tier, and says why', () => {
     const files = [clamped('src/cheap.ts', 'cheap', 7, ['boundary_moved']), clamped('src/costly.ts', 'costly', 20, ['boundary_moved'])];
     const decisions = buildReviewDecisions(toBlockLevelFiles(files), []);
