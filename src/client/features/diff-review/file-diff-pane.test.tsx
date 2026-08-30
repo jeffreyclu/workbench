@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildFileDiffHunks, type ReviewDecision } from './logic.js';
 import { DiffReviewFileDiffPane } from './file-diff-pane.js';
@@ -282,6 +282,32 @@ describe('final-state reading mode', () => {
     expect(codeCells).not.toContain('    return before;');
     expect(container.querySelector('.diff-line.final.removed')?.textContent).toContain('1 line removed');
     expect(screen.getByRole('button', { name: /final code/i })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('opens a removed run in place, so the old side costs no mode switch', () => {
+    const { container } = render(<DiffReviewFileDiffPane
+      filePath="src/example.ts"
+      editorUrl={null}
+      hunks={hunks}
+      decisions={[decision(null)]}
+      activeDecisionId={hunks[0].decisionId}
+      readingMode="final"
+      onSelect={() => {}}
+      onToggleReadingMode={() => {}}
+    />);
+
+    const marker = screen.getByRole('button', { name: /1 line removed/ });
+    expect(marker).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(marker);
+    expect(marker).toHaveAttribute('aria-expanded', 'true');
+    const opened = [...container.querySelectorAll('.diff-line.final.was-removed .diff-line-code')].map((cell) => cell.textContent);
+    expect(opened).toEqual(['    return before;']);
+    // Still final reading: the run opened, the mode did not change.
+    expect(screen.getByRole('button', { name: /final code/i })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(marker);
+    expect(container.querySelector('.diff-line.final.was-removed')).toBeNull();
   });
 
   it('names the enclosing construct when the block is only its inside', () => {

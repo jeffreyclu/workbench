@@ -422,6 +422,17 @@ nav { display: grid; gap: 3px; }
 .diff-line.final.anchor .diff-line-code { opacity: 0.72; }
 .diff-line.final.removed { background: #2d1f23; color: #c9a3a7; font: 10px 'DM Mono'; font-style: italic; }
 .diff-line.final.removed > span:first-child { color: #c9a3a7; background: #3b252b; border-right-color: #3b252b; }
+/* The marker is a control: the run it stands for opens under it, in place, so
+   the old side never costs a mode switch. */
+button.diff-line.final.removed { width: 100%; padding: 0; text-align: left; border: 0; cursor: pointer; }
+button.diff-line.final.removed:hover { background: #3b252b; }
+button.diff-line.final.removed.is-open > span:last-child::after { content: ' ▾'; }
+button.diff-line.final.removed:not(.is-open) > span:last-child::after { content: ' ▸'; }
+/* Opened old lines read as quotation, not as code that will exist: dimmed, on
+   the deletion ground, and numbered from the old side. */
+.diff-line.final.was-removed { background: #241a1d; color: #a58b8f; }
+.diff-line.final.was-removed > span:first-child { color: #8d7276; background: #2f2024; border-right-color: #2f2024; }
+.diff-line.final.was-removed .diff-line-code { opacity: 0.6; text-decoration: line-through; text-decoration-color: #6b4b50; }
 .diff-line-marker { padding-right: 2px; user-select: none; }
 .diff-block { margin: 4px 0; }
 .diff-summary-strip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px; color: #aaa9a2; border: 1px solid #353530; border-radius: 999px; background: #1b1b18; font: 700 9px 'DM Mono'; }

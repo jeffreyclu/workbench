@@ -17,7 +17,7 @@ describe('toFinalStateRows', () => {
     ]);
     expect(rows.map((row) => {
       if (row.type === 'line') return row.line.text;
-      if (row.type === 'removed') return `removed:${row.count}`;
+      if (row.type === 'removed') return `removed:${row.lines.length}`;
       return `anchor:${row.text}`;
     }))
       .toEqual([' function f() {', 'removed:1', '+  return 2;', ' }']);
@@ -31,14 +31,22 @@ describe('toFinalStateRows', () => {
       line('context', ' d', 1),
     ]);
     expect(rows).toEqual([
-      { type: 'removed', key: 'deletion--a-removed', count: 3 },
+      {
+        type: 'removed',
+        key: 'deletion--a-removed',
+        lines: [line('deletion', '-a', null), line('deletion', '-b', null), line('deletion', '-c', null)],
+      },
       { type: 'line', line: line('context', ' d', 1) },
     ]);
   });
 
   it('still reports a block that only deletes', () => {
     const rows = toFinalStateRows([line('deletion', '-gone', null), line('deletion', '-also', null)]);
-    expect(rows).toEqual([{ type: 'removed', key: 'deletion--gone-removed', count: 2 }]);
+    expect(rows).toEqual([{
+      type: 'removed',
+      key: 'deletion--gone-removed',
+      lines: [line('deletion', '-gone', null), line('deletion', '-also', null)],
+    }]);
   });
 
   it('returns nothing for an empty block', () => {
@@ -70,8 +78,19 @@ describe('toFinalStateRows', () => {
     const rows = toFinalStateRows([line('deletion', '-  legacy();', null)], 'function boot() {');
     expect(rows).toEqual([
       { type: 'anchor', key: 'deletion--  legacy();-removed-anchor', text: 'function boot() {' },
-      { type: 'removed', key: 'deletion--  legacy();-removed', count: 1 },
+      { type: 'removed', key: 'deletion--  legacy();-removed', lines: [line('deletion', '-  legacy();', null)] },
     ]);
+  });
+
+  it('keeps each run addressable to its own lines rather than one merged run', () => {
+    const rows = toFinalStateRows([
+      line('deletion', '-first', null),
+      line('context', ' kept', 1),
+      line('deletion', '-second', null),
+    ]);
+    const runs = rows.filter((row) => row.type === 'removed');
+    expect(runs.map((run) => run.type === 'removed' && run.lines.map((l) => l.text)))
+      .toEqual([['-first'], ['-second']]);
   });
 
   it('adds nothing when git named no construct', () => {

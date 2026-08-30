@@ -7,7 +7,7 @@ import type { ReviewDiffLine } from './logic.js';
 export type FinalStateRow =
   | { type: 'anchor'; key: string; text: string }
   | { type: 'line'; line: ReviewDiffLine }
-  | { type: 'removed'; key: string; count: number };
+  | { type: 'removed'; key: string; lines: ReviewDiffLine[] };
 
 /** Whether the block already opens with the construct git named.
  *
@@ -32,13 +32,15 @@ function showsConstruct(code: string, heading: string): boolean {
  * Deletions are collapsed rather than dropped: a block that only removes code
  * would otherwise render as nothing at all, and a replacement would silently
  * lose the fact that something used to be there. One marker per contiguous run
- * keeps that visible without reintroducing the old side as text. */
+ * keeps that visible without reintroducing the old side as text. The run keeps
+ * its lines so a reader who needs the old side can open that one run in place,
+ * rather than leaving final reading for the interleaved diff. */
 export function toFinalStateRows(lines: ReviewDiffLine[], enclosing?: string | null): FinalStateRow[] {
   const rows: FinalStateRow[] = [];
   let removed: ReviewDiffLine[] = [];
   const flush = () => {
     if (removed.length === 0) return;
-    rows.push({ type: 'removed', key: `${removed[0].key}-removed`, count: removed.length });
+    rows.push({ type: 'removed', key: `${removed[0].key}-removed`, lines: removed });
     removed = [];
   };
   for (const line of lines) {

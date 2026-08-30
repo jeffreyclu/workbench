@@ -110,6 +110,12 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   const lastSelection = useRef<string | null>(null);
   const diffBody = useRef<HTMLDivElement | null>(null);
   const [peekDecisionId, setPeekDecisionId] = useState<string | null>(null);
+  // Which collapsed deletion runs are open. A marker that only counts lines
+  // makes the one thing final reading cannot show — what used to be there —
+  // cost a whole mode switch, after which the reader has to find their place
+  // in an interleaved diff again. Opening the run in place keeps the rest of
+  // the block readable as code.
+  const [openRemovals, setOpenRemovals] = useState<ReadonlySet<string>>(() => new Set());
   const language = languageFromPath(filePath);
   const decisionByHunkId = new Map(decisions.flatMap((decision) => decision.hunks.map((hunk) => [hunk.id, decision] as const)));
   // Only spotlight when the selected decision actually lives in this file:
@@ -330,9 +336,24 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
                   <span><SyntaxHighlight code={row.text} language={language} className="diff-line-code" /></span>
                 </div>
                 : row.type === 'removed'
-                ? <div key={row.key} className="diff-line final removed">
-                  <span aria-hidden="true">−</span>
-                  <span>{row.count} {row.count === 1 ? 'line' : 'lines'} removed</span>
+                ? <div key={row.key} className="diff-line-removal">
+                  <button
+                    type="button"
+                    className={`diff-line final removed${openRemovals.has(row.key) ? ' is-open' : ''}`}
+                    aria-expanded={openRemovals.has(row.key)}
+                    onClick={() => setOpenRemovals((open) => {
+                      const next = new Set(open);
+                      if (!next.delete(row.key)) next.add(row.key);
+                      return next;
+                    })}
+                  >
+                    <span aria-hidden="true">−</span>
+                    <span>{row.lines.length} {row.lines.length === 1 ? 'line' : 'lines'} removed</span>
+                  </button>
+                  {openRemovals.has(row.key) && row.lines.map((removed) => <div key={removed.key} className="diff-line final was-removed">
+                    <span>{removed.oldLine ?? ''}</span>
+                    <span><SyntaxHighlight code={removed.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
+                  </div>)}
                 </div>
                 : <div key={row.line.key} className={`diff-line final ${row.line.kind}`}>
                   <span>{row.line.newLine ?? ''}</span>
