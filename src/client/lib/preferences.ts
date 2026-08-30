@@ -13,6 +13,10 @@ const workspaceDiffSelectionsStorageKey = 'workbench:workspace-diff-selections';
  * own key. Sharing Changes' key would mean opening Review moves the file
  * Changes is showing — the one thing the review stack is not allowed to do. */
 const reviewStackSelectionsStorageKey = 'workbench:review-stack-selections';
+/** Reading mode is a habit, not a selection: it is remembered once for the
+ * reviewer rather than per conversation, so moving between reviews does not
+ * silently put the code pane back into interleaved diff. */
+const reviewStackReadingModeStorageKey = 'workbench:review-stack-reading-mode';
 const lastOpenedItemStorageKeys = {
   conversation: 'workbench:last-opened-conversation',
   attention: 'workbench:last-opened-attention-item',
@@ -180,6 +184,27 @@ export function writeReviewStackSource(scope: string, source: string): void {
     window.localStorage.setItem(reviewStackSelectionsStorageKey, JSON.stringify(selections));
   } catch {
     // The queue stays usable when browser storage is unavailable.
+  }
+}
+
+/** Structurally the diff pane's `DiffReadingMode`. Declared here so preference
+ * storage does not depend on a feature component. */
+export type ReviewStackReadingMode = 'diff' | 'final';
+
+export function readReviewStackReadingMode(): ReviewStackReadingMode | null {
+  try {
+    const value = window.localStorage.getItem(reviewStackReadingModeStorageKey);
+    return value === 'diff' || value === 'final' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeReviewStackReadingMode(mode: ReviewStackReadingMode): void {
+  try {
+    window.localStorage.setItem(reviewStackReadingModeStorageKey, mode);
+  } catch {
+    // The mode still applies to this session even if it cannot be remembered.
   }
 }
 

@@ -72,6 +72,9 @@ function renderReview(reviewDiff = diff) {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // Reading mode is remembered globally, so one test's choice must not become
+  // the next test's starting state.
+  window.localStorage.clear();
 });
 
 describe('ReviewStackView', () => {
@@ -150,6 +153,21 @@ describe('ReviewStackView', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: /^diff$/i })).toHaveAttribute('aria-pressed', 'false'));
     expect(document.querySelector('.diff-line.deletion')).not.toBeNull();
+    expect(document.querySelector('.diff-line.final')).toBeNull();
+  });
+
+  it('reopens in the reading mode the reviewer last chose', async () => {
+    renderReview();
+    await screen.findByRole('button', { name: /final code/i });
+    fireEvent.keyDown(document, { key: 'd' });
+    await screen.findByRole('button', { name: /^diff$/i });
+
+    cleanup();
+    renderReview();
+
+    // A remount is not a new reviewer. Coming back to Review must not silently
+    // put the pane back into final reading after it was deliberately left.
+    await waitFor(() => expect(screen.getByRole('button', { name: /^diff$/i })).toHaveAttribute('aria-pressed', 'false'));
     expect(document.querySelector('.diff-line.final')).toBeNull();
   });
 

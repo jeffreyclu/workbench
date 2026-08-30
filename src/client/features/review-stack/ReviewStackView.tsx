@@ -10,7 +10,7 @@ import { useCachedReviewAssistAnswers } from '../diff-review/review-assist.js';
 import { DiffReviewFileDiffPane, type DiffReadingMode } from '../diff-review/file-diff-pane.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { buildFileDiffHunks } from '../diff-review/logic.js';
-import { writeReviewStackBlock } from '../../lib/preferences.js';
+import { readReviewStackReadingMode, writeReviewStackBlock, writeReviewStackReadingMode } from '../../lib/preferences.js';
 import { indexReviewBlocks, toBlockLevelFiles } from './review-blocks.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
 import { ReviewQueueList } from './review-queue-list.js';
@@ -50,8 +50,14 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   // diff: its unit is a whole parsed construct, so the after-state is legal
   // code on its own, and an interleaved two-sided reading is the harder way to
   // judge a block that was rewritten wholesale.
-  const [readingMode, setReadingMode] = useState<DiffReadingMode>('final');
-  const toggleReadingMode = useCallback(() => setReadingMode((mode) => mode === 'final' ? 'diff' : 'final'), []);
+  // The default is 'final', but the reviewer's own last choice outranks it and
+  // survives remounting, switching conversations and reloading.
+  const [readingMode, setReadingMode] = useState<DiffReadingMode>(() => readReviewStackReadingMode() ?? 'final');
+  const toggleReadingMode = useCallback(() => {
+    const next: DiffReadingMode = readingMode === 'final' ? 'diff' : 'final';
+    setReadingMode(next);
+    writeReviewStackReadingMode(next);
+  }, [readingMode]);
   const source = useReviewSource(scope, pullRequestUrlCandidates);
   const files = useMemo(() => source.source?.files ?? [], [source.source]);
   // Blocks are cut once, and both the diff the reviewer reads and the identity
