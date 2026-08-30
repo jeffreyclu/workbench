@@ -5,6 +5,11 @@ import { CHANGE_RELATION_LABELS, type ChangeMap } from '../../../shared/change-m
 import { buildChangeLinkIndex, plainRelationText, type ChangeLink, type ChangeLinkSummary } from './change-map-logic.js';
 import type { ReviewDecision, ReviewDiffHunk } from './logic.js';
 import { reviewStateLabel } from './logic.js';
+import { toFinalStateRows } from './final-state-lines.js';
+
+/** How a block's code is drawn. `diff` is the unified two-sided reading;
+ * `final` is the code as it will exist after the change. */
+export type DiffReadingMode = 'diff' | 'final';
 
 /** Breathing room left above a scrolled-to block, so the reader sees that the
  * change has a context above it rather than reading from the pane's edge. */
@@ -76,7 +81,7 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, onSelect, onOpenDetail }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, readingMode = 'diff', onSelect, onOpenDetail, onToggleReadingMode }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
@@ -92,8 +97,14 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
    * severity the detail panel shows without opening it. */
   riskBands?: Map<string, string>;
   openDetailFor?: string | null;
+  /** Defaults to the unified diff, so the Changes surface that also mounts this
+   * pane keeps the reading it has always had. Review opts into `final`. */
+  readingMode?: DiffReadingMode;
   onSelect: (decisionId: string) => void;
   onOpenDetail?: (decisionId: string, anchor: HTMLElement) => void;
+  /** Supplying this is what puts the reading-mode switch in the header: a
+   * surface that cannot change the mode should not advertise a control. */
+  onToggleReadingMode?: () => void;
 }) {
   const activeBlock = useRef<HTMLElement | null>(null);
   const lastSelection = useRef<string | null>(null);
@@ -218,6 +229,13 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
     <header>
       <span><FileDiff size={13} aria-hidden="true" /><code>{filePath}</code></span>
       <small>{hunks.length} {hunks.length === 1 ? 'block' : 'blocks'} in this file</small>
+      {onToggleReadingMode && <button
+        type="button"
+        className={`diff-review-reading-mode mode-${readingMode}`}
+        aria-pressed={readingMode === 'final'}
+        title="Toggle between the final code and the unified diff (d)"
+        onClick={onToggleReadingMode}
+      >{readingMode === 'final' ? 'Final code' : 'Diff'}</button>}
       {editorUrl && <a href={editorUrl} aria-label={`Open ${filePath} in editor`} title="Open in editor"><ExternalLink size={13} aria-hidden="true" /></a>}
     </header>
     <div className={`diff-review-file-diff-body${spotlight ? ' spotlight' : ''}`} ref={diffBody}>
@@ -305,11 +323,21 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
           </>}
           {hunk.lines.length === 0
             ? <p className="muted">No text patch is available for this file.</p>
-            : hunk.lines.map((line) => <div key={line.key} className={`diff-line ${line.kind}`}>
-              <span>{line.oldLine ?? ''}</span>
-              <span>{line.newLine ?? ''}</span>
-              <span><span className="diff-line-marker">{line.text.slice(0, 1) || ' '}</span><SyntaxHighlight code={line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
-            </div>)}
+            : readingMode === 'final'
+              ? toFinalStateRows(hunk.lines).map((row) => row.type === 'removed'
+                ? <div key={row.key} className="diff-line final removed">
+                  <span aria-hidden="true">−</span>
+                  <span>{row.count} {row.count === 1 ? 'line' : 'lines'} removed</span>
+                </div>
+                : <div key={row.line.key} className={`diff-line final ${row.line.kind}`}>
+                  <span>{row.line.newLine ?? ''}</span>
+                  <span><SyntaxHighlight code={row.line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
+                </div>)
+              : hunk.lines.map((line) => <div key={line.key} className={`diff-line ${line.kind}`}>
+                <span>{line.oldLine ?? ''}</span>
+                <span>{line.newLine ?? ''}</span>
+                <span><span className="diff-line-marker">{line.text.slice(0, 1) || ' '}</span><SyntaxHighlight code={line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
+              </div>)}
           </div>
         </section>;
       })}

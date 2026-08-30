@@ -255,3 +255,32 @@ describe('review file diff pane', () => {
     expect(screen.getByRole('button', { name: /Select the decision at/ })).toBeInTheDocument();
   });
 });
+
+describe('final-state reading mode', () => {
+  it('defaults to the unified diff so the Changes surface is unchanged', () => {
+    const { container } = renderPane(hunks[0].decisionId);
+    expect(container.querySelectorAll('.diff-line.deletion')).toHaveLength(1);
+    expect(container.querySelector('.diff-line.final')).toBeNull();
+    expect(screen.queryByRole('button', { name: /final code|^diff$/i })).toBeNull();
+  });
+
+  it('reads the block as the code that will exist, collapsing what was removed', () => {
+    const { container } = render(<DiffReviewFileDiffPane
+      filePath="src/example.ts"
+      editorUrl={null}
+      hunks={hunks}
+      decisions={[decision(null)]}
+      activeDecisionId={hunks[0].decisionId}
+      readingMode="final"
+      onSelect={() => {}}
+      onToggleReadingMode={() => {}}
+    />);
+
+    // The old side is gone as text, but the fact of the removal is not.
+    const codeCells = [...container.querySelectorAll('.diff-line-code')].map((cell) => cell.textContent);
+    expect(codeCells).toContain('    return after;');
+    expect(codeCells).not.toContain('    return before;');
+    expect(container.querySelector('.diff-line.final.removed')?.textContent).toContain('1 line removed');
+    expect(screen.getByRole('button', { name: /final code/i })).toHaveAttribute('aria-pressed', 'true');
+  });
+});

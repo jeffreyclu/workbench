@@ -486,7 +486,9 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     expect(await screen.findByText('Completed the change.')).toBeTruthy();
-    expect(document.querySelector('.thread-virtualizer')).toHaveClass('thread-live-flow');
+    const thread = document.querySelector('.thread-virtualizer');
+    expect(thread).toHaveClass('thread-live-flow');
+    expect(Array.from(thread!.children).every((row) => !row.hasAttribute('style') && !row.hasAttribute('data-index'))).toBe(true);
     fireEvent.click(await screen.findByRole('button', { name: 'Approve preview' }));
     await screen.findByText('Promotion queued. It will build once active agent work reaches a durable terminal state.');
     expect(document.querySelector('.thread-virtualizer')).toHaveClass('thread-live-flow');
@@ -1769,7 +1771,7 @@ describe('shared room', () => {
       if (url.startsWith('/api/shared/messages') && url.includes(`conversationId=${conversationId}`)) {
         messageFetches += 1;
         const completed = messageFetches > 1;
-        return new Response(JSON.stringify({ messages: [{ id: 'summary-transition', conversationId, author: 'codex', body: completed ? '## Decision\nThe completed report remains visible.\n\n## Verification\nThe virtualized row was remeasured.' : 'Working on the report…', pinned: false, status: completed ? 'completed' : 'running', error: '', createdAt: '2026-01-01T00:00:00Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'none' }] }), { headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({ messages: [{ id: 'summary-transition', conversationId, author: 'codex', body: completed ? '## Decision\nThe completed report remains visible.\n\n## Verification\nThe normal-flow row expanded without overlap.' : 'Working on the report…', pinned: false, status: completed ? 'completed' : 'running', error: '', createdAt: '2026-01-01T00:00:00Z', attachments: [], model: null, executionProfile: null, dispatchTarget: 'none' }] }), { headers: { 'Content-Type': 'application/json' } });
       }
       return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
     }));
@@ -1777,7 +1779,7 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     await screen.findByText('Working on the report…');
-    expect(await screen.findByText('The virtualized row was remeasured.', {}, { timeout: 2_000 })).toBeInTheDocument();
+    expect(await screen.findByText('The normal-flow row expanded without overlap.', {}, { timeout: 2_000 })).toBeInTheDocument();
     expect(screen.getByLabelText('Agent response in 2 parts')).toBeInTheDocument();
   });
 

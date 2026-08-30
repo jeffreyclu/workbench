@@ -411,6 +411,14 @@ nav { display: grid; gap: 3px; }
 .diff-line.addition { background: #12261e; }.diff-line.addition > span:nth-child(-n + 2) { color: #8fb59c; background: #1b3626; border-right-color: #1b3626; }
 .diff-line.deletion { background: #2d1f23; }.diff-line.deletion > span:nth-child(-n + 2) { color: #c9a3a7; background: #3b252b; border-right-color: #3b252b; }
 .diff-line.header { color: #aaa9a2; background: #20201d; }.diff-line.header > span:nth-child(-n + 2) { background: #1c1c19; }
+/* Final-state reading: one line-number gutter, no marker column, and no
+   hanging indent — the code is read as code, not as a two-sided diff. */
+.diff-line.final { grid-template-columns: 42px minmax(0, 1fr); }
+.diff-line.final > span:last-child { padding-left: 8px; text-indent: 0; }
+.diff-line.final > span:first-child { color: #77766f; text-align: right; user-select: none; border-right: 1px solid #242421; }
+.diff-line.final.addition > span:first-child { color: #8fb59c; background: #1b3626; border-right-color: #1b3626; }
+.diff-line.final.removed { background: #2d1f23; color: #c9a3a7; font: 10px 'DM Mono'; font-style: italic; }
+.diff-line.final.removed > span:first-child { color: #c9a3a7; background: #3b252b; border-right-color: #3b252b; }
 .diff-line-marker { padding-right: 2px; user-select: none; }
 .diff-block { margin: 4px 0; }
 .diff-summary-strip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px; color: #aaa9a2; border: 1px solid #353530; border-radius: 999px; background: #1b1b18; font: 700 9px 'DM Mono'; }
@@ -591,6 +599,9 @@ nav { display: grid; gap: 3px; }
 .diff-review-file-diff > header > span { display: flex; align-items: center; gap: 7px; min-width: 0; color: #85847d; }
 .diff-review-file-diff > header code { overflow-wrap: anywhere; color: #deddd6; font: 11px 'DM Mono'; }
 .diff-review-file-diff > header small { margin-left: auto; flex: 0 0 auto; color: #77766f; font: 10px 'DM Mono'; }
+.diff-review-reading-mode { flex: 0 0 auto; padding: 3px 8px; border: 1px solid #2e2e2a; border-radius: 5px; background: #1c1c19; color: #85847d; font: 10px 'DM Mono'; cursor: pointer; }
+.diff-review-reading-mode:hover { border-color: #3c3c37; color: #deddd6; }
+.diff-review-reading-mode.mode-final { border-color: #2c4b39; background: #12261e; color: #8fb59c; }
 .diff-review-file-diff > header a { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: 0 0 auto; color: #aaa9a2; border: 1px solid #3c3c36; border-radius: 5px; }
 .diff-review-file-diff > header a:hover, .diff-review-file-diff > header a:focus-visible { color: var(--acid); border-color: #596234; outline: 0; }
 .diff-review-file-diff-body { max-height: min(72vh, 760px); overflow-y: auto; overscroll-behavior-y: contain; font: 11px/1.65 var(--code-font); scroll-padding-block: 60px; }

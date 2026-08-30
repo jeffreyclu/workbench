@@ -35,7 +35,20 @@ const diff = {
   files: [file('src/server/auth.ts', AUTH_PATCH), file('src/app.ts', IMPORT_PATCH)],
 };
 
-const twoDecisionDiff = { ...diff, files: [file('src/server/auth.ts', AUTH_PATCH), file('src/client/auth.ts', AUTH_PATCH)] };
+// A decision spans every file that carries the same change, so two files with
+// an identical patch are one decision, not two. Keyboard navigation between
+// decisions needs the two files to differ in what they actually do.
+const CLIENT_AUTH_PATCH = [
+  '@@ -8,4 +8,5 @@ export function attachToken(request) {',
+  ' export function attachToken(request) {',
+  '-  request.headers.token = token;',
+  '+  if (!token) throw new Error("missing token");',
+  '+  request.headers.token = token;',
+  '   return request;',
+  ' }',
+].join('\n');
+
+const twoDecisionDiff = { ...diff, files: [file('src/server/auth.ts', AUTH_PATCH), file('src/client/auth.ts', CLIENT_AUTH_PATCH)] };
 
 function renderReview(reviewDiff = diff) {
   const calls: Array<{ url: string; method: string; body: unknown }> = [];
@@ -110,17 +123,34 @@ describe('ReviewStackView', () => {
     renderReview(twoDecisionDiff);
     const queue = await screen.findByRole('navigation', { name: 'Review queue' });
     await waitFor(() => expect(within(queue).getAllByRole('button')).toHaveLength(2));
-    const activePath = () => within(queue).getAllByRole('button').find((button) => button.getAttribute('aria-current') === 'true')!.textContent;
+    // A queue row is labelled by the block it points at, not by its file path.
+    const activeLabel = () => within(queue).getAllByRole('button').find((button) => button.getAttribute('aria-current') === 'true')!.textContent;
 
-    expect(activePath()).toContain('src/server/auth.ts');
+    expect(activeLabel()).toContain('authorize');
     fireEvent.keyDown(document, { key: 'j' });
-    await waitFor(() => expect(activePath()).toContain('src/client/auth.ts'));
+    await waitFor(() => expect(activeLabel()).toContain('attachToken'));
     fireEvent.keyDown(document, { key: 'k' });
-    await waitFor(() => expect(activePath()).toContain('src/server/auth.ts'));
+    await waitFor(() => expect(activeLabel()).toContain('authorize'));
     fireEvent.keyDown(document, { key: ']' });
-    await waitFor(() => expect(activePath()).toContain('src/client/auth.ts'));
+    await waitFor(() => expect(activeLabel()).toContain('attachToken'));
     fireEvent.keyDown(document, { key: '[' });
-    await waitFor(() => expect(activePath()).toContain('src/server/auth.ts'));
+    await waitFor(() => expect(activeLabel()).toContain('authorize'));
+  });
+
+  it('reads a block as its finished code by default and drops to the diff with d', async () => {
+    renderReview();
+    // The default reading is the code that will exist: a rewritten block is
+    // judged as a whole construct rather than as an interleaving of two files.
+    const toggle = await screen.findByRole('button', { name: /final code/i });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(document.querySelector('.diff-line.final')).not.toBeNull();
+    expect(document.querySelector('.diff-line.deletion:not(.final)')).toBeNull();
+
+    fireEvent.keyDown(document, { key: 'd' });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /^diff$/i })).toHaveAttribute('aria-pressed', 'false'));
+    expect(document.querySelector('.diff-line.deletion')).not.toBeNull();
+    expect(document.querySelector('.diff-line.final')).toBeNull();
   });
 
   it('marks the active flagged block reviewed with r', async () => {

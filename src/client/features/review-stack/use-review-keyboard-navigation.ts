@@ -30,7 +30,7 @@ function isEditableTarget(target: EventTarget | null) {
 
 /** Owns the Review stack's document-level shortcuts so the view stays declarative. */
 export function useReviewKeyboardNavigation({
-  queue, activeId, activeFilePath, canMarkReviewed, onSelect, onMarkReviewed,
+  queue, activeId, activeFilePath, canMarkReviewed, onSelect, onMarkReviewed, onToggleReadingMode,
 }: {
   queue: ReviewQueueEntry[];
   activeId: string | null;
@@ -38,6 +38,8 @@ export function useReviewKeyboardNavigation({
   canMarkReviewed: boolean;
   onSelect: (id: string) => void;
   onMarkReviewed: () => void;
+  /** Switches the diff pane between the finished code and the unified diff. */
+  onToggleReadingMode?: () => void;
 }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -55,9 +57,14 @@ export function useReviewKeyboardNavigation({
       if (event.key === 'r' && canMarkReviewed) {
         event.preventDefault();
         onMarkReviewed();
+        return;
+      }
+      if (event.key === 'd' && onToggleReadingMode) {
+        event.preventDefault();
+        onToggleReadingMode();
       }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [activeFilePath, activeId, canMarkReviewed, onMarkReviewed, onSelect, queue]);
+  }, [activeFilePath, activeId, canMarkReviewed, onMarkReviewed, onSelect, onToggleReadingMode, queue]);
 }

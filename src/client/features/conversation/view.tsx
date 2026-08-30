@@ -654,11 +654,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     }
     return rows;
   }, [renderedConversationMessages]);
-  const threadVirtualizer = useVirtualizer({
-    count: conversationRenderRows.length, getScrollElement: () => threadScrollRef.current,
-    estimateSize: () => 160, overscan: 8,
-  });
-  const threadVirtualItems = threadVirtualizer.getVirtualItems();
   useEffect(() => {
     if (!conversationId || selectionHydratedFor === conversationId) return;
     // The rail already has the selected conversation in the normal case. Do
@@ -1047,13 +1042,12 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   useEffect(() => {
     // The query can expose cached data before the newly selected thread has
     // been laid out. An immediate scroll then targets the old/zero height and
-    // still leaves the conversation at the top. Wait for the virtual rows to
-    // commit and be measured before consuming this conversation's one initial
-    // scroll. Later polling must not pull a reader back down after they scroll.
+    // still leaves the conversation at the top. Wait for the message rows to
+    // commit before consuming this conversation's one initial scroll. Later
+    // polling must not pull a reader back down after they scroll.
     if (!conversationId || !messages.isSuccess || pendingInitialThreadScrollRef.current !== conversationId) return;
     let finalFrame = 0;
-    const measureFrame = window.requestAnimationFrame(() => {
-      threadVirtualizer.measure();
+    const layoutFrame = window.requestAnimationFrame(() => {
       finalFrame = window.requestAnimationFrame(() => {
         if (pendingInitialThreadScrollRef.current !== conversationId) return;
         scrollThreadToLatest('auto');
@@ -1061,7 +1055,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       });
     });
     return () => {
-      window.cancelAnimationFrame(measureFrame);
+      window.cancelAnimationFrame(layoutFrame);
       if (finalFrame) window.cancelAnimationFrame(finalFrame);
     };
   }, [conversationId, messages.isSuccess, messages.dataUpdatedAt, conversationRenderRows.length]);
@@ -1245,9 +1239,11 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                 : `Show earlier messages${messages.data?.totalCount ? ` (${messages.data.totalCount - allConversationMessages.length} more)` : ''}`}
             </button>
           )}
-          <div className="thread-virtualizer thread-live-flow" style={{ position: 'relative', height: threadVirtualizer.getTotalSize() }}>
-          {threadVirtualItems.map((virtualRow) => {
-            const row = conversationRenderRows[virtualRow.index];
+          {/* Message height changes while Markdown streams and after it is parsed.
+              Keep paginated rows in document flow so a cold refresh cannot reuse
+              stale height estimates and paint later messages over earlier ones. */}
+          <div className="thread-virtualizer thread-live-flow">
+          {conversationRenderRows.map((row) => {
             const renderMessage = (message: SharedMessage, inGroup: boolean) => {
               const isAgentMessage = message.author === 'codex' || message.author === 'claude';
               const isQueuedMessage = message.status === 'queued';
@@ -1361,7 +1357,9 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                 </div>
               </div>;
             })();
-            return <div key={virtualRow.key} data-index={virtualRow.index} ref={threadVirtualizer.measureElement} style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualRow.start}px)` }}>{rowContent}</div>;
+            return row.type === 'single'
+              ? <div key={row.message.id}>{rowContent}</div>
+              : <div key={`${row.a.id}-${row.b.id}`}>{rowContent}</div>;
           })}
           </div>
           {completionPromptAvailable && <div className="completion-prompt" role="status"><span><strong>Preview approved successfully.</strong><small>Complete the linked task?</small>{completeLinkedTask.error && <small className="completion-prompt-error">Could not complete the task. Try again.</small>}</span><div><button type="button" className="button secondary compact" onClick={() => setDismissedCompletionPromptPromotionId(latestSuccessfulPromotion!.id)}>Not yet</button><button type="button" className="button primary compact" onClick={() => completeLinkedTask.mutate()} disabled={completeLinkedTask.isPending}>{completeLinkedTask.isPending ? <><LoaderCircle className="spin" size={12} /> Completing…</> : <><Check size={12} /> Complete task</>}</button></div></div>}

@@ -7,7 +7,7 @@ import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import type { ReviewAssistTaskIntent } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
 import { useCachedReviewAssistAnswers } from '../diff-review/review-assist.js';
-import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
+import { DiffReviewFileDiffPane, type DiffReadingMode } from '../diff-review/file-diff-pane.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { buildFileDiffHunks } from '../diff-review/logic.js';
 import { writeReviewStackBlock } from '../../lib/preferences.js';
@@ -46,6 +46,12 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   taskIntent?: ReviewAssistTaskIntent;
   pullRequestUrlCandidates?: string[];
 }) {
+  // Review defaults to reading the finished code rather than the unified
+  // diff: its unit is a whole parsed construct, so the after-state is legal
+  // code on its own, and an interleaved two-sided reading is the harder way to
+  // judge a block that was rewritten wholesale.
+  const [readingMode, setReadingMode] = useState<DiffReadingMode>('final');
+  const toggleReadingMode = useCallback(() => setReadingMode((mode) => mode === 'final' ? 'diff' : 'final'), []);
   const source = useReviewSource(scope, pullRequestUrlCandidates);
   const files = useMemo(() => source.source?.files ?? [], [source.source]);
   // Blocks are cut once, and both the diff the reviewer reads and the identity
@@ -152,7 +158,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   // follows the existing queue selection and verdict writer, preserving the
   // same persistence and next-unsettled behavior as the visible Review button.
   useReviewKeyboardNavigation({
-    queue, activeId, activeFilePath, canMarkReviewed: Boolean(active && revision && !upsertBlockReview.isPending), onSelect: selectBlock, onMarkReviewed: markReviewed,
+    queue, activeId, activeFilePath, canMarkReviewed: Boolean(active && revision && !upsertBlockReview.isPending), onSelect: selectBlock, onMarkReviewed: markReviewed, onToggleReadingMode: toggleReadingMode,
   });
 
   if (source.isLoading) return <section className="review-stack" aria-label="Review stack loading" aria-busy="true"><p>Preparing the review queue…</p></section>;
@@ -223,7 +229,9 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
             activeDecisionId={active.decision.id}
             selectionTick={selectionTick}
             changeMap={changeMap}
+            readingMode={readingMode}
             onSelect={selectBlock}
+            onToggleReadingMode={toggleReadingMode}
           />}
         </div>}
       </div>}

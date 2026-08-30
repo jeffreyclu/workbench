@@ -33,6 +33,15 @@ pair's flex columns top-aligned (`align-items: flex-start`) and do not apply
 `height: 100%` to either bubble; longer streamed output may grow its own
 column without adding empty space to the other.
 
+### Conversation message rows stay in document flow
+
+*Confirmed 2026-08-29.* Do not absolutely position or height-virtualize the
+conversation transcript. Message height changes while Markdown streams and
+again when the completed response is parsed into structured sections. On a
+cold refresh, cached estimates placed later user and System rows on top of a
+long Codex response. Keep the API history paginated, but render the loaded
+rows in normal document flow so reflow cannot create overlap.
+
 ### Interactive details need an in-app tooltip, not a native `title`
 
 *Confirmed 2026-08-25.* Browser-native `title` text is not a reliable details
