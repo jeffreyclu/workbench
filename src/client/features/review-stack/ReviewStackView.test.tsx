@@ -35,7 +35,9 @@ const diff = {
   files: [file('src/server/auth.ts', AUTH_PATCH), file('src/app.ts', IMPORT_PATCH)],
 };
 
-function renderReview() {
+const twoDecisionDiff = { ...diff, files: [file('src/server/auth.ts', AUTH_PATCH), file('src/client/auth.ts', AUTH_PATCH)] };
+
+function renderReview(reviewDiff = diff) {
   const calls: Array<{ url: string; method: string; body: unknown }> = [];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -45,7 +47,7 @@ function renderReview() {
       ? json({ review: { id: 'r1', revision: 'rev-1', filePath: 'src/server/auth.ts', blockRange: '@@', contentHash: 'h', state: 'reviewed', note: null, updatedAt: '2026-01-01' } })
       : json({ reviews: [] });
     if (url.includes('/review-assist/lookup')) return json({ answer: null });
-    if (url.includes('/workspace-diff')) return json({ diff });
+    if (url.includes('/workspace-diff')) return json({ diff: reviewDiff });
     return json({});
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -90,5 +92,41 @@ describe('ReviewStackView', () => {
       expect(write?.body).toMatchObject({ filePath: 'src/server/auth.ts', state: 'reviewed', revision: 'rev-1' });
       expect((write?.body as { contentHash: string }).contentHash).toBeTruthy();
     });
+  });
+
+  it('suggests a stopping point only after more than 400 changed lines', async () => {
+    const boundaryDiff = { ...diff, files: [{ ...diff.files[0], additions: 400, deletions: 0 }] };
+    renderReview(boundaryDiff);
+    await screen.findByRole('navigation', { name: 'Review queue' });
+    expect(screen.queryByRole('note', { name: 'Suggested stopping point' })).not.toBeInTheDocument();
+    cleanup();
+
+    const largeDiff = { ...diff, files: [{ ...diff.files[0], additions: 401, deletions: 0 }] };
+    renderReview(largeDiff);
+    expect(await screen.findByRole('note', { name: 'Suggested stopping point' })).toHaveTextContent('401 changed lines');
+  });
+
+  it('moves linearly between flagged blocks and changed files with keyboard shortcuts', async () => {
+    renderReview(twoDecisionDiff);
+    const queue = await screen.findByRole('navigation', { name: 'Review queue' });
+    await waitFor(() => expect(within(queue).getAllByRole('button')).toHaveLength(2));
+    const activePath = () => within(queue).getAllByRole('button').find((button) => button.getAttribute('aria-current') === 'true')!.textContent;
+
+    expect(activePath()).toContain('src/server/auth.ts');
+    fireEvent.keyDown(document, { key: 'j' });
+    await waitFor(() => expect(activePath()).toContain('src/client/auth.ts'));
+    fireEvent.keyDown(document, { key: 'k' });
+    await waitFor(() => expect(activePath()).toContain('src/server/auth.ts'));
+    fireEvent.keyDown(document, { key: ']' });
+    await waitFor(() => expect(activePath()).toContain('src/client/auth.ts'));
+    fireEvent.keyDown(document, { key: '[' });
+    await waitFor(() => expect(activePath()).toContain('src/server/auth.ts'));
+  });
+
+  it('marks the active flagged block reviewed with r', async () => {
+    const calls = renderReview();
+    await screen.findByRole('button', { name: /Reviewed/ });
+    fireEvent.keyDown(document, { key: 'r' });
+    await waitFor(() => expect(calls.some((call) => call.method === 'PUT' && (call.body as { state: string }).state === 'reviewed')).toBe(true));
   });
 });

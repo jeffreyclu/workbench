@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { DiffHunkReview, DiffHunkReviewState } from '../../../shared/contracts.js';
 import { buildChangeMap } from '../../../shared/change-map.js';
@@ -22,6 +22,9 @@ import { highlightReviewPlace, highlightReviewRelationship, selectReviewBlock, t
 import { useBlockAssistAnswers } from './use-block-assist.js';
 import { useDiffBlockReviews, useUpsertDiffBlockReview } from './use-block-reviews.js';
 import { useReviewSource } from './use-review-source.js';
+import { adjacentDecisionId, adjacentFileDecisionId, useReviewKeyboardNavigation } from './use-review-keyboard-navigation.js';
+
+const STOPPING_POINT_LOC = 400;
 
 /**
  * The review stack: an alternative to the Changes view, not a replacement.
@@ -32,6 +35,11 @@ import { useReviewSource } from './use-review-source.js';
  * also uses is either a read-only component or a data hook; its splitting, its
  * ranking, its selection, its preferences and its persisted verdicts are all
  * its own, so Changes behaves exactly as it did before this existed.
+ *
+ * b13bf425-4047-4b22-b7c3-85317d6819fe LEGACY-AFFECTING: Existing Review
+ * stack sessions now accept document-level shortcuts and show a stopping cue
+ * for large diffs. This stays here, instead of the shared Changes surface, so
+ * it cannot change selection or review behavior for the older review flow.
  */
 export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent = null, pullRequestUrlCandidates }: {
   scope: WorkspaceDiffScope;
@@ -80,11 +88,11 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     setSelection(selectReviewBlock(queue.find((entry) => !entry.routing.autoSettled)?.decision.id ?? queue[0].decision.id));
   }, [queue, selectedId]);
 
-  const selectBlock = (decisionId: string) => {
+  const selectBlock = useCallback((decisionId: string) => {
     setSelection(selectReviewBlock(decisionId));
     setSelectionTick((tick) => tick + 1);
     if (revision) writeReviewStackBlock(source.preferenceScope, revision, decisionId);
-  };
+  }, [revision, source.preferenceScope]);
 
   const active = queue.find((entry) => entry.decision.id === selectedId) ?? null;
   const activeFilePath = active?.decision.hunks[0]?.filePath ?? null;
@@ -111,7 +119,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     if (activeId) rememberAssist(activeId, cachedAnswers);
   }, [activeId, cachedAnswers, rememberAssist]);
 
-  const saveVerdict = (state: DiffHunkReviewState) => {
+  const saveVerdict = useCallback((state: DiffHunkReviewState) => {
     if (!active || !revision) return;
     // One thought can span several blocks; the verdict is recorded against
     // every block it covers so none of them comes back as unanswered.
@@ -120,7 +128,32 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     }
     const next = nextUnsettledBlockId(queue, active.decision.id);
     if (next) selectBlock(next);
-  };
+  }, [active, queue, revision, selectBlock, upsertBlockReview]);
+
+  const changedLoc = useMemo(() => files.reduce((total, file) => total + file.additions + file.deletions, 0), [files]);
+  const selectNextDecision = useCallback(() => {
+    const next = adjacentDecisionId(queue, activeId, 1);
+    if (next) selectBlock(next);
+  }, [activeId, queue, selectBlock]);
+  const selectPreviousDecision = useCallback(() => {
+    const previous = adjacentDecisionId(queue, activeId, -1);
+    if (previous) selectBlock(previous);
+  }, [activeId, queue, selectBlock]);
+  const selectNextFile = useCallback(() => {
+    const next = adjacentFileDecisionId(queue, activeFilePath, 1);
+    if (next) selectBlock(next);
+  }, [activeFilePath, queue, selectBlock]);
+  const selectPreviousFile = useCallback(() => {
+    const previous = adjacentFileDecisionId(queue, activeFilePath, -1);
+    if (previous) selectBlock(previous);
+  }, [activeFilePath, queue, selectBlock]);
+  const markReviewed = useCallback(() => saveVerdict('reviewed'), [saveVerdict]);
+  // b13bf425-4047-4b22-b7c3-85317d6819fe LEGACY-AFFECTING: Keyboard input
+  // follows the existing queue selection and verdict writer, preserving the
+  // same persistence and next-unsettled behavior as the visible Review button.
+  useReviewKeyboardNavigation({
+    queue, activeId, activeFilePath, canMarkReviewed: Boolean(active && revision && !upsertBlockReview.isPending), onSelect: selectBlock, onMarkReviewed: markReviewed,
+  });
 
   if (source.isLoading) return <section className="review-stack" aria-label="Review stack loading" aria-busy="true"><p>Preparing the review queue…</p></section>;
   if (source.error) return <section className="review-stack" aria-label="Review stack"><p role="alert">Could not load a diff to review. <button type="button" className="button secondary compact" onClick={source.refresh}>Retry</button></p></section>;
@@ -139,11 +172,22 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
       </p>
     </header>
 
+    {changedLoc > STOPPING_POINT_LOC && <aside className="review-stopping-point" role="note" aria-label="Suggested stopping point">
+      <strong>{changedLoc} changed lines.</strong> This is a good stopping point: save your decisions and continue with a fresh pass.
+    </aside>}
+
     {queue.length === 0
       ? <p className="review-stack-empty">Nothing to review in this source.</p>
       : <div className="review-stack-layout">
         <ReviewQueueList queue={queue} activeId={selectedId} onSelect={selectBlock} />
         {active && <div className="review-stack-detail">
+          <nav className="review-flow-controls" aria-label="Review keyboard shortcuts">
+            <button type="button" onClick={selectPreviousDecision} aria-keyshortcuts="k">Previous flagged <kbd>k</kbd></button>
+            <button type="button" onClick={selectNextDecision} aria-keyshortcuts="j">Next flagged <kbd>j</kbd></button>
+            <button type="button" onClick={selectPreviousFile} aria-keyshortcuts="[">Previous file <kbd>[</kbd></button>
+            <button type="button" onClick={selectNextFile} aria-keyshortcuts="]">Next file <kbd>]</kbd></button>
+            <span>Mark reviewed <kbd>r</kbd></span>
+          </nav>
           <DiffReviewDecisionDetailCard decision={active.decision} taskIntent={taskIntent} decisions={decisions} tier={active.routing.tier}>
             <div className="review-stack-obligations">
               <h4>{REVIEW_TIER_LABELS[active.routing.tier]} — {active.routing.reason}</h4>

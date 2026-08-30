@@ -1329,6 +1329,8 @@ nav { display: grid; gap: 3px; }
 .review-stack-source label { color: #908f88; font: 700 10px 'DM Mono'; text-transform: uppercase; letter-spacing: .08em; }
 .review-stack-source select { max-width: 380px; padding: 5px 8px; color: #e2e1d9; background: #171715; border: 1px solid #373731; border-radius: 6px; font: 500 12px 'DM Mono'; }
 .review-stack-progress { margin: 0 0 0 auto; color: #908f88; font: 500 11px 'DM Mono'; }
+.review-stopping-point { display: flex; gap: 8px; margin: 14px 0 0; padding: 10px 12px; color: #d8d7cf; background: #252520; border: 1px solid #69684f; border-radius: 7px; font: 500 12px/1.45 'DM Mono'; }
+.review-stopping-point strong { color: #f4c632; }
 .review-stack-empty, .review-queue-empty { color: #908f88; font: 500 12px 'DM Mono'; }
 .review-stack-layout { display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); gap: 18px; align-items: start; padding-top: 16px; }
 .review-queue ol { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
@@ -1349,6 +1351,11 @@ nav { display: grid; gap: 3px; }
 .review-queue-settled > button .is-open { transform: rotate(90deg); }
 .review-queue-settled ol { padding-top: 8px; }
 .review-stack-detail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.review-flow-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: #171715; }
+.review-flow-controls button { padding: 5px 7px; color: #b3b2a9; background: #252520; border: 1px solid #373731; border-radius: 5px; font: 700 10px 'DM Mono'; cursor: pointer; }
+.review-flow-controls button:hover, .review-flow-controls button:focus-visible { color: #15200d; background: var(--acid); border-color: var(--acid); }
+.review-flow-controls > span { margin-left: auto; color: #908f88; font: 500 10px 'DM Mono'; }
+.review-flow-controls kbd { padding: 1px 4px; color: #e2e1d9; background: #171715; border: 1px solid #494940; border-radius: 3px; font: 700 9px 'DM Mono'; }
 .review-stack-obligations h4 { margin: 0 0 8px; color: #e2e1d9; font: 700 11px 'DM Mono'; }
 .review-stack-obligations ul { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .review-stack-obligations li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; color: #b3b2a9; font: 500 11px/1.5 'DM Mono'; }
