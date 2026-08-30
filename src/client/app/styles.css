@@ -1381,6 +1381,13 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .review-flow-controls button:hover, .review-flow-controls button:focus-visible { color: #15200d; background: var(--acid); border-color: var(--acid); }
 .review-flow-controls > span { margin-left: auto; color: #908f88; font: 500 10px 'DM Mono'; }
 .review-flow-controls kbd { padding: 1px 4px; color: #e2e1d9; background: #171715; border: 1px solid #494940; border-radius: 3px; font: 700 9px 'DM Mono'; }
+.review-block-claim { margin: 0 0 10px; padding: 10px 12px; border-left: 2px solid var(--acid); background: #1c1c18; }
+.review-block-claim h4 { margin: 0 0 5px; color: #767569; font: 700 9px 'DM Mono'; text-transform: uppercase; letter-spacing: 0.06em; }
+.review-block-claim p { margin: 0; color: #e2e1d9; font: 500 12px/1.55 'DM Mono'; }
+.review-block-claim ul { margin: 6px 0 0; padding: 0 0 0 14px; color: #b3b2a9; font: 500 11px/1.5 'DM Mono'; }
+.review-block-code { display: flex; flex-direction: column; gap: 8px; }
+.review-block-code > button { align-self: flex-start; }
+.review-block-code kbd { margin-left: 6px; }
 .review-stack-obligations h4 { margin: 0 0 8px; color: #e2e1d9; font: 700 11px 'DM Mono'; }
 .review-stack-obligations ul { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .review-stack-obligations li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; color: #b3b2a9; font: 500 11px/1.5 'DM Mono'; }

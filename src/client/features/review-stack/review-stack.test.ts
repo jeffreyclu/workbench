@@ -5,6 +5,8 @@ import { buildReviewDecisions, splitPatchHunks } from '../../../shared/review-de
 import { blockContentHash, indexReviewBlocks, reviewBlockStorageKey, splitPatchBlocks, toBlockLevelFiles } from './review-blocks.js';
 import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
 import { splitHunkIntoLogicBlocks } from './logic-blocks.js';
+import { REVIEW_CHANGE_TYPES } from '../../../shared/change-type.js';
+import { blockClaim } from './review-claims.js';
 import { blockObligations } from './review-obligations.js';
 import { gravestHazard, isFormattingOnlyChange, isImportOnlyChange, routeReviewBlock, settleObligations } from './review-routing.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
@@ -676,5 +678,23 @@ describe('projecting block verdicts onto the hunks Changes addresses', () => {
       { state: 'reviewed', hunks: [{ filePath: 'a.ts', hunkRange: '@@ -1 +1 @@' }, { filePath: 'c.ts', hunkRange: '@@ -3 +3 @@' }] },
       { state: 'needs_changes', hunks: [{ filePath: 'b.ts', hunkRange: '@@ -2 +2 @@' }] },
     ]);
+  });
+});
+
+describe('the claim a block makes', () => {
+  it('states a claim for every change type the classifier can produce', () => {
+    for (const changeType of REVIEW_CHANGE_TYPES) {
+      const claim = blockClaim({ changeType, secondaryChangeTypes: [] });
+      expect(claim.primary, changeType).toBeTruthy();
+    }
+  });
+
+  it('adds a secondary claim only when it says something the primary does not', () => {
+    const distinct = blockClaim({ changeType: 'refactor_pure', secondaryChangeTypes: ['deletion'] });
+    expect(distinct.also).toHaveLength(1);
+    expect(distinct.also[0]).not.toEqual(distinct.primary);
+
+    const repeated = blockClaim({ changeType: 'refactor_pure', secondaryChangeTypes: ['refactor_pure', 'refactor_pure'] });
+    expect(repeated.also).toHaveLength(0);
   });
 });

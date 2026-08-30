@@ -152,8 +152,38 @@ describe('ReviewStackView', () => {
     await waitFor(() => expect(activeLabel()).toContain('authorize'));
   });
 
+  it('leads with the claim and keeps the code closed until it is opened to falsify it', async () => {
+    renderReview();
+    // The claim is what a reviewer reads first. Line-by-line reading from an
+    // already-open pane is the habit this surface exists to break.
+    await screen.findByRole('region', { name: /what this block claims/i });
+    const open = screen.getByRole('button', { name: /read the code to falsify/i });
+    expect(open).toHaveAttribute('aria-expanded', 'false');
+    expect(document.querySelector('.diff-line')).toBeNull();
+
+    fireEvent.click(open);
+
+    await waitFor(() => expect(document.querySelector('.diff-line')).not.toBeNull());
+    expect(screen.getByRole('button', { name: /hide the code/i })).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('closes the code again when the reviewer moves to the next block', async () => {
+    renderReview(twoDecisionDiff);
+    await screen.findByRole('region', { name: /what this block claims/i });
+    fireEvent.keyDown(document, { key: 'o' });
+    await waitFor(() => expect(document.querySelector('.diff-line')).not.toBeNull());
+
+    fireEvent.keyDown(document, { key: 'j' });
+
+    // Each block gets its own reading: a pane left open would put the code back
+    // in front of the next block's claim.
+    await waitFor(() => expect(document.querySelector('.diff-line')).toBeNull());
+  });
+
   it('reads a block as its finished code by default and drops to the diff with d', async () => {
     renderReview();
+    await screen.findByRole('region', { name: /what this block claims/i });
+    fireEvent.keyDown(document, { key: 'o' });
     // The default reading is the code that will exist: a rewritten block is
     // judged as a whole construct rather than as an interleaving of two files.
     const toggle = await screen.findByRole('button', { name: /final code/i });
@@ -170,12 +200,16 @@ describe('ReviewStackView', () => {
 
   it('reopens in the reading mode the reviewer last chose', async () => {
     renderReview();
+    await screen.findByRole('region', { name: /what this block claims/i });
+    fireEvent.keyDown(document, { key: 'o' });
     await screen.findByRole('button', { name: /final code/i });
     fireEvent.keyDown(document, { key: 'd' });
     await screen.findByRole('button', { name: /^diff$/i });
 
     cleanup();
     renderReview();
+    await screen.findByRole('region', { name: /what this block claims/i });
+    fireEvent.keyDown(document, { key: 'o' });
 
     // A remount is not a new reviewer. Coming back to Review must not silently
     // put the pane back into final reading after it was deliberately left.

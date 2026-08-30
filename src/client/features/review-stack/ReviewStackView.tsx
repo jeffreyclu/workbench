@@ -12,6 +12,7 @@ import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { buildFileDiffHunks } from '../diff-review/logic.js';
 import { readReviewStackReadingMode, writeReviewStackBlock, writeReviewStackReadingMode } from '../../lib/preferences.js';
 import { useUpsertDiffHunkReview } from '../workspace-diff/hooks.js';
+import { blockClaim } from './review-claims.js';
 import { indexReviewBlocks, reviewBlockStorageKey, toBlockLevelFiles } from './review-blocks.js';
 import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
@@ -97,6 +98,11 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   const [selection, setSelection] = useState<ReviewSelection | null>(null);
   const [overlays, setOverlays] = useState<ReviewMapOverlays>(DEFAULT_REVIEW_MAP_OVERLAYS);
   const [selectionTick, setSelectionTick] = useState(0);
+  // Behaviour first: a block opens on the claim it makes, and the code is what
+  // the reviewer opens to falsify that claim. Reading line-by-line from the
+  // top is the failure mode this surface exists to break, and a pane that is
+  // already open is an invitation to do exactly that.
+  const [codeOpen, setCodeOpen] = useState(false);
   const selectedId = selection?.blockId ?? null;
   useEffect(() => {
     // Open on the top of the queue, and recover when the diff changes under a
@@ -105,6 +111,12 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     if (selectedId && queue.some((entry) => entry.decision.id === selectedId)) return;
     setSelection(selectReviewBlock(queue.find((entry) => !entry.routing.autoSettled)?.decision.id ?? queue[0].decision.id));
   }, [queue, selectedId]);
+
+  // Every block earns its own reading. The disclosure deliberately does not
+  // persist the way reading mode does: a remembered "always open" would put
+  // the code back in front of the claim, which is the thing being fixed.
+  useEffect(() => { setCodeOpen(false); }, [selectedId]);
+  const toggleCode = useCallback(() => setCodeOpen((open) => !open), []);
 
   const selectBlock = useCallback((decisionId: string) => {
     setSelection(selectReviewBlock(decisionId));
@@ -158,6 +170,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     if (next) selectBlock(next);
   }, [active, blockReviews.data, files, queue, revision, selectBlock, upsertBlockReview, upsertHunkReviews]);
 
+  const claim = useMemo(() => active ? blockClaim(active.decision) : null, [active]);
   const changedLoc = useMemo(() => files.reduce((total, file) => total + file.additions + file.deletions, 0), [files]);
   const selectNextDecision = useCallback(() => {
     const next = adjacentDecisionId(queue, activeId, 1);
@@ -180,7 +193,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   // follows the existing queue selection and verdict writer, preserving the
   // same persistence and next-unsettled behavior as the visible Review button.
   useReviewKeyboardNavigation({
-    queue, activeId, activeFilePath, canMarkReviewed: Boolean(active && revision && !upsertBlockReview.isPending), onSelect: selectBlock, onMarkReviewed: markReviewed, onToggleReadingMode: toggleReadingMode,
+    queue, activeId, activeFilePath, canMarkReviewed: Boolean(active && revision && !upsertBlockReview.isPending), onSelect: selectBlock, onMarkReviewed: markReviewed, onToggleReadingMode: toggleReadingMode, onToggleCode: toggleCode,
   });
 
   if (source.isLoading) return <section className="review-stack" aria-label="Review stack loading" aria-busy="true"><p>Preparing the review queue…</p></section>;
@@ -216,6 +229,13 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
             <button type="button" onClick={selectNextFile} aria-keyshortcuts="]">Next file <kbd>]</kbd></button>
             <span>Mark reviewed <kbd>r</kbd></span>
           </nav>
+          {/* The claim leads. The obligations below it are the ways it can be
+              false, and the code below those is where a reviewer goes to try. */}
+          {claim && <section className="review-block-claim" aria-label="What this block claims">
+            <h4>This change claims</h4>
+            <p>{claim.primary}</p>
+            {claim.also.length > 0 && <ul>{claim.also.map((line) => <li key={line}>{line}</li>)}</ul>}
+          </section>}
           <DiffReviewDecisionDetailCard decision={active.decision} taskIntent={taskIntent} decisions={decisions} tier={active.routing.tier}>
             <div className="review-stack-obligations">
               <h4>{REVIEW_TIER_LABELS[active.routing.tier]} — {active.routing.reason}</h4>
@@ -243,7 +263,11 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
             onHighlightRelationship={(relationshipId) => setSelection((current) => (current ? highlightReviewRelationship(current, relationshipId) : current))}
           />}
 
-          {activeFile && <DiffReviewFileDiffPane
+          {activeFile && <div className="review-block-code">
+            <button type="button" className="button secondary compact" onClick={toggleCode} aria-expanded={codeOpen} aria-controls="review-block-code-pane" aria-keyshortcuts="o">
+              {codeOpen ? 'Hide the code' : 'Read the code to falsify this'} <kbd>o</kbd>
+            </button>
+            {codeOpen && <div id="review-block-code-pane"><DiffReviewFileDiffPane
             filePath={activeFile.path}
             editorUrl={activeFile.editorUrl ?? null}
             hunks={fileHunks}
@@ -254,7 +278,8 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
             readingMode={readingMode}
             onSelect={selectBlock}
             onToggleReadingMode={toggleReadingMode}
-          />}
+          /></div>}
+          </div>}
         </div>}
       </div>}
   </section>;
