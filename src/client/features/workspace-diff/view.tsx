@@ -26,7 +26,7 @@ import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
 import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
 import { workspaceDiffQueryKeys } from './data.js';
 import { readWorkspaceDiffSelection, writeWorkspaceDiffDecision, writeWorkspaceDiffSource } from '../../lib/preferences.js';
-import { adjacentFileDecisionId, adjacentPendingDecisionId, useWorkspaceDiffKeyboardNavigation } from './use-keyboard-navigation.js';
+import { useWorkspaceDiffKeyboardNavigation } from './use-keyboard-navigation.js';
 
 const STOPPING_POINT_LOC = 400;
 
@@ -299,22 +299,6 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     setSelectionTick((tick) => tick + 1);
   }, [selectedDecisionId]);
 
-  const selectPreviousDecision = useCallback(() => {
-    const id = adjacentPendingDecisionId(orderedDecisions, selectedDecision?.id ?? null, -1);
-    if (id) selectDecision(id);
-  }, [orderedDecisions, selectDecision, selectedDecision?.id]);
-  const selectNextDecision = useCallback(() => {
-    const id = adjacentPendingDecisionId(orderedDecisions, selectedDecision?.id ?? null, 1);
-    if (id) selectDecision(id);
-  }, [orderedDecisions, selectDecision, selectedDecision?.id]);
-  const selectPreviousFile = useCallback(() => {
-    const id = adjacentFileDecisionId(orderedDecisions, changedFilePaths, selectedFile?.path ?? null, -1);
-    if (id) selectDecision(id);
-  }, [changedFilePaths, orderedDecisions, selectDecision, selectedFile?.path]);
-  const selectNextFile = useCallback(() => {
-    const id = adjacentFileDecisionId(orderedDecisions, changedFilePaths, selectedFile?.path ?? null, 1);
-    if (id) selectDecision(id);
-  }, [changedFilePaths, orderedDecisions, selectDecision, selectedFile?.path]);
   const markSelectedReviewed = useCallback(() => {
     if (selectedDecision) void saveDecision(selectedDecision, 'reviewed');
   }, [saveDecision, selectedDecision]);
@@ -437,13 +421,6 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                 {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
                 {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
                 {selectedDecision && <>
-                  <nav className="review-flow-controls" aria-label="Changes keyboard shortcuts">
-                    <button type="button" onClick={selectPreviousDecision} aria-keyshortcuts="k">Previous flagged <kbd>k</kbd></button>
-                    <button type="button" onClick={selectNextDecision} aria-keyshortcuts="j">Next flagged <kbd>j</kbd></button>
-                    <button type="button" onClick={selectPreviousFile} aria-keyshortcuts="[">Previous file <kbd>[</kbd></button>
-                    <button type="button" onClick={selectNextFile} aria-keyshortcuts="]">Next file <kbd>]</kbd></button>
-                    <span>Mark reviewed <kbd>r</kbd></span>
-                  </nav>
                   <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} commentCounts={isPullRequestSource ? commentCounts : undefined} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">

@@ -101,7 +101,8 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
-    await screen.findByRole('navigation', { name: 'Changes keyboard shortcuts' });
+    await screen.findByRole('navigation', { name: 'Review decision queue' });
+    expect(screen.queryByRole('navigation', { name: 'Changes keyboard shortcuts' })).not.toBeInTheDocument();
     const selectedName = () => selectedDecisionChip().getAttribute('aria-label');
     expect(selectedName()).toMatch(/^Decision 1/);
 
