@@ -55,6 +55,29 @@ describe('WorkItemRepository', () => {
     expect(repository.listDiffHunkReviews({ workItemId: other.id }, 'rev-1')).toEqual([expect.objectContaining({ state: 'reviewed' })]);
   });
 
+  it('keeps block-level review state separate from hunk-level review state', () => {
+    const item = repository.create({ title: 'Block review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,20 +1,30 @@', state: 'reviewed' });
+
+    const block = repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@ parseBody', contentHash: 'abc123', state: 'needs_changes', note: 'unhandled empty body' });
+    expect(block.state).toBe('needs_changes');
+
+    // Reviewing a block does not mark its hunk reviewed, and vice versa: the
+    // two granularities are deliberately not reconciled.
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-1')).toEqual([expect.objectContaining({ hunkRange: '@@ -1,20 +1,30 @@', state: 'reviewed' })]);
+    expect(repository.listDiffBlockReviews({ workItemId: item.id }, 'rev-1')).toEqual([expect.objectContaining({ blockRange: '@@ -1,8 +1,12 @@ parseBody', contentHash: 'abc123', state: 'needs_changes' })]);
+  });
+
+  it('records a rewritten block as a separate verdict from the one it replaced', () => {
+    const item = repository.create({ title: 'Rewritten block', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-before', state: 'reviewed' });
+    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-after', state: 'commented' });
+
+    const reviews = repository.listDiffBlockReviews({ workItemId: item.id }, 'rev-1');
+    expect(reviews).toHaveLength(2);
+    expect(reviews.map((review) => review.contentHash).sort()).toEqual(['hash-after', 'hash-before']);
+  });
+
   it('upserts every hunk in one review decision through the batch boundary', () => {
     const item = repository.create({ title: 'Cross-file review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const reviews = repository.upsertDiffHunkReviews({ workItemId: item.id }, {

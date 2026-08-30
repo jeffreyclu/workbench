@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentRunReviewHandoff, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type InsightsTimeframe, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState, type UpsertDiffHunkReviewsInput } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentRunReviewHandoff, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type InsightsTimeframe, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState, type UpsertDiffHunkReviewsInput, type DiffBlockReview, type UpsertDiffBlockReviewInput } from '../shared/contracts.js';
 import type { FeedbackWeight, QueueContext, QueuePlan } from './queue-intelligence.js';
 import { listProjects, resolveProjectName } from './project-registry.js';
 import type { WorkbenchDatabase } from './database.js';
@@ -72,6 +72,21 @@ interface DiffHunkReviewRow {
 
 function mapDiffHunkReview(row: DiffHunkReviewRow): DiffHunkReview {
   return { id: row.id, revision: row.revision, filePath: row.file_path, hunkRange: row.hunk_range, state: row.state, note: row.note, updatedAt: row.updated_at };
+}
+
+interface DiffBlockReviewRow {
+  id: string;
+  revision: string;
+  file_path: string;
+  block_range: string;
+  content_hash: string;
+  state: DiffHunkReviewState;
+  note: string | null;
+  updated_at: string;
+}
+
+function mapDiffBlockReview(row: DiffBlockReviewRow): DiffBlockReview {
+  return { id: row.id, revision: row.revision, filePath: row.file_path, blockRange: row.block_range, contentHash: row.content_hash, state: row.state, note: row.note, updatedAt: row.updated_at };
 }
 
 function mapSavedWorkItemFilter(row: SavedWorkItemFilterRow): SavedWorkItemFilter {
@@ -905,6 +920,25 @@ export class WorkItemRepository {
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
     return (this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? ORDER BY file_path ASC, hunk_range ASC`)
       .all(id, revision) as unknown as DiffHunkReviewRow[]).map(mapDiffHunkReview);
+  }
+
+  /** Block-level review state for the Review surface. Kept entirely separate
+   * from `diff_hunk_reviews`: Changes must read and write exactly what it did
+   * before this table existed. */
+  upsertDiffBlockReview(scope: { workItemId: string } | { conversationId: string }, input: UpsertDiffBlockReviewInput): DiffBlockReview {
+    const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
+    const now = new Date().toISOString();
+    this.database.prepare(`INSERT INTO diff_block_reviews (id, ${column}, revision, file_path, block_range, content_hash, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(${column}, revision, file_path, block_range, content_hash) WHERE ${column} IS NOT NULL DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
+      .run(randomUUID(), id, input.revision, input.filePath, input.blockRange, input.contentHash, input.state, input.note ?? null, now);
+    return mapDiffBlockReview(this.database.prepare(`SELECT id, revision, file_path, block_range, content_hash, state, note, updated_at FROM diff_block_reviews WHERE ${column} = ? AND revision = ? AND file_path = ? AND block_range = ? AND content_hash = ?`)
+      .get(id, input.revision, input.filePath, input.blockRange, input.contentHash) as unknown as DiffBlockReviewRow);
+  }
+
+  listDiffBlockReviews(scope: { workItemId: string } | { conversationId: string }, revision: string): DiffBlockReview[] {
+    const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
+    return (this.database.prepare(`SELECT id, revision, file_path, block_range, content_hash, state, note, updated_at FROM diff_block_reviews WHERE ${column} = ? AND revision = ? ORDER BY file_path ASC, block_range ASC`)
+      .all(id, revision) as unknown as DiffBlockReviewRow[]).map(mapDiffBlockReview);
   }
 
   createSessionFeedback(input: { conversationId?: string | null; workItemId?: string | null; rating: SessionFeedbackRating }): SessionFeedback | null {

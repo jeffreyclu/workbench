@@ -1828,6 +1828,36 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // The review stack addresses a change at logic-block granularity, which
+    // `diff_hunk_reviews` cannot express: that table is keyed on a hunk range
+    // and already holds rows recorded against those ranges. Splitting them in
+    // place would orphan every existing verdict, so blocks get their own
+    // table. The content hash is part of the key, so a rewritten block asks
+    // its question again rather than inheriting an answer about other code.
+    id: '068_diff_block_reviews',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS diff_block_reviews (
+          id TEXT PRIMARY KEY,
+          work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
+          conversation_id TEXT REFERENCES shared_conversations(id) ON DELETE CASCADE,
+          revision TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          block_range TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('reviewed', 'needs_changes', 'commented')),
+          note TEXT,
+          updated_at TEXT NOT NULL,
+          CHECK (work_item_id IS NOT NULL OR conversation_id IS NOT NULL)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_diff_block_reviews_work_item_key
+          ON diff_block_reviews(work_item_id, revision, file_path, block_range, content_hash) WHERE work_item_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_diff_block_reviews_conversation_key
+          ON diff_block_reviews(conversation_id, revision, file_path, block_range, content_hash) WHERE conversation_id IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

@@ -341,6 +341,14 @@ const reviewAssistLinesSchema = z.array(z.string())
   .transform(boundReviewAssistLines)
   .pipe(z.array(z.string().max(REVIEW_ASSIST_MAX_LINE_LENGTH)).max(REVIEW_ASSIST_MAX_LINES_PER_HUNK));
 
+/** How much attention the review stack routed a block to. It rides on the
+ * assist request because it changes what the answer is worth: a T1 skim and a
+ * T3 study are different questions, and a cache that ignored the tier would
+ * serve the cheap one wearing the expensive one's authority. Changes never
+ * sends it, so its requests hash exactly as they did before this existed. */
+export const REVIEW_ASSIST_TIERS = ['T0', 'T1', 'T2', 'T3'] as const;
+export type ReviewAssistTier = typeof REVIEW_ASSIST_TIERS[number];
+
 export const reviewAssistRequestSchema = z.object({
   action: z.enum(['explain', 'what_could_break', 'compare_task_intent', 'score_risk']),
   decision: z.object({
@@ -387,6 +395,7 @@ export const reviewAssistRequestSchema = z.object({
     title: z.string().max(2_000),
     description: z.string().max(50_000),
   }).nullable().default(null),
+  tier: z.enum(REVIEW_ASSIST_TIERS).nullable().default(null),
 });
 
 /** A read-only snapshot of the uncommitted changes in a task's local workspace. */
@@ -457,6 +466,39 @@ export const upsertDiffHunkReviewsSchema = z.object({
 });
 
 export type UpsertDiffHunkReviewsInput = z.infer<typeof upsertDiffHunkReviewsSchema>;
+
+/** Persistent review state for one *block* — a hunk cut at the boundaries a
+ * reader would use — at a given diff revision.
+ *
+ * Deliberately its own table rather than a column on `diff_hunk_reviews`. A
+ * shared table would make Changes read rows addressed at a granularity it does
+ * not speak, and the Review surface exists precisely so that Changes keeps
+ * working exactly as it does today. Reviewing a block here does not mark its
+ * hunk reviewed there; reconciling the two is a later decision, not a silent
+ * coupling. */
+export interface DiffBlockReview {
+  id: string;
+  revision: string;
+  filePath: string;
+  blockRange: string;
+  /** Hash of the block's own lines. A block whose content changed asks its
+   * question again instead of inheriting a verdict given about other code. */
+  contentHash: string;
+  state: DiffHunkReviewState;
+  note: string | null;
+  updatedAt: string;
+}
+
+export const upsertDiffBlockReviewSchema = z.object({
+  revision: z.string().trim().min(1),
+  filePath: z.string().trim().min(1),
+  blockRange: z.string().trim().min(1),
+  contentHash: z.string().trim().min(1).max(64),
+  state: z.enum(['reviewed', 'needs_changes', 'commented']),
+  note: z.string().trim().min(1).optional(),
+});
+
+export type UpsertDiffBlockReviewInput = z.infer<typeof upsertDiffBlockReviewSchema>;
 
 export interface WorkspacePublishStatus {
   branch: string | null;

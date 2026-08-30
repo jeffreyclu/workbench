@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
 import { changeTypeLabel, isReviewChangeType, type ReviewChangeType } from '../shared/change-type.js';
+import type { ReviewAssistTier } from '../shared/contracts.js';
 import { auditCitations, auditReferenceClaims, citationAuditNote, referenceClaimNote, type CoverageEvidence, type ReferenceEvidence } from '../shared/coverage-evidence.js';
 import { auditParityTable, parityAuditNote, parityTableApplies, PARITY_DIRECTIVE } from '../shared/parity-table.js';
 
@@ -118,7 +119,7 @@ const PRIME_PROMPT = 'Instruction: reply with the single word ready.';
  * an edited task description threw away a score that did not depend on it, and
  * a background-computed score missed the moment the reviewer's window derived
  * intent even slightly differently. */
-function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent): string {
+function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null = null): string {
   // Review state is deliberately excluded from both the key and the prompt.
   // Whether a human has already ticked "Reviewed" does not change what the code
   // does, and folding it in threw the answer away the instant a reviewer
@@ -144,9 +145,13 @@ function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision,
       : null,
   };
   const keyedDecision = { behavior: decision.behavior, changeType: decision.changeType, secondaryChangeTypes: decision.secondaryChangeTypes, hunks: decision.hunks, evidence: keyedEvidence };
+  // `tier` is only present for review-stack requests, and `JSON.stringify`
+  // omits an undefined value: a request without a tier hashes to exactly the
+  // string it hashed to before tiering existed, so no cached Changes answer is
+  // invalidated by this key gaining a field.
   const keyed = action === 'compare_task_intent'
-    ? { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, taskIntent }
-    : { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision };
+    ? { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, taskIntent, tier: tier ?? undefined }
+    : { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, tier: tier ?? undefined };
   return createHash('sha256').update(JSON.stringify(keyed)).digest('hex');
 }
 
@@ -164,8 +169,8 @@ function writeCached(database: WorkbenchDatabase, hash: string, answer: string):
  * they (or another window) already paid for the instant they open a hunk,
  * without turning this surface back into ambient AI spend for hunks nobody
  * has asked about yet. */
-export function lookupReviewAssist(database: WorkbenchDatabase, action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent): string | null {
-  return readCached(database, hashRequest(action, decision, taskIntent)) ?? null;
+export function lookupReviewAssist(database: WorkbenchDatabase, action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null = null): string | null {
+  return readCached(database, hashRequest(action, decision, taskIntent, tier)) ?? null;
 }
 
 function buildPrompt(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent): string {
@@ -458,8 +463,9 @@ export async function requestReviewAssist(
   decision: ReviewAssistDecision,
   taskIntent: ReviewAssistTaskIntent,
   onDelta?: (text: string) => void,
+  tier: ReviewAssistTier | null = null,
 ): Promise<string> {
-  const hash = hashRequest(action, decision, taskIntent);
+  const hash = hashRequest(action, decision, taskIntent, tier);
   const cached = readCached(database, hash);
   if (cached) return cached;
   // Task and conversation scopes intentionally score the same diff at the

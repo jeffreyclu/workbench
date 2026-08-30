@@ -4,6 +4,7 @@ import { sourceClient, type ReviewAssistActionName } from '../../data/source-cli
 import type { ReviewDecision } from './logic.js';
 import { reviewAssistDecisionPayload } from './logic.js';
 import type { AutoScoreResult } from './auto-score.js';
+import type { ReviewAssistTier } from '../../../shared/contracts.js';
 
 export type ReviewAssistAction = ReviewAssistActionName;
 export type ReviewAssistTaskIntent = { title: string; description: string } | null;
@@ -27,20 +28,22 @@ export const EXPLAIN_ACTIONS = ASSIST_ACTIONS.filter((action) => action !== 'sco
 
 export type CachedAssistAnswers = Partial<Record<ReviewAssistAction, string>>;
 
-function cacheKey(decisionId: string, taskIntent: ReviewAssistTaskIntent) {
-  return ['review-assist-cache', decisionId, taskIntent?.title, taskIntent?.description];
+function cacheKey(decisionId: string, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null) {
+  // Tier is part of the key for the same reason it is part of the server's
+  // cache hash: a T1 skim and a T3 study are different answers.
+  return ['review-assist-cache', decisionId, taskIntent?.title, taskIntent?.description, tier];
 }
 
 /** Cache-only reads: a reviewer (or another window) who already asked this
  * exact question about this exact decision sees the answer the instant the
  * decision opens, with no model spend and no click required. */
-export function useCachedReviewAssistAnswers(decision: ReviewDecision | null, taskIntent: ReviewAssistTaskIntent, siblings: ReviewDecision[] = []) {
+export function useCachedReviewAssistAnswers(decision: ReviewDecision | null, taskIntent: ReviewAssistTaskIntent, siblings: ReviewDecision[] = [], tier: ReviewAssistTier | null = null) {
   // Siblings feed the coverage-evidence pack, which is part of the server's
   // cache key. Reading with a different sibling set than the background scorer
   // wrote with would miss every cached answer, so both pass the whole review.
   const decisionPayload = decision ? reviewAssistDecisionPayload(decision, siblings) : null;
   return useQuery({
-    queryKey: cacheKey(decision?.id ?? '', taskIntent),
+    queryKey: cacheKey(decision?.id ?? '', taskIntent, tier),
     enabled: Boolean(decisionPayload),
     // A cache lookup is cheap and is automatically repeated when the decision
     // or diff changes. Retrying a deterministic 4xx four times only hammers the
@@ -48,7 +51,7 @@ export function useCachedReviewAssistAnswers(decision: ReviewDecision | null, ta
     retry: false,
     queryFn: async () => {
       if (!decisionPayload) return {} as CachedAssistAnswers;
-      const results = await Promise.all(ASSIST_ACTIONS.map((action) => sourceClient.lookupReviewAssist({ action, decision: decisionPayload, taskIntent }).then((response) => [action, response.answer] as const)));
+      const results = await Promise.all(ASSIST_ACTIONS.map((action) => sourceClient.lookupReviewAssist({ action, decision: decisionPayload, taskIntent, tier }).then((response) => [action, response.answer] as const)));
       return Object.fromEntries(results.filter(([, answer]) => answer !== null)) as CachedAssistAnswers;
     },
   });

@@ -6,7 +6,7 @@ import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, buildSharedReplyPrompt, classificationForLinkedItem, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const temporaryDirectories: string[] = [];
@@ -410,11 +410,11 @@ describe('shared-room Codex warming', () => {
 
     warmSharedRoomCodex(directory);
 
-    expect(hasWarmProcess('codex', directory, 'codex', ['app-server', '--stdio'], 'default')).toBe(false);
-    await waitFor(() => hasWarmProcess('codex', directory, 'codex', ['app-server', '--stdio'], 'default'));
+    expect(hasWarmProcess('codex', directory, 'codex', CODEX_APP_SERVER_ARGS, 'default')).toBe(false);
+    await waitFor(() => hasWarmProcess('codex', directory, 'codex', CODEX_APP_SERVER_ARGS, 'default'));
     expect(JSON.parse(readFileSync(log, 'utf8'))).toMatchObject({ id: 1, method: 'initialize' });
 
-    const claimed = claimWarmProcess('codex', directory, 'codex', ['app-server', '--stdio'], 'default');
+    const claimed = claimWarmProcess('codex', directory, 'codex', CODEX_APP_SERVER_ARGS, 'default');
     expect(claimed).not.toBeNull();
     claimed?.kill();
   });

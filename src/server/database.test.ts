@@ -78,6 +78,7 @@ const EXPECTED_MIGRATIONS = [
   '065_backfill_estimated_cost',
   '066_shared_message_kind',
   '067_shared_turn_groundings',
+  '068_diff_block_reviews',
 ];
 
 describe('openDatabase', () => {
@@ -150,6 +151,26 @@ describe('openDatabase', () => {
     const columns = upgraded.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>;
     expect(columns.map(({ name }) => name)).toEqual(expect.arrayContaining(['is_queued', 'workspace_path', 'archived_at', 'stack']));
     expect(upgraded.prepare('SELECT id FROM schema_migrations ORDER BY id').all()).toHaveLength(EXPECTED_MIGRATIONS.length);
+    upgraded.close();
+  });
+
+  it('adds block-level review storage when upgrading from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    // A database that has already recorded through 067 would skip a change
+    // made only to the base schema, which is the failure this asserts against.
+    current.exec('DROP TABLE diff_block_reviews;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '068_diff_block_reviews'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'diff_block_reviews'").get()).toBeTruthy();
+    const columns = (upgraded.prepare('PRAGMA table_info(diff_block_reviews)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['revision', 'file_path', 'block_range', 'content_hash', 'state', 'note']));
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_diff_block_reviews_conversation_key'").get()).toBeTruthy();
+    // Hunk-level review state is untouched by the block table existing.
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'diff_hunk_reviews'").get()).toBeTruthy();
     upgraded.close();
   });
 

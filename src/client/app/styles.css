@@ -1314,6 +1314,47 @@ nav { display: grid; gap: 3px; }
 .conversation-changes { order: 1; flex: 1 1 auto; min-width: 0; min-height: 0; padding: 0 28px 14px; overflow: auto; }
 .conversation-changes .workspace-diff { max-width: 1240px; margin: 0 auto; padding-top: 18px; border-top: 0; }
 .conversation-changes .github-diff { max-width: 1240px; margin: 0 auto; padding-top: 18px; border-top: 0; }
+/* The review stack is a third pane beside Changes. It reuses Changes' column
+   geometry and none of its selectors, so restyling one can never move the
+   other. */
+.conversation-review-layout.layout-review { display: flex; flex-direction: column; }
+.conversation-review-layout.layout-review .conversation-thread-pane { display: contents; }
+.conversation-review-layout.layout-review .shared-thread { display: none; }
+.conversation-review-layout.layout-review .shared-composer,
+.conversation-review-layout.layout-review .archived-composer-note { order: 2; flex: 0 0 auto; width: calc(100% - 56px); margin: 0 28px 20px; }
+.conversation-review { order: 1; flex: 1 1 auto; min-width: 0; min-height: 0; padding: 0 28px 14px; overflow: auto; }
+.review-stack { max-width: 1240px; margin: 0 auto; padding-top: 18px; }
+.review-stack > header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.review-stack-source { display: inline-flex; align-items: center; gap: 8px; }
+.review-stack-source label { color: #908f88; font: 700 10px 'DM Mono'; text-transform: uppercase; letter-spacing: .08em; }
+.review-stack-source select { max-width: 380px; padding: 5px 8px; color: #e2e1d9; background: #171715; border: 1px solid #373731; border-radius: 6px; font: 500 12px 'DM Mono'; }
+.review-stack-progress { margin: 0 0 0 auto; color: #908f88; font: 500 11px 'DM Mono'; }
+.review-stack-empty, .review-queue-empty { color: #908f88; font: 500 12px 'DM Mono'; }
+.review-stack-layout { display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); gap: 18px; align-items: start; padding-top: 16px; }
+.review-queue ol { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.review-queue-row > button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; width: 100%; padding: 9px 10px; text-align: left; color: #e2e1d9; background: #171715; border: 1px solid #373731; border-radius: 6px; cursor: pointer; }
+.review-queue-row > button:hover { background: #252520; }
+.review-queue-row.is-active > button { border-color: var(--acid); }
+.review-queue-row.is-judged > button { opacity: .55; }
+.review-queue-tier { align-self: start; padding: 2px 5px; border-radius: 4px; background: #252520; color: #908f88; font: 700 10px 'DM Mono'; }
+.review-queue-row.tier-t2 .review-queue-tier { color: #f4c632; }
+.review-queue-row.tier-t3 .review-queue-tier { color: #15200d; background: var(--acid); }
+.review-queue-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.review-queue-body strong { overflow: hidden; font: 600 12px 'DM Mono'; text-overflow: ellipsis; white-space: nowrap; }
+.review-queue-body em { color: #b3b2a9; font: italic 400 11px/1.4 'DM Mono'; }
+.review-queue-body small { color: #767569; font: 500 10px 'DM Mono'; }
+.review-queue-state { color: #908f88; }
+.review-queue-settled { padding-top: 10px; }
+.review-queue-settled > button { display: inline-flex; align-items: center; gap: 6px; padding: 0; color: #767569; background: none; border: 0; font: 700 10px 'DM Mono'; cursor: pointer; }
+.review-queue-settled > button .is-open { transform: rotate(90deg); }
+.review-queue-settled ol { padding-top: 8px; }
+.review-stack-detail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.review-stack-obligations h4 { margin: 0 0 8px; color: #e2e1d9; font: 700 11px 'DM Mono'; }
+.review-stack-obligations ul { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.review-stack-obligations li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; color: #b3b2a9; font: 500 11px/1.5 'DM Mono'; }
+.review-stack-obligations li > span { padding: 1px 5px; border-radius: 4px; background: #252520; color: #767569; font: 700 9px 'DM Mono'; text-align: center; text-transform: uppercase; }
+.review-stack-obligations li.settled-by-human > span { color: #15200d; background: var(--acid); }
+.review-stack-obligations li.settled-by-ai > span { color: #f4c632; }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .spin { animation: spin .8s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes thinking-pulse { 0% { box-shadow: 0 0 0 0 #c6f43277; } 70% { box-shadow: 0 0 0 8px #c6f43200; } 100% { box-shadow: 0 0 0 0 #c6f43200; } }
@@ -1502,6 +1543,8 @@ nav { display: grid; gap: 3px; }
   .shared-message header .model-badge::-webkit-scrollbar { display: none; }
   .conversation-review-layout { border-top: 0; }
   .conversation-review-layout.layout-changes .conversation-thread-pane { display: contents; }
+  .conversation-review-layout.layout-review .conversation-thread-pane { display: contents; }
+  .review-stack-layout { grid-template-columns: minmax(0, 1fr); }
   .conversation-review-layout.layout-changes .shared-composer,
   .conversation-review-layout.layout-changes .archived-composer-note { width: auto; margin: 0; }
   .conversation-changes { padding: 0 14px 20px; }

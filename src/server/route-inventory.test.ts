@@ -56,6 +56,8 @@ const baselineInventory = [
   'GET /api/shared/conversations/:id/workspace-diff/hunk-reviews',
   'PUT /api/shared/conversations/:id/workspace-diff/hunk-reviews',
   'PUT /api/shared/conversations/:id/workspace-diff/hunk-reviews/batch',
+  'GET /api/shared/conversations/:id/workspace-diff/block-reviews',
+  'PUT /api/shared/conversations/:id/workspace-diff/block-reviews',
   'GET /api/shared/conversations/:id/agent-events',
   'GET /api/shared/conversations/:id/feedback',
   'GET /api/shared/conversations-unread-count',
@@ -121,6 +123,11 @@ const baselineInventory = [
   'GET /api/work-items/:id/workspace-diff/hunk-reviews',
   'PUT /api/work-items/:id/workspace-diff/hunk-reviews',
   'PUT /api/work-items/:id/workspace-diff/hunk-reviews/batch',
+  'GET /api/work-items/:id/workspace-diff/block-reviews',
+  // Registered since the stale-reference check shipped, but never recorded
+  // here; the inventory is only a guard while it tracks the app exactly.
+  'GET /api/work-items/:id/workspace-diff/stale-references',
+  'PUT /api/work-items/:id/workspace-diff/block-reviews',
   'PUT /api/work-items/:id/workspaces/selection',
   'GET /api/work-items/:id/dependency-candidates',
   'POST /api/work-items/:id/references',
@@ -180,7 +187,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(148);
+    expect(baselineInventory).toHaveLength(153);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

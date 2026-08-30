@@ -746,6 +746,17 @@ export function checkpointActivityDetail(peakContextTokens: number, profile: Exe
 
 export type AgentInputSteering = (body: string) => Promise<boolean>;
 
+/**
+ * Keep Codex's Workbench MCP connection independent of the active account's
+ * personal config. The loopback endpoint is trusted by Workbench's auth gate,
+ * so clear any inherited bearer-token setting instead of exposing the host's
+ * WORKBENCH_TOKEN to the agent subprocess.
+ */
+export const CODEX_WORKBENCH_MCP_ARGS = [
+  '-c', 'mcp_servers.workbench.url="http://localhost:5180/mcp"',
+  '-c', 'mcp_servers.workbench.bearer_token_env_var=""',
+] as const;
+
 export function commandFor(agent: AgentRun['agent'], cwd: string, profile: ExecutionProfile, modelOverride?: string, resumeSessionId?: string, kind: AgentRun['kind'] = 'execute'): { command: string; args: string[] } {
   const effort = effortFor(profile);
   const readOnly = kind === 'analysis' || kind === 'research' || kind === 'review' || kind === 'strategy';
@@ -757,7 +768,7 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
       // --ignore-user-config excludes every personal MCP server. Add back only
       // Workbench's loopback-local MCP surface so Codex does not try to curl
       // the host UI from inside its command sandbox.
-      args: ['exec', '--ephemeral', '--ignore-user-config', '--sandbox', readOnly ? 'read-only' : 'workspace-write', '--skip-git-repo-check', '--json', '-c', `model_reasoning_effort="${effort}"`, '-c', 'mcp_servers.workbench.url="http://localhost:5180/mcp"', '--model', model, '-C', cwd, '-'],
+      args: ['exec', '--ephemeral', '--ignore-user-config', '--sandbox', readOnly ? 'read-only' : 'workspace-write', '--skip-git-repo-check', '--json', '-c', `model_reasoning_effort="${effort}"`, ...CODEX_WORKBENCH_MCP_ARGS, '--model', model, '-C', cwd, '-'],
     };
   }
   const model = modelOverride ?? modelFor(agent, profile);

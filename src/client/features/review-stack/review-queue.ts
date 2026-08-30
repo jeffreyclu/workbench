@@ -1,0 +1,92 @@
+import type { ChangeMap } from '../../../shared/change-map.js';
+import type { ReviewDecision } from '../../../shared/review-decisions.js';
+import { blockObligations, type ReviewObligation } from './review-obligations.js';
+import { blockRelationships, relationshipEscalation, warrantsRelationshipMap, type ReviewRelationships } from './review-relationships.js';
+import { escalateRouting, routeReviewBlock, tierRank, type ReviewRouting } from './review-routing.js';
+import type { ReviewBlockIdentity } from './review-blocks.js';
+
+export interface ReviewQueueEntry {
+  decision: ReviewDecision;
+  /** Every block this entry covers. Usually one, but the shared builder groups
+   * a change with the imports it needed and with its counterparts in other
+   * files — one thought spread across hunks is still one queue position, and
+   * judging it writes a row per block. Empty only for a patch that could not be
+   * re-emitted at block level (binary, whole-file placeholder). */
+  identities: ReviewBlockIdentity[];
+  routing: ReviewRouting;
+  obligations: ReviewObligation[];
+  relationships: ReviewRelationships;
+  /** Whether this block has earned the relationship map's cost. */
+  showsMap: boolean;
+}
+
+/** Ranked by attention deserved, not by file order.
+ *
+ * Already-judged blocks sink, then auto-settled ones, so what is left at the
+ * top is only what is still owed an answer. Within that, tier decides —
+ * routing has already priced each block — and relationship degree breaks ties,
+ * because a change other changes hang off is the one worth understanding
+ * first. Source ordinal keeps every remaining tie stable across renders. */
+function compareEntries(left: ReviewQueueEntry, right: ReviewQueueEntry): number {
+  const judged = Number(left.decision.state !== null) - Number(right.decision.state !== null);
+  if (judged !== 0) return judged;
+  const settled = Number(left.routing.autoSettled) - Number(right.routing.autoSettled);
+  if (settled !== 0) return settled;
+  const tier = tierRank(right.routing.tier) - tierRank(left.routing.tier);
+  if (tier !== 0) return tier;
+  const degree = right.relationships.degree - left.relationships.degree;
+  if (degree !== 0) return degree;
+  return left.decision.ordinal - right.decision.ordinal;
+}
+
+export function buildReviewQueue(decisions: ReviewDecision[], map: ChangeMap, blocks: Map<string, ReviewBlockIdentity>): ReviewQueueEntry[] {
+  const entries = decisions.map((decision): ReviewQueueEntry => {
+    const obligations = blockObligations(decision);
+    const relationships = blockRelationships(map, decision.id);
+    let routing = routeReviewBlock(decision, obligations);
+    // Discovering broader impact is the one thing routing cannot see from the
+    // patch alone, so it is applied after the neighbourhood is known.
+    const escalation = routing.autoSettled ? null : relationshipEscalation(relationships);
+    if (escalation) routing = escalateRouting(routing, escalation);
+    return {
+      decision,
+      identities: decision.hunks.flatMap((hunk) => { const identity = blocks.get(hunk.id); return identity ? [identity] : []; }),
+      routing, obligations, relationships,
+      showsMap: warrantsRelationshipMap(routing, relationships),
+    };
+  });
+  return entries.sort(compareEntries);
+}
+
+/** The next block still owed an answer, skipping everything routing settled.
+ * Falls back to the auto-settled tail only when nothing else is left, so
+ * "advance" always moves rather than dead-ending. */
+export function nextUnsettledBlockId(queue: ReviewQueueEntry[], currentId: string | null): string | null {
+  const pending = queue.filter((entry) => entry.decision.state === null && !entry.routing.autoSettled);
+  const index = pending.findIndex((entry) => entry.decision.id === currentId);
+  const next = pending[index + 1] ?? pending.find((entry) => entry.decision.id !== currentId);
+  if (next) return next.decision.id;
+  return queue.find((entry) => entry.decision.state === null && entry.decision.id !== currentId)?.decision.id ?? null;
+}
+
+export interface ReviewQueueProgress {
+  total: number;
+  settled: number;
+  judged: number;
+  /** What is actually left for Jeffrey: unjudged, not auto-settled. */
+  remaining: number;
+  byTier: Record<string, number>;
+}
+
+export function reviewQueueProgress(queue: ReviewQueueEntry[]): ReviewQueueProgress {
+  const byTier: Record<string, number> = {};
+  let settled = 0;
+  let judged = 0;
+  for (const entry of queue) {
+    byTier[entry.routing.tier] = (byTier[entry.routing.tier] ?? 0) + 1;
+    if (entry.routing.autoSettled) settled += 1;
+    if (entry.decision.state !== null) judged += 1;
+  }
+  const remaining = queue.filter((entry) => entry.decision.state === null && !entry.routing.autoSettled).length;
+  return { total: queue.length, settled, judged, remaining, byTier };
+}

@@ -7,13 +7,19 @@ import {
 } from './contracts.js';
 import { buildCoverageEvidence, buildReferenceEvidence, type CoverageEvidence, type ReferenceEvidence } from './coverage-evidence.js';
 import { classifyChangeType, type ReviewChangeType } from './change-type.js';
-import { splitHunkIntoLogicBlocks, type PatchHunk } from './logic-blocks.js';
 
 /** Decision derivation is shared, not client-only: the server's background
  * scorer must produce byte-identical decision payloads, because the AI answer
  * cache is keyed by a hash of that payload. Any drift between the two would
  * silently turn every pre-computed score into a cache miss the reviewer pays
  * for again. */
+/** A hunk as Git emits it: one contiguous edit and its `@@` header. Shared
+ * derivation addresses changes at exactly this granularity, because the
+ * persisted review key `(revision, file_path, hunk_range)` is a hunk range.
+ * Anything finer belongs to the Review surface, which owns its own splitter
+ * and its own table. */
+export interface PatchHunk { range: string; lines: string[] }
+
 export const REVIEW_RISK_SIGNALS = ['public_api', 'persistence', 'auth', 'cross_file', 'error_path'] as const;
 export type ReviewRiskSignal = typeof REVIEW_RISK_SIGNALS[number];
 
@@ -59,7 +65,6 @@ export interface ReviewDecision {
   note: string | null;
 }
 
-export type { PatchHunk };
 interface DecisionCandidate {
   subject: string | null;
   fileStatus: WorkspaceDiffFile['status'];
@@ -87,15 +92,6 @@ export function splitPatchHunks(file: Pick<WorkspaceDiffFile, 'patch' | 'isBinar
     } else if (current) current.lines.push(line);
   }
   return hunks.length > 0 ? hunks : [{ range: 'Whole-file change', lines: file.patch.split('\n') }];
-}
-
-/** The reviewable blocks of a file: its hunks, each cut into the individual
- * logic blocks inside it. Every surface that addresses a block by id — the
- * decision builder, the diff pane, the persisted review state — must call this
- * rather than `splitPatchHunks`, or the ids on screen stop matching the ids the
- * queue and the background scorer agreed on. */
-export function splitPatchBlocks(file: Pick<WorkspaceDiffFile, 'patch' | 'isBinary'>): PatchHunk[] {
-  return splitPatchHunks(file).flatMap(splitHunkIntoLogicBlocks);
 }
 
 export function countChangedLines(lines: string[]) {
@@ -240,7 +236,7 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
   const reviewByKey = new Map(reviews.map((review) => [`${review.filePath}::${review.hunkRange}`, review]));
   const candidates: DecisionCandidate[] = [];
   for (const file of files) {
-    for (const patchHunk of splitPatchBlocks(file)) {
+    for (const patchHunk of splitPatchHunks(file)) {
       const review = reviewByKey.get(`${file.path}::${patchHunk.range}`);
       const counts = countChangedLines(patchHunk.lines);
       candidates.push({

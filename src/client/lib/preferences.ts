@@ -9,6 +9,10 @@ const conversationModelStorageKey = 'workbench:conversation-model-profiles';
 const taskModelStorageKey = 'workbench:task-model-profiles';
 const conversationDraftStorageKey = 'workbench:conversation-drafts';
 const workspaceDiffSelectionsStorageKey = 'workbench:workspace-diff-selections';
+/** The Review surface remembers its own source and its own block, under its
+ * own key. Sharing Changes' key would mean opening Review moves the file
+ * Changes is showing — the one thing the review stack is not allowed to do. */
+const reviewStackSelectionsStorageKey = 'workbench:review-stack-selections';
 const lastOpenedItemStorageKeys = {
   conversation: 'workbench:last-opened-conversation',
   attention: 'workbench:last-opened-attention-item',
@@ -142,5 +146,51 @@ export function writeWorkspaceDiffDecision(scope: string, revision: string, deci
     window.localStorage.setItem(workspaceDiffSelectionsStorageKey, JSON.stringify(selections));
   } catch {
     // A decision can still be reviewed even if its browser preference cannot save.
+  }
+}
+
+
+type ReviewStackSelections = Record<string, { source: string; blocks: Record<string, string> }>;
+
+function readReviewStackSelections(): ReviewStackSelections {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(reviewStackSelectionsStorageKey) ?? '{}') as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(value).flatMap(([scope, selection]) => {
+      if (!selection || typeof selection !== 'object') return [];
+      const { source, blocks } = selection as Record<string, unknown>;
+      if (typeof source !== 'string' || !source) return [];
+      const validBlocks = blocks && typeof blocks === 'object'
+        ? Object.fromEntries(Object.entries(blocks).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[1])))
+        : {};
+      return [[scope, { source, blocks: validBlocks }]];
+    }));
+  } catch {
+    return {};
+  }
+}
+
+export function readReviewStackSelection(scope: string): { source: string; blocks: Record<string, string> } | null {
+  return readReviewStackSelections()[scope] ?? null;
+}
+
+export function writeReviewStackSource(scope: string, source: string): void {
+  try {
+    const selections = readReviewStackSelections();
+    selections[scope] = { source, blocks: selections[scope]?.blocks ?? {} };
+    window.localStorage.setItem(reviewStackSelectionsStorageKey, JSON.stringify(selections));
+  } catch {
+    // The queue stays usable when browser storage is unavailable.
+  }
+}
+
+export function writeReviewStackBlock(scope: string, revision: string, blockId: string): void {
+  try {
+    const selections = readReviewStackSelections();
+    const selection = selections[scope];
+    if (!selection) return;
+    selection.blocks[revision] = blockId;
+    window.localStorage.setItem(reviewStackSelectionsStorageKey, JSON.stringify(selections));
+  } catch {
+    // A block can still be judged even if its browser preference cannot save.
   }
 }
