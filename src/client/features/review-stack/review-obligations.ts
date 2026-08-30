@@ -9,7 +9,16 @@ import type { ReviewDecision, ReviewRiskSignal } from '../../../shared/review-de
  * Jeffrey's, and the surface owes him the relationship map when he asks. */
 export type ObligationSettledBy = 'proof' | 'ai' | 'human';
 
-export interface ReviewObligation {
+/** Whether the question has actually been answered yet.
+ *
+ * `unresolved` is the honest default, and the only outcome an `ai` or `human`
+ * obligation carries here: those are settled by a model turn or by Jeffrey,
+ * not by this module. `proven` and `failed` are reserved for a check that ran
+ * and produced the evidence it is reported with. */
+export type ObligationOutcome = 'proven' | 'failed' | 'unresolved';
+
+/** The catalogue entry: the question, and who is allowed to answer it. */
+export interface ObligationQuestion {
   id: string;
   /** Phrased as the question the block has to answer, not as a checklist item:
    * the queue's value is that a reviewer reads a question, not a category. */
@@ -17,7 +26,18 @@ export interface ReviewObligation {
   settledBy: ObligationSettledBy;
 }
 
-const CHANGE_TYPE_OBLIGATIONS: Record<ReviewChangeType, ReviewObligation[]> = {
+/** A question carried with whatever answer it has so far. An obligation that
+ * says `proof` and never records one is a claim rather than a proof, and the
+ * router spends T0 on that claim — the outcome is what makes the difference
+ * visible, both to routing and to the reviewer reading the queue. */
+export interface ReviewObligation extends ObligationQuestion {
+  outcome: ObligationOutcome;
+  /** What did the proving or the disproving, in the reviewer's words. Null
+   * exactly when the outcome is unresolved. */
+  evidence: string | null;
+}
+
+const CHANGE_TYPE_OBLIGATIONS: Record<ReviewChangeType, ObligationQuestion[]> = {
   generated: [{ id: 'generated_source', question: 'Was this regenerated from a source change that is itself reviewed?', settledBy: 'proof' }],
   docs_comment: [{ id: 'docs_accurate', question: 'Does the prose still describe what the code does?', settledBy: 'proof' }],
   config_dep: [{ id: 'config_blast', question: 'What runtime behaviour changes when this configuration or dependency moves?', settledBy: 'human' }],
@@ -31,7 +51,7 @@ const CHANGE_TYPE_OBLIGATIONS: Record<ReviewChangeType, ReviewObligation[]> = {
   behavior_edit: [{ id: 'behavior_intent', question: 'Is the new behaviour the intended one, and who else depends on the old one?', settledBy: 'human' }],
 };
 
-const RISK_OBLIGATIONS: Record<ReviewRiskSignal, ReviewObligation> = {
+const RISK_OBLIGATIONS: Record<ReviewRiskSignal, ObligationQuestion> = {
   public_api: { id: 'risk_public_api', question: 'Does every existing caller of this exported surface still compile and behave?', settledBy: 'human' },
   persistence: { id: 'risk_persistence', question: 'Is this a forward-only migration, and does an already-migrated database reach the new schema?', settledBy: 'human' },
   auth: { id: 'risk_auth', question: 'Can this change let a request through that the old code refused?', settledBy: 'human' },
@@ -43,13 +63,15 @@ const RISK_OBLIGATIONS: Record<ReviewRiskSignal, ReviewObligation> = {
  * type selects the primary question; risk signals add the ones that are about
  * blast radius rather than about the edit. */
 export function blockObligations(decision: Pick<ReviewDecision, 'changeType' | 'secondaryChangeTypes' | 'riskSignals'>): ReviewObligation[] {
-  const obligations = new Map<string, ReviewObligation>();
-  for (const obligation of CHANGE_TYPE_OBLIGATIONS[decision.changeType] ?? []) obligations.set(obligation.id, obligation);
+  const questions = new Map<string, ObligationQuestion>();
+  for (const question of CHANGE_TYPE_OBLIGATIONS[decision.changeType] ?? []) questions.set(question.id, question);
   for (const type of decision.secondaryChangeTypes) {
-    for (const obligation of CHANGE_TYPE_OBLIGATIONS[type] ?? []) obligations.set(obligation.id, obligation);
+    for (const question of CHANGE_TYPE_OBLIGATIONS[type] ?? []) questions.set(question.id, question);
   }
-  for (const signal of decision.riskSignals) obligations.set(RISK_OBLIGATIONS[signal].id, RISK_OBLIGATIONS[signal]);
-  return [...obligations.values()];
+  for (const signal of decision.riskSignals) questions.set(RISK_OBLIGATIONS[signal].id, RISK_OBLIGATIONS[signal]);
+  // Unanswered is the only honest starting state: nothing has been checked at
+  // the point the questions are selected.
+  return [...questions.values()].map((question) => ({ ...question, outcome: 'unresolved' as const, evidence: null }));
 }
 
 export function heaviestObligation(obligations: ReviewObligation[]): ObligationSettledBy {

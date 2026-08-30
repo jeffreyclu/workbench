@@ -192,8 +192,12 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
             <div className="review-stack-obligations">
               <h4>{REVIEW_TIER_LABELS[active.routing.tier]} — {active.routing.reason}</h4>
               <ul>
-                {active.obligations.map((obligation) => <li key={obligation.id} className={`settled-by-${obligation.settledBy}`}>
-                  <span>{obligation.settledBy}</span>{obligation.question}
+                {/* The badge shows the answer once there is one, and who owes
+                    it while there is not — an unanswered question and a proven
+                    one should never read the same. */}
+                {active.obligations.map((obligation) => <li key={obligation.id} className={`settled-by-${obligation.settledBy} outcome-${obligation.outcome}`}>
+                  <span>{obligation.outcome === 'unresolved' ? obligation.settledBy : obligation.outcome}</span>
+                  <div>{obligation.question}{obligation.evidence ? <em>{obligation.evidence}</em> : null}</div>
                 </li>)}
               </ul>
             </div>

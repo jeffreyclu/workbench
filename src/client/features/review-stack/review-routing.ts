@@ -106,6 +106,54 @@ export function isGeneratedOutput(decision: Pick<ReviewDecision, 'filePaths'>): 
   return decision.filePaths.length > 0 && decision.filePaths.every((path) => GENERATED_PATH.test(path));
 }
 
+/** The checks a `proof` obligation claims already exist.
+ *
+ * `settledBy: 'proof'` means the patch itself answers the question — and the
+ * router spends T0 on that promise. Until something runs the check, though,
+ * the promise is only the change type's word for it: a `move_rename` that
+ * rewrites the code as it moves, or a `docs_comment` block carrying real
+ * statements, is auto-settled on a claim nobody tested. These are the three
+ * claims that can be checked from the patch and the compiler's reading;
+ * everything else is left unresolved rather than asserted. */
+const OBLIGATION_PROOFS: Record<
+  string,
+  (decision: ReviewDecision, analysis: BlockAnalysis | null) => Pick<ReviewObligation, 'outcome' | 'evidence'> | null
+> = {
+  move_identical: (decision) => (isPureRelocation(decision)
+    ? { outcome: 'proven', evidence: 'Every added line appears among the removed ones once whitespace is normalised.' }
+    : { outcome: 'failed', evidence: 'The content was rewritten as it moved, so the move is not the whole change.' }),
+  docs_accurate: (_decision, analysis) => {
+    // A null analysis proves nothing in either direction — the file did not
+    // parse, and guessing from text is exactly what this replaces.
+    if (analysis === null) return null;
+    return readsAsNonRunning(analysis)
+      ? { outcome: 'proven', evidence: 'The compiler read nothing that runs here, so the prose stands beside unchanged behaviour.' }
+      : { outcome: 'failed', evidence: 'The compiler read executable code in a block classified as prose.' };
+  },
+  // Only the affirmative half is checkable: paths that are not generated
+  // artefacts leave the question open rather than answering it "no".
+  generated_source: (decision) => (isGeneratedOutput(decision)
+    ? { outcome: 'proven', evidence: 'Every path in this block is a generated artefact.' }
+    : null),
+};
+
+/** Run the checks, recording what answered each question. Pure and idempotent:
+ * re-settling an already-settled obligation reaches the same conclusion, and an
+ * obligation nothing can check routes exactly as it did before outcomes
+ * existed. `ai` and `human` obligations are never touched — they are owed a
+ * turn or Jeffrey, and claiming otherwise here would be the same defect. */
+export function settleObligations(
+  obligations: readonly ReviewObligation[],
+  decision: ReviewDecision,
+  analysis: BlockAnalysis | null = null,
+): ReviewObligation[] {
+  return obligations.map((obligation) => {
+    if (obligation.settledBy !== 'proof') return obligation;
+    const settled = OBLIGATION_PROOFS[obligation.id]?.(decision, analysis);
+    return settled ? { ...obligation, ...settled } : obligation;
+  });
+}
+
 /** Route a block to the attention it deserves, deterministically. No model is
  * consulted here: routing decides whether a model is consulted at all. */
 export function routeReviewBlock(
@@ -134,9 +182,15 @@ export function routeReviewBlock(
     };
   }
 
-  const heaviest = heaviestObligation(obligations);
+  const settled = settleObligations(obligations, decision, analysis);
+  const heaviest = heaviestObligation(settled);
   const size = changedLines(decision);
   if (heaviest === 'proof') {
+    // This branch is the one place a label alone buys T0. A proof obligation
+    // the patch actively contradicts is the opposite of a settled block, so it
+    // is read rather than collapsed out of the way.
+    const disproved = settled.find((obligation) => obligation.outcome === 'failed');
+    if (disproved) return { tier: 'T2', reason: disproved.evidence ?? disproved.question, autoSettled: false };
     return size <= TRIVIAL_CHANGED_LINES
       ? { tier: 'T0', reason: 'Settled by the patch itself.', autoSettled: true }
       : { tier: 'T1', reason: 'Proof-settled, but large enough to skim.', autoSettled: false };

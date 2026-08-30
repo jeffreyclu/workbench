@@ -5,7 +5,7 @@ import { buildReviewDecisions, splitPatchHunks } from '../../../shared/review-de
 import { blockContentHash, indexReviewBlocks, splitPatchBlocks, toBlockLevelFiles } from './review-blocks.js';
 import { splitHunkIntoLogicBlocks } from './logic-blocks.js';
 import { blockObligations } from './review-obligations.js';
-import { gravestHazard, isFormattingOnlyChange, isImportOnlyChange, routeReviewBlock } from './review-routing.js';
+import { gravestHazard, isFormattingOnlyChange, isImportOnlyChange, routeReviewBlock, settleObligations } from './review-routing.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
 import { assistEscalationReason } from './review-escalation.js';
 import { buildReviewPlaceMap, type ReviewPlaceMap } from './review-places.js';
@@ -137,6 +137,74 @@ describe('routing', () => {
     ].join('\n')));
     expect(decision.riskSignals).toContain('auth');
     expect(routeReviewBlock(decision, blockObligations(decision)).tier).toBe('T3');
+  });
+
+  it('starts every obligation unanswered rather than assuming the proof happened', () => {
+    const decision = decisionFor(file('src/server/auth.ts', [
+      '@@ -20,3 +20,4 @@ export function authorize(request) {',
+      ' export function authorize(request) {',
+      '-  if (!request.token) return false;',
+      '+  if (!request.token) return request.internal === true;',
+      ' }',
+    ].join('\n')));
+    const obligations = blockObligations(decision);
+    expect(obligations.length).toBeGreaterThan(0);
+    expect(obligations.every((obligation) => obligation.outcome === 'unresolved' && obligation.evidence === null)).toBe(true);
+  });
+
+  it('will not auto-settle a move whose content was rewritten on the way', () => {
+    const moved = (patch: string): WorkspaceDiffFile => ({ ...file('src/renamed.ts', patch), status: 'renamed', previousPath: 'src/app.ts' });
+    const decision = decisionFor(moved([
+      '@@ -1,3 +1,3 @@',
+      ' const before = 1;',
+      '-const value = compute(a);',
+      '+const value = compute(a, b);',
+      ' const after = 2;',
+    ].join('\n')));
+    expect(decision.changeType).toBe('move_rename');
+    const move = settleObligations(blockObligations(decision), decision)
+      .find((obligation) => obligation.id === 'move_identical');
+    expect(move?.outcome).toBe('failed');
+    expect(move?.evidence).toMatch(/rewritten/);
+    // Small enough that the old rule collapsed it to T0 on the change type's
+    // word alone; the disproved claim is what keeps it readable.
+    const routing = routeReviewBlock(decision, blockObligations(decision));
+    expect(routing.autoSettled).toBe(false);
+    expect(routing.tier).toBe('T2');
+
+    const untouched = decisionFor(moved(['@@ -1,2 +1,2 @@', '-const value = 1;', '+const value = 1;'].join('\n')));
+    const proven = settleObligations(blockObligations(untouched), untouched)
+      .find((obligation) => obligation.id === 'move_identical');
+    expect(proven?.outcome).toBe('proven');
+  });
+
+  it('records what proved a proof obligation, and what disproved it', () => {
+    const decision = decisionFor(file('src/app.ts', [
+      '@@ -1,3 +1,4 @@',
+      ' const value = 1;',
+      '+// explains what value is used for',
+      ' const other = 2;',
+    ].join('\n')));
+    expect(decision.changeType).toBe('docs_comment');
+    const docs = blockObligations(decision).filter((obligation) => obligation.id === 'docs_accurate');
+    expect(docs).toHaveLength(1);
+
+    const proven = settleObligations(docs, decision, { effect: 'declaration', score: 0, hazards: [] })[0];
+    expect(proven.outcome).toBe('proven');
+    expect(proven.evidence).toMatch(/nothing that runs/);
+
+    const failed = settleObligations(docs, decision, { effect: 'call', score: 9, hazards: [] })[0];
+    expect(failed.outcome).toBe('failed');
+    expect(failed.evidence).toMatch(/executable code/);
+
+    // Nothing to check without a parse: the obligation stays honest rather than
+    // guessing from the patch text.
+    expect(settleObligations(docs, decision)[0].outcome).toBe('unresolved');
+
+    // A block classified as prose that the compiler finds running code in is
+    // read, not collapsed out of the queue.
+    expect(routeReviewBlock(decision, blockObligations(decision), { effect: 'call', score: 9, hazards: [] }).autoSettled).toBe(false);
+    expect(routeReviewBlock(decision, blockObligations(decision), { effect: 'declaration', score: 0, hazards: [] }).autoSettled).toBe(true);
   });
 
   it('never auto-settles generated output into invisibility', () => {

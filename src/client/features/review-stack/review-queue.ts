@@ -3,7 +3,7 @@ import type { ReviewDecision } from '../../../shared/review-decisions.js';
 import { blockObligations, type ReviewObligation } from './review-obligations.js';
 import { blockRelationships, relationshipEscalation, warrantsRelationshipMap, type ReviewRelationships } from './review-relationships.js';
 import { assistAnswersEscalationReason } from './review-escalation.js';
-import { escalateRouting, escalateRoutingToStudy, routeReviewBlock, tierRank, type ReviewRouting, type ReviewTier } from './review-routing.js';
+import { escalateRouting, escalateRoutingToStudy, routeReviewBlock, settleObligations, tierRank, type ReviewRouting, type ReviewTier } from './review-routing.js';
 import type { ReviewBlockIdentity } from './review-blocks.js';
 import type { BlockAnalysis } from './logic-blocks.js';
 
@@ -78,10 +78,12 @@ export function buildReviewQueue(
   assistAnswers: ReadonlyMap<string, readonly (string | null | undefined)[]> = new Map(),
 ): ReviewQueueEntry[] {
   const entries = decisions.map((decision): ReviewQueueEntry => {
-    const obligations = blockObligations(decision);
     const relationships = blockRelationships(map, decision.id);
     const identities = decision.hunks.flatMap((hunk) => { const identity = blocks.get(hunk.id); return identity ? [identity] : []; });
     const analysis = mergeAnalysis(identities);
+    // Settled here as well as inside routing, because the entry is what the
+    // reviewer reads: a question shown without its answer is the claim again.
+    const obligations = settleObligations(blockObligations(decision), decision, analysis);
     let routing = routeReviewBlock(decision, obligations, analysis);
     const assistTier = routing.tier;
     // Discovering broader impact is the one thing routing cannot see from the

@@ -1361,6 +1361,9 @@ nav { display: grid; gap: 3px; }
 .review-stack-obligations li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; color: #b3b2a9; font: 500 11px/1.5 'DM Mono'; }
 .review-stack-obligations li > span { padding: 1px 5px; border-radius: 4px; background: #252520; color: #767569; font: 700 9px 'DM Mono'; text-align: center; text-transform: uppercase; }
 .review-stack-obligations li.settled-by-human > span { color: #15200d; background: var(--acid); }
+.review-stack-obligations li.outcome-proven > span { color: #15200d; background: #6f8f52; }
+.review-stack-obligations li.outcome-failed > span { color: #2b1109; background: #d98a6a; }
+.review-stack-obligations li em { display: block; margin-top: 3px; color: #767569; font: 500 10px/1.4 'DM Mono'; font-style: normal; }
 .review-stack-obligations li.settled-by-ai > span { color: #f4c632; }
 .review-place-map { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #171715; overflow-x: auto; }
 .review-place-map > header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
