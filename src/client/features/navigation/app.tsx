@@ -53,7 +53,6 @@ import { ConversationOriginBadge, ModelProfileSelect, ReferenceTypeIcon } from '
 import { CreateTask, type CreateTaskReopenState } from '../../components/dialogs/create-task-dialog';
 import { DiscoveryInboxView } from '../discovery';
 import { useNavigation } from '../../features/navigation/hooks';
-import { ReviewsWorkspace } from '../review-stack/ReviewsWorkspace';
 import { NavigationView } from '../../features/navigation/view';
 import { FollowUpArchiveDialog } from '../../components/dialogs/follow-up-archive-dialog';
 import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../lib/formatters';
@@ -565,7 +564,6 @@ export function App() {
         onOpenWorkbench={() => { openPrimaryStack('workbench'); setMobileNavOpen(false); }}
         onOpenDiscovery={() => { navigate({ name: 'discovery' }); setMobileNavOpen(false); }}
         onOpenConversations={() => { openConversations(); setMobileNavOpen(false); }}
-        onOpenReviews={() => { navigate({ name: 'reviews' }); setMobileNavOpen(false); }}
         onOpenArtifacts={() => { navigate({ name: 'artifacts' }); setMobileNavOpen(false); }}
         onOpenInsights={() => { navigate({ name: 'insights' }); setMobileNavOpen(false); }}
         onOpenSources={() => { setShowSources(true); setMobileNavOpen(false); }}
@@ -577,7 +575,7 @@ export function App() {
         }}
       />
 
-      {view === 'reviews' ? <ReviewsWorkspace /> : view === 'context' ? <SharedWorkspace key={`conversation-${conversationNavigationVersion}`} initialConversationId={agentConversationId} initialStackOnly={agentConversationId === null} view={conversationRailView} onViewChange={setConversationRailView} onSelectConversation={handleConversationSelected} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} /> : view === 'artifacts' ? <ArtifactLibraryView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : view === 'insights' ? <InsightsView /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenStack={() => navigate({ name: 'stack', stack: 'active' })} /> : <><main className="queue-panel">
+      {view === 'context' ? <SharedWorkspace key={`conversation-${conversationNavigationVersion}`} initialConversationId={agentConversationId} initialStackOnly={agentConversationId === null} view={conversationRailView} onViewChange={setConversationRailView} onSelectConversation={handleConversationSelected} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} /> : view === 'artifacts' ? <ArtifactLibraryView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : view === 'insights' ? <InsightsView /> : view === 'discovery' ? <DiscoveryInboxView onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenStack={() => navigate({ name: 'stack', stack: 'active' })} /> : <><main className="queue-panel">
         <header className="queue-header stack-toolbar">
           <div className="stack-toolbar-copy"><span className="eyebrow">{isArchiveView ? 'Archive' : 'Tasks'}</span><h2>{isWorkbenchScope ? 'Workbench focus' : 'Attention stack'}</h2></div>
           <div className="header-actions">

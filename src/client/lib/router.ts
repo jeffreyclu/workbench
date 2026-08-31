@@ -15,11 +15,10 @@ export type Route =
   | { name: 'conversations'; conversationId: string | null }
   | { name: 'discovery' }
   | { name: 'artifacts' }
-  | { name: 'reviews' }
   | { name: 'insights' };
 
 const stackPaths: Record<StackName, string> = { active: '/', workbench: '/workbench', archive: '/archive', 'workbench-archive': '/workbench/archive' };
-const libraryRoutes = ['discovery', 'artifacts', 'insights', 'reviews'] as const;
+const libraryRoutes = ['discovery', 'artifacts', 'insights'] as const;
 
 /**
  * A task keeps one URL wherever it lives, so a link stays good after the task

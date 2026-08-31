@@ -15,7 +15,7 @@ import { DecisionRelationshipDiagram } from '../diff-review/decision-relationshi
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import type { ReviewDecision } from '../diff-review/logic.js';
-import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, fixRequestPrompt, nextPendingDecisionId, orderReviewDecisions, parseAiRiskScore } from '../diff-review/logic.js';
+import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, fixRequestPrompt, nextPendingDecisionId, orderReviewDecisions, parseAiRiskScore, reviewStateLabel } from '../diff-review/logic.js';
 import { useAutoReviewScores } from '../diff-review/auto-score.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
@@ -23,18 +23,20 @@ import { DiffReviewChangeMap } from '../diff-review/change-map.js';
 import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js';
 import { useGitHubPullRequestDiff } from '../github-diff/hooks.js';
 import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
-import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
+import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots, useWorkspaceFileSource } from './hooks.js';
 // Tier routing and the delegated sweep, reached across to the review stack.
 // These four are pure policy over a `ReviewDecision` — no block splitting, no
 // block rows, none of the machinery that is deliberately kept out of Changes.
 // What a change costs to answer is one decision, and it should not be made
 // twice with two sets of rules just because two tabs ask it.
 import { blockObligations } from '../review-stack/review-obligations.js';
-import { routeReviewBlock } from '../review-stack/review-routing.js';
+import { REVIEW_TIER_LABELS, routeReviewBlock } from '../review-stack/review-routing.js';
 import { isDelegatedTier, type DelegationTarget } from '../review-stack/review-delegation.js';
 import { useDelegatedReview } from '../review-stack/use-delegated-review.js';
+import { fileSourceRevision } from '../review-stack/review-full-file.js';
+import { ReviewFullFilePane } from '../review-stack/review-full-file-pane.js';
 import { workspaceDiffQueryKeys } from './data.js';
-import { readWorkspaceDiffSelection, writeWorkspaceDiffDecision, writeWorkspaceDiffSource } from '../../lib/preferences.js';
+import { readReviewStackReadingMode, readWorkspaceDiffSelection, writeReviewStackReadingMode, writeWorkspaceDiffDecision, writeWorkspaceDiffSource, type ReviewStackReadingMode } from '../../lib/preferences.js';
 import { useWorkspaceDiffKeyboardNavigation } from './use-keyboard-navigation.js';
 
 /** The parts of a diff this review surface reads, whichever source produced
@@ -47,6 +49,10 @@ interface ReviewSourceDiff {
 }
 
 type ReviewSourceKind = 'workspace' | 'history' | 'pull-request';
+
+/** One tooltip for the one key that cycles all three readings, so the button
+ * never claims a two-way toggle. */
+const READING_MODE_TITLE = 'Cycle the reading: unified diff, final code, whole file (d)';
 
 function DiffSkeleton() {
   return <section className="workspace-diff" aria-label="Workspace changes loading" aria-busy="true">
@@ -224,8 +230,33 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // bought and read back under. The detail card has to be handed the same one
   // the delegated turn spent, or the answer already paid for sits in the cache
   // under a key nothing ever reads and the panel opens empty.
-  const decisionTiers = useMemo(() => new Map(decisions.map((decision) =>
-    [decision.id, routeReviewBlock(decision, blockObligations(decision), null, { reviewIsTestOnly }).tier] as const)), [decisions, reviewIsTestOnly]);
+  // Routing is kept whole rather than reduced to the tier on the way in: the
+  // dimming and the progress line both need to know a change was settled by
+  // proof, which is exactly the part a tier-only map throws away.
+  const decisionRouting = useMemo(() => new Map(decisions.map((decision) =>
+    [decision.id, routeReviewBlock(decision, blockObligations(decision), null, { reviewIsTestOnly })] as const)), [decisions, reviewIsTestOnly]);
+  const decisionTiers = useMemo(() => new Map([...decisionRouting].map(([decisionId, routing]) => [decisionId, routing.tier] as const)), [decisionRouting]);
+  // Changes the reviewer is done with, and the one word that says why: a
+  // recorded verdict, or T0 routing settling it by proof. A delegated tier is
+  // not a third way — a change priced "delegated" is still owed until its turn
+  // actually answers. Named changes collapse to their header, so reading time
+  // is spent on what is still open.
+  const handledDecisions = useMemo(() => new Map(decisions.flatMap((decision) => {
+    if (decision.state !== null) return [[decision.id, reviewStateLabel(decision.state)] as const];
+    return decisionRouting.get(decision.id)?.tier === 'T0' ? [[decision.id, REVIEW_TIER_LABELS.T0] as const] : [];
+  })), [decisionRouting, decisions]);
+  const reviewProgress = useMemo(() => {
+    let settled = 0;
+    let judged = 0;
+    let remaining = 0;
+    for (const decision of decisions) {
+      const autoSettled = decisionRouting.get(decision.id)?.autoSettled ?? false;
+      if (autoSettled) settled += 1;
+      if (decision.state !== null) judged += 1;
+      else if (!autoSettled) remaining += 1;
+    }
+    return { total: decisions.length, settled, judged, remaining };
+  }, [decisionRouting, decisions]);
   const delegationTargets = useMemo((): DelegationTarget[] => decisions.flatMap((decision) => {
     const tier = decisionTiers.get(decision.id);
     return decision.state === null && tier && isDelegatedTier(tier) ? [{ decisionId: decision.id, decision, tier }] : [];
@@ -290,6 +321,30 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   useEffect(() => {
     if (displayedDiff?.revision && selectedDecisionId) writeWorkspaceDiffDecision(preferenceScope, displayedDiff.revision, selectedDecisionId);
   }, [displayedDiff?.revision, preferenceScope, selectedDecisionId]);
+
+  // Three readings of the same change, widening each time: the unified diff,
+  // the finished code, then the whole file the change sits in. One key cycles
+  // them because they answer the same question at different magnifications.
+  // Changes keeps the unified diff as its default; the reviewer's own last
+  // choice outranks it and survives remounting and reloading.
+  const [readingMode, setReadingMode] = useState<ReviewStackReadingMode>(() => readReviewStackReadingMode() ?? 'diff');
+  const toggleReadingMode = useCallback(() => {
+    const order: ReviewStackReadingMode[] = ['diff', 'final', 'file'];
+    const next = order[(order.indexOf(readingMode) + 1) % order.length]!;
+    setReadingMode(next);
+    writeReviewStackReadingMode(next);
+  }, [readingMode]);
+  // Whole-file reading needs the file itself, and only a source this checkout
+  // can produce has one: a pull request's after-state lives on a head revision
+  // this checkout may never have fetched, so asking for it would read the local
+  // copy of the same path and mark the changes on the wrong text.
+  const wholeFileReadable = !isPullRequestSource;
+  const fileSourceQuery = useWorkspaceFileSource(
+    scope,
+    selectedFile?.path ?? null,
+    fileSourceRevision(displayedDiff?.revision),
+    readingMode === 'file' && wholeFileReadable,
+  );
 
   const recordDecisionState = useCallback((decision: ReviewDecision, state: DiffHunkReviewState) =>
     upsertHunkReview.mutateAsync({
@@ -375,6 +430,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     canMarkReviewed: Boolean(selectedDecision && reviewRevision && !upsertHunkReview.isPending),
     onSelect: selectDecision,
     onMarkReviewed: markSelectedReviewed,
+    onToggleReadingMode: toggleReadingMode,
   });
 
   // Switching source resets the queue: decision ids belong to one diff.
@@ -466,6 +522,9 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
       <span className="review-diff-stat-removed">−{diffStat.deletions}</span>
       <span className="review-diff-stat-total">{diffStat.additions + diffStat.deletions} changed lines</span>
     </aside>
+    {reviewProgress.total > 0 && <p className="review-stack-progress" role="status">
+      {reviewProgress.remaining} to judge · {reviewProgress.settled} settled automatically · {reviewProgress.judged} of {reviewProgress.total} answered
+    </p>}
     {isHandoffOpen && <ModalDialog className="review-handoff-dialog" labelledBy="review-handoff-dialog-title" onClose={() => setIsHandoffOpen(false)}>
       <header className="review-handoff-dialog-header">
         <div className="review-handoff-dialog-icon"><ClipboardCheck size={20} /></div>
@@ -497,7 +556,14 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                   <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} commentCounts={isPullRequestSource ? commentCounts : undefined} delegating={delegation.pending} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">
-                    {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} />}
+                    {selectedFile && (readingMode === 'file'
+                      ? <div className="review-full-file-shell">
+                          <button type="button" className="diff-review-reading-mode mode-file" title={READING_MODE_TITLE} onClick={toggleReadingMode}>Whole file</button>
+                          {wholeFileReadable
+                            ? <ReviewFullFilePane filePath={selectedFile.path} file={fileSourceQuery.data?.file ?? null} isLoading={fileSourceQuery.isLoading} error={fileSourceQuery.error ? 'This file could not be read.' : null} hunks={fileHunks} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} onSelect={selectDecision} />
+                            : <p className="review-full-file-note">A pull request has no local copy of this file, so it cannot be read whole here.</p>}
+                        </div>
+                      : <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} handledBlocks={handledDecisions} readingMode={readingMode} modeTitle={READING_MODE_TITLE} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} onToggleReadingMode={toggleReadingMode} />)}
                     {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={<DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />} onClose={() => setDetailAnchor(null)}>
                       <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null}>
                         <DiffReviewActions key={popoverDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(popoverDecision, state)} onFix={onFixRequest ? () => requestFix(popoverDecision) : undefined} onSkip={() => skipDecision(popoverDecision)} />

@@ -1,4 +1,4 @@
-import { Cloud, Command, ListChecks, MessageCircle, MoreHorizontal, Search, Wrench, X } from 'lucide-react';
+import { Cloud, Command, MessageCircle, MoreHorizontal, Search, Wrench, X } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -12,7 +12,7 @@ import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton';
 import { useValuePulse } from '../../hooks/use-value-pulse';
 import { useDebouncedValue } from '../conversation/hooks';
 
-export type NavigationViewName = 'active' | 'workbench' | 'archive' | 'artifacts' | 'context' | 'discovery' | 'insights' | 'reviews';
+export type NavigationViewName = 'active' | 'workbench' | 'archive' | 'artifacts' | 'context' | 'discovery' | 'insights';
 
 const GLOBAL_SEARCH_RESULT_LIMIT = 20;
 const GLOBAL_SEARCH_MAX_RESULTS = 100;
@@ -217,7 +217,7 @@ function GlobalSearchResultSkeleton() {
   </div>;
 }
 
-export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conversationCount, onOpenActive, onOpenWorkbench, onOpenDiscovery, onOpenConversations, onOpenReviews, onOpenArtifacts, onOpenInsights, onOpenSources, onToggleMore, onSelectGlobalSearchResult }: {
+export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conversationCount, onOpenActive, onOpenWorkbench, onOpenDiscovery, onOpenConversations, onOpenArtifacts, onOpenInsights, onOpenSources, onToggleMore, onSelectGlobalSearchResult }: {
   view: NavigationViewName;
   mobileNavOpen: boolean;
   isCompactNav: boolean;
@@ -227,7 +227,6 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
   onOpenWorkbench: () => void;
   onOpenDiscovery: () => void;
   onOpenConversations: () => void;
-  onOpenReviews: () => void;
   onOpenArtifacts: () => void;
   onOpenInsights: () => void;
   onOpenSources: () => void;
@@ -248,7 +247,6 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
       <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={onOpenWorkbench}><Wrench size={16} /> Workbench <span className={workbenchPulse}>{counts?.workbench ?? '…'}</span></button>
       <DiscoveryNav active={view === 'discovery'} onClick={onOpenDiscovery} />
       <button className={`nav-item mobile-conversation-nav ${view === 'context' ? 'active' : ''}`} onClick={onOpenConversations}><MessageCircle size={16} /> Conversations <span className={conversationPulse}>{conversationCount ?? '…'}</span></button>
-      <button className={`nav-item ${view === 'reviews' ? 'active' : ''}`} onClick={onOpenReviews}><ListChecks size={16} /> Reviews</button>
       <div id="mobile-nav-more" className="mobile-nav-secondary" aria-label="More destinations">
         <div className="mobile-global-search"><GlobalSearch onSelectResult={onSelectGlobalSearchResult} /></div>
         <ArtifactNav active={view === 'artifacts'} onClick={onOpenArtifacts} />
