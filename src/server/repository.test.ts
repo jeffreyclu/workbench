@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkspaceDiff } from '../shared/contracts.js';
+import { buildReviewDecisions, contentHashOfLines } from '../shared/review-decisions.js';
 import { readFileSync, rmSync } from 'node:fs';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
@@ -55,25 +56,83 @@ describe('WorkItemRepository', () => {
     expect(repository.listDiffHunkReviews({ workItemId: other.id }, 'rev-1')).toEqual([expect.objectContaining({ state: 'reviewed' })]);
   });
 
-  it('carries a hunk verdict onto a later revision that did not change the code, and never onto rewritten code', () => {
+  it('carries only reviewed byte-identical hunks from the immediately preceding revision', () => {
     const item = repository.create({ title: 'Carried hunk review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', contentHash: 'unchanged', state: 'reviewed' });
-    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/b.ts', hunkRange: '@@ -1,3 +1,3 @@', contentHash: 'rewritten-later', state: 'needs_changes', note: 'please fix' });
+    const first: WorkspaceDiff = {
+      workspacePath: '/tmp/workbench', branch: 'feature/review', revision: 'rev-1', changedFiles: 4, additions: 4, deletions: 4,
+      publish: { branch: 'feature/review', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
+      files: [
+        { path: 'src/stable.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, patch: '@@ -10,2 +10,2 @@\n const stable = true;\n-oldCall();\n+newCall();', isBinary: false },
+        { path: 'src/edited.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, patch: '@@ -20 +20 @@\n-oldValue\n+firstValue', isBinary: false },
+        { path: 'src/commented.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, patch: '@@ -30 +30 @@\n-oldComment\n+newComment', isBinary: false },
+        { path: 'src/blocked.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, patch: '@@ -40 +40 @@\n-oldBlock\n+newBlock', isBinary: false },
+      ],
+    };
+    const second: WorkspaceDiff = {
+      ...first,
+      revision: 'rev-2',
+      files: [
+        { ...first.files[0], patch: '@@ -10,2 +18,2 @@\n const stable = true;\n-oldCall();\n+newCall();' },
+        { ...first.files[1], patch: '@@ -20 +28 @@\n-firstValue\n+secondValue' },
+        { ...first.files[2], patch: '@@ -30 +38 @@\n-oldComment\n+newComment' },
+        { ...first.files[3], patch: '@@ -40 +48 @@\n-oldBlock\n+newBlock' },
+      ],
+    };
+    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, first);
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/stable.ts', hunkRange: '@@ -10,2 +10,2 @@', contentHash: contentHashOfLines([' const stable = true;', '-oldCall();', '+newCall();']), state: 'reviewed' });
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/edited.ts', hunkRange: '@@ -20 +20 @@', contentHash: contentHashOfLines(['-oldValue', '+firstValue']), state: 'reviewed' });
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/commented.ts', hunkRange: '@@ -30 +30 @@', contentHash: contentHashOfLines(['-oldComment', '+newComment']), state: 'commented', note: 'discussion only' });
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/blocked.ts', hunkRange: '@@ -40 +40 @@', contentHash: contentHashOfLines(['-oldBlock', '+newBlock']), state: 'needs_changes', note: 'please fix' });
+    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, second);
 
-    // Nothing was recorded against rev-2, yet both answers are still on offer:
-    // the caller matches them by content, and only the hash decides.
     const carried = repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-2');
     expect(carried).toEqual([
-      expect.objectContaining({ filePath: 'src/b.ts', contentHash: 'rewritten-later', state: 'needs_changes' }),
-      expect.objectContaining({ filePath: 'src/a.ts', contentHash: 'unchanged', state: 'reviewed' }),
+      expect.objectContaining({ revision: 'rev-1', filePath: 'src/edited.ts', state: 'reviewed' }),
+      expect.objectContaining({ revision: 'rev-1', filePath: 'src/stable.ts', state: 'reviewed' }),
     ]);
+    const decisions = buildReviewDecisions(second.files, carried);
+    const hunks = decisions.flatMap((decision) => decision.hunks);
+    expect(hunks.find((hunk) => hunk.filePath === 'src/stable.ts')).toEqual(expect.objectContaining({ hunkRange: '@@ -10,2 +18,2 @@', state: 'reviewed' }));
+    expect(hunks.find((hunk) => hunk.filePath === 'src/edited.ts')).toEqual(expect.objectContaining({ state: null }));
+    expect(hunks.find((hunk) => hunk.filePath === 'src/commented.ts')).toEqual(expect.objectContaining({ state: null }));
+    expect(hunks.find((hunk) => hunk.filePath === 'src/blocked.ts')).toEqual(expect.objectContaining({ state: null }));
 
-    // A verdict recorded against the revision being read wins over the older
-    // one about the same content, so re-answering a hunk still sticks.
-    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-2', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', contentHash: 'unchanged', state: 'needs_changes' });
-    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-2')
-      .filter((review) => review.filePath === 'src/a.ts'))
-      .toEqual([expect.objectContaining({ revision: 'rev-2', state: 'needs_changes' })]);
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-1')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ revision: 'rev-1', filePath: 'src/stable.ts', state: 'reviewed' }),
+      expect.objectContaining({ revision: 'rev-1', filePath: 'src/commented.ts', state: 'commented', note: 'discussion only' }),
+      expect.objectContaining({ revision: 'rev-1', filePath: 'src/blocked.ts', state: 'needs_changes', note: 'please fix' }),
+    ]));
+  });
+
+  it('does not skip an undecided intermediate revision when carrying hunk reviews', () => {
+    const item = repository.create({ title: 'Immediate predecessor only', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const diff = (revision: string): WorkspaceDiff => ({
+      workspacePath: '/tmp/workbench', branch: 'feature/review', revision, changedFiles: 1, additions: 1, deletions: 1,
+      publish: { branch: 'feature/review', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
+      files: [{ path: 'src/a.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, patch: '@@ -1 +1 @@\n-old\n+new', isBinary: false }],
+    });
+    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff('rev-1'));
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1 +1 @@', contentHash: contentHashOfLines(['-old', '+new']), state: 'reviewed' });
+    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff('rev-2'));
+    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff('rev-3'));
+
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-3')).toEqual([]);
+  });
+
+  it('carries reviewed hunks across standalone review snapshots', () => {
+    const review = repository.createStandaloneReview({ pullRequestUrl: 'https://github.com/acme/widgets/pull/42' });
+    const diff = (revision: string, range: string): WorkspaceDiff => ({
+      workspacePath: '', branch: 'feature/review', revision, changedFiles: 1, additions: 1, deletions: 1,
+      publish: { branch: null, hasOrigin: false, ahead: 0, hasChanges: false, reason: 'Pull request diff.' },
+      files: [{ path: 'src/a.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, patch: `${range}\n-old\n+new`, isBinary: false }],
+    });
+    repository.captureStandaloneReviewDiffSnapshot(review.id, diff('rev-1', '@@ -1 +1 @@'));
+    repository.upsertDiffHunkReview({ reviewId: review.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1 +1 @@', contentHash: contentHashOfLines(['-old', '+new']), state: 'reviewed' });
+    repository.captureStandaloneReviewDiffSnapshot(review.id, diff('rev-2', '@@ -1 +10 @@'));
+
+    expect(repository.listDiffHunkReviews({ reviewId: review.id }, 'rev-2'))
+      .toEqual([expect.objectContaining({ revision: 'rev-1', filePath: 'src/a.ts', state: 'reviewed' })]);
+    expect(repository.listStandaloneReviewDiffSnapshots(review.id).map((snapshot) => snapshot.revision)).toEqual(['rev-2', 'rev-1']);
   });
 
   it('keeps a verdict recorded before content was tracked with the revision it was given about', () => {

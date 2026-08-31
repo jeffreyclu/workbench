@@ -966,6 +966,24 @@ export class WorkItemRepository {
     return (this.database.prepare(`SELECT id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash FROM workspace_diff_snapshots WHERE ${column} = ? ORDER BY captured_at DESC`).all(id) as unknown as WorkspaceDiffSnapshotRow[]).map(mapWorkspaceDiffSnapshot);
   }
 
+  captureStandaloneReviewDiffSnapshot(reviewId: string, diff: WorkspaceDiff): WorkspaceDiffSnapshot {
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    this.database.prepare(`INSERT OR IGNORE INTO standalone_review_diff_snapshots (id, review_id, revision, diff_json, captured_at)
+      VALUES (?, ?, ?, ?, ?)`).run(id, reviewId, diff.revision, JSON.stringify(diff), now);
+    return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at,
+        NULL AS originating_agent_run_id, NULL AS commit_hash
+      FROM standalone_review_diff_snapshots WHERE review_id = ? AND revision = ?`)
+      .get(reviewId, diff.revision) as unknown as WorkspaceDiffSnapshotRow);
+  }
+
+  listStandaloneReviewDiffSnapshots(reviewId: string): WorkspaceDiffSnapshot[] {
+    return (this.database.prepare(`SELECT id, revision, diff_json, captured_at,
+        NULL AS originating_agent_run_id, NULL AS commit_hash
+      FROM standalone_review_diff_snapshots WHERE review_id = ? ORDER BY captured_at DESC, rowid DESC`)
+      .all(reviewId) as unknown as WorkspaceDiffSnapshotRow[]).map(mapWorkspaceDiffSnapshot);
+  }
+
   latestAgentRunForSnapshot(scope: { workItemId: string } | { conversationId: string }): AgentRun | null {
     if ('workItemId' in scope) return this.listRuns(scope.workItemId)[0] ?? null;
     const row = this.database.prepare('SELECT id FROM agent_runs WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(scope.conversationId) as { id: string } | undefined;
@@ -994,31 +1012,58 @@ export class WorkItemRepository {
     })));
   }
 
-  /** Verdicts for a revision, plus every verdict this scope has ever recorded
-   * about code that still hashes the same.
+  /** Verdicts for a revision, plus approved verdicts from its immediate
+   * predecessor about code that still hashes the same.
    *
    * Changes answers questions about content, exactly as Review does: a rebase,
    * an amend, or one follow-up commit changes the revision of every hunk in the
    * diff including the untouched ones, so filtering on revision alone threw the
-   * whole review away and asked again. Rows from other revisions are carried
-   * forward here and matched on content by the caller; a hunk whose lines
-   * actually changed hashes differently and is never matched. The current
-   * revision's own row wins a tie. */
+   * whole review away and asked again. Only `reviewed` carries: a new revision
+   * may be the response to `needs_changes`, while `commented` is discussion,
+   * not approval. The caller matches the predecessor's rows by content, so a
+   * hunk whose lines changed is never matched. The current revision wins a
+   * tie, and every stored row remains untouched. */
   listDiffHunkReviews(scope: DiffReviewScope, revision: string): DiffHunkReview[] {
-    // Rows recorded before content was tracked hold an empty hash, so they can
-    // only ever be matched by their range. Offering them beyond the revision
-    // they were given about would carry an answer onto code nobody judged, so
-    // they stay with their own revision and everything else carries forward.
-    const scoped = `(content_hash <> '' OR revision = ?)`;
-    const order = `ORDER BY CASE WHEN revision = ? THEN 0 ELSE 1 END ASC, updated_at DESC, rowid DESC`;
-    const rows = 'reviewId' in scope
-      ? this.database.prepare(`SELECT id, revision, file_path, hunk_range, content_hash, state, note, updated_at FROM standalone_review_hunk_reviews WHERE review_id = ? AND ${scoped} ${order}`)
-        .all(scope.reviewId, revision, revision) as unknown as DiffHunkReviewRow[]
-      : (() => {
-        const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
-        return this.database.prepare(`SELECT id, revision, file_path, hunk_range, content_hash, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND ${scoped} ${order}`)
-          .all(id, revision, revision) as unknown as DiffHunkReviewRow[];
-      })();
+    if ('reviewId' in scope) {
+      const currentSnapshot = this.database.prepare('SELECT captured_at, rowid FROM standalone_review_diff_snapshots WHERE review_id = ? AND revision = ?')
+        .get(scope.reviewId, revision) as { captured_at: string; rowid: number } | undefined;
+      const predecessor = currentSnapshot
+        ? this.database.prepare(`SELECT revision FROM standalone_review_diff_snapshots
+            WHERE review_id = ? AND (captured_at < ? OR (captured_at = ? AND rowid < ?))
+            ORDER BY captured_at DESC, rowid DESC LIMIT 1`)
+          .get(scope.reviewId, currentSnapshot.captured_at, currentSnapshot.captured_at, currentSnapshot.rowid) as { revision: string } | undefined
+        : undefined;
+      const currentRows = this.database.prepare(`SELECT id, revision, file_path, hunk_range, content_hash, state, note, updated_at
+        FROM standalone_review_hunk_reviews WHERE review_id = ? AND revision = ? ORDER BY updated_at DESC, rowid DESC`)
+        .all(scope.reviewId, revision) as unknown as DiffHunkReviewRow[];
+      const carriedRows = predecessor
+        ? this.database.prepare(`SELECT id, revision, file_path, hunk_range, content_hash, state, note, updated_at
+            FROM standalone_review_hunk_reviews WHERE review_id = ? AND revision = ? AND state = 'reviewed' AND content_hash <> ''
+            ORDER BY updated_at DESC, rowid DESC`)
+          .all(scope.reviewId, predecessor.revision) as unknown as DiffHunkReviewRow[]
+        : [];
+      return dedupeHunkReviewsByContent([...currentRows, ...carriedRows].map(mapDiffHunkReview));
+    }
+
+    const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
+    const currentSnapshot = this.database.prepare(`SELECT captured_at, rowid FROM workspace_diff_snapshots WHERE ${column} = ? AND revision = ?`)
+      .get(id, revision) as { captured_at: string; rowid: number } | undefined;
+    const predecessor = currentSnapshot
+      ? this.database.prepare(`SELECT revision FROM workspace_diff_snapshots
+          WHERE ${column} = ? AND (captured_at < ? OR (captured_at = ? AND rowid < ?))
+          ORDER BY captured_at DESC, rowid DESC LIMIT 1`)
+        .get(id, currentSnapshot.captured_at, currentSnapshot.captured_at, currentSnapshot.rowid) as { revision: string } | undefined
+      : undefined;
+    const currentRows = this.database.prepare(`SELECT id, revision, file_path, hunk_range, content_hash, state, note, updated_at
+      FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? ORDER BY updated_at DESC, rowid DESC`)
+      .all(id, revision) as unknown as DiffHunkReviewRow[];
+    const carriedRows = predecessor
+      ? this.database.prepare(`SELECT id, revision, file_path, hunk_range, content_hash, state, note, updated_at
+          FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? AND state = 'reviewed' AND content_hash <> ''
+          ORDER BY updated_at DESC, rowid DESC`)
+        .all(id, predecessor.revision) as unknown as DiffHunkReviewRow[]
+      : [];
+    const rows = [...currentRows, ...carriedRows];
     return dedupeHunkReviewsByContent(rows.map(mapDiffHunkReview));
   }
 

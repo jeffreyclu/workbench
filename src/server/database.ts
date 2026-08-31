@@ -2,6 +2,42 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { estimateCostUsd } from './model-pricing.js';
+import { contentHashOfLines, splitPatchHunks } from '../shared/review-decisions.js';
+
+function backfillDiffHunkReviewContentHashes(database: DatabaseSync) {
+  const rows = database.prepare(`SELECT id, work_item_id, conversation_id, revision, file_path, hunk_range
+    FROM diff_hunk_reviews WHERE content_hash = ''`).all() as Array<{
+      id: string;
+      work_item_id: string | null;
+      conversation_id: string | null;
+      revision: string;
+      file_path: string;
+      hunk_range: string;
+    }>;
+  const workItemSnapshot = database.prepare('SELECT diff_json FROM workspace_diff_snapshots WHERE work_item_id = ? AND revision = ?');
+  const conversationSnapshot = database.prepare('SELECT diff_json FROM workspace_diff_snapshots WHERE conversation_id = ? AND revision = ?');
+  const update = database.prepare("UPDATE diff_hunk_reviews SET content_hash = ? WHERE id = ? AND content_hash = ''");
+
+  for (const row of rows) {
+    const snapshot = row.work_item_id
+      ? workItemSnapshot.get(row.work_item_id, row.revision)
+      : row.conversation_id
+        ? conversationSnapshot.get(row.conversation_id, row.revision)
+        : undefined;
+    if (!snapshot || typeof snapshot.diff_json !== 'string') continue;
+
+    try {
+      const parsed = JSON.parse(snapshot.diff_json) as { files?: Array<{ path?: unknown; patch?: unknown; isBinary?: unknown }> };
+      const file = parsed.files?.find((candidate) => candidate.path === row.file_path);
+      if (!file || typeof file.patch !== 'string' || file.isBinary === true) continue;
+      const hunk = splitPatchHunks({ patch: file.patch, isBinary: false }).find((candidate) => candidate.range === row.hunk_range);
+      if (hunk) update.run(contentHashOfLines(hunk.lines), row.id);
+    } catch {
+      // A malformed historical snapshot must not block the database upgrade.
+      // Its review stays revision-bound because the empty hash cannot carry.
+    }
+  }
+}
 
 const baseSchemaStatements = [
   `
@@ -1936,6 +1972,33 @@ const schemaMigrations: readonly Migration[] = [
         DROP INDEX IF EXISTS idx_standalone_review_hunk_reviews_key;
         CREATE UNIQUE INDEX IF NOT EXISTS idx_standalone_review_hunk_reviews_key
           ON standalone_review_hunk_reviews(review_id, revision, file_path, hunk_range, content_hash);
+      `);
+    },
+  },
+  {
+    // Migration 070 introduced the hash column but deliberately left legacy
+    // rows empty. Recover exact hunk bodies from immutable workspace snapshots
+    // where possible; anything ambiguous remains revision-bound.
+    id: '071_diff_hunk_review_hash_backfill',
+    apply(database) {
+      backfillDiffHunkReviewContentHashes(database);
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_diff_hunk_reviews_work_item_carry
+          ON diff_hunk_reviews(work_item_id, revision, state, file_path, content_hash) WHERE work_item_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_diff_hunk_reviews_conversation_carry
+          ON diff_hunk_reviews(conversation_id, revision, state, file_path, content_hash) WHERE conversation_id IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS standalone_review_diff_snapshots (
+          id TEXT PRIMARY KEY,
+          review_id TEXT NOT NULL REFERENCES standalone_reviews(id) ON DELETE CASCADE,
+          revision TEXT NOT NULL,
+          diff_json TEXT NOT NULL,
+          captured_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_standalone_review_diff_snapshots_revision
+          ON standalone_review_diff_snapshots(review_id, revision);
+        CREATE INDEX IF NOT EXISTS idx_standalone_review_diff_snapshots_captured
+          ON standalone_review_diff_snapshots(review_id, captured_at DESC);
       `);
     },
   },

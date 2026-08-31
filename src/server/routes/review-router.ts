@@ -94,15 +94,15 @@ export function createReviewRouter({ repository }: RouteContext) {
     try {
       if (!review(request.params.id)) return response.status(404).json({ error: 'Review not found.' });
       const directory = workingDirectory(request.params.id);
-      response.json({ diff: directory ? await getWorkspaceDiff(directory) : EMPTY_DIFF });
+      const diff = directory ? await getWorkspaceDiff(directory) : EMPTY_DIFF;
+      if (diff.changedFiles > 0) repository.captureStandaloneReviewDiffSnapshot(request.params.id, diff);
+      response.json({ diff });
     } catch (error) { next(error); }
   });
 
-  // A standalone review reads its source live. It records no snapshots of its
-  // own, so the recorded-diff list is empty rather than borrowed from a task.
   router.get('/api/reviews/:id/workspace-diff/snapshots', (request, response) => {
     if (!review(request.params.id)) return response.status(404).json({ error: 'Review not found.' });
-    response.json({ snapshots: [] });
+    response.json({ snapshots: repository.listStandaloneReviewDiffSnapshots(request.params.id) });
   });
 
   router.get('/api/reviews/:id/workspace-diff/refs', async (request, response, next) => {
@@ -119,7 +119,9 @@ export function createReviewRouter({ repository }: RouteContext) {
       if (!directory) return response.status(409).json({ error: 'This review has no repository to read a branch from.' });
       const ref = typeof request.query.ref === 'string' ? request.query.ref : '';
       if (!ref) return response.status(400).json({ error: 'Specify which branch or worktree to review.' });
-      response.json({ diff: await getWorkspaceRefDiff(directory, ref) });
+      const diff = await getWorkspaceRefDiff(directory, ref);
+      if (diff.changedFiles > 0) repository.captureStandaloneReviewDiffSnapshot(request.params.id, diff);
+      response.json({ diff });
     } catch (error) { next(error); }
   });
 
@@ -140,7 +142,9 @@ export function createReviewRouter({ repository }: RouteContext) {
       const directory = workingDirectory(request.params.id);
       if (!directory) return response.status(409).json({ error: 'This review has no repository to read a commit from.' });
       const commit = z.string().trim().min(1).max(200).parse(request.query.commit);
-      response.json({ diff: await getWorkspaceCommitDiff(directory, commit) });
+      const diff = await getWorkspaceCommitDiff(directory, commit);
+      if (diff.changedFiles > 0) repository.captureStandaloneReviewDiffSnapshot(request.params.id, diff);
+      response.json({ diff });
     } catch (error) { next(error); }
   });
 

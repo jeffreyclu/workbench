@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
+import { contentHashOfLines } from '../shared/review-decisions.js';
 import { openDatabase } from './database.js';
 
 /**
@@ -81,6 +82,7 @@ const EXPECTED_MIGRATIONS = [
   '068_diff_block_reviews',
   '069_standalone_reviews',
   '070_diff_hunk_review_content_hash',
+  '071_diff_hunk_review_hash_backfill',
 ];
 
 describe('openDatabase', () => {
@@ -193,6 +195,39 @@ describe('openDatabase', () => {
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_standalone_review_block_reviews_key'").get()).toBeTruthy();
     // Conversation- and task-scoped verdicts keep their own tables untouched.
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'diff_block_reviews'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('backfills recoverable hunk hashes and carry indexes when upgrading from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '071_diff_hunk_review_hash_backfill'").run();
+    current.exec('DROP INDEX idx_diff_hunk_reviews_work_item_carry; DROP INDEX idx_diff_hunk_reviews_conversation_carry;');
+    current.exec('DROP TABLE standalone_review_diff_snapshots;');
+    current.prepare(`INSERT INTO work_items (id, title, description, status, priority, queue_position, source, created_at, updated_at)
+      VALUES ('item-071', 'Backfill', '', 'ready', 1, 1, 'manual', '2026-08-31T00:00:00.000Z', '2026-08-31T00:00:00.000Z')`).run();
+    const diff = {
+      revision: 'rev-071',
+      files: [{ path: 'src/a.ts', patch: '@@ -10,2 +20,2 @@\n const stable = true;\n-oldCall();\n+newCall();', isBinary: false }],
+    };
+    current.prepare(`INSERT INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at)
+      VALUES ('snapshot-071', 'item-071', NULL, 'rev-071', ?, '2026-08-31T00:00:01.000Z')`).run(JSON.stringify(diff));
+    current.prepare(`INSERT INTO diff_hunk_reviews (id, work_item_id, conversation_id, revision, file_path, hunk_range, content_hash, state, note, updated_at)
+      VALUES ('recoverable-071', 'item-071', NULL, 'rev-071', 'src/a.ts', '@@ -10,2 +20,2 @@', '', 'reviewed', NULL, '2026-08-31T00:00:02.000Z'),
+             ('missing-071', 'item-071', NULL, 'rev-071', 'src/missing.ts', '@@ -1 +1 @@', '', 'reviewed', NULL, '2026-08-31T00:00:03.000Z')`).run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(diff_hunk_reviews)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toContain('content_hash');
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_diff_hunk_reviews_work_item_carry'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_diff_hunk_reviews_conversation_carry'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'standalone_review_diff_snapshots'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_standalone_review_diff_snapshots_revision'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT content_hash FROM diff_hunk_reviews WHERE id = 'recoverable-071'").get())
+      .toEqual({ content_hash: contentHashOfLines([' const stable = true;', '-oldCall();', '+newCall();']) });
+    expect(upgraded.prepare("SELECT content_hash FROM diff_hunk_reviews WHERE id = 'missing-071'").get()).toEqual({ content_hash: '' });
     upgraded.close();
   });
 
