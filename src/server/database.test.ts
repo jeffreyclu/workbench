@@ -80,6 +80,7 @@ const EXPECTED_MIGRATIONS = [
   '067_shared_turn_groundings',
   '068_diff_block_reviews',
   '069_standalone_reviews',
+  '070_diff_hunk_review_content_hash',
 ];
 
 describe('openDatabase', () => {

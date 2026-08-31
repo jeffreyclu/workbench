@@ -3,7 +3,7 @@ import { existsSync, statSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { z } from 'zod';
 import { createStandaloneReviewSchema, upsertDiffBlockReviewSchema, upsertDiffHunkReviewsSchema, type StandaloneReview, type WorkspaceDiff } from '../../shared/contracts.js';
-import { getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceRefDiff, listWorkspaceRefs } from '../workspace-diff.js';
+import { getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceRefDiff, listWorkspaceRefCommits, listWorkspaceRefs } from '../workspace-diff.js';
 import { listCandidateWorkspaces } from '../workspace-candidates.js';
 import type { RouteContext } from '../route-context.js';
 
@@ -123,6 +123,27 @@ export function createReviewRouter({ repository }: RouteContext) {
     } catch (error) { next(error); }
   });
 
+  // A branch is reviewable whole or one commit at a time; these two answer the
+  // second reading without moving what the whole-branch reading shows.
+  router.get('/api/reviews/:id/workspace-diff/ref/commits', async (request, response, next) => {
+    try {
+      const directory = workingDirectory(request.params.id);
+      if (!directory) return response.status(409).json({ error: 'This review has no repository to read commits from.' });
+      const ref = typeof request.query.ref === 'string' ? request.query.ref : '';
+      if (!ref) return response.status(400).json({ error: 'Specify which branch to list commits for.' });
+      response.json({ commits: await listWorkspaceRefCommits(directory, ref) });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/api/reviews/:id/workspace-diff/commit', async (request, response, next) => {
+    try {
+      const directory = workingDirectory(request.params.id);
+      if (!directory) return response.status(409).json({ error: 'This review has no repository to read a commit from.' });
+      const commit = z.string().trim().min(1).max(200).parse(request.query.commit);
+      response.json({ diff: await getWorkspaceCommitDiff(directory, commit) });
+    } catch (error) { next(error); }
+  });
+
   router.get('/api/reviews/:id/workspace-diff/status', async (request, response, next) => {
     try {
       if (!review(request.params.id)) return response.status(404).json({ error: 'Review not found.' });
@@ -156,6 +177,7 @@ export function createReviewRouter({ repository }: RouteContext) {
         revision: z.string().trim().min(1),
         filePath: z.string().trim().min(1),
         hunkRange: z.string().trim().min(1),
+        contentHash: z.string().trim().min(1).max(64),
         state: z.enum(['reviewed', 'needs_changes', 'commented']),
         note: z.string().trim().min(1).optional(),
       }).parse(request.body);

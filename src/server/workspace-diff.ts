@@ -4,7 +4,7 @@ import { existsSync, realpathSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import type { WorkspaceBranchRef, WorkspaceDiff, WorkspaceDiffFile, WorkspaceFileSource, WorkspacePublishResult, WorkspacePublishStatus, WorkspaceRefs, WorkspaceWorktreeRef } from '../shared/contracts.js';
+import type { ReviewCommit, WorkspaceBranchRef, WorkspaceDiff, WorkspaceDiffFile, WorkspaceFileSource, WorkspacePublishResult, WorkspacePublishStatus, WorkspaceRefs, WorkspaceWorktreeRef } from '../shared/contracts.js';
 import { patchLogicBoundaries } from './review-logic-primitives.js';
 
 const execFile = promisify(execFileCallback);
@@ -149,6 +149,18 @@ async function publishStatus(workspacePath: string, status: string, branch: stri
   try { ahead = Number(await gitOutput(workspacePath, ['rev-list', '--count', '@{upstream}..HEAD'])) || 0; }
   catch { /* A new branch has no upstream yet; pushing HEAD still establishes it. */ }
   return { branch, hasOrigin: true, ahead, hasChanges, reason: null };
+}
+
+/** A commit subject can contain anything a keyboard can type, so the fields
+ * are separated by a unit separator rather than by punctuation. */
+const COMMIT_FIELD = '\u001f';
+const MAX_LISTED_COMMITS = 300;
+
+export function parseCommitLog(log: string): ReviewCommit[] {
+  return log.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+    const [sha, title, author, committedAt] = line.split(COMMIT_FIELD);
+    return { sha, shortSha: sha.slice(0, 7), title: title ?? '', author: author || null, committedAt: committedAt || null };
+  });
 }
 
 function workspaceDiffRevision(...parts: string[]) {
@@ -401,14 +413,20 @@ export async function listWorkspaceRefs(workspacePath: string): Promise<Workspac
 
 /** A branch's own work: everything it added since it left the base, which is
  * what a reviewer means by "review this branch" — not its whole history. */
-export async function getWorkspaceBranchDiff(workspacePath: string, branchName: string): Promise<WorkspaceDiff> {
-  const repositoryPath = resolveWorkspaceRepository(workspacePath);
+/** Where a branch review starts and ends. The diff and the commit list must
+ * agree on the range, or reading the same branch two ways would show two
+ * different changes. */
+async function branchRange(repositoryPath: string, branchName: string): Promise<{ mergeBase: string; tip: string }> {
   const tip = await gitOutput(repositoryPath, ['rev-parse', '--verify', `refs/heads/${branchName}^{commit}`]);
   const base = await defaultBaseBranch(repositoryPath);
   if (!base) throw new Error(`Could not determine a comparison base for ${branchName}. This repository has no default branch.`);
-  let mergeBase: string;
-  try { mergeBase = await gitOutput(repositoryPath, ['merge-base', base, tip]); }
+  try { return { mergeBase: await gitOutput(repositoryPath, ['merge-base', base, tip]), tip }; }
   catch { throw new Error(`${branchName} shares no history with ${base}, so there is nothing to compare.`); }
+}
+
+export async function getWorkspaceBranchDiff(workspacePath: string, branchName: string): Promise<WorkspaceDiff> {
+  const repositoryPath = resolveWorkspaceRepository(workspacePath);
+  const { mergeBase, tip } = await branchRange(repositoryPath, branchName);
   const { stdout: patch } = await git(repositoryPath, ['diff', '--no-ext-diff', '--binary', '--no-color', '--no-renames', mergeBase, tip]);
   const files = parseWorkspacePatch(patch)
     .map((file) => ({ ...file, editorUrl: workspaceEditorUrl(repositoryPath, file.path) }));
@@ -436,6 +454,21 @@ export async function getWorkspaceWorktreeDiff(workspacePath: string, worktreePa
   const worktree = worktrees.find((candidate) => canonicalPath(candidate.path) === canonicalPath(worktreePath));
   if (!worktree) throw new Error(`${worktreePath} is not a worktree of this repository.`);
   return getWorkspaceDiff(worktree.path);
+}
+
+/** The commits a branch adds on top of its base, newest first.
+ *
+ * The working tree and a sibling worktree are uncommitted state by
+ * definition, so they answer with nothing rather than with an error: there is
+ * no commit series to walk, and that is a real answer. */
+export async function listWorkspaceRefCommits(workspacePath: string, refId: string): Promise<ReviewCommit[]> {
+  if (!refId.startsWith('branch:')) return [];
+  const repositoryPath = resolveWorkspaceRepository(workspacePath);
+  const { mergeBase, tip } = await branchRange(repositoryPath, refId.slice('branch:'.length));
+  const { stdout } = await git(repositoryPath, [
+    'log', `--max-count=${MAX_LISTED_COMMITS}`, `--format=%H${COMMIT_FIELD}%s${COMMIT_FIELD}%an${COMMIT_FIELD}%aI`, `${mergeBase}..${tip}`,
+  ]);
+  return parseCommitLog(stdout);
 }
 
 /** Review source ids are stored in a browser preference and arrive as opaque

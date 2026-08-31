@@ -1,9 +1,12 @@
-import type { GitHubPullRequestCommentsSummary, GitHubPullRequestDiff, GitHubPullRequestFile } from '../shared/contracts.js';
+import type { GitHubPullRequestCommentsSummary, GitHubPullRequestDiff, GitHubPullRequestFile, ReviewCommit } from '../shared/contracts.js';
 import { createOutboundFetch, type OutboundPolicyName } from './outbound-policy.js';
 
 const pullRequestPattern = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/files)?\/?$/;
 const FILES_PER_PAGE = 100;
 const COMMENTS_PER_PAGE = 100;
+const COMMITS_PER_PAGE = 100;
+const MAX_COMMIT_PAGES = 3;
+const commitShaPattern = /^[0-9a-f]{7,40}$/;
 
 type GitHubPullRequestResponse = {
   html_url: string;
@@ -43,6 +46,13 @@ type GitHubFileResponse = {
   additions: number;
   deletions: number;
   patch?: string;
+};
+
+type GitHubCommitResponse = {
+  sha: string;
+  commit: { message: string; author: { name?: string; date?: string } | null };
+  author: { login: string } | null;
+  files?: GitHubFileResponse[];
 };
 
 export interface GitHubPullRequestTarget {
@@ -143,15 +153,7 @@ export async function getGitHubPullRequestDiff(
     getJsonNonFatal<GitHubReviewResponse[]>(fetchImpl, `${root}/reviews?per_page=100`, options.token),
     getJsonNonFatal<GitHubReviewCommentResponse[]>(fetchImpl, `${root}/comments?per_page=${COMMENTS_PER_PAGE}`, options.token),
   ]);
-  const files = filePage.map((file) => ({
-    path: file.filename,
-    status: file.status,
-    additions: file.additions,
-    deletions: file.deletions,
-    previousPath: file.previous_filename ?? null,
-    patch: file.patch ?? null,
-    isBinary: !file.patch,
-  }));
+  const files = toReviewFiles(filePage);
   return {
     url: pullRequest.html_url,
     repository: `${target.owner}/${target.repository}`,
@@ -173,6 +175,76 @@ export async function getGitHubPullRequestDiff(
     reviewDecisionError: reviews.error,
     comments: summarizeComments(commentPage.data, commentPage.error),
   };
+}
+
+function toReviewCommit(commit: GitHubCommitResponse): ReviewCommit {
+  return {
+    sha: commit.sha,
+    shortSha: commit.sha.slice(0, 7),
+    // A commit message is a subject line and then a body; the selector reads
+    // the subject, which is what the author wrote the commit to say.
+    title: commit.commit.message.split('\n')[0],
+    author: commit.author?.login ?? commit.commit.author?.name ?? null,
+    committedAt: commit.commit.author?.date ?? null,
+  };
+}
+
+function toReviewFiles(files: GitHubFileResponse[]): GitHubPullRequestFile[] {
+  return files.map((file) => ({
+    path: file.filename,
+    status: file.status,
+    additions: file.additions,
+    deletions: file.deletions,
+    previousPath: file.previous_filename ?? null,
+    patch: file.patch ?? null,
+    isBinary: !file.patch,
+  }));
+}
+
+/** The commits a pull request is made of, newest first.
+ *
+ * GitHub returns them oldest-first and caps this endpoint at 250 commits; both
+ * are the API's shape rather than a choice, so the order is reversed here and
+ * a longer pull request is reviewed whole instead. */
+export async function getGitHubPullRequestCommits(
+  url: string,
+  options: { token?: string; fetchForPolicy?: (policy: OutboundPolicyName) => typeof fetch } = {},
+): Promise<ReviewCommit[]> {
+  const target = parseGitHubPullRequestUrl(url);
+  if (!target) throw new Error('Enter a GitHub pull request URL, such as github.com/owner/repo/pull/123.');
+  const fetchImpl = (options.fetchForPolicy ?? createOutboundFetch)('github-api');
+  const root = `https://api.github.com/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/pulls/${target.number}`;
+  // Paged to GitHub's own 250-commit ceiling rather than to the first page:
+  // taking one page would quietly drop the newest commits, which are the ones
+  // a reviewer opens the list to find.
+  const commits: GitHubCommitResponse[] = [];
+  for (let page = 1; page <= MAX_COMMIT_PAGES; page += 1) {
+    const batch = await getJson<GitHubCommitResponse[]>(fetchImpl, `${root}/commits?per_page=${COMMITS_PER_PAGE}&page=${page}`, options.token);
+    commits.push(...batch);
+    if (batch.length < COMMITS_PER_PAGE) break;
+  }
+  return commits.map(toReviewCommit).reverse();
+}
+
+/** One commit of a pull request, as its own diff.
+ *
+ * The commit is read from the pull request's repository, so a sha from
+ * somewhere else cannot be smuggled in through the same link. */
+export async function getGitHubCommitDiff(
+  url: string,
+  sha: string,
+  options: { token?: string; fetchForPolicy?: (policy: OutboundPolicyName) => typeof fetch } = {},
+): Promise<{ commit: ReviewCommit; files: GitHubPullRequestFile[] }> {
+  const target = parseGitHubPullRequestUrl(url);
+  if (!target) throw new Error('Enter a GitHub pull request URL, such as github.com/owner/repo/pull/123.');
+  if (!commitShaPattern.test(sha)) throw new Error('That is not a commit identifier.');
+  const fetchImpl = (options.fetchForPolicy ?? createOutboundFetch)('github-api');
+  const commit = await getJson<GitHubCommitResponse>(
+    fetchImpl,
+    `https://api.github.com/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/commits/${sha}`,
+    options.token,
+  );
+  return { commit: toReviewCommit(commit), files: toReviewFiles(commit.files ?? []) };
 }
 
 const imageContentTypes: Record<string, string> = {

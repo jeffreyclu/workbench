@@ -36,7 +36,7 @@ import { assessDiffBlocks, lookupDiffConfidenceBlocks } from '../diff-confidence
 import { lookupReviewAssist, requestReviewAssist } from '../review-assist-ai.js';
 import { ensureReviewAutoScore, reviewAutoScoreView } from '../review-auto-score.js';
 import { findStaleReferences } from '../stale-references.js';
-import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceRefs } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceRefCommits, listWorkspaceRefs } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
@@ -223,6 +223,27 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       response.json({ diff: await getWorkspaceRefDiff(workingDirectory, ref) });
     } catch (error) { next(error); }
   });
+  router.get('/api/work-items/:id/workspace-diff/ref/commits', async (request, response, next) => {
+    try {
+      const item = repository.get(request.params.id);
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      const workingDirectory = taskWorkingDirectory(item.id);
+      if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
+      const ref = typeof request.query.ref === 'string' ? request.query.ref : '';
+      if (!ref) return response.status(400).json({ error: 'Specify which branch to list commits for.' });
+      response.json({ commits: await listWorkspaceRefCommits(workingDirectory, ref) });
+    } catch (error) { next(error); }
+  });
+  router.get('/api/work-items/:id/workspace-diff/commit', async (request, response, next) => {
+    try {
+      const item = repository.get(request.params.id);
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      const workingDirectory = taskWorkingDirectory(item.id);
+      if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
+      const commit = z.string().trim().min(1).max(200).parse(request.query.commit);
+      response.json({ diff: await getWorkspaceCommitDiff(workingDirectory, commit) });
+    } catch (error) { next(error); }
+  });
   // The one review check that has to read outside the patch: a reference the
   // change forgot to update is, by definition, in a file the diff does not
   // contain. Served separately from the diff itself because it spawns a grep
@@ -285,6 +306,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
         revision: z.string().trim().min(1),
         filePath: z.string().trim().min(1),
         hunkRange: z.string().trim().min(1),
+        contentHash: z.string().trim().min(1).max(64),
         state: z.enum(['reviewed', 'needs_changes', 'commented']),
         note: z.string().trim().min(1).optional(),
       }).parse(request.body);

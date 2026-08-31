@@ -1915,6 +1915,30 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // Give Changes' hunk verdicts the same content identity Review's block
+    // verdicts already have, so a verdict survives the branch moving under it.
+    // Existing rows keep an empty hash: they were recorded before content was
+    // tracked, so they stay answers about their own revision and never carry
+    // forward onto content nobody has judged.
+    id: '070_diff_hunk_review_content_hash',
+    apply(database) {
+      database.exec(`
+        ALTER TABLE diff_hunk_reviews ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';
+        DROP INDEX IF EXISTS idx_diff_hunk_reviews_work_item_key;
+        DROP INDEX IF EXISTS idx_diff_hunk_reviews_conversation_key;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_diff_hunk_reviews_work_item_key
+          ON diff_hunk_reviews(work_item_id, revision, file_path, hunk_range, content_hash) WHERE work_item_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_diff_hunk_reviews_conversation_key
+          ON diff_hunk_reviews(conversation_id, revision, file_path, hunk_range, content_hash) WHERE conversation_id IS NOT NULL;
+
+        ALTER TABLE standalone_review_hunk_reviews ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';
+        DROP INDEX IF EXISTS idx_standalone_review_hunk_reviews_key;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_standalone_review_hunk_reviews_key
+          ON standalone_review_hunk_reviews(review_id, revision, file_path, hunk_range, content_hash);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

@@ -9,7 +9,7 @@ afterEach(cleanup);
 
 const hunk = (over: Partial<ReviewDecisionHunk> & { filePath: string; lines: string[] }): ReviewDecisionHunk => ({
   id: `${over.filePath}::@@`, fileStatus: 'modified', editorUrl: null, hunkRange: '@@ -1 +1 @@',
-  location: 'Line 1', additions: 1, deletions: 1, state: null, note: null, ...over,
+  location: 'Line 1', contentHash: 'hash-1', additions: 1, deletions: 1, state: null, note: null, ...over,
 });
 
 const decision = (over: Partial<ReviewDecision> & { hunks: ReviewDecisionHunk[] }): ReviewDecision => ({

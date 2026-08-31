@@ -20,6 +20,7 @@ function decision(filePath: string, lines: string[], subject: string | null = nu
       filePath,
       fileStatus: 'modified' as const,
       editorUrl: null,
+      contentHash: `hash-${sequence}`,
       hunkRange: '@@ -1,1 +1,1 @@',
       location: filePath,
       lines,

@@ -8,7 +8,7 @@ import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
 import { resolveWorkingDirectory, runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, retrySharedSynthesis, runSharedBackgroundJob } from '../shared-room.js';
-import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceRefs } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceRefCommits, listWorkspaceRefs } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { parseFollowUpPlan } from '../app-exports.js';
 import { isRuntimeApproval } from '../runtime-promotion.js';
@@ -166,6 +166,24 @@ export function createConversationRouter({ repository, database, capabilities, a
     } catch (error) { next(error); }
   });
 
+  router.get('/api/shared/conversations/:id/workspace-diff/ref/commits', async (request, response, next) => {
+    try {
+      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
+      const ref = typeof request.query.ref === 'string' ? request.query.ref : '';
+      if (!ref) return response.status(400).json({ error: 'Specify which branch to list commits for.' });
+      response.json({ commits: await listWorkspaceRefCommits(workingDirectory, ref) });
+    } catch (error) { next(error); }
+  });
+  router.get('/api/shared/conversations/:id/workspace-diff/commit', async (request, response, next) => {
+    try {
+      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
+      const commit = z.string().trim().min(1).max(200).parse(request.query.commit);
+      response.json({ diff: await getWorkspaceCommitDiff(workingDirectory, commit) });
+    } catch (error) { next(error); }
+  });
+
   router.get('/api/shared/conversations/:id/workspace-diff/status', async (request, response, next) => {
     try {
       const workingDirectory = conversationWorkingDirectory(request.params.id);
@@ -210,6 +228,7 @@ export function createConversationRouter({ repository, database, capabilities, a
         revision: z.string().trim().min(1),
         filePath: z.string().trim().min(1),
         hunkRange: z.string().trim().min(1),
+        contentHash: z.string().trim().min(1).max(64),
         state: z.enum(['reviewed', 'needs_changes', 'commented']),
         note: z.string().trim().min(1).optional(),
       }).parse(request.body);

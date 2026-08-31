@@ -95,13 +95,30 @@ interface DiffHunkReviewRow {
   revision: string;
   file_path: string;
   hunk_range: string;
+  content_hash: string;
   state: DiffHunkReviewState;
   note: string | null;
   updated_at: string;
 }
 
 function mapDiffHunkReview(row: DiffHunkReviewRow): DiffHunkReview {
-  return { id: row.id, revision: row.revision, filePath: row.file_path, hunkRange: row.hunk_range, state: row.state, note: row.note, updatedAt: row.updated_at };
+  return { id: row.id, revision: row.revision, filePath: row.file_path, hunkRange: row.hunk_range, contentHash: row.content_hash, state: row.state, note: row.note, updatedAt: row.updated_at };
+}
+
+/** One verdict per (content, range) pair, newest first, with a note carried
+ * across ranges that hold the same content. Same shape as the block dedupe:
+ * the caller matches on content, so it must not be handed two answers about
+ * the same code. */
+function dedupeHunkReviewsByContent(reviews: DiffHunkReview[]): DiffHunkReview[] {
+  const winners = new Map<string, DiffHunkReview>();
+  const notes = new Map<string, string>();
+  for (const review of reviews) {
+    const content = `${review.filePath}\u0000${review.contentHash}`;
+    if (review.note && !notes.has(content)) notes.set(content, review.note);
+    const key = `${content}\u0000${review.hunkRange}`;
+    if (!winners.has(key)) winners.set(key, review);
+  }
+  return [...winners.values()].map((review) => review.note ? review : { ...review, note: notes.get(`${review.filePath}\u0000${review.contentHash}`) ?? review.note });
 }
 
 interface DiffBlockReviewRow {
@@ -955,15 +972,15 @@ export class WorkItemRepository {
     return row ? this.getRun(row.id) : null;
   }
 
-  upsertDiffHunkReview(scope: DiffReviewScope, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {
+  upsertDiffHunkReview(scope: DiffReviewScope, input: { revision: string; filePath: string; hunkRange: string; contentHash: string; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {
     if ('reviewId' in scope) return this.upsertStandaloneReviewHunkReview(scope.reviewId, input);
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
     const now = new Date().toISOString();
-    this.database.prepare(`INSERT INTO diff_hunk_reviews (id, ${column}, revision, file_path, hunk_range, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(${column}, revision, file_path, hunk_range) WHERE ${column} IS NOT NULL DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
-      .run(randomUUID(), id, input.revision, input.filePath, input.hunkRange, input.state, input.note ?? null, now);
-    return mapDiffHunkReview(this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? AND file_path = ? AND hunk_range = ?`)
-      .get(id, input.revision, input.filePath, input.hunkRange) as unknown as DiffHunkReviewRow);
+    this.database.prepare(`INSERT INTO diff_hunk_reviews (id, ${column}, revision, file_path, hunk_range, content_hash, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(${column}, revision, file_path, hunk_range, content_hash) WHERE ${column} IS NOT NULL DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
+      .run(randomUUID(), id, input.revision, input.filePath, input.hunkRange, input.contentHash, input.state, input.note ?? null, now);
+    return mapDiffHunkReview(this.database.prepare(`SELECT id, revision, file_path, hunk_range, content_hash, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? AND file_path = ? AND hunk_range = ? AND content_hash = ?`)
+      .get(id, input.revision, input.filePath, input.hunkRange, input.contentHash) as unknown as DiffHunkReviewRow);
   }
 
   upsertDiffHunkReviews(scope: DiffReviewScope, input: UpsertDiffHunkReviewsInput): DiffHunkReview[] {
@@ -971,19 +988,38 @@ export class WorkItemRepository {
       revision: input.revision,
       filePath: hunk.filePath,
       hunkRange: hunk.hunkRange,
+      contentHash: hunk.contentHash,
       state: input.state,
       note: input.note,
     })));
   }
 
+  /** Verdicts for a revision, plus every verdict this scope has ever recorded
+   * about code that still hashes the same.
+   *
+   * Changes answers questions about content, exactly as Review does: a rebase,
+   * an amend, or one follow-up commit changes the revision of every hunk in the
+   * diff including the untouched ones, so filtering on revision alone threw the
+   * whole review away and asked again. Rows from other revisions are carried
+   * forward here and matched on content by the caller; a hunk whose lines
+   * actually changed hashes differently and is never matched. The current
+   * revision's own row wins a tie. */
   listDiffHunkReviews(scope: DiffReviewScope, revision: string): DiffHunkReview[] {
-    if ('reviewId' in scope) {
-      return (this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM standalone_review_hunk_reviews WHERE review_id = ? AND revision = ? ORDER BY file_path ASC, hunk_range ASC`)
-        .all(scope.reviewId, revision) as unknown as DiffHunkReviewRow[]).map(mapDiffHunkReview);
-    }
-    const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
-    return (this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? ORDER BY file_path ASC, hunk_range ASC`)
-      .all(id, revision) as unknown as DiffHunkReviewRow[]).map(mapDiffHunkReview);
+    // Rows recorded before content was tracked hold an empty hash, so they can
+    // only ever be matched by their range. Offering them beyond the revision
+    // they were given about would carry an answer onto code nobody judged, so
+    // they stay with their own revision and everything else carries forward.
+    const scoped = `(content_hash <> '' OR revision = ?)`;
+    const order = `ORDER BY CASE WHEN revision = ? THEN 0 ELSE 1 END ASC, updated_at DESC, rowid DESC`;
+    const rows = 'reviewId' in scope
+      ? this.database.prepare(`SELECT id, revision, file_path, hunk_range, content_hash, state, note, updated_at FROM standalone_review_hunk_reviews WHERE review_id = ? AND ${scoped} ${order}`)
+        .all(scope.reviewId, revision, revision) as unknown as DiffHunkReviewRow[]
+      : (() => {
+        const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
+        return this.database.prepare(`SELECT id, revision, file_path, hunk_range, content_hash, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND ${scoped} ${order}`)
+          .all(id, revision, revision) as unknown as DiffHunkReviewRow[];
+      })();
+    return dedupeHunkReviewsByContent(rows.map(mapDiffHunkReview));
   }
 
   /** Block-level review state for the Review surface. Kept entirely separate
@@ -1024,14 +1060,14 @@ export class WorkItemRepository {
     return dedupeBlockReviewsByContent(rows.map(mapDiffBlockReview));
   }
 
-  private upsertStandaloneReviewHunkReview(reviewId: string, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {
+  private upsertStandaloneReviewHunkReview(reviewId: string, input: { revision: string; filePath: string; hunkRange: string; contentHash: string; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {
     const now = new Date().toISOString();
-    this.database.prepare(`INSERT INTO standalone_review_hunk_reviews (id, review_id, revision, file_path, hunk_range, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(review_id, revision, file_path, hunk_range) DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
-      .run(randomUUID(), reviewId, input.revision, input.filePath, input.hunkRange, input.state, input.note ?? null, now);
+    this.database.prepare(`INSERT INTO standalone_review_hunk_reviews (id, review_id, revision, file_path, hunk_range, content_hash, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(review_id, revision, file_path, hunk_range, content_hash) DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
+      .run(randomUUID(), reviewId, input.revision, input.filePath, input.hunkRange, input.contentHash, input.state, input.note ?? null, now);
     this.touchStandaloneReview(reviewId);
-    return mapDiffHunkReview(this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM standalone_review_hunk_reviews WHERE review_id = ? AND revision = ? AND file_path = ? AND hunk_range = ?`)
-      .get(reviewId, input.revision, input.filePath, input.hunkRange) as unknown as DiffHunkReviewRow);
+    return mapDiffHunkReview(this.database.prepare(`SELECT id, revision, file_path, hunk_range, content_hash, state, note, updated_at FROM standalone_review_hunk_reviews WHERE review_id = ? AND revision = ? AND file_path = ? AND hunk_range = ? AND content_hash = ?`)
+      .get(reviewId, input.revision, input.filePath, input.hunkRange, input.contentHash) as unknown as DiffHunkReviewRow);
   }
 
   private upsertStandaloneReviewBlockReview(reviewId: string, input: UpsertDiffBlockReviewInput): DiffBlockReview {

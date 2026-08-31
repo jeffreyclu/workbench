@@ -288,11 +288,11 @@ describe('ReviewStackView', () => {
     const written = await waitFor(() => {
       const puts = calls.filter((call) => call.method === 'PUT' && call.url.includes('hunk-reviews'));
       expect(puts).toHaveLength(1);
-      return puts[0].body as { revision: string; state: string; hunks: Array<{ filePath: string; hunkRange: string }> };
+      return puts[0].body as { revision: string; state: string; hunks: Array<{ filePath: string; hunkRange: string; contentHash: string }> };
     });
     expect(written.revision).toBe('rev-1');
     expect(written.state).toBe('reviewed');
-    expect(written.hunks).toEqual([{ filePath: 'src/app.ts', hunkRange: '@@ -1,2 +1,3 @@' }]);
+    expect(written.hunks).toEqual([{ filePath: 'src/app.ts', hunkRange: '@@ -1,2 +1,3 @@', contentHash: expect.any(String) }]);
 
     // The read this is diffed against is stubbed empty, so a reconcile that did
     // not remember what it already asked for would rewrite Changes forever.
@@ -468,5 +468,45 @@ describe('ReviewStackView', () => {
       const put = calls.find((call) => call.method === 'PUT' && call.url.includes('block-reviews'));
       expect(put?.body).toMatchObject({ state: 'reviewed', note });
     });
+  });
+  it('reads a branch commit by commit as well as whole', async () => {
+    const commits = [
+      { sha: 'b'.repeat(40), shortSha: 'bbbbbbb', title: 'tighten authorize', author: 'jeffrey', committedAt: '2026-01-02T00:00:00Z' },
+      { sha: 'a'.repeat(40), shortSha: 'aaaaaaa', title: 'add an import', author: 'jeffrey', committedAt: '2026-01-01T00:00:00Z' },
+    ];
+    const branchDiff = { ...diff, branch: 'feature', revision: 'branch:feature:base..tip' };
+    const commitDiff = {
+      ...diff, branch: 'feature', revision: `commit:${commits[0].sha}`, changedFiles: 1,
+      files: [file('src/server/auth.ts', AUTH_PATCH)],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/workspace-diff/file')) return json({ file: { path: 'src/server/auth.ts', revision: null, content: AUTH_FILE, unavailable: null } });
+      if (url.includes('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.includes('/workspace-diff/refs')) return json({ refs: { base: 'main', branches: [{ name: 'feature', current: false, ahead: 2 }], worktrees: [] } });
+      if (url.includes('/workspace-diff/ref/commits')) return json({ commits });
+      if (url.includes('/workspace-diff/commit')) return json({ diff: commitDiff });
+      if (url.includes('/workspace-diff/ref')) return json({ diff: branchDiff });
+      if (url.includes('block-reviews')) return init?.method === 'PUT' ? json({ review: null }) : json({ reviews: [] });
+      if (url.includes('hunk-reviews')) return json({ reviews: [] });
+      if (url.includes('/review-assist/lookup')) return json({ answer: null });
+      if (url.includes('/workspace-diff')) return json({ diff });
+      return json({});
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReviewStackView scope={{ workItemId: 'work-item-1' }} /></QueryClientProvider>);
+
+    await screen.findByLabelText('Reviewing');
+    fireEvent.change(screen.getByLabelText('Reviewing'), { target: { value: 'branch:feature' } });
+
+    // The whole branch first: every file the branch touched.
+    await waitFor(() => expect(canvasNode('src/app.ts')).toBeInTheDocument());
+    const commitSelect = await screen.findByLabelText('Commit');
+    expect(screen.getByRole('option', { name: 'All 2 commits' })).toBeInTheDocument();
+
+    fireEvent.change(commitSelect, { target: { value: commits[0].sha } });
+    // Now only what that commit did, rather than the branch's total.
+    await waitFor(() => expect(screen.queryByRole('button', { name: /in src\/app\.ts/ })).toBeNull());
+    await canvasNodeReadyFor('src/server/auth.ts');
   });
 });

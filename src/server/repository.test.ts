@@ -45,9 +45,9 @@ describe('WorkItemRepository', () => {
     const item = repository.create({ title: 'Hunk review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const other = repository.create({ title: 'Other item', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
 
-    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', state: 'reviewed' });
-    const updated = repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', state: 'needs_changes', note: 'please fix' });
-    repository.upsertDiffHunkReview({ workItemId: other.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', state: 'reviewed' });
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', contentHash: 'hash-a', state: 'reviewed' });
+    const updated = repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', contentHash: 'hash-a', state: 'needs_changes', note: 'please fix' });
+    repository.upsertDiffHunkReview({ workItemId: other.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', contentHash: 'hash-a', state: 'reviewed' });
 
     expect(updated.state).toBe('needs_changes');
     expect(updated.note).toBe('please fix');
@@ -55,9 +55,44 @@ describe('WorkItemRepository', () => {
     expect(repository.listDiffHunkReviews({ workItemId: other.id }, 'rev-1')).toEqual([expect.objectContaining({ state: 'reviewed' })]);
   });
 
+  it('carries a hunk verdict onto a later revision that did not change the code, and never onto rewritten code', () => {
+    const item = repository.create({ title: 'Carried hunk review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', contentHash: 'unchanged', state: 'reviewed' });
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/b.ts', hunkRange: '@@ -1,3 +1,3 @@', contentHash: 'rewritten-later', state: 'needs_changes', note: 'please fix' });
+
+    // Nothing was recorded against rev-2, yet both answers are still on offer:
+    // the caller matches them by content, and only the hash decides.
+    const carried = repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-2');
+    expect(carried).toEqual([
+      expect.objectContaining({ filePath: 'src/b.ts', contentHash: 'rewritten-later', state: 'needs_changes' }),
+      expect.objectContaining({ filePath: 'src/a.ts', contentHash: 'unchanged', state: 'reviewed' }),
+    ]);
+
+    // A verdict recorded against the revision being read wins over the older
+    // one about the same content, so re-answering a hunk still sticks.
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-2', filePath: 'src/a.ts', hunkRange: '@@ -1,3 +1,3 @@', contentHash: 'unchanged', state: 'needs_changes' });
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-2')
+      .filter((review) => review.filePath === 'src/a.ts'))
+      .toEqual([expect.objectContaining({ revision: 'rev-2', state: 'needs_changes' })]);
+  });
+
+  it('keeps a verdict recorded before content was tracked with the revision it was given about', () => {
+    const item = repository.create({ title: 'Legacy hunk review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    database.prepare(`INSERT INTO diff_hunk_reviews (id, work_item_id, revision, file_path, hunk_range, content_hash, state, note, updated_at)
+      VALUES ('legacy-1', ?, 'rev-1', 'src/a.ts', '@@ -1,3 +1,3 @@', '', 'reviewed', NULL, '2026-01-01T00:00:00.000Z')`).run(item.id);
+
+    // Still answered where it was answered: an existing review must not be
+    // thrown away by the move to content matching.
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-1'))
+      .toEqual([expect.objectContaining({ filePath: 'src/a.ts', contentHash: '', state: 'reviewed' })]);
+    // But never carried forward: with no hash there is nothing to prove the
+    // code it judged is the code now on screen.
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-2')).toEqual([]);
+  });
+
   it('keeps block-level review state separate from hunk-level review state', () => {
     const item = repository.create({ title: 'Block review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,20 +1,30 @@', state: 'reviewed' });
+    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,20 +1,30 @@', contentHash: 'hash-hunk', state: 'reviewed' });
 
     const block = repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@ parseBody', contentHash: 'abc123', state: 'needs_changes', note: 'unhandled empty body' });
     expect(block.state).toBe('needs_changes');
@@ -128,8 +163,8 @@ describe('WorkItemRepository', () => {
     const reviews = repository.upsertDiffHunkReviews({ workItemId: item.id }, {
       revision: 'rev-cross-file',
       hunks: [
-        { filePath: 'src/authorize.ts', hunkRange: '@@ -1 +1 @@ function authorizeRequest()' },
-        { filePath: 'src/authorize.test.ts', hunkRange: '@@ -10 +10 @@ describe("authorizeRequest")' },
+        { filePath: 'src/authorize.ts', hunkRange: '@@ -1 +1 @@ function authorizeRequest()', contentHash: 'hash-source' },
+        { filePath: 'src/authorize.test.ts', hunkRange: '@@ -10 +10 @@ describe("authorizeRequest")', contentHash: 'hash-test' },
       ],
       state: 'reviewed',
       note: 'Validated together.',
@@ -151,8 +186,8 @@ describe('WorkItemRepository', () => {
     expect(() => repository.upsertDiffHunkReviews({ workItemId: item.id }, {
       revision: 'rev-atomic',
       hunks: [
-        { filePath: 'src/succeeds-first.ts', hunkRange: '@@ -1 +1 @@ function updateDecision()' },
-        { filePath: 'src/fail.ts', hunkRange: '@@ -10 +10 @@ describe("updateDecision")' },
+        { filePath: 'src/succeeds-first.ts', hunkRange: '@@ -1 +1 @@ function updateDecision()', contentHash: 'hash-ok' },
+        { filePath: 'src/fail.ts', hunkRange: '@@ -10 +10 @@ describe("updateDecision")', contentHash: 'hash-fail' },
       ],
       state: 'needs_changes',
       note: 'Both hunks must remain pending.',

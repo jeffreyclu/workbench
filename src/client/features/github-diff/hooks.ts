@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQueries } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { githubDiffData, githubDiffQueryKeys } from './data.js';
 
@@ -10,6 +10,26 @@ export function useGitHubPullRequestDiff(url: string | null) {
     getNextPageParam: (lastPage) => lastPage.diff.nextPage,
     enabled: url !== null,
     staleTime: 30_000,
+  });
+}
+
+/** A pull request's commits, and one of them read as its own diff. */
+export function useGitHubPullRequestCommits(url: string | null) {
+  return useQuery({
+    queryKey: githubDiffQueryKeys.commits(url ?? ''),
+    queryFn: () => githubDiffData.getCommits(url!),
+    enabled: url !== null,
+    staleTime: 30_000,
+  });
+}
+
+export function useGitHubPullRequestCommitDiff(url: string | null, sha: string | null) {
+  return useQuery({
+    queryKey: githubDiffQueryKeys.commitDiff(url ?? '', sha ?? ''),
+    queryFn: () => githubDiffData.getCommitDiff(url!, sha!),
+    enabled: url !== null && sha !== null,
+    // A pushed commit does not change under the reviewer.
+    staleTime: Infinity,
   });
 }
 

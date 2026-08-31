@@ -35,6 +35,9 @@ export interface ReviewDecisionHunk {
   hunkRange: string;
   location: string;
   lines: string[];
+  /** Identity of the lines themselves, so a verdict recorded about this change
+   * survives a revision that did not touch it. */
+  contentHash: string;
   additions: number;
   deletions: number;
   state: DiffHunkReviewState | null;
@@ -236,18 +239,76 @@ function behaviorSummary(subject: string | null, hunks: ReviewDecisionHunk[], st
   return `${verb} ${effect}${fileCount > 1 ? ` across ${fileCount} files` : ''}.`;
 }
 
+/** FNV-1a over a change's lines. Not a security hash — it exists so a recorded
+ * verdict is invalidated when the lines under it change, and survives when they
+ * do not, even though the `@@` range moved. Read during render, so it is
+ * synchronous by necessity. */
+export function contentHashOfLines(lines: string[]): string {
+  let hash = 0x811c9dc5;
+  const text = lines.join('\n');
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+/** Match stored verdicts onto the hunks currently on screen by *content*.
+ *
+ * A stored row remembers the range it was answered at, but a range is a line
+ * number: edit anything above an untouched hunk and its range moves even though
+ * the code did not change. An exact (range, hash) hit wins, so same-revision
+ * reading is unchanged; a moved hunk is recognised by its hash; a file that
+ * repeats identical content at two ranges is left unmatched rather than
+ * guessed at, because carrying a verdict onto the wrong change is worse than
+ * asking again. Reviews arrive current-revision-first, so first match wins. */
+function resolveCarriedHunkReviews(
+  fileHunks: Array<{ file: WorkspaceDiffFile; hunks: Array<{ range: string; lines: string[] }> }>,
+  reviews: DiffHunkReview[],
+): Map<string, DiffHunkReview> {
+  const byContent = new Map<string, Array<{ id: string; range: string }>>();
+  for (const { file, hunks } of fileHunks) {
+    for (const hunk of hunks) {
+      const key = `${file.path}\u0000${contentHashOfLines(hunk.lines)}`;
+      const held = byContent.get(key);
+      const entry = { id: `${file.path}::${hunk.range}`, range: hunk.range };
+      if (held) held.push(entry);
+      else byContent.set(key, [entry]);
+    }
+  }
+  const resolved = new Map<string, DiffHunkReview>();
+  const onScreen = new Set([...byContent.values()].flat().map((entry) => entry.id));
+  for (const review of reviews) {
+    // A verdict recorded before content was tracked has no hash to match on.
+    // It keeps exactly the addressing it was written with — its own range, in
+    // its own revision, which is all the server offers it for.
+    if (!review.contentHash) {
+      const id = `${review.filePath}::${review.hunkRange}`;
+      if (onScreen.has(id) && !resolved.has(id)) resolved.set(id, review);
+      continue;
+    }
+    const candidates = byContent.get(`${review.filePath}\u0000${review.contentHash}`) ?? [];
+    const target = candidates.find((candidate) => candidate.range === review.hunkRange)
+      ?? (candidates.length === 1 ? candidates[0] : undefined);
+    if (target && !resolved.has(target.id)) resolved.set(target.id, review);
+  }
+  return resolved;
+}
+
 export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHunkReview[]): ReviewDecision[] {
-  const reviewByKey = new Map(reviews.map((review) => [`${review.filePath}::${review.hunkRange}`, review]));
+  const fileHunks = files.map((file) => ({ file, hunks: splitPatchHunks(file) }));
+  const reviewByHunkId = resolveCarriedHunkReviews(fileHunks, reviews);
   const candidates: DecisionCandidate[] = [];
-  for (const file of files) {
-    for (const patchHunk of splitPatchHunks(file)) {
-      const review = reviewByKey.get(`${file.path}::${patchHunk.range}`);
+  for (const { file, hunks } of fileHunks) {
+    for (const patchHunk of hunks) {
+      const review = reviewByHunkId.get(`${file.path}::${patchHunk.range}`);
       const counts = countChangedLines(patchHunk.lines);
       candidates.push({
         subject: hunkSubject(patchHunk), fileStatus: file.status,
         hunk: {
           id: `${file.path}::${patchHunk.range}`, filePath: file.path, fileStatus: file.status, editorUrl: file.editorUrl ?? null,
           hunkRange: patchHunk.range, location: hunkLocation(patchHunk.range), lines: patchHunk.lines,
+          contentHash: contentHashOfLines(patchHunk.lines),
           additions: counts.additions, deletions: counts.deletions, state: review?.state ?? null, note: review?.note ?? null,
         },
         riskSignals: staticRiskSignals(file, patchHunk),

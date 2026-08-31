@@ -1,5 +1,5 @@
 import type { WorkspaceDiffFile } from '../../../shared/contracts.js';
-import { splitPatchHunks } from '../../../shared/review-decisions.js';
+import { contentHashOfLines, splitPatchHunks } from '../../../shared/review-decisions.js';
 import { splitHunkIntoLogicBlocks, type BlockAnalysis, type LogicBlock } from './logic-blocks.js';
 
 /** The reviewable blocks of a file: its hunks, each cut into the individual
@@ -15,18 +15,10 @@ export function splitPatchBlocks(file: Pick<WorkspaceDiffFile, 'patch' | 'isBina
   return splitPatchHunks(file).flatMap((hunk) => splitHunkIntoLogicBlocks(hunk, file.logicBlocks));
 }
 
-/** FNV-1a. Not a security hash — it exists so a block's recorded verdict is
- * invalidated when the lines under it change, even if the `@@` range happens
- * to land identically after an edit above it. `crypto.subtle` is async and
- * this is read during render, so a small synchronous hash is the right tool. */
+/** A block's content identity. The same hash Changes keys its hunk verdicts
+ * on, so the two surfaces can never disagree about whether code changed. */
 export function blockContentHash(lines: string[]): string {
-  let hash = 0x811c9dc5;
-  const text = lines.join('\n');
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(36);
+  return contentHashOfLines(lines);
 }
 
 /** How Review addresses one block. `decisionId` is what the reused queue and

@@ -103,7 +103,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     return carried.flatMap(({ identity, review }) => {
       if (seen.has(identity.decisionId)) return [];
       seen.add(identity.decisionId);
-      return [{ id: review.id, revision: review.revision, filePath: identity.filePath, hunkRange: identity.range, state: review.state, note: review.note, updatedAt: review.updatedAt }];
+      return [{ id: review.id, revision: review.revision, filePath: identity.filePath, hunkRange: identity.range, contentHash: identity.contentHash, state: review.state, note: review.note, updatedAt: review.updatedAt }];
     });
   }, [carried]);
 
@@ -290,6 +290,20 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
         <select id="review-stack-source-select" value={source.sourceId ?? ''} onChange={(event) => source.selectSource(event.target.value)}>
           {source.options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
         </select>
+        {/* A change is written commit by commit, so it can be read that way
+            too. The whole source stays the default reading; picking a commit
+            narrows to exactly what that commit did. */}
+        {source.commits.length > 0 && <>
+          <label htmlFor="review-stack-commit-select">Commit</label>
+          <select
+            id="review-stack-commit-select"
+            value={source.commitSha ?? ''}
+            onChange={(event) => source.selectCommit(event.target.value || null)}
+          >
+            <option value="">{`All ${source.commits.length} commit${source.commits.length === 1 ? '' : 's'}`}</option>
+            {source.commits.map((commit) => <option key={commit.sha} value={commit.sha}>{commit.shortSha} — {commit.title}</option>)}
+          </select>
+        </>}
         <button type="button" className="icon-button" onClick={source.refresh} aria-label="Refresh"><RefreshCw size={13} /></button>
       </div>
       <p className="review-stack-progress" role="status">

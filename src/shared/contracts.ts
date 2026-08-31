@@ -555,6 +555,7 @@ export interface DiffHunkReview {
   revision: string;
   filePath: string;
   hunkRange: string;
+  contentHash: string;
   state: DiffHunkReviewState;
   note: string | null;
   updatedAt: string;
@@ -565,6 +566,7 @@ export const upsertDiffHunkReviewsSchema = z.object({
   hunks: z.array(z.object({
     filePath: z.string().trim().min(1),
     hunkRange: z.string().trim().min(1),
+    contentHash: z.string().trim().min(1).max(64),
   })).min(1).max(500),
   state: z.enum(['reviewed', 'needs_changes', 'commented']),
   note: z.string().trim().min(1).optional(),
@@ -657,6 +659,19 @@ export interface WorkspacePublishResult {
   committed: boolean;
   pushed: boolean;
   commit: string | null;
+}
+
+/** One commit inside whatever a review is reading.
+ *
+ * A pull request is written commit by commit, and reading it back as one
+ * flattened diff loses the order the author worked in. The same question is
+ * asked of a local branch, so both sources answer it with the same shape. */
+export interface ReviewCommit {
+  sha: string;
+  shortSha: string;
+  title: string;
+  author: string | null;
+  committedAt: string | null;
 }
 
 export interface GitHubPullRequestFile {

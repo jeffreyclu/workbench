@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LOGIC_HAZARD_REASONS, type DiffHunkReviewState, type WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { buildChangeMap } from '../../../shared/change-map.js';
-import { buildReviewDecisions, splitPatchHunks } from '../../../shared/review-decisions.js';
+import { buildReviewDecisions, contentHashOfLines, splitPatchHunks } from '../../../shared/review-decisions.js';
 import { blockContentHash, indexReviewBlocks, resolveCarriedBlockReviews, reviewBlockStorageKey, splitPatchBlocks, toBlockLevelFiles } from './review-blocks.js';
 import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
 import { splitHunkIntoLogicBlocks } from './logic-blocks.js';
@@ -699,6 +699,7 @@ describe('projecting block verdicts onto the hunks Changes addresses', () => {
   const target = file('src/api.ts', MULTI_CONSTRUCT_PATCH);
   const blocks = splitPatchBlocks(target);
   const hunkRange = splitPatchHunks(target)[0].range;
+  const hunkHash = contentHashOfLines(splitPatchHunks(target)[0].lines);
   const keyFor = (index: number) => reviewBlockStorageKey(target.path, blocks[index].range, blockContentHash(blocks[index].lines));
   const allReviewed = () => new Map<string, DiffHunkReviewState>(blocks.map((_, index) => [keyFor(index), 'reviewed']));
 
@@ -708,9 +709,9 @@ describe('projecting block verdicts onto the hunks Changes addresses', () => {
   });
 
   it('claims the hunk once every block is answered, at the gravest verdict given', () => {
-    expect(projectHunkVerdicts([target], allReviewed())).toEqual([{ filePath: 'src/api.ts', hunkRange, state: 'reviewed' }]);
-    expect(projectHunkVerdicts([target], allReviewed().set(keyFor(1), 'needs_changes'))).toEqual([{ filePath: 'src/api.ts', hunkRange, state: 'needs_changes' }]);
-    expect(projectHunkVerdicts([target], allReviewed().set(keyFor(1), 'commented'))).toEqual([{ filePath: 'src/api.ts', hunkRange, state: 'commented' }]);
+    expect(projectHunkVerdicts([target], allReviewed())).toEqual([{ filePath: 'src/api.ts', hunkRange, contentHash: hunkHash, state: 'reviewed' }]);
+    expect(projectHunkVerdicts([target], allReviewed().set(keyFor(1), 'needs_changes'))).toEqual([{ filePath: 'src/api.ts', hunkRange, contentHash: hunkHash, state: 'needs_changes' }]);
+    expect(projectHunkVerdicts([target], allReviewed().set(keyFor(1), 'commented'))).toEqual([{ filePath: 'src/api.ts', hunkRange, contentHash: hunkHash, state: 'commented' }]);
   });
 
   it('ignores a verdict recorded against content that has since changed', () => {
@@ -719,21 +720,21 @@ describe('projecting block verdicts onto the hunks Changes addresses', () => {
   });
 
   it('writes only what moved, so answering one block does not rewrite settled hunks', () => {
-    const before = [{ filePath: 'src/api.ts', hunkRange, state: 'reviewed' as DiffHunkReviewState }];
+    const before = [{ filePath: 'src/api.ts', hunkRange, contentHash: hunkHash, state: 'reviewed' as DiffHunkReviewState }];
     expect(newlyProjectedHunkVerdicts(before, before)).toEqual([]);
-    const moved = [{ filePath: 'src/api.ts', hunkRange, state: 'needs_changes' as DiffHunkReviewState }];
+    const moved = [{ filePath: 'src/api.ts', hunkRange, contentHash: hunkHash, state: 'needs_changes' as DiffHunkReviewState }];
     expect(newlyProjectedHunkVerdicts(before, moved)).toEqual(moved);
     expect(newlyProjectedHunkVerdicts([], moved)).toEqual(moved);
   });
 
   it('groups a delta into one request per state', () => {
     expect(groupHunkVerdictsByState([
-      { filePath: 'a.ts', hunkRange: '@@ -1 +1 @@', state: 'reviewed' },
-      { filePath: 'b.ts', hunkRange: '@@ -2 +2 @@', state: 'needs_changes' },
-      { filePath: 'c.ts', hunkRange: '@@ -3 +3 @@', state: 'reviewed' },
+      { filePath: 'a.ts', hunkRange: '@@ -1 +1 @@', contentHash: 'hash-a', state: 'reviewed' },
+      { filePath: 'b.ts', hunkRange: '@@ -2 +2 @@', contentHash: 'hash-b', state: 'needs_changes' },
+      { filePath: 'c.ts', hunkRange: '@@ -3 +3 @@', contentHash: 'hash-c', state: 'reviewed' },
     ])).toEqual([
-      { state: 'reviewed', hunks: [{ filePath: 'a.ts', hunkRange: '@@ -1 +1 @@' }, { filePath: 'c.ts', hunkRange: '@@ -3 +3 @@' }] },
-      { state: 'needs_changes', hunks: [{ filePath: 'b.ts', hunkRange: '@@ -2 +2 @@' }] },
+      { state: 'reviewed', hunks: [{ filePath: 'a.ts', hunkRange: '@@ -1 +1 @@', contentHash: 'hash-a' }, { filePath: 'c.ts', hunkRange: '@@ -3 +3 @@', contentHash: 'hash-c' }] },
+      { state: 'needs_changes', hunks: [{ filePath: 'b.ts', hunkRange: '@@ -2 +2 @@', contentHash: 'hash-b' }] },
     ]);
   });
 });

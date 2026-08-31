@@ -71,6 +71,28 @@ export function useWorkspaceRefDiff(scope: WorkspaceDiffScope | null, ref: strin
 }
 
 
+/** The commits behind a branch, and one commit read on its own. Both are
+ * asked for only once a branch is actually selected: a review that never
+ * leaves the whole-branch reading pays for neither. */
+export function useWorkspaceRefCommits(scope: WorkspaceDiffScope | null, ref: string | null) {
+  return useQuery({
+    queryKey: workspaceDiffQueryKeys.refCommits(scope ?? { workItemId: '' }, ref ?? ''),
+    queryFn: () => workspaceDiffData.getRefCommits(scope!, ref!),
+    enabled: Boolean(scope) && Boolean(ref),
+    staleTime: 30_000,
+  });
+}
+
+export function useWorkspaceCommitDiff(scope: WorkspaceDiffScope | null, commit: string | null) {
+  return useQuery({
+    queryKey: workspaceDiffQueryKeys.commitDiff(scope ?? { workItemId: '' }, commit ?? ''),
+    queryFn: () => workspaceDiffData.getCommitDiff(scope!, commit!),
+    enabled: Boolean(scope) && Boolean(commit),
+    // A commit is immutable, so what was fetched stays true.
+    staleTime: Infinity,
+  });
+}
+
 export function useDiffHunkReviews(scope: WorkspaceDiffScope, revision: string | undefined) {
   return useQuery({
     queryKey: workspaceDiffQueryKeys.hunkReviews(scope, revision),
@@ -83,7 +105,7 @@ export function useDiffHunkReviews(scope: WorkspaceDiffScope, revision: string |
 export function useUpsertDiffHunkReview(scope: WorkspaceDiffScope, revision: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { hunks: Array<{ filePath: string; hunkRange: string }>; state: DiffHunkReviewState; note?: string }) => workspaceDiffData.upsertHunkReviews(scope, { ...input, revision: revision! }),
+    mutationFn: (input: { hunks: Array<{ filePath: string; hunkRange: string; contentHash: string }>; state: DiffHunkReviewState; note?: string }) => workspaceDiffData.upsertHunkReviews(scope, { ...input, revision: revision! }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.hunkReviews(scope, revision) });
     },

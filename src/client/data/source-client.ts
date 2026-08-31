@@ -1,7 +1,7 @@
 import type { StaleReferenceReport } from '../../shared/stale-reference-contract.js';
 import type { BrokerConnection, BrokerSearchResponse, BrokerSourceId, ResolvedSourceDraft } from '../../shared/contracts';
 import type { ReviewAssistTier } from '../../shared/contracts';
-import type { CreateStandaloneReviewInput, DiffBlockReview, DiffHunkReview, DiffHunkReviewState, GitHubPullRequestDiff, StandaloneReview, UpsertDiffBlockReviewInput, UpsertDiffHunkReviewsInput, WorkspaceDiff, WorkspaceDiffSnapshot, WorkspaceFileSource, WorkspaceRefs } from '../../shared/contracts';
+import type { CreateStandaloneReviewInput, DiffBlockReview, DiffHunkReview, DiffHunkReviewState, GitHubPullRequestDiff, GitHubPullRequestFile, ReviewCommit, StandaloneReview, UpsertDiffBlockReviewInput, UpsertDiffHunkReviewsInput, WorkspaceDiff, WorkspaceDiffSnapshot, WorkspaceFileSource, WorkspaceRefs } from '../../shared/contracts';
 import { request } from './request';
 
 // A conversation with no linked task still has a real workspace (see
@@ -33,6 +33,8 @@ export const sourceClient = {
   getWorkspaceDiffSnapshots: (scope: WorkspaceDiffScope) => request<{ snapshots: WorkspaceDiffSnapshot[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/snapshots`),
   getWorkspaceRefs: (scope: WorkspaceDiffScope) => request<{ refs: WorkspaceRefs }>(`${workspaceDiffBasePath(scope)}/workspace-diff/refs`),
   getWorkspaceRefDiff: (scope: WorkspaceDiffScope, ref: string) => request<{ diff: WorkspaceDiff }>(`${workspaceDiffBasePath(scope)}/workspace-diff/ref?ref=${encodeURIComponent(ref)}`),
+  getWorkspaceRefCommits: (scope: WorkspaceDiffScope, ref: string) => request<{ commits: ReviewCommit[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/ref/commits?ref=${encodeURIComponent(ref)}`),
+  getWorkspaceCommitDiff: (scope: WorkspaceDiffScope, commit: string) => request<{ diff: WorkspaceDiff }>(`${workspaceDiffBasePath(scope)}/workspace-diff/commit?commit=${encodeURIComponent(commit)}`),
   getWorkspaceFileSource: (scope: WorkspaceDiffScope, filePath: string, revision: string | null) => request<{ file: WorkspaceFileSource }>(`${workspaceDiffBasePath(scope)}/workspace-diff/file?path=${encodeURIComponent(filePath)}${revision ? `&revision=${encodeURIComponent(revision)}` : ''}`),
   getWorkspaceDiffStatus: (scope: WorkspaceDiffScope, revision: string) => request<{ changed: boolean }>(`${workspaceDiffBasePath(scope)}/workspace-diff/status?revision=${encodeURIComponent(revision)}`),
   getDiffHunkReviews: (scope: WorkspaceDiffScope, revision: string) => request<{ reviews: DiffHunkReview[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/hunk-reviews?revision=${encodeURIComponent(revision)}`),
@@ -49,6 +51,8 @@ export const sourceClient = {
   listReviewRepositories: () => request<{ repositories: Array<{ path: string; label: string }> }>('/api/reviews/repositories'),
   listReviewRepositoryRefs: (repositoryPath: string) => request<{ refs: WorkspaceRefs }>(`/api/reviews/repositories/refs?repositoryPath=${encodeURIComponent(repositoryPath)}`),
   getGitHubPullRequestDiff: (url: string, page = 1) => request<{ diff: GitHubPullRequestDiff }>(`/api/github/pull-request-diff?url=${encodeURIComponent(url)}&page=${page}`),
+  getGitHubPullRequestCommits: (url: string) => request<{ commits: ReviewCommit[] }>(`/api/github/pull-request-commits?url=${encodeURIComponent(url)}`),
+  getGitHubPullRequestCommitDiff: (url: string, sha: string) => request<{ commit: ReviewCommit; files: GitHubPullRequestFile[] }>(`/api/github/pull-request-commit-diff?url=${encodeURIComponent(url)}&sha=${encodeURIComponent(sha)}`),
   assessDiffBlocks: (blocks: Array<{ key: string; lines: string[] }>) => request<{ assessments: Record<string, { risk: number | null; reasoning: string }> }>('/api/diff-confidence', { method: 'POST', body: JSON.stringify({ blocks }) }),
   lookupDiffConfidenceBlocks: (blocks: Array<{ key: string; lines: string[] }>) => request<{ assessments: Record<string, { risk: number | null; reasoning: string }> }>('/api/diff-confidence/lookup', { method: 'POST', body: JSON.stringify({ blocks }) }),
   requestReviewAssist: (input: {

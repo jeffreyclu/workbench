@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { commitAndPushWorkspace, getWorkspaceBranchDiff, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceFileSource, getWorkspaceRefDiff, getWorkspaceWorktreeDiff, listWorkspaceRefs, parseWorkspacePatch, parseWorktreeList, resolveWorkspaceRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceBranchDiff, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceFileSource, getWorkspaceRefDiff, getWorkspaceWorktreeDiff, listWorkspaceRefCommits, listWorkspaceRefs, parseWorkspacePatch, parseWorktreeList, resolveWorkspaceRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -279,6 +279,34 @@ describe('branch and worktree review sources', () => {
     expect(diff.files.map((file) => file.path)).toEqual(['file.ts']);
     // The primary checkout is untouched by reading a sibling.
     expect((await getWorkspaceDiff(workspace)).changedFiles).toBe(0);
+  });
+
+  it('lists a branch\'s own commits, newest first, and reads one of them as its own diff', async () => {
+    const workspace = repositoryWithBase();
+    execFileSync('git', ['checkout', '--quiet', '-b', 'feature'], { cwd: workspace });
+    writeFileSync(join(workspace, 'first.ts'), 'const first = 1;\n');
+    execFileSync('git', ['add', 'first.ts'], { cwd: workspace });
+    execFileSync('git', ['commit', '--quiet', '-m', 'first step'], { cwd: workspace });
+    writeFileSync(join(workspace, 'second.ts'), 'const second = 2;\n');
+    execFileSync('git', ['add', 'second.ts'], { cwd: workspace });
+    execFileSync('git', ['commit', '--quiet', '-m', 'second step'], { cwd: workspace });
+    execFileSync('git', ['checkout', '--quiet', 'main'], { cwd: workspace });
+
+    const commits = await listWorkspaceRefCommits(workspace, 'branch:feature');
+    // The base's own commits are not this branch's work, and the newest step
+    // is the one a reviewer reaches for first.
+    expect(commits.map((commit) => commit.title)).toEqual(['second step', 'first step']);
+    expect(commits[0].shortSha).toBe(commits[0].sha.slice(0, 7));
+
+    // Reading one commit shows that commit's change, not the branch's total.
+    const diff = await getWorkspaceCommitDiff(workspace, commits[1].sha);
+    expect(diff.files.map((file) => file.path)).toEqual(['first.ts']);
+    expect(diff.revision).toBe(`commit:${commits[1].sha}`);
+  });
+
+  it('answers with no commits for sources that are uncommitted by definition', async () => {
+    const workspace = repositoryWithBase();
+    await expect(listWorkspaceRefCommits(workspace, 'worktree:/anywhere')).resolves.toEqual([]);
   });
 
   it('refuses a path git never reported as a worktree', async () => {

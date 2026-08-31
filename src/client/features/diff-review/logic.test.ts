@@ -3,6 +3,13 @@ import type { DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contract
 import type { ChangeMap, ChangeMapNode } from '../../../shared/change-map.js';
 import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions } from './logic.js';
 
+/** The hash the decision builder derives for a hunk, so a fixture verdict is
+ * recorded against the content actually on screen rather than a literal that
+ * would silently stop matching. */
+const hunkHash = (files: WorkspaceDiffFile[], filePath: string, hunkRange: string): string =>
+  buildReviewDecisions(files, []).flatMap((decision) => decision.hunks)
+    .find((hunk) => hunk.filePath === filePath && hunk.hunkRange === hunkRange)!.contentHash;
+
 const localFile: WorkspaceDiffFile = {
   path: 'src/local.ts', status: 'modified', additions: 1, deletions: 1, previousPath: null,
   patch: '@@ -2 +2 @@ localValue\n-before\n+after', isBinary: false,
@@ -42,7 +49,9 @@ describe('diff review queue logic', () => {
   it('groups the same concrete symbol across files and keeps partial legacy state pending', () => {
     const review: DiffHunkReview = {
       id: 'review-1', revision: 'rev-1', filePath: authFile.path,
-      hunkRange: '@@ -10 +10,3 @@ function authorizeRequest()', state: 'reviewed', note: null,
+      hunkRange: '@@ -10 +10,3 @@ function authorizeRequest()',
+      contentHash: hunkHash([authFile, authTestFile], authFile.path, '@@ -10 +10,3 @@ function authorizeRequest()'),
+      state: 'reviewed', note: null,
       updatedAt: '2026-08-27T00:00:00.000Z',
     };
     const decisions = buildReviewDecisions([authFile, authTestFile], [review]);
@@ -117,12 +126,28 @@ describe('diff review queue logic', () => {
     ]);
   });
 
+  it('carries a verdict onto the same code at a moved range, and keeps a hash-less verdict at its own range', () => {
+    const moved: WorkspaceDiffFile = { ...authFile, patch: authFile.patch!.replace('@@ -10 +10,3 @@', '@@ -40 +40,3 @@') };
+    const range = '@@ -10 +10,3 @@ function authorizeRequest()';
+    const review: DiffHunkReview = {
+      id: 'review-4', revision: 'rev-1', filePath: authFile.path, hunkRange: range,
+      contentHash: hunkHash([authFile], authFile.path, range), state: 'reviewed', note: null,
+      updatedAt: '2026-08-27T00:00:00.000Z',
+    };
+    // The lines did not change, only the line numbers did, so the answer holds.
+    expect(buildReviewDecisions([moved], [review])[0].hunks[0].state).toBe('reviewed');
+    // A row from before hashes existed has only its range to go on, so the
+    // moved change asks its question again rather than inheriting an answer.
+    expect(buildReviewDecisions([moved], [{ ...review, contentHash: '' }])[0].hunks[0].state).toBeNull();
+    expect(buildReviewDecisions([authFile], [{ ...review, contentHash: '' }])[0].hunks[0].state).toBe('reviewed');
+  });
+
   it('sorts reviewed decisions below every unreviewed decision, then by source order', () => {
     const decisions = buildReviewDecisions([localFile, authFile], []);
     const authDecision = decisions.find((decision) => decision.filePaths[0] === authFile.path)!;
     const authReview: DiffHunkReview = {
       id: 'review-3', revision: 'rev-1', filePath: authFile.path,
-      hunkRange: authDecision.hunks[0].hunkRange, state: 'reviewed', note: null,
+      hunkRange: authDecision.hunks[0].hunkRange, contentHash: authDecision.hunks[0].contentHash, state: 'reviewed', note: null,
       updatedAt: '2026-08-27T00:00:00.000Z',
     };
     const reviewed = buildReviewDecisions([localFile, authFile], [authReview]);
@@ -139,7 +164,9 @@ describe('diff review queue logic', () => {
     // Reviewing the first decision sinks it in the queue; its number goes with it.
     const authReview: DiffHunkReview = {
       id: 'review-2', revision: 'rev-1', filePath: authFile.path,
-      hunkRange: '@@ -10 +10,3 @@ function authorizeRequest()', state: 'reviewed', note: null,
+      hunkRange: '@@ -10 +10,3 @@ function authorizeRequest()',
+      contentHash: hunkHash([localFile, authFile], authFile.path, '@@ -10 +10,3 @@ function authorizeRequest()'),
+      state: 'reviewed', note: null,
       updatedAt: '2026-08-27T00:00:00.000Z',
     };
     const reviewed = buildReviewDecisions([localFile, authFile], [authReview]);

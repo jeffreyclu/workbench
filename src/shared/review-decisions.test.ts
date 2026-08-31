@@ -8,6 +8,7 @@ function hunk(index: number, lines: string[]): ReviewDecisionHunk {
     filePath: 'src/example.ts',
     fileStatus: 'modified',
     editorUrl: null,
+    contentHash: `hash-${index}`,
     hunkRange: `@@ -${index},1 +${index},1 @@`,
     location: `Line ${index}`,
     lines,

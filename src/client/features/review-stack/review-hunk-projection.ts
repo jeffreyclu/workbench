@@ -1,5 +1,5 @@
 import type { DiffHunkReviewState, WorkspaceDiffFile } from '../../../shared/contracts.js';
-import { splitPatchHunks } from '../../../shared/review-decisions.js';
+import { contentHashOfLines, splitPatchHunks } from '../../../shared/review-decisions.js';
 import { splitHunkIntoLogicBlocks } from './logic-blocks.js';
 import { blockContentHash, reviewBlockStorageKey } from './review-blocks.js';
 
@@ -7,6 +7,7 @@ import { blockContentHash, reviewBlockStorageKey } from './review-blocks.js';
 export interface ProjectedHunkVerdict {
   filePath: string;
   hunkRange: string;
+  contentHash: string;
   state: DiffHunkReviewState;
 }
 
@@ -46,7 +47,7 @@ export function projectHunkVerdicts(files: WorkspaceDiffFile[], blockVerdicts: R
         if (!verdict) { complete = false; break; }
         if (!state || STATE_SEVERITY[verdict] > STATE_SEVERITY[state]) state = verdict;
       }
-      if (complete && state) projected.push({ filePath: file.path, hunkRange: hunk.range, state });
+      if (complete && state) projected.push({ filePath: file.path, hunkRange: hunk.range, contentHash: contentHashOfLines(hunk.lines), state });
     }
   }
   return projected;
@@ -63,11 +64,11 @@ export function newlyProjectedHunkVerdicts(before: ProjectedHunkVerdict[], after
 /** Group a delta into the shape the hunk-review batch route takes: one request
  * per distinct state, since that route records a single state for a list of
  * hunks. */
-export function groupHunkVerdictsByState(verdicts: ProjectedHunkVerdict[]): Array<{ state: DiffHunkReviewState; hunks: Array<{ filePath: string; hunkRange: string }> }> {
-  const groups = new Map<DiffHunkReviewState, Array<{ filePath: string; hunkRange: string }>>();
+export function groupHunkVerdictsByState(verdicts: ProjectedHunkVerdict[]): Array<{ state: DiffHunkReviewState; hunks: Array<{ filePath: string; hunkRange: string; contentHash: string }> }> {
+  const groups = new Map<DiffHunkReviewState, Array<{ filePath: string; hunkRange: string; contentHash: string }>>();
   for (const verdict of verdicts) {
     const hunks = groups.get(verdict.state) ?? [];
-    hunks.push({ filePath: verdict.filePath, hunkRange: verdict.hunkRange });
+    hunks.push({ filePath: verdict.filePath, hunkRange: verdict.hunkRange, contentHash: verdict.contentHash });
     groups.set(verdict.state, hunks);
   }
   return [...groups].map(([state, hunks]) => ({ state, hunks }));

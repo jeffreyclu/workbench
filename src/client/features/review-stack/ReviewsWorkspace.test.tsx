@@ -32,6 +32,19 @@ function renderWorkspace() {
     if (url.includes('/workspace-diff/snapshots')) return json({ snapshots: [] });
     if (url.includes('/workspace-diff/block-reviews')) return json({ reviews: [] });
     if (url.includes('/workspace-diff')) return json({ diff: { workspacePath: '', branch: '', revision: 'pull-request', files: [], changedFiles: 0, additions: 0, deletions: 0, publish: { branch: null, hasOrigin: false, ahead: 0, hasChanges: false, reason: null } } });
+    // A pull-request review reads the pull request itself: its diff, and the
+    // commits it is made of. Answering neither leaves the viewer holding a
+    // page that has no diff on it.
+    if (url.includes('/api/github/pull-request-commits')) return json({ commits: [] });
+    if (url.includes('/api/github/pull-request-diff')) return json({
+      diff: {
+        url: 'https://github.com/acme/widgets/pull/42', repository: 'acme/widgets', number: 42, title: 'Widget review',
+        baseRef: 'main', headRef: 'feature', headSha: 'a'.repeat(40), revision: 'a'.repeat(40),
+        files: [], changedFiles: 0, additions: 0, deletions: 0, nextPage: null,
+        state: 'open', draft: false, mergeableState: 'clean', reviewDecision: null, reviewDecisionError: null,
+        comments: { available: false, partial: false, total: null, byPath: {}, comments: [], error: null },
+      },
+    });
     if (url.includes('/api/shared/conversations')) return json({ conversations: [], nextCursor: null });
     return json({});
   });

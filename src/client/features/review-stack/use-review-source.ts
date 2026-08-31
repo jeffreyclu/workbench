@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
-import { useWorkspaceDiff, useWorkspaceDiffSnapshots, useWorkspaceRefDiff, useWorkspaceRefs } from '../workspace-diff/hooks.js';
-import { useGitHubPullRequestDiff } from '../github-diff/hooks.js';
+import { useWorkspaceCommitDiff, useWorkspaceDiff, useWorkspaceDiffSnapshots, useWorkspaceRefCommits, useWorkspaceRefDiff, useWorkspaceRefs } from '../workspace-diff/hooks.js';
+import { useGitHubPullRequestCommitDiff, useGitHubPullRequestCommits, useGitHubPullRequestDiff } from '../github-diff/hooks.js';
 import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
 import { readReviewStackSelection, writeReviewStackSource } from '../../lib/preferences.js';
 import {
@@ -58,21 +58,58 @@ export function useReviewSource(scope: WorkspaceDiffScope, pullRequestUrlCandida
     return { branch: `${first.baseRef} → ${first.headRef}`, revision: first.revision, files: pullRequestQuery.data!.pages.flatMap((page) => page.diff.files) };
   }, [pullRequestQuery.data]);
 
+  // The commits behind the selected source. A pull request and a branch are
+  // the same question asked of two hosts, so both answer with `ReviewCommit`
+  // and the reader below cannot tell them apart.
+  const pullRequestCommitsQuery = useGitHubPullRequestCommits(pullRequestUrl);
+  const refCommitsQuery = useWorkspaceRefCommits(scope, selectedKind === 'branch' ? refId : null);
+  const commits = useMemo(
+    () => (pullRequestUrl ? pullRequestCommitsQuery.data?.commits : refCommitsQuery.data?.commits) ?? [],
+    [pullRequestUrl, pullRequestCommitsQuery.data, refCommitsQuery.data],
+  );
+
+  // A commit id only means anything inside the source it was listed from, so
+  // changing source drops back to reading that source whole.
+  const [commitSha, setCommitSha] = useState<string | null>(null);
+  useEffect(() => { setCommitSha(null); }, [sourceId]);
+  const selectedCommit = commitSha && commits.some((commit) => commit.sha === commitSha) ? commitSha : null;
+
+  const pullRequestCommitQuery = useGitHubPullRequestCommitDiff(pullRequestUrl, pullRequestUrl ? selectedCommit : null);
+  const workspaceCommitQuery = useWorkspaceCommitDiff(scope, pullRequestUrl ? null : selectedCommit);
+  const commitDiff: ReviewSourceDiff | null = useMemo(() => {
+    const fromPullRequest = pullRequestCommitQuery.data;
+    if (fromPullRequest) return { branch: `${fromPullRequest.commit.shortSha} — ${fromPullRequest.commit.title}`, revision: fromPullRequest.commit.sha, files: fromPullRequest.files };
+    const fromWorkspace = workspaceCommitQuery.data?.diff;
+    if (!fromWorkspace) return null;
+    const listed = commits.find((commit) => fromWorkspace.revision.endsWith(commit.sha));
+    return { branch: listed ? `${listed.shortSha} — ${listed.title}` : fromWorkspace.branch, revision: fromWorkspace.revision, files: fromWorkspace.files };
+  }, [pullRequestCommitQuery.data, workspaceCommitQuery.data, commits]);
+
   const selectSource = (nextId: string) => {
     setSourceId(nextId);
     writeReviewStackSource(preferenceScope, nextId);
   };
 
-  const source = sourceId ? resolveReviewSourceDiff(sourceId, { diff, snapshots, pullRequest: pullRequestDiff, refDiff }) : null;
+  const wholeSource = sourceId ? resolveReviewSourceDiff(sourceId, { diff, snapshots, pullRequest: pullRequestDiff, refDiff }) : null;
+  const commitLoading = selectedCommit !== null && (pullRequestCommitQuery.isLoading || workspaceCommitQuery.isLoading);
   return {
     preferenceScope,
     options,
     sourceId,
     selectSource,
-    source,
-    isLoading: diffQuery.isLoading || snapshotsQuery.isLoading || (pullRequestUrl !== null && pullRequestQuery.isLoading) || (refId !== null && refDiffQuery.isLoading),
-    error: diffQuery.error ?? pullRequestQuery.error ?? refDiffQuery.error ?? null,
-    refresh: () => { void diffQuery.refetch(); void snapshotsQuery.refetch(); void refsQuery.refetch(); if (refId) void refDiffQuery.refetch(); },
+    commits,
+    commitSha: selectedCommit,
+    selectCommit: setCommitSha,
+    // A selected commit replaces what is being read, rather than filtering it:
+    // the commit's own patch is what its author wrote, hunk for hunk.
+    source: selectedCommit ? commitDiff : wholeSource,
+    isLoading: diffQuery.isLoading || snapshotsQuery.isLoading || (pullRequestUrl !== null && pullRequestQuery.isLoading) || (refId !== null && refDiffQuery.isLoading) || commitLoading,
+    error: diffQuery.error ?? pullRequestQuery.error ?? refDiffQuery.error ?? pullRequestCommitQuery.error ?? workspaceCommitQuery.error ?? null,
+    refresh: () => {
+      void diffQuery.refetch(); void snapshotsQuery.refetch(); void refsQuery.refetch();
+      if (refId) void refDiffQuery.refetch();
+      if (pullRequestUrl) void pullRequestCommitsQuery.refetch(); else if (selectedKind === 'branch') void refCommitsQuery.refetch();
+    },
   };
 }
 
