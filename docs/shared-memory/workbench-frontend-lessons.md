@@ -6,7 +6,8 @@
 destination glyph, active-button glyph, and footer Search glyph must be centered on the same
 vertical axis. Hiding nav labels with `font-size: 0` does not remove a flex `gap`: set the collapsed
 item gap to zero and restore it only for the expanded state. Center the footer control in the full
-rail content box instead of applying nested horizontal padding that offsets Search.
+rail content box instead of applying nested horizontal padding that offsets Search. When the desktop
+sidebar expands, Search grows from that centered square into a bar spanning the available footer width.
 
 ### New Task Linear identifiers resolve beyond the current sync scope
 

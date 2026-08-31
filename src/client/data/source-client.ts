@@ -1,7 +1,7 @@
 import type { StaleReferenceReport } from '../../shared/stale-reference-contract.js';
 import type { BrokerConnection, BrokerSearchResponse, BrokerSourceId, ResolvedSourceDraft } from '../../shared/contracts';
 import type { ReviewAssistTier } from '../../shared/contracts';
-import type { DiffBlockReview, DiffHunkReview, DiffHunkReviewState, GitHubPullRequestDiff, UpsertDiffBlockReviewInput, UpsertDiffHunkReviewsInput, WorkspaceDiff, WorkspaceDiffSnapshot, WorkspaceFileSource } from '../../shared/contracts';
+import type { DiffBlockReview, DiffHunkReview, DiffHunkReviewState, GitHubPullRequestDiff, UpsertDiffBlockReviewInput, UpsertDiffHunkReviewsInput, WorkspaceDiff, WorkspaceDiffSnapshot, WorkspaceFileSource, WorkspaceRefs } from '../../shared/contracts';
 import { request } from './request';
 
 // A conversation with no linked task still has a real workspace (see
@@ -27,6 +27,8 @@ export const sourceClient = {
   disconnectSource: (provider: 'confluence' | 'slack' | 'figma' | 'grafana' | 'gmail' | 'github') => request<void>(`/api/source-connections/${provider}`, { method: 'DELETE' }),
   getWorkspaceDiff: (scope: WorkspaceDiffScope) => request<{ diff: WorkspaceDiff }>(`${workspaceDiffBasePath(scope)}/workspace-diff`),
   getWorkspaceDiffSnapshots: (scope: WorkspaceDiffScope) => request<{ snapshots: WorkspaceDiffSnapshot[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/snapshots`),
+  getWorkspaceRefs: (scope: WorkspaceDiffScope) => request<{ refs: WorkspaceRefs }>(`${workspaceDiffBasePath(scope)}/workspace-diff/refs`),
+  getWorkspaceRefDiff: (scope: WorkspaceDiffScope, ref: string) => request<{ diff: WorkspaceDiff }>(`${workspaceDiffBasePath(scope)}/workspace-diff/ref?ref=${encodeURIComponent(ref)}`),
   getWorkspaceFileSource: (scope: WorkspaceDiffScope, filePath: string, revision: string | null) => request<{ file: WorkspaceFileSource }>(`${workspaceDiffBasePath(scope)}/workspace-diff/file?path=${encodeURIComponent(filePath)}${revision ? `&revision=${encodeURIComponent(revision)}` : ''}`),
   getWorkspaceDiffStatus: (scope: WorkspaceDiffScope, revision: string) => request<{ changed: boolean }>(`${workspaceDiffBasePath(scope)}/workspace-diff/status?revision=${encodeURIComponent(revision)}`),
   getDiffHunkReviews: (scope: WorkspaceDiffScope, revision: string) => request<{ reviews: DiffHunkReview[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/hunk-reviews?revision=${encodeURIComponent(revision)}`),

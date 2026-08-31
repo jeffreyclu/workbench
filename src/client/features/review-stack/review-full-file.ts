@@ -29,12 +29,21 @@ export interface FullFileReading {
 /** Which git revision holds a source's after-state, or null for the working tree.
  *
  * A recorded commit diff carries `commit:<sha>`, and that commit holds the
- * file. A working-tree diff's revision is a content hash of uncommitted work —
- * no commit holds that text, so the file on disk is the only after-state
- * there is. */
+ * file. A branch diff carries `branch:<name>:<base>..<tip>`, and its tip is a
+ * real commit that holds the file. A working-tree diff's revision is a content
+ * hash of uncommitted work — no commit holds that text, so the file on disk is
+ * the only after-state there is. */
 export function fileSourceRevision(revision: string | null | undefined): string | null {
   if (!revision) return null;
-  return revision.startsWith('commit:') ? revision.slice('commit:'.length) : null;
+  if (revision.startsWith('commit:')) return revision.slice('commit:'.length);
+  if (revision.startsWith('branch:')) {
+    // Git forbids `..` inside a ref name, so the last one is always the
+    // separator this revision was built with.
+    const separator = revision.lastIndexOf('..');
+    const tip = separator === -1 ? '' : revision.slice(separator + 2);
+    return tip || null;
+  }
+  return null;
 }
 
 function splitLines(content: string): string[] {

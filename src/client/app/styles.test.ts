@@ -99,6 +99,11 @@ describe('conversation view controls', () => {
     expect(styles).toContain('.sidebar:hover .sidebar-footer, .sidebar:focus-within .sidebar-footer { display: block; padding-inline: 9px; }');
   });
 
+  it('stretches Search into a wide bar with the expanded desktop navigation', () => {
+    expect(styles).toContain('.sidebar:hover .sidebar-footer .global-search, .sidebar:hover .sidebar-footer .global-search-trigger,');
+    expect(styles).toContain('.sidebar:focus-within .sidebar-footer .global-search, .sidebar:focus-within .sidebar-footer .global-search-trigger { width: 100%; }');
+  });
+
   it('keeps the phone composer in normal flex flow and the jump control above it', () => {
     const phoneRules = styles.match(/@media \(max-width: 820px\) and \(pointer: coarse\) \{[\s\S]*?\.agent-console \.shared-thread \.jump-to-latest-button\s*\{[^}]*\}/)?.[0] ?? '';
 

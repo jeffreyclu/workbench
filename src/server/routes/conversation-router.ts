@@ -8,7 +8,7 @@ import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
 import { resolveWorkingDirectory, runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, retrySharedSynthesis, runSharedBackgroundJob } from '../shared-room.js';
-import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceRefs } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { parseFollowUpPlan } from '../app-exports.js';
 import { isRuntimeApproval } from '../runtime-promotion.js';
@@ -146,6 +146,25 @@ export function createConversationRouter({ repository, database, capabilities, a
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
       await captureRecordedWorkspaceDiffSnapshots(repository, { conversationId: request.params.id }, workingDirectory, [request.params.id]);
       response.json({ snapshots: repository.listWorkspaceDiffSnapshots({ conversationId: request.params.id }) });
+    } catch (error) { next(error); }
+  });
+
+  // Branches and worktrees are more review sources, not another view: both
+  // answer with the same WorkspaceDiff the working tree does.
+  router.get('/api/shared/conversations/:id/workspace-diff/refs', async (request, response, next) => {
+    try {
+      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
+      response.json({ refs: await listWorkspaceRefs(workingDirectory) });
+    } catch (error) { next(error); }
+  });
+  router.get('/api/shared/conversations/:id/workspace-diff/ref', async (request, response, next) => {
+    try {
+      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
+      const ref = typeof request.query.ref === 'string' ? request.query.ref : '';
+      if (!ref) return response.status(400).json({ error: 'Specify which branch or worktree to review.' });
+      response.json({ diff: await getWorkspaceRefDiff(workingDirectory, ref) });
     } catch (error) { next(error); }
   });
 

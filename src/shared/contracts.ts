@@ -492,6 +492,35 @@ export interface WorkspaceDiff {
   publish: WorkspacePublishStatus;
 }
 
+/** A reviewable place in the repository other than its working tree.
+ *
+ * Branches and worktrees are read through the same review source selector as
+ * the working tree, recorded snapshots and pull requests — they are more
+ * sources for one surface, never a viewer of their own. */
+export interface WorkspaceBranchRef {
+  name: string;
+  /** True for the branch the primary checkout currently has out. */
+  current: boolean;
+  /** Commits this branch carries that the comparison base does not. */
+  ahead: number;
+}
+
+export interface WorkspaceWorktreeRef {
+  path: string;
+  /** Null while the worktree sits on a detached HEAD. */
+  branch: string | null;
+  /** True for the worktree this review is already scoped to. */
+  current: boolean;
+}
+
+export interface WorkspaceRefs {
+  /** Branch every listed branch is compared against, or null when the
+   * repository has no recognisable default branch. */
+  base: string | null;
+  branches: WorkspaceBranchRef[];
+  worktrees: WorkspaceWorktreeRef[];
+}
+
 /** One file read whole, for reviewing a block in its real surroundings rather
  * than in a three-line patch window.
  *

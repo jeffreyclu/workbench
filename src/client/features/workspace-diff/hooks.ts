@@ -48,6 +48,28 @@ export function useWorkspaceDiffSnapshots(scope: WorkspaceDiffScope | null, revi
   return query;
 }
 
+/** Branches and worktrees available to review. Cheap enough to keep warm, but
+ * it walks refs, so it is not on the diff's own refetch-always path. */
+export function useWorkspaceRefs(scope: WorkspaceDiffScope | null) {
+  return useQuery({
+    queryKey: workspaceDiffQueryKeys.refs(scope ?? { workItemId: '' }),
+    queryFn: () => workspaceDiffData.getRefs(scope!),
+    enabled: Boolean(scope),
+    staleTime: 30_000,
+  });
+}
+
+/** The diff for one selected branch or worktree. Only the selected ref is ever
+ * fetched — enumerating every branch's patch would be the expensive mistake. */
+export function useWorkspaceRefDiff(scope: WorkspaceDiffScope | null, ref: string | null) {
+  return useQuery({
+    queryKey: workspaceDiffQueryKeys.refDiff(scope ?? { workItemId: '' }, ref ?? ''),
+    queryFn: () => workspaceDiffData.getRefDiff(scope!, ref!),
+    enabled: Boolean(scope) && Boolean(ref),
+    staleTime: 0,
+  });
+}
+
 
 export function useDiffHunkReviews(scope: WorkspaceDiffScope, revision: string | undefined) {
   return useQuery({

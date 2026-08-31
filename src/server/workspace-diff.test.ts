@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceFileSource, parseWorkspacePatch, resolveWorkspaceRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceBranchDiff, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceFileSource, getWorkspaceRefDiff, getWorkspaceWorktreeDiff, listWorkspaceRefs, parseWorkspacePatch, parseWorktreeList, resolveWorkspaceRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -209,5 +209,85 @@ describe('whole-file source', () => {
     writeFileSync(join(workspace, 'logo.png'), Buffer.from([0x89, 0x50, 0x00, 0x01]));
     const binary = await getWorkspaceFileSource(workspace, 'logo.png');
     expect(binary).toMatchObject({ content: null, unavailable: 'This file is binary.' });
+  });
+});
+
+describe('branch and worktree review sources', () => {
+  function repositoryWithBase() {
+    const workspace = temporaryGitWorkspace();
+    writeFileSync(join(workspace, 'file.ts'), 'const value = 1;\n');
+    execFileSync('git', ['add', 'file.ts'], { cwd: workspace });
+    execFileSync('git', ['commit', '--quiet', '-m', 'initial'], { cwd: workspace });
+    // git init picks main or master depending on the host config; pin the base
+    // so the test asserts against a known comparison branch either way.
+    execFileSync('git', ['branch', '--move', 'main'], { cwd: workspace });
+    return workspace;
+  }
+
+  it('reads a worktree list, naming the checkout it was asked about as current', () => {
+    const worktrees = parseWorktreeList(
+      'worktree /repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /repo-feature\nHEAD def\ndetached\n',
+      '/repo',
+    );
+    expect(worktrees).toEqual([
+      { path: '/repo', branch: 'main', current: true },
+      { path: '/repo-feature', branch: null, current: false },
+    ]);
+  });
+
+  it('lists other branches with how far ahead of the base they are, and omits the base itself', async () => {
+    const workspace = repositoryWithBase();
+    execFileSync('git', ['checkout', '--quiet', '-b', 'feature'], { cwd: workspace });
+    writeFileSync(join(workspace, 'file.ts'), 'const value = 2;\n');
+    execFileSync('git', ['commit', '--all', '--quiet', '-m', 'branch work'], { cwd: workspace });
+    execFileSync('git', ['checkout', '--quiet', 'main'], { cwd: workspace });
+
+    const refs = await listWorkspaceRefs(workspace);
+    expect(refs.base).toBe('main');
+    expect(refs.branches).toEqual([{ name: 'feature', current: false, ahead: 1 }]);
+    expect(refs.worktrees).toEqual([{ path: expect.any(String), branch: 'main', current: true }]);
+  });
+
+  it('diffs a branch against its merge base rather than against the current checkout', async () => {
+    const workspace = repositoryWithBase();
+    execFileSync('git', ['checkout', '--quiet', '-b', 'feature'], { cwd: workspace });
+    writeFileSync(join(workspace, 'file.ts'), 'const value = 2;\n');
+    execFileSync('git', ['commit', '--all', '--quiet', '-m', 'branch work'], { cwd: workspace });
+    execFileSync('git', ['checkout', '--quiet', 'main'], { cwd: workspace });
+    // Work landing on the base after the branch left must not show up as the
+    // branch's own change.
+    writeFileSync(join(workspace, 'other.ts'), 'const other = 1;\n');
+    execFileSync('git', ['add', 'other.ts'], { cwd: workspace });
+    execFileSync('git', ['commit', '--quiet', '-m', 'base moved on'], { cwd: workspace });
+
+    const diff = await getWorkspaceBranchDiff(workspace, 'feature');
+    expect(diff.branch).toBe('feature');
+    expect(diff.files.map((file) => file.path)).toEqual(['file.ts']);
+    expect(diff.revision).toMatch(/^branch:feature:[0-9a-f]{40}\.\.[0-9a-f]{40}$/);
+    expect(diff.publish.hasChanges).toBe(false);
+  });
+
+  it('reads a linked worktree\'s own uncommitted changes', async () => {
+    const workspace = repositoryWithBase();
+    const linked = `${workspace}-linked`;
+    temporaryDirectories.push(linked);
+    execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'linked', linked], { cwd: workspace });
+    writeFileSync(join(linked, 'file.ts'), 'const value = 3;\n');
+
+    const diff = await getWorkspaceWorktreeDiff(workspace, linked);
+    expect(diff.branch).toBe('linked');
+    expect(diff.files.map((file) => file.path)).toEqual(['file.ts']);
+    // The primary checkout is untouched by reading a sibling.
+    expect((await getWorkspaceDiff(workspace)).changedFiles).toBe(0);
+  });
+
+  it('refuses a path git never reported as a worktree', async () => {
+    const workspace = repositoryWithBase();
+    await expect(getWorkspaceRefDiff(workspace, 'worktree:/etc')).rejects.toThrow('not a worktree of this repository');
+  });
+
+  it('refuses a source id it does not recognise', async () => {
+    const workspace = repositoryWithBase();
+    await expect(getWorkspaceRefDiff(workspace, 'nonsense')).rejects.toThrow('Unrecognised review source');
   });
 });

@@ -7,7 +7,7 @@ import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import type { ReviewAssistTaskIntent } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
 import { useCachedReviewAssistAnswers } from '../diff-review/review-assist.js';
-import { DiffReviewFileDiffPane, type DiffReadingMode } from '../diff-review/file-diff-pane.js';
+import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { buildFileDiffHunks } from '../diff-review/logic.js';
 import { readReviewStackReadingMode, writeReviewStackBlock, writeReviewStackReadingMode, type ReviewStackReadingMode } from '../../lib/preferences.js';
@@ -153,11 +153,14 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   const activeFilePath = active?.decision.hunks[0]?.filePath ?? null;
   const activeFile = blockFiles.find((file) => file.path === activeFilePath) ?? null;
   const fileHunks = useMemo(() => activeFile ? buildFileDiffHunks(activeFile) : [], [activeFile]);
-  // Whole-file reading needs the file itself, and only a local source has one:
-  // a pull request's after-state lives on a head revision this checkout may
-  // never have fetched, so asking would read the local copy of the same path
-  // and mark the pull request's changes on the wrong text.
-  const wholeFileReadable = source.sourceId ? reviewSourceKind(source.sourceId) !== 'pull-request' : false;
+  // Whole-file reading needs the file itself, and only a source this checkout
+  // can produce has one: a pull request's after-state lives on a head revision
+  // this checkout may never have fetched, and a sibling worktree's after-state
+  // is uncommitted text on another path entirely. Asking for either would read
+  // the local copy of the same path and mark the changes on the wrong text.
+  const wholeFileReadable = source.sourceId
+    ? ['workspace', 'history', 'branch'].includes(reviewSourceKind(source.sourceId))
+    : false;
   const fileSourceQuery = useWorkspaceFileSource(
     scope,
     activeFile?.path ?? null,

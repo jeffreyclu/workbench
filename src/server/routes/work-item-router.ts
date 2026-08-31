@@ -36,7 +36,7 @@ import { assessDiffBlocks, lookupDiffConfidenceBlocks } from '../diff-confidence
 import { lookupReviewAssist, requestReviewAssist } from '../review-assist-ai.js';
 import { ensureReviewAutoScore, reviewAutoScoreView } from '../review-auto-score.js';
 import { findStaleReferences } from '../stale-references.js';
-import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceRefs } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
@@ -198,6 +198,29 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
         repository.listConversationsForWorkItem(item.id).map((conversation) => conversation.id),
       );
       response.json({ snapshots: repository.listWorkspaceDiffSnapshots({ workItemId: item.id }) });
+    } catch (error) { next(error); }
+  });
+
+  // Branches and worktrees are more review sources, not another view: both
+  // answer with the same WorkspaceDiff the working tree does.
+  router.get('/api/work-items/:id/workspace-diff/refs', async (request, response, next) => {
+    try {
+      const item = repository.get(request.params.id);
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      const workingDirectory = taskWorkingDirectory(item.id);
+      if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
+      response.json({ refs: await listWorkspaceRefs(workingDirectory) });
+    } catch (error) { next(error); }
+  });
+  router.get('/api/work-items/:id/workspace-diff/ref', async (request, response, next) => {
+    try {
+      const item = repository.get(request.params.id);
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      const workingDirectory = taskWorkingDirectory(item.id);
+      if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
+      const ref = typeof request.query.ref === 'string' ? request.query.ref : '';
+      if (!ref) return response.status(400).json({ error: 'Specify which branch or worktree to review.' });
+      response.json({ diff: await getWorkspaceRefDiff(workingDirectory, ref) });
     } catch (error) { next(error); }
   });
   // The one review check that has to read outside the patch: a reference the

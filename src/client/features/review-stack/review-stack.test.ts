@@ -13,6 +13,7 @@ import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './r
 import { assistEscalationReason } from './review-escalation.js';
 import { buildReviewPlaceMap, type ReviewPlaceMap } from './review-places.js';
 import { placeMapAsChangeMap, placeRiskBand } from './review-map-overlays.js';
+import { branchSourceId, resolveReviewSourceDiff, reviewSourceKind, reviewSourceOptions, worktreeSourceId } from './source.js';
 import { highlightReviewPlace, highlightReviewRelationship, selectReviewBlock } from './review-selection.js';
 import { buildFileDiffHunks } from '../diff-review/logic.js';
 import { fileSourceRevision, toFullFileReading } from './review-full-file.js';
@@ -771,5 +772,59 @@ describe('whole-file reading', () => {
     const reading = toFullFileReading(stale, greetHunks());
     expect(reading.aligned).toBe(false);
     expect(reading.rows).toEqual([]);
+  });
+});
+
+describe('branch and worktree review sources', () => {
+  const refs = {
+    base: 'main',
+    branches: [{ name: 'feature', current: false, ahead: 3 }, { name: 'solo', current: true, ahead: 1 }],
+    worktrees: [
+      { path: '/repo', branch: 'main', current: true },
+      { path: '/repo-agent', branch: 'agent-run', current: false },
+    ],
+  };
+
+  it('offers branches and worktrees in the one source list, never a surface of their own', () => {
+    const options = reviewSourceOptions({
+      diff: null,
+      snapshots: [],
+      pullRequests: [{ url: 'https://github.com/o/r/pull/1', label: 'PR #1' }],
+      refs,
+    });
+    expect(options.map((option) => [option.kind, option.id])).toEqual([
+      ['workspace', 'workspace'],
+      // The checkout being reviewed is already the working tree; listing it
+      // twice would be two names for one thing.
+      ['worktree', 'worktree:/repo-agent'],
+      ['branch', 'branch:feature'],
+      ['branch', 'branch:solo'],
+      ['pull-request', 'https://github.com/o/r/pull/1'],
+    ]);
+    expect(options.find((option) => option.id === 'branch:feature')?.label).toBe('Branch feature — 3 commits');
+    expect(options.find((option) => option.id === 'branch:solo')?.label).toBe('Branch solo — 1 commit');
+    expect(options.find((option) => option.id === 'worktree:/repo-agent')?.label).toBe('Worktree repo-agent — agent-run');
+  });
+
+  it('reads each id back to its kind, leaving a pull request URL as the only fallback', () => {
+    expect(reviewSourceKind('workspace')).toBe('workspace');
+    expect(reviewSourceKind('history:42')).toBe('history');
+    expect(reviewSourceKind(branchSourceId('feature'))).toBe('branch');
+    expect(reviewSourceKind(worktreeSourceId('/repo-agent'))).toBe('worktree');
+    expect(reviewSourceKind('https://github.com/o/r/pull/1')).toBe('pull-request');
+  });
+
+  it('resolves a selected branch or worktree to the one fetched ref diff', () => {
+    const refDiff = { branch: 'feature', revision: 'branch:feature:aaa..bbb', files: [] };
+    expect(resolveReviewSourceDiff('branch:feature', { diff: null, snapshots: [], pullRequest: null, refDiff })).toBe(refDiff);
+    expect(resolveReviewSourceDiff('worktree:/repo-agent', { diff: null, snapshots: [], pullRequest: null, refDiff })).toBe(refDiff);
+    // Nothing fetched yet must read as no diff, not as the working tree's.
+    expect(resolveReviewSourceDiff('branch:feature', { diff: null, snapshots: [], pullRequest: null })).toBeNull();
+  });
+
+  it('reads a branch diff\'s after-state from its tip commit', () => {
+    expect(fileSourceRevision(`branch:feature:${'a'.repeat(40)}..${'b'.repeat(40)}`)).toBe('b'.repeat(40));
+    // A worktree diff is uncommitted text, so no commit holds its after-state.
+    expect(fileSourceRevision('9f3768e0')).toBeNull();
   });
 });

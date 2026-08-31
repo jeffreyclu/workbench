@@ -1,10 +1,10 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import type { WorkspaceDiff, WorkspaceDiffFile, WorkspaceFileSource, WorkspacePublishResult, WorkspacePublishStatus } from '../shared/contracts.js';
+import type { WorkspaceBranchRef, WorkspaceDiff, WorkspaceDiffFile, WorkspaceFileSource, WorkspacePublishResult, WorkspacePublishStatus, WorkspaceRefs, WorkspaceWorktreeRef } from '../shared/contracts.js';
 import { patchLogicBoundaries } from './review-logic-primitives.js';
 
 const execFile = promisify(execFileCallback);
@@ -328,4 +328,120 @@ export async function commitAndPushWorkspace(workspacePath: string, message: str
     const prefix = committed ? 'Commit created, but push failed.' : 'Could not commit and push.';
     throw new Error(`${prefix} ${gitFailure(error)}`);
   }
+}
+
+// Reviewing a branch or a linked worktree is the same reading task as
+// reviewing the working tree, so both resolve to a WorkspaceDiff and join the
+// existing review source list rather than growing a surface of their own.
+
+const BASE_BRANCH_CANDIDATES = ['main', 'master', 'trunk'];
+/** Enumerating branches costs one rev-list each; a repository with hundreds of
+ * stale branches must not turn the source list into a git storm. */
+const MAX_LISTED_BRANCHES = 50;
+
+/** What a branch is worth reviewing against. Prefers whatever origin calls its
+ * default, because that is the branch the work will actually merge into. */
+async function defaultBaseBranch(repositoryPath: string): Promise<string | null> {
+  try {
+    const head = await gitOutput(repositoryPath, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+    const name = head.replace(/^origin\//, '');
+    if (name) return name;
+  } catch { /* No origin, or origin/HEAD was never recorded locally. */ }
+  for (const candidate of BASE_BRANCH_CANDIDATES) {
+    try {
+      await gitOutput(repositoryPath, ['rev-parse', '--verify', `${candidate}^{commit}`]);
+      return candidate;
+    } catch { /* Try the next conventional name. */ }
+  }
+  return null;
+}
+
+/** macOS hands out symlinked temp and home paths and git always answers with
+ * the resolved one, so worktree identity is decided by what the filesystem
+ * says rather than by the string a caller happened to type. */
+function canonicalPath(path: string): string {
+  try { return realpathSync.native(path); } catch { return resolve(path); }
+}
+
+/** `git worktree list --porcelain` emits blank-line separated records of
+ * `worktree <path>` / `HEAD <sha>` / `branch <ref>` or `detached`. */
+export function parseWorktreeList(porcelain: string, currentPath: string): WorkspaceWorktreeRef[] {
+  const worktrees: WorkspaceWorktreeRef[] = [];
+  for (const record of porcelain.split(/\n\s*\n/)) {
+    const lines = record.split('\n').map((line) => line.trim()).filter(Boolean);
+    const path = lines.find((line) => line.startsWith('worktree '))?.slice('worktree '.length);
+    if (!path) continue;
+    const branchRef = lines.find((line) => line.startsWith('branch '))?.slice('branch '.length);
+    worktrees.push({ path, branch: branchRef?.replace(/^refs\/heads\//, '') ?? null, current: canonicalPath(path) === canonicalPath(currentPath) });
+  }
+  return worktrees;
+}
+
+export async function listWorkspaceRefs(workspacePath: string): Promise<WorkspaceRefs> {
+  const repositoryPath = resolveWorkspaceRepository(workspacePath);
+  const [base, names, current, worktreeList] = await Promise.all([
+    defaultBaseBranch(repositoryPath),
+    gitOutput(repositoryPath, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads']),
+    gitOutput(repositoryPath, ['branch', '--show-current']),
+    gitOutput(repositoryPath, ['worktree', 'list', '--porcelain']),
+  ]);
+  const candidates = names.split('\n').map((line) => line.trim()).filter(Boolean)
+    .filter((name) => name !== base)
+    .slice(0, MAX_LISTED_BRANCHES);
+  const branches: WorkspaceBranchRef[] = await Promise.all(candidates.map(async (name) => {
+    let ahead = 0;
+    if (base) {
+      try { ahead = Number(await gitOutput(repositoryPath, ['rev-list', '--count', `${base}..${name}`])) || 0; }
+      catch { /* Unrelated histories still list, they just cannot report a count. */ }
+    }
+    return { name, current: name === current, ahead };
+  }));
+  return { base, branches, worktrees: parseWorktreeList(worktreeList, repositoryPath) };
+}
+
+/** A branch's own work: everything it added since it left the base, which is
+ * what a reviewer means by "review this branch" — not its whole history. */
+export async function getWorkspaceBranchDiff(workspacePath: string, branchName: string): Promise<WorkspaceDiff> {
+  const repositoryPath = resolveWorkspaceRepository(workspacePath);
+  const tip = await gitOutput(repositoryPath, ['rev-parse', '--verify', `refs/heads/${branchName}^{commit}`]);
+  const base = await defaultBaseBranch(repositoryPath);
+  if (!base) throw new Error(`Could not determine a comparison base for ${branchName}. This repository has no default branch.`);
+  let mergeBase: string;
+  try { mergeBase = await gitOutput(repositoryPath, ['merge-base', base, tip]); }
+  catch { throw new Error(`${branchName} shares no history with ${base}, so there is nothing to compare.`); }
+  const { stdout: patch } = await git(repositoryPath, ['diff', '--no-ext-diff', '--binary', '--no-color', '--no-renames', mergeBase, tip]);
+  const files = parseWorkspacePatch(patch)
+    .map((file) => ({ ...file, editorUrl: workspaceEditorUrl(repositoryPath, file.path) }));
+  const totals = files.reduce((counts, file) => ({ additions: counts.additions + file.additions, deletions: counts.deletions + file.deletions }), { additions: 0, deletions: 0 });
+  return {
+    workspacePath: repositoryPath,
+    branch: branchName,
+    // Both ends belong in the identity: block reviews must not silently carry
+    // over when the base moves underneath an open branch review.
+    revision: `branch:${branchName}:${mergeBase}..${tip}`,
+    files,
+    changedFiles: files.length,
+    ...totals,
+    // Another branch is read-only from here; publishing stays bound to the
+    // checkout the reviewer actually has out.
+    publish: { branch: branchName, hasOrigin: false, ahead: 0, hasChanges: false, reason: 'Switch to this branch to publish it.' },
+  };
+}
+
+/** A linked worktree's uncommitted state. The path is only ever one git itself
+ * reported, so a stored preference cannot point the reader at an arbitrary
+ * directory. */
+export async function getWorkspaceWorktreeDiff(workspacePath: string, worktreePath: string): Promise<WorkspaceDiff> {
+  const { worktrees } = await listWorkspaceRefs(workspacePath);
+  const worktree = worktrees.find((candidate) => canonicalPath(candidate.path) === canonicalPath(worktreePath));
+  if (!worktree) throw new Error(`${worktreePath} is not a worktree of this repository.`);
+  return getWorkspaceDiff(worktree.path);
+}
+
+/** Review source ids are stored in a browser preference and arrive as opaque
+ * strings; one resolver keeps both routers honest about what they accept. */
+export async function getWorkspaceRefDiff(workspacePath: string, refId: string): Promise<WorkspaceDiff> {
+  if (refId.startsWith('branch:')) return getWorkspaceBranchDiff(workspacePath, refId.slice('branch:'.length));
+  if (refId.startsWith('worktree:')) return getWorkspaceWorktreeDiff(workspacePath, refId.slice('worktree:'.length));
+  throw new Error(`Unrecognised review source ${refId}.`);
 }

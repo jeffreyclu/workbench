@@ -1888,6 +1888,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
   .sidebar:hover .nav-item, .sidebar:hover .nav-item.active,
   .sidebar:focus-within .nav-item, .sidebar:focus-within .nav-item.active { justify-content: flex-start; gap: 10px; padding: 10px; font-size: 13px; }
   .sidebar:hover .sidebar-footer, .sidebar:focus-within .sidebar-footer { display: block; padding-inline: 9px; }
+  .sidebar:hover .sidebar-footer .global-search, .sidebar:hover .sidebar-footer .global-search-trigger,
+  .sidebar:focus-within .sidebar-footer .global-search, .sidebar:focus-within .sidebar-footer .global-search-trigger { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
