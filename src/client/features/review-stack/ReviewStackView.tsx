@@ -5,25 +5,19 @@ import { buildChangeMap } from '../../../shared/change-map.js';
 import { buildReviewDecisions } from '../../../shared/review-decisions.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import type { ReviewAssistTaskIntent } from '../diff-review/decision-detail-card.js';
-import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
-import { DecisionPopover, type DecisionPopoverAnchor } from '../diff-review/decision-popover.js';
 import { useCachedReviewAssistAnswers } from '../diff-review/review-assist.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
-import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { buildFileDiffHunks } from '../diff-review/logic.js';
 import { readReviewStackReadingMode, writeReviewStackBlock, writeReviewStackReadingMode, type ReviewStackReadingMode } from '../../lib/preferences.js';
 import { useUpsertDiffHunkReview, useWorkspaceFileSource } from '../workspace-diff/hooks.js';
-import { blockClaim } from './review-claims.js';
 import { reviewSourceKind } from './source.js';
 import { fileSourceRevision } from './review-full-file.js';
 import { ReviewFullFilePane } from './review-full-file-pane.js';
 import { indexReviewBlocks, reviewBlockStorageKey, toBlockLevelFiles } from './review-blocks.js';
 import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
-import { ReviewBlockNote } from './review-block-note.js';
 import { ReviewQueueList } from './review-queue-list.js';
-import { REVIEW_TIER_LABELS } from './review-routing.js';
-import { REVIEW_CANVAS_NODE_ATTRIBUTE, ReviewChangeCanvas } from './review-change-canvas.js';
+import { ReviewChangeCanvas } from './review-change-canvas.js';
 import { selectReviewBlock, type ReviewSelection } from './review-selection.js';
 import { useBlockAssistAnswers } from './use-block-assist.js';
 import { useDiffBlockReviews, useUpsertDiffBlockReview } from './use-block-reviews.js';
@@ -121,11 +115,9 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   // map writes only what is highlighted inside itself.
   const [selection, setSelection] = useState<ReviewSelection | null>(null);
   const [selectionTick, setSelectionTick] = useState(0);
-  // An open card is the code and the canvas, and nothing else. Everything a
-  // reviewer decides with — the claim, what is still owed, the verdict buttons,
-  // the comment — is one click away in the popover, anchored to whichever
-  // handle opened it: a gutter marker or a canvas node.
-  const [detailAnchor, setDetailAnchor] = useState<{ decisionId: string; anchor: DecisionPopoverAnchor; anchorAttribute: string } | null>(null);
+  // An open card is the code and the canvas, and nothing else: no decision
+  // panel, in front of the panes or behind a handle. A verdict is recorded with
+  // the keyboard, against the block the card is already on.
   const selectedId = selection?.blockId ?? null;
   useEffect(() => {
     // Open on the top of the queue, and recover when the diff changes under a
@@ -138,19 +130,8 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   const selectBlock = useCallback((decisionId: string) => {
     setSelection(selectReviewBlock(decisionId));
     setSelectionTick((tick) => tick + 1);
-    // Moving to another change closes a panel about the one being left, but a
-    // handle selects its own change before it opens the panel, so an unchanged
-    // id keeps the anchor — otherwise the handle would clear and immediately
-    // reopen and never toggle shut.
-    setDetailAnchor((current) => (current && current.decisionId === decisionId ? current : null));
     if (revision) writeReviewStackBlock(source.preferenceScope, revision, decisionId);
   }, [revision, source.preferenceScope]);
-
-  /** The one opener both handles share, so a gutter marker and a canvas node
-   * put up the same panel and each keeps re-anchoring to its own surface. */
-  const openDecisionDetail = useCallback((decisionId: string, anchor: DecisionPopoverAnchor, anchorAttribute = 'data-decision-marker') => {
-    setDetailAnchor((current) => (current?.decisionId === decisionId ? null : { decisionId, anchor, anchorAttribute }));
-  }, []);
 
   const active = queue.find((entry) => entry.decision.id === selectedId) ?? null;
   const activeFilePath = active?.decision.hunks[0]?.filePath ?? null;
@@ -209,16 +190,6 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     if (next) selectBlock(next);
   }, [active, blockReviews.data, files, queue, revision, savedNotes, selectBlock, upsertBlockReview, upsertHunkReviews]);
 
-  // An entry is one thought spread over blocks, so the first note found on any
-  // of them is the note about that thought.
-  const activeNote = useMemo(() => {
-    for (const identity of active?.identities ?? []) {
-      const found = savedNotes.get(identity.storageKey);
-      if (found) return found;
-    }
-    return null;
-  }, [active, savedNotes]);
-  const claim = useMemo(() => active ? blockClaim(active.decision) : null, [active]);
   const changedLoc = useMemo(() => files.reduce((total, file) => total + file.additions + file.deletions, 0), [files]);
   const selectNextDecision = useCallback(() => {
     const next = adjacentDecisionId(queue, activeId, 1);
@@ -296,7 +267,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
               the canvas on the right, each scrolling on its own. They are two
               readings of one thing, so they share a selection rather than
               tracking one each — selecting a hunk moves the canvas, selecting a
-              node moves the code, and either handle opens the same decision. */}
+              node moves the code. */}
           <div className="review-stack-panes">
             <div className="review-stack-code">
               {activeFile && (readingMode === 'file'
@@ -329,63 +300,17 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
                     changeMap={changeMap}
                     readingMode={readingMode}
                     modeTitle={READING_MODE_TITLE}
-                    openDetailFor={detailAnchor?.decisionId ?? null}
                     onSelect={selectBlock}
-                    onOpenDetail={openDecisionDetail}
                     onToggleReadingMode={toggleReadingMode}
                   />)}
             </div>
             <ReviewChangeCanvas
               map={changeMap}
               selectedId={selectedId}
-              openDetailFor={detailAnchor?.decisionId ?? null}
               selectionTick={selectionTick}
               onSelect={selectBlock}
-              onOpenDetail={(decisionId, anchor) => openDecisionDetail(decisionId, anchor, REVIEW_CANVAS_NODE_ATTRIBUTE)}
             />
           </div>
-
-          {/* Only ever the open block: both handles select before they open, so
-              a panel about some other change would be a panel whose verdict
-              buttons wrote somewhere the reviewer is not looking. */}
-          {detailAnchor && detailAnchor.decisionId === active.decision.id && <DecisionPopover
-            anchor={detailAnchor.anchor}
-            anchorId={detailAnchor.decisionId}
-            anchorAttribute={detailAnchor.anchorAttribute}
-            labelledBy="review-stack-decision-title"
-            onClose={() => setDetailAnchor(null)}
-          >
-            {/* The claim leads. The obligations below it are the ways it can be
-                false, and the code behind the panel is where a reviewer goes to
-                try. */}
-            {claim && <section className="review-block-claim" aria-label="What this block claims">
-              <h4>This change claims</h4>
-              <p>{claim.primary}</p>
-              {claim.also.length > 0 && <ul>{claim.also.map((line) => <li key={line}>{line}</li>)}</ul>}
-            </section>}
-            <DiffReviewDecisionDetailCard decision={active.decision} titleId="review-stack-decision-title" taskIntent={taskIntent} decisions={decisions} tier={active.routing.tier}>
-              <div className="review-stack-obligations">
-                <h4>{REVIEW_TIER_LABELS[active.routing.tier]} — {active.routing.reason}</h4>
-                <ul>
-                  {/* The badge shows the answer once there is one, and who owes
-                      it while there is not — an unanswered question and a proven
-                      one should never read the same. */}
-                  {active.obligations.map((obligation) => <li key={obligation.id} className={`settled-by-${obligation.settledBy} outcome-${obligation.outcome}`}>
-                    <span>{obligation.outcome === 'unresolved' ? obligation.settledBy : obligation.outcome}</span>
-                    <div>{obligation.question}{obligation.evidence ? <em>{obligation.evidence}</em> : null}</div>
-                  </li>)}
-                </ul>
-              </div>
-              <DiffReviewActions saving={upsertBlockReview.isPending} error={upsertBlockReview.error instanceof Error ? upsertBlockReview.error.message : null} onSave={saveVerdict} />
-              <ReviewBlockNote
-                blockId={active.decision.id}
-                note={activeNote}
-                saving={upsertBlockReview.isPending}
-                error={upsertBlockReview.error instanceof Error ? upsertBlockReview.error.message : null}
-                onSave={saveVerdict}
-              />
-            </DiffReviewDecisionDetailCard>
-          </DecisionPopover>}
         </div>}
       </div>}
   </section>;

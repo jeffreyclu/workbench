@@ -1,10 +1,7 @@
 import { memo, useEffect, useMemo, useRef } from 'react';
 import type { ChangeMap } from '../../../shared/change-map.js';
-import type { DecisionPopoverAnchor } from '../diff-review/decision-popover.js';
 
-/** The handle the popover re-finds a canvas node by. Every surface that can
- * open the decision popover needs its own attribute, or a panel opened from the
- * canvas would re-anchor itself to the diff gutter and jump across the card. */
+/** The handle a canvas node is addressed by. */
 export const REVIEW_CANVAS_NODE_ATTRIBUTE = 'data-review-canvas-node';
 
 const NODE_HEIGHT = 74;
@@ -34,16 +31,14 @@ function fileTail(filePath: string): string {
  * hunk without any translation between them.
  */
 export const ReviewChangeCanvas = memo(function ReviewChangeCanvas({
-  map, selectedId, openDetailFor, selectionTick, onSelect, onOpenDetail,
+  map, selectedId, selectionTick, onSelect,
 }: {
   map: ChangeMap;
   selectedId: string | null;
-  openDetailFor: string | null;
   /** Bumped on every selection, including reselecting the same node, so the
    * canvas re-reveals a node the reviewer scrolled away from. */
   selectionTick: number;
   onSelect: (decisionId: string) => void;
-  onOpenDetail: (decisionId: string, anchor: DecisionPopoverAnchor) => void;
 }) {
   const body = useRef<HTMLDivElement | null>(null);
   const rows = useMemo(() => new Map(map.nodes.map((node, index) => [node.id, index])), [map.nodes]);
@@ -98,14 +93,8 @@ export const ReviewChangeCanvas = memo(function ReviewChangeCanvas({
           className={`review-canvas-node state-${node.state ?? 'pending'}${node.id === selectedId ? ' is-active' : ''}${node.id !== selectedId && linked.has(node.id) ? ' is-linked' : ''}`}
           style={{ top: index * ROW, height: NODE_HEIGHT }}
           aria-current={node.id === selectedId}
-          aria-haspopup="dialog"
-          aria-expanded={openDetailFor === node.id}
-          aria-label={`Change ${node.ordinal}: ${node.behavior} in ${node.filePath} — open decision details`}
-          onClick={(event) => {
-            const anchor = event.currentTarget;
-            onSelect(node.id);
-            onOpenDetail(node.id, anchor);
-          }}
+          aria-label={`Change ${node.ordinal}: ${node.behavior} in ${node.filePath}`}
+          onClick={() => onSelect(node.id)}
         >
           <span className="review-canvas-node-head"><b>{node.ordinal}</b><code>{fileTail(node.filePath)}</code></span>
           <span className="review-canvas-node-behavior">{node.behavior}</span>

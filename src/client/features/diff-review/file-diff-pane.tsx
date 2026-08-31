@@ -290,7 +290,9 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
               // that announces a dialog and opens nothing is a dead click.
               aria-haspopup={onOpenDetail ? 'dialog' : undefined}
               aria-expanded={onOpenDetail ? openDetailFor === decisionId : undefined}
-              aria-label={`Decision ${ordinal ?? ''} · ${reviewStateLabel(state)}${band ? ` · ${band} risk` : ''} — open decision details`}
+              // Same rule as the popup hint: with nothing wired the marker only
+              // selects, so it must not announce details it cannot show.
+              aria-label={`Decision ${ordinal ?? ''} · ${reviewStateLabel(state)}${band ? ` · ${band} risk` : ''}${onOpenDetail ? ' — open decision details' : ''}`}
               onClick={(event) => {
                 const anchor = event.currentTarget;
                 onSelect(decisionId);
