@@ -577,18 +577,6 @@ export function shouldContinueCacheHandoff(result: Pick<AgentCommandResult, 'out
   return hasCacheHandoff(result.output);
 }
 
-export const PROGRESS_STEER_INTERVAL = 8;
-export function executionProgressSteer(toolStarts: number, cacheHandoffRequested: boolean): string | null {
-  if (cacheHandoffRequested) {
-    return toolStarts > 0 && toolStarts % 2 === 0
-      ? `The cache handoff is still pending. Do not start another tool. Return the required ${CACHE_HANDOFF_MARKER} checkpoint now; Workbench will resume the task in a fresh session.`
-      : null;
-  }
-  return toolStarts > 0 && toolStarts % PROGRESS_STEER_INTERVAL === 0
-    ? 'Progress supervisor: stop broad discovery. Re-read the authoritative objective. For a mutating task, make the smallest relevant edit now; if a concrete blocker prevents that edit, report it and finish. Do not start another general repository search.'
-    : null;
-}
-
 export function cacheContinuationPrompt(originalPrompt: string, checkpoint: string): string {
   return `${externalActionContractFromPrompt(originalPrompt)}\n\nContinue the original request in a fresh provider session after a cache-budget checkpoint. Treat the checkpoint as progress evidence, inspect only what is needed to finish, and return the final user-facing answer. Do not repeat the checkpoint marker unless this new session receives another cache-budget instruction.\n\nOriginal request:\n${compactPromptSection(originalPrompt, 12_000)}\n\nCompleted segment checkpoint:\n${compactPromptSection(checkpoint, 8_000)}`;
 }
@@ -1238,8 +1226,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
     let peakContextTokens = 0;
     let providerCostUsd: number | null = null;
     const cacheHandoffRequested = false;
-    let toolStarts = 0;
-    const toolStartsAtCacheHandoff = 0;
     let steerAgentInput: AgentInputSteering | null = null;
     // One successful stream-json write corresponds to one terminal Claude
     // result. Keep stdin open until every accepted input has reached that
@@ -1387,16 +1373,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
         }
         if (event.audit.length) {
           onAudit?.(event.audit, agent);
-          if (agent === 'claude' && MUTATING_RUN_KINDS.has(kind)) {
-            for (const entry of event.audit) {
-              const isToolStart = entry.command === undefined && ['tool', 'file_read', 'file_write'].includes(entry.streamKind ?? '');
-              if (!isToolStart) continue;
-              toolStarts += 1;
-              const supervisedCount = cacheHandoffRequested ? toolStarts - toolStartsAtCacheHandoff : toolStarts;
-              const steering = executionProgressSteer(supervisedCount, cacheHandoffRequested);
-              if (steering && steerAgentInput) void steerAgentInput(steering);
-            }
-          }
         }
       }
       if (progress) flushProgress();

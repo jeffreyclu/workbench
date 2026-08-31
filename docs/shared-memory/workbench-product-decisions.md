@@ -786,6 +786,14 @@ Any shared-conversation fallback to Codex must use the steerable app-server;
 the one-shot `codex exec` transport is never a valid fallback for an active
 conversation because it cannot receive live input.
 
+*Terminal-lifecycle correction, 2026-08-31.* Only Jeffrey's explicit
+interjections may add input to an active provider turn. Workbench must not
+inject periodic progress-supervisor messages based on tool-call counts: those
+synthetic user turns make a finished Claude run wait for another result and
+can redirect or extend either provider after it completed the requested work.
+Scope and verification limits belong in the initial provider-neutral execution
+contract; Codex and Claude follow the same rule.
+
 ### In-progress "thinking" activity is a log, not a finished report
 
 *Fix from Claude, 2026-08-25.* The huge-circle-and-missing-space bug Jeffrey

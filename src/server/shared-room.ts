@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, executionProgressSteer, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -290,8 +290,6 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
     const pendingSteerRetries = new Map<ReturnType<typeof setTimeout>, PendingCodexSteer>();
     let steerCount = 0;
     const cacheHandoffRequested = false;
-    let toolStarts = 0;
-    const toolStartsAtCacheHandoff = 0;
     // A steered turn emits a separate `agentMessage` item per exchange (the
     // pre-interjection reply, then the reply to the steer). Deltas carry an
     // `itemId`; concatenating them flat without an item boundary runs the two
@@ -438,12 +436,6 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         const agentEvent = agentStreamEventForCodexAppServerItem(event.method ?? '', item);
         if (agentEvent) {
           onEvent(agentEvent);
-          if (mutating && agentEvent.kind === 'tool' && event.method === 'item/started') {
-            toolStarts += 1;
-            const supervisedCount = cacheHandoffRequested ? toolStarts - toolStartsAtCacheHandoff : toolStarts;
-            const steering = executionProgressSteer(supervisedCount, cacheHandoffRequested);
-            if (steering) void steer(steering);
-          }
           // The debugger is an audit trail, not the only place the user gets
           // to see work in progress. Keep provider-recorded decisions and
           // tool starts in the running activity feed too.

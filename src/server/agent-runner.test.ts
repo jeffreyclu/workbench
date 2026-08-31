@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, executionProgressSteer, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -261,6 +261,29 @@ describe('classifyExecution', () => {
     await expect(resultPromise).resolves.toEqual(expect.objectContaining({ output: 'Applied the interjection.' }));
   });
 
+  it('does not append synthetic user turns after repeated Claude tool calls', async () => {
+    const toolEvents = Array.from({ length: 8 }, (_, index) => JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: `tool-${index}`, name: 'Bash', input: { command: 'true' } }] },
+    })).map((event) => `printf '%s\\n' '${event}'`).join('\n');
+    const fixture = fakeAgentDirectory('exit 1', 'exit 1');
+    const claudeBody = [
+      `IFS= read -r first; printf '%s\\n' "$first" >> '${fixture.log}'`,
+      toolEvents,
+      `printf '%s\\n' '{"type":"result","result":"Finished once."}'`,
+      `if IFS= read -r second; then printf '%s\\n' "$second" >> '${fixture.log}'; printf '%s\\n' '{"type":"result","result":"Unexpected synthetic turn."}'; fi`,
+    ].join('\n');
+    const scriptPath = join(fixture.directory, 'claude');
+    writeFileSync(scriptPath, `#!/bin/sh\nprintf '%s\\n' 'claude' >> '${fixture.log}'\n${claudeBody}\n`);
+    chmodSync(scriptPath, 0o755);
+
+    const result = await runAgentCommandWithFallback('claude', fixture.directory, 'Complete one task.', undefined, undefined, undefined, 'economy', undefined, undefined, 'execute');
+
+    expect(result.output).toBe('Finished once.');
+    const inputs = readFileSync(fixture.log, 'utf8').trim().split('\n').slice(1);
+    expect(inputs).toHaveLength(1);
+  });
+
   it('shows streamed text once rather than twice when the completed block arrives', async () => {
     // Real deltas arrive over time. The pause exceeds the progress flush window,
     // so this tests incremental visibility rather than chunk luck.
@@ -305,11 +328,9 @@ describe('classifyExecution', () => {
     expect(AGENT_EXECUTION_CONTRACT).toContain('Never debate, reinterpret, downgrade, or substitute a different task');
   });
 
-  it('uses one provider-neutral progress supervisor for action and cache handoff reminders', () => {
-    expect(executionProgressSteer(7, false)).toBeNull();
-    expect(executionProgressSteer(8, false)).toContain('make the smallest relevant edit now');
-    expect(executionProgressSteer(1, true)).toBeNull();
-    expect(executionProgressSteer(2, true)).toContain(CACHE_HANDOFF_MARKER);
+  it('keeps scope and verification limits in the initial contract without synthetic mid-turn messages', () => {
+    expect(AGENT_EXECUTION_CONTRACT).toContain('Use the shortest tool path');
+    expect(AGENT_EXECUTION_CONTRACT).toContain('Run one focused verification pass');
     expect(shouldContinueCacheHandoff({ output: `${CACHE_HANDOFF_MARKER} useful checkpoint`, cacheHandoffRequested: true, terminalWarning: 'provider stopped' })).toBe(true);
     expect(shouldContinueCacheHandoff({ output: 'normal completion', cacheHandoffRequested: false, terminalWarning: null })).toBe(false);
   });

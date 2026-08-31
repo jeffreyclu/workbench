@@ -22,9 +22,15 @@ export interface DelegatedReviewProgress {
   failed: number;
   /** Delegable changes past the per-revision ceiling. */
   skipped: number;
+  /** The changes whose delegated turn is claimed but unanswered — queued or in
+   * flight. Per-decision because a running total cannot tell a reviewer whether
+   * *this* change is still owed an answer or was never delegated at all. */
+  pending: ReadonlySet<string>;
 }
 
-const IDLE: DelegatedReviewProgress = { running: false, completed: 0, total: 0, failed: 0, skipped: 0 };
+const NO_PENDING: ReadonlySet<string> = new Set();
+
+const IDLE: DelegatedReviewProgress = { running: false, completed: 0, total: 0, failed: 0, skipped: 0, pending: NO_PENDING };
 
 /**
  * One revision's delegated turns, and the workers spending them.
@@ -45,6 +51,21 @@ interface DelegationSweep {
 }
 
 const targetKey = (target: DelegationTarget): string => `${target.decisionId}:${target.tier}`;
+
+/** Claims are counted rather than flagged: a change can be re-tiered while its
+ * first delegated turn is still in flight, and the answer to that first turn
+ * must not clear the marker the second one is still owed. */
+function claimPending(counts: Map<string, number>, decisionId: string): void {
+  counts.set(decisionId, (counts.get(decisionId) ?? 0) + 1);
+}
+
+function settlePending(counts: Map<string, number>, decisionId: string): void {
+  const left = (counts.get(decisionId) ?? 0) - 1;
+  if (left > 0) counts.set(decisionId, left);
+  else counts.delete(decisionId);
+}
+
+const pendingSnapshot = (counts: Map<string, number>): ReadonlySet<string> => new Set(counts.keys());
 
 /**
  * Spending the delegated tiers without waiting for anyone to click.
@@ -83,6 +104,9 @@ export function useDelegatedReview(input: {
   const [progress, setProgress] = useState<DelegatedReviewProgress>(IDLE);
   const attempted = useRef<{ revision: string | undefined; keys: Set<string> }>({ revision: undefined, keys: new Set() });
   const sweep = useRef<DelegationSweep | null>(null);
+  // Which changes are still owed a delegated answer, counted per decision so
+  // the surfaces can mark the individual change rather than the whole sweep.
+  const pendingCounts = useRef(new Map<string, number>());
   // Bumped when claims come back after the effect that could have taken them
   // has already run, so the sweep resumes instead of stopping one target short.
   const [resumeTick, setResumeTick] = useState(0);
@@ -113,16 +137,22 @@ export function useDelegatedReview(input: {
     // A sweep whose revision has already been replaced holds claims against a
     // key set nobody reads: dropping its queue is the whole of the work.
     if (attempted.current.revision !== run.revision) return;
-    for (const target of unspent) attempted.current.keys.delete(targetKey(target));
+    for (const target of unspent) {
+      attempted.current.keys.delete(targetKey(target));
+      settlePending(pendingCounts.current, target.decisionId);
+    }
     // A successor sweep for the same revision owns the progress line now, and
     // must not be reported finished by its predecessor's last worker.
     if (sweep.current && sweep.current !== run) {
       // Those claims are free again, but the successor computed its own list
       // before they were: nothing else would go back for them.
-      if (unspent.length > 0) setResumeTick((tick) => tick + 1);
+      if (unspent.length > 0) {
+        setProgress((current) => ({ ...current, pending: pendingSnapshot(pendingCounts.current) }));
+        setResumeTick((tick) => tick + 1);
+      }
       return;
     }
-    setProgress((current) => ({ ...current, running: false, total: Math.max(current.completed, current.total - unspent.length) }));
+    setProgress((current) => ({ ...current, running: false, pending: pendingSnapshot(pendingCounts.current), total: Math.max(current.completed, current.total - unspent.length) }));
   }, []);
 
   const spend = useCallback(async (run: DelegationSweep): Promise<void> => {
@@ -149,13 +179,15 @@ export function useDelegatedReview(input: {
         if (run.cancelled) { abandon(target); break; }
         if (answer) latest.current.onAnswer?.(target.decisionId, answer);
         if (delegationOutcome(target.tier, answer).autoReview) latest.current.onAutoReview?.(target);
-        setProgress((current) => ({ ...current, completed: current.completed + 1 }));
+        settlePending(pendingCounts.current, target.decisionId);
+        setProgress((current) => ({ ...current, completed: current.completed + 1, pending: pendingSnapshot(pendingCounts.current) }));
       } catch {
         if (run.cancelled) { abandon(target); break; }
         // A failed turn leaves the change owed. It is not retried within the
         // revision: the reviewer can still ask about it directly, and a
         // retry loop against a broken endpoint spends without informing.
-        setProgress((current) => ({ ...current, completed: current.completed + 1, failed: current.failed + 1 }));
+        settlePending(pendingCounts.current, target.decisionId);
+        setProgress((current) => ({ ...current, completed: current.completed + 1, failed: current.failed + 1, pending: pendingSnapshot(pendingCounts.current) }));
       }
     }
     run.workers -= 1;
@@ -189,6 +221,7 @@ export function useDelegatedReview(input: {
     }
     if (attempted.current.revision !== revision) {
       attempted.current = { revision, keys: new Set() };
+      pendingCounts.current.clear();
       setProgress(IDLE);
     }
     const keys = attempted.current.keys;
@@ -201,11 +234,14 @@ export function useDelegatedReview(input: {
     if (pending.length === 0) return;
     // Claimed up front, not as each turn starts: the effect can re-run while
     // this sweep is in flight, and it must find nothing left to claim.
-    for (const target of pending) keys.add(targetKey(target));
+    for (const target of pending) {
+      keys.add(targetKey(target));
+      claimPending(pendingCounts.current, target.decisionId);
+    }
     const run = sweep.current ?? { revision, cancelled: false, queue: [], workers: 0 };
     sweep.current = run;
     run.queue.push(...pending);
-    setProgress((current) => ({ ...current, running: true, total: current.total + pending.length }));
+    setProgress((current) => ({ ...current, running: true, total: current.total + pending.length, pending: pendingSnapshot(pendingCounts.current) }));
     const starting = Math.min(DELEGATION_CONCURRENCY - run.workers, run.queue.length);
     for (let index = 0; index < starting; index += 1) {
       run.workers += 1;

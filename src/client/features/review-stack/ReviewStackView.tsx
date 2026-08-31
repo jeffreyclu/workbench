@@ -435,6 +435,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
                     modeTitle={READING_MODE_TITLE}
                     openDetailFor={openChangeId}
                     handledBlocks={handled}
+                    delegating={delegation.pending}
                     renderDetail={(decisionId) => decisionId === active.decision.id
                       ? <ReviewChangeBrief
                           entry={active}
@@ -454,6 +455,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
               selectedId={selectedId}
               selectionTick={selectionTick}
               handled={handled}
+              delegating={delegation.pending}
               onSelect={openChange}
             />
           </div>

@@ -537,6 +537,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-decision-queue button.selected b { color: #e4e3dc; }
 .diff-review-decision-queue button.settled b { color: var(--state-tone); }
 .diff-review-decision-queue button svg { color: var(--state-tone); }
+.diff-review-decision-queue button.delegating { border-bottom: 2px solid #8c6f2c; }
+.diff-review-decision-queue button svg.diff-review-queue-delegating { color: #e6c75f; }
 /* Risk is a dot here and a number in the popover: at chip size the count is
    noise, but "this one has signals" still has to survive the compaction. */
 .diff-review-queue-risk-dot { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #d6bd76; }
@@ -653,6 +655,10 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-diff-block.settled { border-left-color: var(--state-tone); }
 .diff-review-diff-block.settled .diff-review-diff-block-header { background: color-mix(in srgb, var(--state-tone) 9%, #1b1b18); }
 .diff-review-diff-block.reviewed { opacity: 0.45; }
+/* A hunk waiting on a delegated turn: an amber rail plus a labelled spinner, so
+   "a model is answering this one" reads without relying on colour alone. */
+.diff-review-diff-block.delegating { box-shadow: inset 2px 0 0 #b08a2e; }
+.diff-review-diff-block-delegating { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; padding: 1px 6px; color: #e6c75f; background: #2b2414; border: 1px solid #8c6f2c; border-radius: 999px; font: 500 9px 'DM Mono'; font-style: normal; text-transform: uppercase; letter-spacing: .06em; }
 .diff-review-diff-block.reviewed.active, .diff-review-diff-block.reviewed:hover, .diff-review-diff-block.reviewed:focus-within { opacity: 1; }
 /* A handled change keeps its header — the reviewer has to be able to see that
    it exists and reach it — and loses its diff, which is the part that costs
@@ -1481,6 +1487,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .review-canvas-node.is-linked { border-color: #4d5836; }
 .review-canvas-node.is-active { border-color: var(--acid); background: #1b2113; }
 .review-canvas-node.state-reviewed { opacity: .62; }
+.review-canvas-node.is-delegating { border-color: #8c6f2c; }
+.review-canvas-node-delegating { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; color: #e6c75f; font-style: normal; text-transform: uppercase; letter-spacing: .05em; font-size: 9px; }
 /* Done with, or never Jeffrey's to read: greyed out of the way rather than
    dropped, so the canvas still counts the same changes the diff does. Hover and
    selection bring it back to full strength — it is de-emphasised, not disabled. */
@@ -2019,3 +2027,7 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-heuristic-summary p { margin: 0; color: #a9a89f; font-size: 12px; line-height: 1.55; }
 .diff-review-heuristic-summary p:first-child { color: var(--soft); }
 .diff-review-heuristic-warn { color: #e1a68f; }
+
+/* The delegated-review markers carry their own words, so with motion reduced the
+   icon holds still rather than disappearing. */
+@media (prefers-reduced-motion: reduce) { .diff-review-queue-delegating, .diff-review-diff-block-delegating .spin, .review-canvas-node-delegating .spin { animation: none; } }

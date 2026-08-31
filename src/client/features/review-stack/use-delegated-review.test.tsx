@@ -84,7 +84,34 @@ function GatedHarness({ targets, enabled, onAutoReview }: { targets: DelegationT
   return null;
 }
 
+/** The same sweep, reporting the changes it says are still owed an answer. */
+function PendingHarness({ targets, onPending }: { targets: DelegationTarget[]; onPending: (pending: ReadonlySet<string>) => void }) {
+  const progress = useDelegatedReview({ targets, siblings: [], taskIntent: null, revision: 'rev-1', enabled: true });
+  onPending(progress.pending);
+  return null;
+}
+
 describe('useDelegatedReview', () => {
+  // A running count told a reviewer that some sweep was working; it never told
+  // them whether the change they were looking at was the one still waiting.
+  it('names the change whose delegated turn is in flight and stops naming it once answered', async () => {
+    let deliver: (() => void) | undefined;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      await new Promise<void>((resolve) => { deliver = resolve; });
+      return new Response(JSON.stringify({ answer: CONFIDENT }), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const [decision] = decisions();
+    const seen: ReadonlySet<string>[] = [];
+    render(<PendingHarness targets={[{ decisionId: decision.id, decision, tier: 'T1' }]} onPending={(pending) => seen.push(pending)} />);
+    await settle();
+
+    expect(seen.at(-1)!.has(decision.id)).toBe(true);
+
+    await act(async () => { deliver?.(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    expect(seen.at(-1)!.has(decision.id)).toBe(false);
+  });
+
   it('buys one answer per change and records the verdict a confident one earned', async () => {
     const fetchMock = stubAssist(CONFIDENT);
     const [decision] = decisions();

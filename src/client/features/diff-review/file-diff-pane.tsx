@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowDownRight, ArrowUpRight, Check, ExternalLink, FileDiff, MessageSquare, TriangleAlert } from 'lucide-react';
+import { ArrowDownRight, ArrowUpRight, Check, ExternalLink, FileDiff, LoaderCircle, MessageSquare, TriangleAlert } from 'lucide-react';
 import { languageFromPath, SyntaxHighlight } from '../../components/markdown/syntax-highlight.js';
 import { CHANGE_RELATION_LABELS, type ChangeMap } from '../../../shared/change-map.js';
 import { buildChangeLinkIndex, plainRelationText, type ChangeLink, type ChangeLinkSummary } from './change-map-logic.js';
@@ -81,7 +81,7 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, readingMode = 'diff', modeTitle, onSelect, onOpenDetail, onToggleReadingMode }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode = 'diff', modeTitle, onSelect, onOpenDetail, onToggleReadingMode }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
@@ -109,6 +109,10 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
    * The value is shown as-is, so the surface that routes the work owns the
    * wording rather than this pane guessing at it. */
   handledBlocks?: Map<string, string>;
+  /** Decisions whose delegated turn is still owed. Marked on the block itself
+   * because a header count says a sweep is running, not which of the hunks in
+   * front of the reviewer is the one still waiting on it. */
+  delegating?: ReadonlySet<string>;
   /** Defaults to the unified diff, so the Changes surface that also mounts this
    * pane keeps the reading it has always had. Review opts into `final`. */
   readingMode?: DiffReadingMode;
@@ -307,13 +311,14 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         // A scored band outranks the raw signal count: once the model has read
         // the change, its severity is the more useful thing to show.
         const band = riskBands?.get(decisionId) ?? ((decision?.riskSignals.length ?? 0) > 0 ? 'signals' : null);
+        const awaiting = state === null && !handled && Boolean(delegating?.has(decisionId));
         return <section
           key={hunk.range}
           ref={scrollTarget ? activeBlock : undefined}
           tabIndex={-1}
-          className={`diff-review-diff-block state-${state ?? 'pending'}${state === null ? '' : ' settled'}${state === 'reviewed' ? ' reviewed' : ''}${handled ? ' handled' : ''}${collapsed ? ' collapsed' : ''}${active ? ' active' : ''}${marker ? ` linked relation-${marker.relation}` : ''}`}
+          className={`diff-review-diff-block state-${state ?? 'pending'}${state === null ? '' : ' settled'}${state === 'reviewed' ? ' reviewed' : ''}${handled ? ' handled' : ''}${awaiting ? ' delegating' : ''}${collapsed ? ' collapsed' : ''}${active ? ' active' : ''}${marker ? ` linked relation-${marker.relation}` : ''}`}
           aria-current={active ? 'location' : undefined}
-          aria-label={`${hunk.location} · ${reviewStateLabel(state)}${active ? ' · selected decision' : ''}${marker ? ` · ${CHANGE_RELATION_LABELS[marker.relation]} relationship with change ${activeOrdinal ?? ''}` : ''}`}
+          aria-label={`${hunk.location} · ${reviewStateLabel(state)}${awaiting ? ' · awaiting delegated review' : ''}${active ? ' · selected decision' : ''}${marker ? ` · ${CHANGE_RELATION_LABELS[marker.relation]} relationship with change ${activeOrdinal ?? ''}` : ''}`}
         >
           <div className="diff-review-block-gutter">
             {/* The standing facts about this decision — which one it is, whether
@@ -353,6 +358,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
           <div className="diff-review-diff-block-main">
           <button type="button" className="diff-review-diff-block-header" onClick={() => onSelect(decisionId)} aria-label={`Select the decision at ${hunk.location} in ${filePath}`}>
             <code>{hunk.range}</code>
+            {awaiting && <em className="diff-review-diff-block-delegating"><LoaderCircle className="spin" size={10} aria-hidden="true" />Delegated review running</em>}
             {handled && <em className="diff-review-diff-block-handled">{handled}</em>}
             <small><b>+{hunk.additions}</b> <i>−{hunk.deletions}</i></small>
           </button>

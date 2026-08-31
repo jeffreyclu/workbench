@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef } from 'react';
+import { LoaderCircle } from 'lucide-react';
 import type { ChangeMap } from '../../../shared/change-map.js';
 
 /** The handle a canvas node is addressed by. */
@@ -31,7 +32,7 @@ function fileTail(filePath: string): string {
  * hunk without any translation between them.
  */
 export const ReviewChangeCanvas = memo(function ReviewChangeCanvas({
-  map, selectedId, selectionTick, openDetailFor, handled, onSelect,
+  map, selectedId, selectionTick, openDetailFor, handled, delegating, onSelect,
 }: {
   map: ChangeMap;
   selectedId: string | null;
@@ -40,6 +41,9 @@ export const ReviewChangeCanvas = memo(function ReviewChangeCanvas({
    * and a node missing from it would make the diff and the map disagree about
    * how many changes there are. */
   handled?: Map<string, string>;
+  /** Changes whose delegated turn is still owed, so the canvas distinguishes a
+   * node nobody has looked at yet from one a model is answering right now. */
+  delegating?: ReadonlySet<string>;
   /** Bumped on every selection, including reselecting the same node, so the
    * canvas re-reveals a node the reviewer scrolled away from. */
   selectionTick: number;
@@ -111,21 +115,24 @@ export const ReviewChangeCanvas = memo(function ReviewChangeCanvas({
         </svg>
         {map.nodes.map((node, index) => {
           const settledAs = handled?.get(node.id) ?? null;
+          const awaiting = !settledAs && node.state === null && Boolean(delegating?.has(node.id));
           return <button
           key={node.id}
           type="button"
           {...{ [REVIEW_CANVAS_NODE_ATTRIBUTE]: node.id }}
-          className={`review-canvas-node state-${node.state ?? 'pending'}${node.id === selectedId ? ' is-active' : ''}${node.id !== selectedId && linked.has(node.id) ? ' is-linked' : ''}${settledAs ? ' is-handled' : ''}`}
+          className={`review-canvas-node state-${node.state ?? 'pending'}${node.id === selectedId ? ' is-active' : ''}${node.id !== selectedId && linked.has(node.id) ? ' is-linked' : ''}${settledAs ? ' is-handled' : ''}${awaiting ? ' is-delegating' : ''}`}
           style={{ top: index * ROW, height: NODE_HEIGHT }}
           aria-current={node.id === selectedId}
           aria-haspopup="dialog"
           aria-expanded={openDetailFor === node.id}
-          aria-label={`Change ${node.ordinal}: ${node.behavior} in ${node.filePath} — ${settledAs ? `${settledAs} · ` : ''}open decision details`}
+          aria-label={`Change ${node.ordinal}: ${node.behavior} in ${node.filePath} — ${awaiting ? 'awaiting delegated review · ' : ''}${settledAs ? `${settledAs} · ` : ''}open decision details`}
           onClick={(event) => onSelect(node.id, event.currentTarget)}
         >
           <span className="review-canvas-node-head"><b>{node.ordinal}</b><code>{fileTail(node.filePath)}</code></span>
           <span className="review-canvas-node-behavior">{node.behavior}</span>
-          <span className="review-canvas-node-meta"><i>+{node.additions}</i><i>−{node.deletions}</i>{settledAs ? <em>{settledAs}</em> : node.state && <em>{node.state}</em>}</span>
+          <span className="review-canvas-node-meta"><i>+{node.additions}</i><i>−{node.deletions}</i>{awaiting
+            ? <em className="review-canvas-node-delegating"><LoaderCircle className="spin" size={9} aria-hidden="true" />delegating</em>
+            : settledAs ? <em>{settledAs}</em> : node.state && <em>{node.state}</em>}</span>
         </button>;
         })}
       </div>
