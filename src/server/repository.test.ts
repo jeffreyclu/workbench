@@ -1375,6 +1375,40 @@ describe('WorkItemRepository', () => {
     }
   });
 
+  it('binds a short referential question to its own run instead of the previous objective', async () => {
+    const task = repository.create({ title: 'Review connector PR', description: '', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Connector PR review', task.id);
+    const earlier = repository.createSharedMessage('jeffrey', 'can we fix these icons, ugh they look inconsistent', 'completed', conversation.id, [], 'codex');
+    repository.setSharedTurnGrounding(earlier.id, conversation.id, JSON.stringify({
+      objective: 'Fix the inconsistent connector icons.',
+      acceptanceCriteria: [],
+      exclusions: [],
+      continuation: false,
+      source: 'haiku',
+    }));
+    repository.createSharedMessage('codex', 'I fixed the connector icons.', 'completed', conversation.id, [], 'none', null, null, earlier.id);
+    const question = repository.createSharedMessage('jeffrey', 'is this PR worth stacking?', 'queued', conversation.id, [], 'codex');
+    const previousPath = process.env.PATH;
+    const { directory } = fakeAgentDirectory("printf '%s\\n' '{\"type\":\"result\",\"result\":\"Yes, stack it.\"}'", "printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'");
+    try {
+      const [reply] = dispatchNextSharedTurn(repository, conversation.id);
+      expect(reply.dispatchGroupId).toBe(question.id);
+      expect(repository.getRunByMessage(reply.id)?.instructions).toBe('is this PR worth stacking?');
+      expect(JSON.parse(repository.getSharedTurnGrounding(question.id) ?? '{}')).toEqual(expect.objectContaining({
+        objective: 'is this PR worth stacking?',
+        continuation: false,
+      }));
+      const deadline = Date.now() + 2_000;
+      while (repository.listAllSharedMessages(conversation.id).some((message) => message.status === 'running')) {
+        if (Date.now() > deadline) throw new Error('Timed out waiting for reply.');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('keeps a pinned task pinned when a queued turn dispatches', async () => {
     const task = repository.create({ title: 'Pinned task', description: '', priority: 1, status: 'pinned', projectName: null, workspacePath: null, dueDate: null });
     const conversation = repository.createConversation('Pinned thread', task.id);

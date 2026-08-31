@@ -691,8 +691,13 @@ function isContinuationTurn(message: string): boolean {
   // never erase them by treating them as a plain continuation.
   if (/\b(?:no|not|instead|except|but)\b/.test(normalized)) return false;
   if (/^(?:continue|keep going|go ahead|proceed|do it|build it|build that|fix it|ship it|yes|yeah|yep)$/.test(normalized)) return true;
-  if (/^(?:why .*(?:taking (?:so )?long|so slow|stuck|still not|doing nothing)|what .*(?:doing|happening)|hurry up|come on)/.test(normalized)
+  if (/^(?:why .*(?:taking (?:so )?long|so slow|stuck|still not|doing nothing).*(?:build|fix|finish|continue|ship|do) (?:it|this|that)|hurry up|come on)/.test(normalized)
     && /\b(?:it|this|that|build|fix|finish|continue|done|long|slow|stuck)\b/.test(normalized)) return true;
+  // A direct question is itself the current objective, even when it uses a
+  // referent such as "this PR". Treating every short `this`/`that`/`it`
+  // message as shorthand caused questions to inherit and execute the prior
+  // turn instead of being answered.
+  if (/^(?:who|what|when|where|why|how|is|are|am|was|were|do|does|did|can|could|should|would|will|has|have|had)\b/.test(normalized)) return false;
   return normalized.split(' ').length <= 8 && /\b(?:it|that|this|those|these|them|same|again)\b/.test(normalized);
 }
 

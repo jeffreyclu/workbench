@@ -311,7 +311,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
           key={hunk.range}
           ref={scrollTarget ? activeBlock : undefined}
           tabIndex={-1}
-          className={`diff-review-diff-block state-${state ?? 'pending'}${state === null ? '' : ' settled'}${handled ? ' handled' : ''}${collapsed ? ' collapsed' : ''}${active ? ' active' : ''}${marker ? ` linked relation-${marker.relation}` : ''}`}
+          className={`diff-review-diff-block state-${state ?? 'pending'}${state === null ? '' : ' settled'}${state === 'reviewed' ? ' reviewed' : ''}${handled ? ' handled' : ''}${collapsed ? ' collapsed' : ''}${active ? ' active' : ''}${marker ? ` linked relation-${marker.relation}` : ''}`}
           aria-current={active ? 'location' : undefined}
           aria-label={`${hunk.location} · ${reviewStateLabel(state)}${active ? ' · selected decision' : ''}${marker ? ` · ${CHANGE_RELATION_LABELS[marker.relation]} relationship with change ${activeOrdinal ?? ''}` : ''}`}
         >

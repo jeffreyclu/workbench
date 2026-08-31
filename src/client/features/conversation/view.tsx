@@ -1394,7 +1394,28 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           {send.error && <p className="error-message">{send.error.message}</p>}
         </form></>}
         </div>
-        {activePane === 'changes' && workspaceDiffScope && <div className="conversation-changes" aria-label="Conversation changes"><WorkspaceDiffView scope={workspaceDiffScope} activeWorkspacePaths={linkedWorkItem.data?.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : []) ?? []} reviewHandoff={linkedWorkItem.data?.runs.find((run) => run.reviewHandoff)?.reviewHandoff ?? null} taskIntent={linkedWorkItem.data?.item ? { title: linkedWorkItem.data.item.title, description: linkedWorkItem.data.item.description } : null} pullRequestUrlCandidates={githubCandidateUrls} /></div>}
+        {activePane === 'changes' && workspaceDiffScope && <div className="conversation-changes" aria-label="Conversation changes"><WorkspaceDiffView scope={workspaceDiffScope} activeWorkspacePaths={linkedWorkItem.data?.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : []) ?? []} reviewHandoff={linkedWorkItem.data?.runs.find((run) => run.reviewHandoff)?.reviewHandoff ?? null} taskIntent={linkedWorkItem.data?.item ? { title: linkedWorkItem.data.item.title, description: linkedWorkItem.data.item.description } : null} pullRequestUrlCandidates={githubCandidateUrls} onFixRequest={(prompt) => {
+          // Fix is a handoff, not a send: the change lands in the composer with
+          // the cursor after "What to change", so the instruction is Jeffrey's
+          // and nothing leaves for an agent until he sends it.
+          updateBody(body.trim() ? `${body.replace(/\s+$/, '')}\n\n${prompt}` : prompt);
+          setActivePane('conversation');
+          requestAnimationFrame(() => {
+            // The composer is a Lexical contenteditable, so the caret is placed
+            // through a DOM range rather than a textarea selection. Landing it
+            // at the end is the point: the reviewer types straight into the
+            // sentence the handoff left open.
+            const composer = document.querySelector<HTMLElement>('.markdown-contenteditable[aria-label="Message Codex or Claude"]');
+            if (!composer) return;
+            composer.focus();
+            const range = document.createRange();
+            range.selectNodeContents(composer);
+            range.collapse(false);
+            const selection = window.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+          });
+        }} /></div>}
         </div>
       </section>
       {planArchivePromptOpen && <FollowUpArchiveDialog count={selectedPlanTaskIndexes.size} pending={resolvePlan.isPending} onClose={() => setPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolvePlan.mutate({ resolution: 'accepted', archiveParent })} />}

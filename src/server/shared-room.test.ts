@@ -162,6 +162,48 @@ describe('compactConversationHistory', () => {
     expect(grounding.source).toBe('fallback');
   });
 
+  it('keeps a short referential question authoritative instead of inheriting the prior task', async () => {
+    const prior = {
+      objective: 'Fix the inconsistent connector icons.',
+      acceptanceCriteria: ['Every connector icon is consistent.'],
+      exclusions: [],
+      continuation: false,
+      source: 'haiku' as const,
+    };
+    let classifierCalls = 0;
+    const grounding = await resolveTurnGrounding([
+      message(0, 'can we fix these icons, ugh they look inconsistent'),
+      message(1, 'I changed the connector icon implementation.'),
+      message(2, 'is this PR worth stacking?'),
+    ], async () => {
+      classifierCalls += 1;
+      return JSON.stringify({
+        objective: 'Answer whether this PR is worth stacking.',
+        acceptanceCriteria: ['Give a direct recommendation supported by the PR shape.'],
+        exclusions: ['Do not continue changing connector icons.'],
+        continuation: false,
+      });
+    }, prior);
+
+    expect(classifierCalls).toBe(1);
+    expect(grounding.objective).toBe('Answer whether this PR is worth stacking.');
+    expect(grounding.continuation).toBe(false);
+    expect(grounding.exclusions).toContain('Do not continue changing connector icons.');
+  });
+
+  it('uses the literal short question as the fallback objective when supervision is unavailable', async () => {
+    const prior = { objective: 'Fix the inconsistent connector icons.', acceptanceCriteria: [], exclusions: [], continuation: false, source: 'haiku' as const };
+    const grounding = await resolveTurnGrounding([message(0, 'is this PR worth stacking?')], async () => {
+      throw new Error('classifier unavailable');
+    }, prior);
+
+    expect(grounding).toEqual(expect.objectContaining({
+      objective: 'is this PR worth stacking?',
+      continuation: false,
+      source: 'fallback',
+    }));
+  });
+
   it('uses a tiny supervisor result as the authoritative objective and preserves explicit exclusions', async () => {
     const messages = [
       message(0, 'Show the execution type in the header.'),

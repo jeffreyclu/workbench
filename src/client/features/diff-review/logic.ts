@@ -48,6 +48,24 @@ export function nextPendingDecisionId(decisions: ReviewDecision[], currentId: st
   return after?.id ?? before?.id ?? ordered.find((decision) => decision.id !== currentId)?.id ?? null;
 }
 
+/** How many patch lines a fix request carries. A composer message is an
+ * instruction, not a diff dump: past this the agent can read the file itself
+ * from the location above, and the reviewer can still see what they sent. */
+const FIX_REQUEST_PATCH_LINES = 80;
+
+/** The text a Fix hands to the composer. It names the change, says where it
+ * lives, and quotes the patch, so the reviewer only has to type what is wrong
+ * with it — the part no other surface knows. */
+export function fixRequestPrompt(decision: ReviewDecision): string {
+  const locations = decision.hunks.map((hunk) => `${hunk.filePath} ${hunk.location}`).join('\n');
+  const patchLines = decision.hunks.flatMap((hunk) => [hunk.hunkRange, ...hunk.lines]);
+  const shown = patchLines.slice(0, FIX_REQUEST_PATCH_LINES);
+  const omitted = patchLines.length - shown.length;
+  const patch = [...shown, ...(omitted > 0 ? [`… ${omitted} more patch ${omitted === 1 ? 'line' : 'lines'} not quoted`] : [])].join('\n');
+  const fence = '`'.repeat(3);
+  return [`Fix decision ${decision.ordinal} — ${decision.behavior}`, locations, `${fence}diff\n${patch}\n${fence}`, 'What to change: '].join('\n\n');
+}
+
 export function riskSignalLabel(signal: ReviewRiskSignal): string {
   if (signal === 'public_api') return 'Public API';
   if (signal === 'cross_file') return 'Cross-file';

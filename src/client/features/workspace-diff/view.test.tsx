@@ -24,10 +24,10 @@ function workspaceDiff(files: WorkspaceDiffFile[], revision = 'review-revision')
 /** This surface never scores decisions ambiently; assistance is on demand from
  * the detail card instead. Tests only stub the requests this view actually
  * makes, so a stray `/api/diff-confidence` call would fail as unexpected. */
-function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, reviewHandoff?: AgentRunReviewHandoff | null, pullRequestUrlCandidates?: string[]) {
+function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, reviewHandoff?: AgentRunReviewHandoff | null, pullRequestUrlCandidates?: string[], onFixRequest?: (prompt: string) => void) {
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} reviewHandoff={reviewHandoff} pullRequestUrlCandidates={pullRequestUrlCandidates} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} reviewHandoff={reviewHandoff} pullRequestUrlCandidates={pullRequestUrlCandidates} onFixRequest={onFixRequest} /></QueryClientProvider>);
 }
 
 /**
@@ -446,6 +446,39 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 1.*Approved/ })).toBeInTheDocument();
     expect(putBodies[1]).toEqual({ revision: 'hunk-revision', hunks: [{ filePath: 'src/reviewed.ts', hunkRange: '@@ -10 +10 @@ secondBehavior', contentHash: contentHashOfLines(['-c', '+d']) }], state: 'reviewed' });
     expect(await screen.findByLabelText('3 decisions across 1 file, 3 completed')).toHaveTextContent('3 completed');
+  });
+
+  it('moves to the next change on skip without recording a verdict, and hands a change to the composer on fix', async () => {
+    const file: WorkspaceDiffFile = {
+      path: 'src/skipped.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
+      patch: '@@ -1 +1 @@ firstBehavior\n-a\n+b\n@@ -10 +10 @@ secondBehavior\n-c\n+d',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'skip-revision') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      if (url.endsWith('/workspace-diff/hunk-reviews/batch') && init?.method === 'PUT') throw new Error('Skip must not record a verdict');
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const fixRequests: string[] = [];
+    renderView(fetchMock, false, null, undefined, (prompt) => fixRequests.push(prompt));
+
+    await findSelectedDecision('Changes behavior in src/skipped.ts.');
+    await openDecisionDetail(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+    await waitFor(() => expect(selectedDecisionChip()).toHaveAccessibleName(/^Decision 2/));
+    // Skipping leaves the work owed: nothing was persisted and the queue still
+    // counts the skipped change as unreviewed.
+    expect(await screen.findByLabelText('2 decisions across 1 file, 0 completed')).toBeInTheDocument();
+
+    await openDecisionDetail(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Fix' }));
+    expect(fixRequests).toHaveLength(1);
+    expect(fixRequests[0]).toContain('src/skipped.ts');
+    expect(fixRequests[0]).toContain('@@ -10 +10 @@ secondBehavior');
+    expect(fixRequests[0]).toContain('+d');
   });
 
   it('keeps the active decision in place and shows an actionable error when persistence fails', async () => {

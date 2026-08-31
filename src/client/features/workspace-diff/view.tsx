@@ -15,7 +15,7 @@ import { DecisionRelationshipDiagram } from '../diff-review/decision-relationshi
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import type { ReviewDecision } from '../diff-review/logic.js';
-import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions, parseAiRiskScore } from '../diff-review/logic.js';
+import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, fixRequestPrompt, nextPendingDecisionId, orderReviewDecisions, parseAiRiskScore } from '../diff-review/logic.js';
 import { useAutoReviewScores } from '../diff-review/auto-score.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
@@ -61,7 +61,7 @@ function DiffSkeleton() {
  * The new controls delegate to Changes' existing selection and hunk-review
  * mutation so its source handling, persistence, and auto-advance stay intact.
  */
-export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, reviewHandoff, taskIntent = null, pullRequestUrlCandidates }: {
+export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunning = false, activeWorkspacePaths, reviewHandoff, taskIntent = null, pullRequestUrlCandidates, onFixRequest }: {
   scope: WorkspaceDiffScope;
   isRunning?: boolean;
   activeWorkspacePaths?: string[];
@@ -70,6 +70,9 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   /** Any URLs that may be pull requests. Recognised ones join the repository
    * picker as review sources beside the local checkouts. */
   pullRequestUrlCandidates?: string[];
+  /** Where a Fix goes. A surface with a composer supplies this and receives the
+   * change as message text; one without simply does not offer the button. */
+  onFixRequest?: (prompt: string) => void;
 }) {
   const queryClient = useQueryClient();
   const conversationId = 'conversationId' in scope ? scope.conversationId : null;
@@ -325,6 +328,26 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     }
   }, [changeMap, orderedDecisions, recordDecisionState]);
 
+  // Moving on without answering. The decision keeps its pending state, so the
+  // queue, the counts and the map all still owe it — the only thing that
+  // changes is which change the reviewer is reading.
+  const skipDecision = useCallback((decision: ReviewDecision) => {
+    const nextId = nextPendingDecisionId(orderedDecisions, decision.id, changeMap);
+    setDetailAnchor(null);
+    if (!nextId || nextId === decision.id) return;
+    setCameFromDecisionId(decision.id);
+    setSelectedDecisionId(nextId);
+    setSelectionTick((tick) => tick + 1);
+  }, [changeMap, orderedDecisions]);
+
+  // Handing the change back to the agent. The verdict is deliberately not
+  // recorded: what happens to this change depends on the answer, and the
+  // reviewer reads it in the conversation before deciding.
+  const requestFix = useCallback((decision: ReviewDecision) => {
+    onFixRequest?.(fixRequestPrompt(decision));
+    setDetailAnchor(null);
+  }, [onFixRequest]);
+
   const openDecisionDetail = (decisionId: string, anchor: DecisionPopoverAnchor, anchorAttribute = 'data-decision-marker') => {
     setDetailAnchor((current) => (current?.decisionId === decisionId ? null : { decisionId, anchor, anchorAttribute }));
   };
@@ -477,7 +500,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                     {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} />}
                     {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={<DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />} onClose={() => setDetailAnchor(null)}>
                       <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null}>
-                        <DiffReviewActions key={popoverDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(popoverDecision, state)} />
+                        <DiffReviewActions key={popoverDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(popoverDecision, state)} onFix={onFixRequest ? () => requestFix(popoverDecision) : undefined} onSkip={() => skipDecision(popoverDecision)} />
                       </DiffReviewDecisionDetailCard>
                     </DecisionPopover>}
                   </div>

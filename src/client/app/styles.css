@@ -486,6 +486,12 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-node:focus-visible { outline: none; }
 .change-map-node:focus-visible .change-map-node-body { stroke: var(--acid); stroke-width: 2; }
 .change-map-node.dimmed { opacity: 0.38; }
+/* An accepted change recedes on both surfaces at once: the map node and the
+   hunk itself. It is still there, still selectable, and comes back to full
+   strength the moment it is selected, hovered, or focused — dimming marks read
+   work, it does not hide it. */
+.change-map-node.state-reviewed { opacity: 0.42; }
+.change-map-node.state-reviewed.selected, .change-map-node.state-reviewed.came-from, .change-map-node.state-reviewed:hover, .change-map-node.state-reviewed:focus-visible { opacity: 1; }
 .change-map-node.isolated .change-map-node-body { stroke-dasharray: 3 3; }
 .change-map-node-rail { fill: var(--state-tone); }
 .change-map-node-title { fill: #deddd6; font: 12px 'DM Mono'; }
@@ -588,6 +594,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 0 12px; color: #c9c8c1; border: 1px solid #45443e; border-radius: 6px; background: #20201d; cursor: pointer; font: 700 10px 'DM Mono'; }
 .diff-review-actions button:hover:not(:disabled), .diff-review-actions button:focus-visible { color: #eee; border-color: #6c6b62; outline: 0; }
 .diff-review-actions button.review-approve { color: #b9d7aa; border-color: #45603a; }
+.diff-review-actions button.review-fix { color: #e8c98a; border-color: #6a5626; }
+.diff-review-actions button.review-skip { color: #9a998f; border-color: #3b3a35; }
 .diff-review-actions button:disabled { opacity: .6; cursor: wait; }
 .diff-review-actions > p { margin: 0; color: #e1a68f; font-size: 11px; }.diff-review-saving { color: #85847d; font: 10px 'DM Mono'; }
 /* Portalled out of the diff scroller, so it is positioned in fixed viewport
@@ -644,6 +652,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-diff-block.state-commented { --state-tone: #9ab6d8; }
 .diff-review-diff-block.settled { border-left-color: var(--state-tone); }
 .diff-review-diff-block.settled .diff-review-diff-block-header { background: color-mix(in srgb, var(--state-tone) 9%, #1b1b18); }
+.diff-review-diff-block.reviewed { opacity: 0.45; }
+.diff-review-diff-block.reviewed.active, .diff-review-diff-block.reviewed:hover, .diff-review-diff-block.reviewed:focus-within { opacity: 1; }
 /* A handled change keeps its header — the reviewer has to be able to see that
    it exists and reach it — and loses its diff, which is the part that costs
    reading time. */
