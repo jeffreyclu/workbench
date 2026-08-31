@@ -1359,14 +1359,10 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .review-stack-progress { margin: 0 0 0 auto; color: #908f88; font: 500 11px 'DM Mono'; }
 .review-stopping-point { display: flex; gap: 8px; margin: 14px 0 0; padding: 10px 12px; color: #d8d7cf; background: #252520; border: 1px solid #69684f; border-radius: 7px; font: 500 12px/1.45 'DM Mono'; }
 .review-stopping-point strong { color: #f4c632; }
-.review-stack-empty, .review-queue-empty { color: #908f88; font: 500 12px 'DM Mono'; }
-.review-stack-layout { display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); gap: 18px; align-items: start; padding-top: 16px; }
-.review-stack-back { display: inline-flex; align-self: start; padding: 6px 10px; border: 1px solid #373731; border-radius: 6px; background: transparent; color: #b3b2a9; font: 700 10px 'DM Mono'; text-transform: uppercase; letter-spacing: .08em; cursor: pointer; }
+.review-stack-empty { color: #908f88; font: 500 12px 'DM Mono'; }
+.review-stack-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; padding-top: 16px; }
 /* The stack and the open card are the same space: choosing a card gives the
    whole width to the code and the canvas, and Back to stack is the way out. */
-.review-stack-layout.is-canvas-open { grid-template-columns: minmax(0, 1fr); }
-.review-stack-layout.is-canvas-open .review-queue { display: none; }
-.review-stack-layout:not(.is-canvas-open) .review-stack-detail { display: none; }
 /* Two columns divided vertically, each scrolling down on its own. The height is
    taken from the viewport rather than the content so both panes have something
    to scroll inside — a pane sized by its own content never scrolls at all. */
@@ -1376,7 +1372,6 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .review-stack-panes .diff-review-file-diff-body { max-height: none; }
 .review-stack-panes .review-full-file { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
 .review-stack-panes .review-full-file-body { max-height: none; }
-.review-queue ol { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .review-card { align-content: start; }
 .review-card:hover { background: #1a1e16; border-color: #59683a; }
 .review-card.is-active { border-color: var(--acid); }
@@ -1389,10 +1384,6 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .review-card-state { flex: 0 0 auto; display: inline-flex; color: #908f88; }
 .review-card em { color: #b3b2a9; font: italic 400 11px/1.4 'DM Mono'; }
 .review-card small { color: #767569; font: 500 10px 'DM Mono'; }
-.review-queue-settled { padding-top: 10px; }
-.review-queue-settled > button { display: inline-flex; align-items: center; gap: 6px; padding: 0; color: #767569; background: none; border: 0; font: 700 10px 'DM Mono'; cursor: pointer; }
-.review-queue-settled > button .is-open { transform: rotate(90deg); }
-.review-queue-settled ol { padding-top: 8px; }
 .review-stack-detail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .review-flow-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: #171715; }
 .review-flow-controls button { padding: 5px 7px; color: #b3b2a9; background: #252520; border: 1px solid #373731; border-radius: 5px; font: 700 10px 'DM Mono'; cursor: pointer; }
@@ -1657,7 +1648,6 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
   .conversation-review-layout { border-top: 0; }
   .conversation-review-layout.layout-changes .conversation-thread-pane { display: contents; }
   .conversation-review-layout.layout-review .conversation-thread-pane { display: contents; }
-  .review-stack-layout { grid-template-columns: minmax(0, 1fr); }
   /* No room for two columns, so the canvas sits under the code and each keeps
      its own scroll rather than one long page that scrolls them together. */
   .review-stack-panes { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(180px, 40%); height: calc(100vh - 180px); }

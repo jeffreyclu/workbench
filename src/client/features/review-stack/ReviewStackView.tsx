@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { DiffHunkReview, DiffHunkReviewState } from '../../../shared/contracts.js';
 import { buildChangeMap } from '../../../shared/change-map.js';
@@ -16,13 +16,12 @@ import { ReviewFullFilePane } from './review-full-file-pane.js';
 import { indexReviewBlocks, reviewBlockStorageKey, toBlockLevelFiles } from './review-blocks.js';
 import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
-import { ReviewQueueList } from './review-queue-list.js';
 import { ReviewChangeCanvas } from './review-change-canvas.js';
 import { selectReviewBlock, type ReviewSelection } from './review-selection.js';
 import { useBlockAssistAnswers } from './use-block-assist.js';
 import { useDiffBlockReviews, useUpsertDiffBlockReview } from './use-block-reviews.js';
 import { useReviewSource } from './use-review-source.js';
-import { adjacentDecisionId, adjacentFileDecisionId, useReviewKeyboardNavigation } from './use-review-keyboard-navigation.js';
+import { useReviewKeyboardNavigation } from './use-review-keyboard-navigation.js';
 
 /** One tooltip for the one key that cycles all three readings, so the button
  * never claims a two-way toggle Review no longer has. */
@@ -191,43 +190,10 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   }, [active, blockReviews.data, files, queue, revision, savedNotes, selectBlock, upsertBlockReview, upsertHunkReviews]);
 
   const changedLoc = useMemo(() => files.reduce((total, file) => total + file.additions + file.deletions, 0), [files]);
-  const selectNextDecision = useCallback(() => {
-    const next = adjacentDecisionId(queue, activeId, 1);
-    if (next) selectBlock(next);
-  }, [activeId, queue, selectBlock]);
-  const selectPreviousDecision = useCallback(() => {
-    const previous = adjacentDecisionId(queue, activeId, -1);
-    if (previous) selectBlock(previous);
-  }, [activeId, queue, selectBlock]);
-  const selectNextFile = useCallback(() => {
-    const next = adjacentFileDecisionId(queue, activeFilePath, 1);
-    if (next) selectBlock(next);
-  }, [activeFilePath, queue, selectBlock]);
-  const selectPreviousFile = useCallback(() => {
-    const previous = adjacentFileDecisionId(queue, activeFilePath, -1);
-    if (previous) selectBlock(previous);
-  }, [activeFilePath, queue, selectBlock]);
   const markReviewed = useCallback(() => saveVerdict('reviewed'), [saveVerdict]);
-  // The stack and the canvas are one surface, so a card click has to open
-  // something. Where both fit they sit side by side; on one column the canvas
-  // takes the space and the back control gives the stack back. Keyboard
-  // navigation deliberately does not force it open — it moves a selection the
-  // reader already has in front of them.
-  const [canvasOpen, setCanvasOpen] = useState(false);
-  const backToStackRef = useRef<HTMLButtonElement>(null);
-  const openCanvas = useCallback((decisionId: string) => {
-    selectBlock(decisionId);
-    setCanvasOpen(true);
-  }, [selectBlock]);
-  useEffect(() => {
-    if (!canvasOpen) return;
-    // Only where the canvas actually replaced the stack: there the card that
-    // was just clicked is now hidden, so focus would be dropped on the document
-    // body. Asking whether the control is on screen keeps the breakpoint in the
-    // stylesheet, which is the only place that decides this.
-    if (!backToStackRef.current?.offsetParent) return;
-    backToStackRef.current.focus();
-  }, [canvasOpen]);
+  // There is no stack to return to: the card is the whole surface, so the
+  // selection only ever moves between blocks. Keyboard navigation and clicks
+  // in either pane are the two ways to move it.
   // b13bf425-4047-4b22-b7c3-85317d6819fe LEGACY-AFFECTING: Keyboard input
   // follows the existing queue selection and verdict writer, preserving the
   // same persistence and next-unsettled behavior as the visible Review button.
@@ -258,11 +224,8 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
 
     {queue.length === 0
       ? <p className="review-stack-empty">Nothing to review in this source.</p>
-      : <div className={`review-stack-layout${canvasOpen ? ' is-canvas-open' : ''}`}>
-        <ReviewQueueList queue={queue} activeId={selectedId} onSelect={openCanvas} />
+      : <div className="review-stack-layout">
         {active && <div className="review-stack-detail">
-          <button type="button" ref={backToStackRef} className="review-stack-back" onClick={() => setCanvasOpen(false)}>Back to stack</button>
-
           {/* An open card is two panes and nothing else: the code on the left,
               the canvas on the right, each scrolling on its own. They are two
               readings of one thing, so they share a selection rather than

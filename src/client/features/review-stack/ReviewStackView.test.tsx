@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiffBlockReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
@@ -106,37 +106,24 @@ afterEach(() => {
 });
 
 describe('ReviewStackView', () => {
-  it('leads with the block that deserves attention and collapses what proof settled', async () => {
+  it('opens on the block that deserves attention', async () => {
     renderReview();
-    const queue = await screen.findByRole('navigation', { name: 'Review queue' });
-    const rows = await waitFor(() => {
-      const found = within(queue).queryAllByRole('button');
-      expect(found.length).toBeGreaterThan(0);
-      return found;
-    });
-    // The auth change is routed to the top tier; the import-only block is
-    // settled by proof and lives behind the disclosure instead of the queue.
-    expect(rows[0]).toHaveTextContent('T3');
-    expect(rows[0]).toHaveTextContent('authorize');
-    expect(await screen.findByRole('button', { name: /settled automatically/ })).toBeInTheDocument();
+    // With no stack to pick from, the card has to land on the highest-tier
+    // unsettled block itself. The import-only block is settled by proof, so it
+    // is never what opens.
+    expect(await screen.findByLabelText('Full diff for src/server/auth.ts')).toBeInTheDocument();
+    await waitFor(() => expect(canvasNode('src/server/auth.ts')).toHaveClass('is-active'));
   });
 
-  it('opens the canvas when a card is clicked and hands the stack back on request', async () => {
+  it('shows no decision stack anywhere around the card', async () => {
     renderReview();
-    const queue = await screen.findByRole('navigation', { name: 'Review queue' });
-    const rows = await waitFor(() => {
-      const found = within(queue).queryAllByRole('button');
-      expect(found.length).toBeGreaterThan(0);
-      return found;
-    });
-    // Nothing is open until a card is chosen: the stack is the whole surface.
-    expect(document.querySelector('.review-stack-layout')).not.toHaveClass('is-canvas-open');
-
-    fireEvent.click(rows[0]);
-    expect(document.querySelector('.review-stack-layout')).toHaveClass('is-canvas-open');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Back to stack' }));
-    expect(document.querySelector('.review-stack-layout')).not.toHaveClass('is-canvas-open');
+    await screen.findByRole('region', { name: 'Change canvas' });
+    // The queue of decision cards is gone, and with it the control that used to
+    // hand it back: the card is the whole surface.
+    expect(screen.queryByRole('navigation', { name: 'Review queue' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Back to stack' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /settled automatically/ })).toBeNull();
+    expect(document.querySelector('.review-queue')).toBeNull();
   });
 
   it('states what is still owed rather than only what is done', async () => {
@@ -171,7 +158,7 @@ describe('ReviewStackView', () => {
   it('suggests a stopping point only after more than 400 changed lines', async () => {
     const boundaryDiff = { ...diff, files: [{ ...diff.files[0], additions: 400, deletions: 0 }] };
     renderReview(boundaryDiff);
-    await screen.findByRole('navigation', { name: 'Review queue' });
+    await screen.findByRole('region', { name: 'Change canvas' });
     expect(screen.queryByRole('note', { name: 'Suggested stopping point' })).not.toBeInTheDocument();
     cleanup();
 
@@ -182,20 +169,23 @@ describe('ReviewStackView', () => {
 
   it('moves linearly between flagged blocks and changed files with keyboard shortcuts', async () => {
     renderReview(twoDecisionDiff);
-    const queue = await screen.findByRole('navigation', { name: 'Review queue' });
-    await waitFor(() => expect(within(queue).getAllByRole('button')).toHaveLength(2));
-    // A queue row is labelled by the block it points at, not by its file path.
-    const activeLabel = () => within(queue).getAllByRole('button').find((button) => button.getAttribute('aria-current') === 'true')!.textContent;
+    await screen.findByRole('region', { name: 'Change canvas' });
+    await waitFor(() => expect(document.querySelectorAll('.review-canvas-node')).toHaveLength(2));
+    // The canvas is the only readout of the selection now, so the shortcuts are
+    // checked against the node that is current there.
+    const activeLabel = () => document.querySelector('.review-canvas-node[aria-current="true"]')?.textContent ?? '';
 
-    expect(activeLabel()).toContain('authorize');
+    // A canvas node names the file it stands for, so the moves are checked
+    // against that rather than against the symbol a queue row used to show.
+    expect(activeLabel()).toContain('server/auth.ts');
     fireEvent.keyDown(document, { key: 'j' });
-    await waitFor(() => expect(activeLabel()).toContain('attachToken'));
+    await waitFor(() => expect(activeLabel()).toContain('client/auth.ts'));
     fireEvent.keyDown(document, { key: 'k' });
-    await waitFor(() => expect(activeLabel()).toContain('authorize'));
+    await waitFor(() => expect(activeLabel()).toContain('server/auth.ts'));
     fireEvent.keyDown(document, { key: ']' });
-    await waitFor(() => expect(activeLabel()).toContain('attachToken'));
+    await waitFor(() => expect(activeLabel()).toContain('client/auth.ts'));
     fireEvent.keyDown(document, { key: '[' });
-    await waitFor(() => expect(activeLabel()).toContain('authorize'));
+    await waitFor(() => expect(activeLabel()).toContain('server/auth.ts'));
   });
 
   it('opens a card as the code and the canvas, and nothing else', async () => {
