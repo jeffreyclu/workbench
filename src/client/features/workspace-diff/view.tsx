@@ -151,16 +151,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
       setReviewSource('pull-request');
     }
   }, [availablePullRequests, rememberedSelection]);
-  useEffect(() => {
-    // A remembered local workspace is authoritative for this browser session,
-    // just as a remembered pull request is. The server remains the shared
-    // default when no local preference exists.
-    const source = rememberedSelection?.source;
-    if (!source || availablePullRequests.includes(source) || !explorer.data) return;
-    if (explorer.data.workspaces.some((workspace) => workspace.path === source)) {
-      if (source !== explorer.data.selectedPath) selectWorkspace.mutate(source);
-    }
-  }, [availablePullRequests, explorer.data, rememberedSelection?.source, selectWorkspace]);
+  // Local preferences may restore presentation-only sources such as a PR or
+  // recorded revision. A repository selection is shared server state and is
+  // restored by the explorer response itself. Never replay a local repository
+  // preference through the mutation here: an active run can authoritatively
+  // select its worktree, making the server return a different path; mutation
+  // invalidation would then rerun this render effect forever.
   useEffect(() => {
     if (!rememberedSelection?.source.startsWith('history:')) return;
     const snapshotId = rememberedSelection.source.slice('history:'.length);

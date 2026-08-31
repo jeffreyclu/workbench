@@ -237,7 +237,7 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(screen.queryByText('No uncommitted changes to review.')).toBeNull();
   });
 
-  it('restores the selected local repository and decision after the Changes view remounts', async () => {
+  it('uses the server-selected repository after remount and never replays a stale local repository preference', async () => {
     const repositoryA = '/tmp/repository-a';
     const repositoryB = '/tmp/repository-b';
     let selectedPath = repositoryA;
@@ -266,8 +266,9 @@ describe('WorkspaceDiffView decision queue', () => {
     selectedPath = repositoryA;
     renderView(fetchMock);
 
-    await waitFor(() => expect(screen.getByLabelText('Workspace')).toHaveValue(repositoryB));
-    expect(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
+    await waitFor(() => expect(screen.getByLabelText('Workspace')).toHaveValue(repositoryA));
+    await findSelectedDecision('Changes behavior in src/a.ts.');
+    expect(fetchMock.mock.calls.filter(([input, init]) => String(input).endsWith('/workspaces/selection') && (init as RequestInit | undefined)?.method === 'PUT')).toHaveLength(1);
   });
 
   it('keeps source order when decisions have no relationships, with no ambient AI scoring', async () => {

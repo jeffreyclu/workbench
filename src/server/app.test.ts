@@ -144,6 +144,29 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     }
   });
 
+  it('treats selecting the current conversation workspace as an idempotent no-op', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'workbench-current-workspace-'));
+    writeFileSync(join(workspace, 'package.json'), '{}');
+    const item = repository.create({ title: 'Keep repository', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: workspace, dueDate: null });
+    const conversation = repository.createConversation('Keep repository', item.id);
+    repository.setConversationClaudeSessionId(conversation.id, 'claude-session');
+    repository.setConversationCodexThreadId(conversation.id, 'codex-thread');
+
+    try {
+      const response = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/workspaces/selection`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspacePath: workspace }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(repository.getConversation(conversation.id)).toEqual(expect.objectContaining({ claudeSessionId: 'claude-session', codexThreadId: 'codex-thread' }));
+      expect(database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversation.id)).toBeUndefined();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it('reports only work owned by this backend in its runtime drain health', async () => {
     const idle = await fetch(`${baseUrl}/api/health`);
     expect(await idle.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: false, ownedAgentWorkActive: false, liveAgentProcessCount: 0, buildId: expect.any(String) });

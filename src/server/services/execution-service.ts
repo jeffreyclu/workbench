@@ -133,7 +133,13 @@ export class ExecutionService {
     const now = new Date().toISOString();
     const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
     this.runs.renewOwnedLeases(ownerId, leaseMs, adoptRunIds);
-    this.database.prepare(`UPDATE shared_messages SET lease_expires_at = ? WHERE owner_id = ? AND status = 'running' AND lease_expires_at >= ?`).run(leaseExpiresAt, ownerId, now);
+    // If the event loop was saturated, this heartbeat can arrive just after
+    // its timestamp expired even though the same process still owns and is
+    // streaming the reply. Ownership is the fencing token: once another
+    // process reclaims the message, owner_id changes and this update cannot
+    // resurrect it. Renew every still-owned running reply so a late heartbeat
+    // does not let our own collector falsely kill a live agent.
+    this.database.prepare(`UPDATE shared_messages SET lease_expires_at = ? WHERE owner_id = ? AND status = 'running'`).run(leaseExpiresAt, ownerId);
   }
 
   renewSharedMessageLease(id: string, ownerId: string, leaseMs: number): boolean {

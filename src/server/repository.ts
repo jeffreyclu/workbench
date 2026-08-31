@@ -65,6 +65,31 @@ function mapWorkspaceDiffSnapshot(row: WorkspaceDiffSnapshotRow): WorkspaceDiffS
   return { id: row.id, revision: row.revision, diff: JSON.parse(row.diff_json) as WorkspaceDiff, capturedAt: row.captured_at, originatingAgentRunId: row.originating_agent_run_id, commitHash: row.commit_hash };
 }
 
+/** One verdict per block of content, in the order the read established: this
+ * revision's own rows first, then the newest rows from earlier revisions.
+ * Older rows for the same block would otherwise arrive as duplicates the moment
+ * verdicts stopped being revision-scoped. Ranges are kept apart rather than
+ * collapsed — a file that repeats the same content at two ranges answered both,
+ * and merging them would silently drop one of those answers — while a note is
+ * carried across the whole content group for the same reason it is kept across
+ * a state change: what the reviewer wrote outlives the state it was written
+ * under.
+ *
+ * The read order is preserved rather than re-sorted by path, because the caller
+ * resolves these onto the blocks on screen first-wins: "the answer that counts
+ * first" is the contract here, not alphabetical order. */
+function dedupeBlockReviewsByContent(reviews: DiffBlockReview[]): DiffBlockReview[] {
+  const winners = new Map<string, DiffBlockReview>();
+  const notes = new Map<string, string>();
+  for (const review of reviews) {
+    const content = `${review.filePath}\u0000${review.contentHash}`;
+    if (review.note && !notes.has(content)) notes.set(content, review.note);
+    const key = `${content}\u0000${review.blockRange}`;
+    if (!winners.has(key)) winners.set(key, review);
+  }
+  return [...winners.values()].map((review) => review.note ? review : { ...review, note: notes.get(`${review.filePath}\u0000${review.contentHash}`) ?? review.note });
+}
+
 interface DiffHunkReviewRow {
   id: string;
   revision: string;
@@ -975,14 +1000,28 @@ export class WorkItemRepository {
       .get(id, input.revision, input.filePath, input.blockRange, input.contentHash) as unknown as DiffBlockReviewRow);
   }
 
+  /** Verdicts for a revision, plus every verdict this scope has ever recorded
+   * about code that still hashes the same.
+   *
+   * A verdict is an answer about *content*, not about a revision: rebasing,
+   * amending, or pushing a follow-up commit changes the revision of every block
+   * in the diff, including the ones nobody touched. Filtering on revision alone
+   * therefore threw away the whole review each time the branch moved and asked
+   * the reviewer the same questions again. Rows from other revisions are
+   * carried forward here and matched on content by the caller; a block whose
+   * lines actually changed hashes differently and is never matched, so it still
+   * asks its question. The current revision's own row always wins a tie. */
   listDiffBlockReviews(scope: DiffReviewScope, revision: string): DiffBlockReview[] {
-    if ('reviewId' in scope) {
-      return (this.database.prepare(`SELECT id, revision, file_path, block_range, content_hash, state, note, updated_at FROM standalone_review_block_reviews WHERE review_id = ? AND revision = ? ORDER BY file_path ASC, block_range ASC`)
-        .all(scope.reviewId, revision) as unknown as DiffBlockReviewRow[]).map(mapDiffBlockReview);
-    }
-    const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
-    return (this.database.prepare(`SELECT id, revision, file_path, block_range, content_hash, state, note, updated_at FROM diff_block_reviews WHERE ${column} = ? AND revision = ? ORDER BY file_path ASC, block_range ASC`)
-      .all(id, revision) as unknown as DiffBlockReviewRow[]).map(mapDiffBlockReview);
+    const order = `ORDER BY CASE WHEN revision = ? THEN 0 ELSE 1 END ASC, updated_at DESC, rowid DESC`;
+    const rows = 'reviewId' in scope
+      ? this.database.prepare(`SELECT id, revision, file_path, block_range, content_hash, state, note, updated_at FROM standalone_review_block_reviews WHERE review_id = ? ${order}`)
+        .all(scope.reviewId, revision) as unknown as DiffBlockReviewRow[]
+      : (() => {
+        const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
+        return this.database.prepare(`SELECT id, revision, file_path, block_range, content_hash, state, note, updated_at FROM diff_block_reviews WHERE ${column} = ? ${order}`)
+          .all(id, revision) as unknown as DiffBlockReviewRow[];
+      })();
+    return dedupeBlockReviewsByContent(rows.map(mapDiffBlockReview));
   }
 
   private upsertStandaloneReviewHunkReview(reviewId: string, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {

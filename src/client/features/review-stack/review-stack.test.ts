@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { LOGIC_HAZARD_REASONS, type DiffHunkReviewState, type WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { buildChangeMap } from '../../../shared/change-map.js';
 import { buildReviewDecisions, splitPatchHunks } from '../../../shared/review-decisions.js';
-import { blockContentHash, indexReviewBlocks, reviewBlockStorageKey, splitPatchBlocks, toBlockLevelFiles } from './review-blocks.js';
+import { blockContentHash, indexReviewBlocks, resolveCarriedBlockReviews, reviewBlockStorageKey, splitPatchBlocks, toBlockLevelFiles } from './review-blocks.js';
 import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
 import { splitHunkIntoLogicBlocks } from './logic-blocks.js';
 import { REVIEW_CHANGE_TYPES } from '../../../shared/change-type.js';
@@ -86,6 +86,60 @@ describe('review block splitting', () => {
     expect(afterIdentity.range).toBe(beforeIdentity.range);
     expect(afterIdentity.contentHash).not.toBe(beforeIdentity.contentHash);
     expect(blockContentHash(['a'])).not.toBe(blockContentHash(['b']));
+  });
+});
+
+/** A review already given is not owed twice. The reviewer's answers have to
+ * survive the branch moving underneath them, and must not survive the code
+ * actually changing. */
+describe('carrying review decisions forward', () => {
+  const TWIN_PATCH = [
+    '@@ -4,3 +4,4 @@ const limit = 5;',
+    ' const limit = 5;',
+    '-const retries = 1;',
+    '+const retries = 3;',
+    ' export { limit };',
+    '@@ -40,3 +40,4 @@ const limit = 5;',
+    ' const limit = 5;',
+    '-const retries = 1;',
+    '+const retries = 3;',
+    ' export { limit };',
+  ].join('\n');
+  const stored = (blockRange: string, contentHash: string) => ({ filePath: 'src/config.ts', blockRange, contentHash, state: 'reviewed' as const });
+
+  it('keeps a verdict whose block only moved', () => {
+    const [before] = [...indexReviewBlocks([file('src/config.ts', SMALL_PATCH)]).values()];
+    const after = indexReviewBlocks([file('src/config.ts', SMALL_PATCH.replace('@@ -4,3 +4,4 @@', '@@ -40,3 +40,4 @@'))]);
+    const [moved] = [...after.values()];
+
+    // Inserting code above this block moves its range without touching a line
+    // of it, which is precisely the case a range-keyed read re-asked.
+    expect(moved.range).not.toBe(before.range);
+    expect(moved.contentHash).toBe(before.contentHash);
+    expect(resolveCarriedBlockReviews(after, [stored(before.range, before.contentHash)]))
+      .toEqual([{ identity: moved, review: stored(before.range, before.contentHash) }]);
+  });
+
+  it('asks again when the block was rewritten under an unchanged range', () => {
+    const rewritten = indexReviewBlocks([file('src/config.ts', SMALL_PATCH.replace('retries = 3', 'retries = 9'))]);
+    const [identity] = [...rewritten.values()];
+    expect(resolveCarriedBlockReviews(rewritten, [stored(identity.range, 'hash-of-other-code')])).toEqual([]);
+  });
+
+  it('matches each answer to its own block when a file repeats the same content', () => {
+    const twins = indexReviewBlocks([file('src/config.ts', TWIN_PATCH)]);
+    const [first, second] = [...twins.values()];
+    expect(first.contentHash).toBe(second.contentHash);
+
+    const carried = resolveCarriedBlockReviews(twins, [stored(first.range, first.contentHash), stored(second.range, second.contentHash)]);
+    expect(carried.map((match) => match.identity.range)).toEqual([first.range, second.range]);
+  });
+
+  it('refuses to guess which twin a moved verdict belonged to', () => {
+    const twins = indexReviewBlocks([file('src/config.ts', TWIN_PATCH)]);
+    const [first] = [...twins.values()];
+    // Carrying an answer to the wrong block is worse than asking again.
+    expect(resolveCarriedBlockReviews(twins, [stored('@@ -90,3 +90,4 @@ const limit = 5;', first.contentHash)])).toEqual([]);
   });
 });
 

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { DiffHunkReview, DiffHunkReviewState } from '../../../shared/contracts.js';
 import { buildChangeMap } from '../../../shared/change-map.js';
@@ -9,11 +9,11 @@ import { useCachedReviewAssistAnswers } from '../diff-review/review-assist.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import { buildFileDiffHunks } from '../diff-review/logic.js';
 import { readReviewStackReadingMode, writeReviewStackBlock, writeReviewStackReadingMode, type ReviewStackReadingMode } from '../../lib/preferences.js';
-import { useUpsertDiffHunkReview, useWorkspaceFileSource } from '../workspace-diff/hooks.js';
+import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceFileSource } from '../workspace-diff/hooks.js';
 import { reviewSourceKind } from './source.js';
 import { fileSourceRevision } from './review-full-file.js';
 import { ReviewFullFilePane } from './review-full-file-pane.js';
-import { indexReviewBlocks, reviewBlockStorageKey, toBlockLevelFiles } from './review-blocks.js';
+import { indexReviewBlocks, resolveCarriedBlockReviews, toBlockLevelFiles } from './review-blocks.js';
 import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
 import { REVIEW_TIER_LABELS } from './review-routing.js';
@@ -82,15 +82,30 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   // hunk has to land in the same table and invalidate the same cache Changes
   // reads, or the two surfaces would disagree until a reload.
   const upsertHunkReviews = useUpsertDiffHunkReview(scope, revision);
+  // What Changes has already been told about this revision. Read, not assumed:
+  // the reconcile below has to know which hunks are genuinely still owed, or it
+  // would rewrite every hunk in the diff on each load.
+  const hunkReviews = useDiffHunkReviews(scope, revision);
 
-  // Only verdicts whose block still hashes the same are applied: a block whose
-  // lines were rewritten under an unchanged range asks its question again
-  // rather than inheriting an answer given about other code.
-  const currentReviews = useMemo((): DiffHunkReview[] => (blockReviews.data?.reviews ?? []).flatMap((review) => {
-    const identity = blocks.get(`${review.filePath}::${review.blockRange}`);
-    if (!identity || identity.contentHash !== review.contentHash) return [];
-    return [{ id: review.id, revision: review.revision, filePath: review.filePath, hunkRange: review.blockRange, state: review.state, note: review.note, updatedAt: review.updatedAt }];
-  }), [blockReviews.data, blocks]);
+  // Every stored verdict this scope holds, resolved onto the blocks on screen
+  // now. Only verdicts whose block still hashes the same are applied: a block
+  // whose lines were rewritten asks its question again rather than inheriting
+  // an answer given about other code. A block that merely moved keeps its
+  // answer, which is the whole point — a review already given is not owed
+  // twice.
+  const carried = useMemo(() => resolveCarriedBlockReviews(blocks, blockReviews.data?.reviews ?? []), [blockReviews.data, blocks]);
+
+  // Addressed by the block's *current* range, not the one the verdict was
+  // recorded at: downstream decisions are built from today's diff, and a
+  // verdict filed under last revision's line numbers would match nothing.
+  const currentReviews = useMemo((): DiffHunkReview[] => {
+    const seen = new Set<string>();
+    return carried.flatMap(({ identity, review }) => {
+      if (seen.has(identity.decisionId)) return [];
+      seen.add(identity.decisionId);
+      return [{ id: review.id, revision: review.revision, filePath: identity.filePath, hunkRange: identity.range, state: review.state, note: review.note, updatedAt: review.updatedAt }];
+    });
+  }, [carried]);
 
   // Notes are keyed the way verdicts are, by block. They are read back
   // separately from the verdicts because a note outlives the state it was
@@ -98,11 +113,20 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   // what the reviewer said about it.
   const savedNotes = useMemo(() => {
     const map = new Map<string, string>();
-    for (const review of blockReviews.data?.reviews ?? []) {
-      if (review.note) map.set(reviewBlockStorageKey(review.filePath, review.blockRange, review.contentHash), review.note);
+    for (const { identity, review } of carried) {
+      if (review.note && !map.has(identity.storageKey)) map.set(identity.storageKey, review.note);
     }
     return map;
-  }, [blockReviews.data]);
+  }, [carried]);
+
+  // The block verdicts this scope holds about the code on screen, keyed the way
+  // the projection reads them. Built once so the reconcile that runs on load and
+  // the one that runs on save can never disagree about what is already answered.
+  const carriedVerdicts = useMemo(() => {
+    const verdicts = new Map<string, DiffHunkReviewState>();
+    for (const { identity, review } of carried) if (!verdicts.has(identity.storageKey)) verdicts.set(identity.storageKey, review.state);
+    return verdicts;
+  }, [carried]);
 
   const decisions = useMemo(() => buildReviewDecisions(blockFiles, currentReviews), [blockFiles, currentReviews]);
   const changeMap = useMemo(() => buildChangeMap(decisions), [decisions]);
@@ -194,6 +218,32 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     if (activeId) rememberAssist(activeId, cachedAnswers);
   }, [activeId, cachedAnswers, rememberAssist]);
 
+  // Carry the reconciliation forward, not just the verdict. `diff_hunk_reviews`
+  // is keyed on the revision, so answers given before the branch moved leave
+  // Changes showing those hunks unanswered even though Review now holds a
+  // verdict for every block inside them — the same code, asked about twice.
+  // Projecting on load closes that: the answers reach Changes at whatever
+  // revision is open, instead of waiting for the next verdict that happens to be
+  // saved. It settles after one pass, because the write invalidates the read it
+  // is diffed against and the delta is then empty.
+  //
+  // Asked at most once per hunk, verdict and revision. The write invalidates the
+  // read it is diffed against, which normally empties the delta by itself, but a
+  // write that fails or a read that lags must not turn one reconcile into a loop
+  // that rewrites Changes on every render.
+  const reconcileHunkVerdicts = upsertHunkReviews.mutate;
+  const recordedHunks = hunkReviews.data?.reviews;
+  const reconciled = useRef(new Set<string>());
+  useEffect(() => {
+    if (!revision || !recordedHunks || files.length === 0 || carriedVerdicts.size === 0) return;
+    const asked = (verdict: { filePath: string; hunkRange: string; state: DiffHunkReviewState }) => [revision, verdict.filePath, verdict.hunkRange, verdict.state].join('\u0000');
+    const owed = newlyProjectedHunkVerdicts(recordedHunks, projectHunkVerdicts(files, carriedVerdicts))
+      .filter((verdict) => !reconciled.current.has(asked(verdict)));
+    if (owed.length === 0) return;
+    for (const verdict of owed) reconciled.current.add(asked(verdict));
+    for (const group of groupHunkVerdictsByState(owed)) reconcileHunkVerdicts(group);
+  }, [carriedVerdicts, files, recordedHunks, reconcileHunkVerdicts, revision]);
+
   const saveVerdict = useCallback((state: DiffHunkReviewState, note?: string) => {
     if (!active || !revision) return;
     // One thought can span several blocks; the verdict is recorded against
@@ -209,15 +259,14 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     // addresses hunks, so a hunk is only claimed once every block inside it has
     // an answer. The projection is computed from the rows plus the verdict just
     // written, so it does not wait for the block-review query to come back.
-    const blockVerdicts = new Map<string, DiffHunkReviewState>();
-    for (const review of blockReviews.data?.reviews ?? []) blockVerdicts.set(reviewBlockStorageKey(review.filePath, review.blockRange, review.contentHash), review.state);
+    const blockVerdicts = new Map(carriedVerdicts);
     const before = projectHunkVerdicts(files, blockVerdicts);
     for (const identity of active.identities) blockVerdicts.set(identity.storageKey, state);
     for (const group of groupHunkVerdictsByState(newlyProjectedHunkVerdicts(before, projectHunkVerdicts(files, blockVerdicts)))) upsertHunkReviews.mutate(group);
 
     const next = nextUnsettledBlockId(queue, active.decision.id);
     if (next) selectBlock(next);
-  }, [active, blockReviews.data, files, queue, revision, savedNotes, selectBlock, upsertBlockReview, upsertHunkReviews]);
+  }, [active, carriedVerdicts, files, queue, revision, savedNotes, selectBlock, upsertBlockReview, upsertHunkReviews]);
 
   const changedLoc = useMemo(() => files.reduce((total, file) => total + file.additions + file.deletions, 0), [files]);
   const markReviewed = useCallback(() => saveVerdict('reviewed'), [saveVerdict]);

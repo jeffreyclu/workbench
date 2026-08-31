@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiffBlockReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { ReviewStackView } from './ReviewStackView.js';
+import { indexReviewBlocks } from './review-blocks.js';
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
@@ -73,6 +74,7 @@ function renderReview(reviewDiff = diff, seededReviews: DiffBlockReview[] = []) 
     if (url.includes('/workspace-diff/block-reviews')) return init?.method === 'PUT'
       ? json({ review: { id: 'r1', revision: 'rev-1', filePath: 'src/server/auth.ts', blockRange: '@@', contentHash: 'h', state: 'reviewed', note: null, updatedAt: '2026-01-01' } })
       : json({ reviews: seededReviews });
+    if (url.includes('/workspace-diff/hunk-reviews')) return json({ reviews: [] });
     if (url.includes('/review-assist/lookup')) return json({ answer: null });
     if (url.includes('/workspace-diff')) return json({ diff: reviewDiff });
     return json({});
@@ -245,6 +247,57 @@ describe('ReviewStackView', () => {
       expect(node?.classList.contains('is-handled')).toBe(true);
       expect(node?.getAttribute('aria-label')).toContain('Approved');
     });
+  });
+
+  it('greys a change that was answered before the branch moved', async () => {
+    // Same code, different revision: rebasing or pushing a follow-up commit
+    // changes the revision of every block in the diff, including the ones nobody
+    // touched. Those must not come back asking the same question.
+    const seeded: DiffBlockReview[] = [...indexReviewBlocks(diff.files).values()]
+      .filter((identity) => identity.filePath === 'src/server/auth.ts')
+      .map((identity, index) => ({
+        id: `seed-${index}`, revision: 'rev-0', filePath: identity.filePath, blockRange: identity.range,
+        contentHash: identity.contentHash, state: 'reviewed', note: null, updatedAt: '2026-01-01',
+      }));
+    renderReview(diff, seeded);
+
+    await waitFor(() => {
+      const node = [...document.querySelectorAll('.review-canvas-node')]
+        .find((candidate) => candidate.getAttribute('aria-label')?.includes('src/server/auth.ts'));
+      expect(node?.classList.contains('is-handled')).toBe(true);
+      expect(node?.getAttribute('aria-label')).toContain('Approved');
+    });
+  });
+
+  it('tells Changes about a verdict carried in from an earlier revision, once', async () => {
+    // Every block of the import file, answered under a revision that is no
+    // longer the one on screen. The identities come from the surface's own
+    // splitter, so the hashes are the ones the carry-forward matches on rather
+    // than values invented here.
+    const seeded: DiffBlockReview[] = [...indexReviewBlocks(diff.files).values()]
+      .filter((identity) => identity.filePath === 'src/app.ts')
+      .map((identity, index) => ({
+        id: `seed-${index}`, revision: 'rev-0', filePath: identity.filePath, blockRange: identity.range,
+        contentHash: identity.contentHash, state: 'reviewed', note: null, updatedAt: '2026-01-01',
+      }));
+    const calls = renderReview(diff, seeded);
+    await canvasNodeReadyFor('src/server/auth.ts');
+
+    // Changes keys its rows on the revision, so a review given before the branch
+    // moved reaches it only if the carried verdict is projected again here.
+    const written = await waitFor(() => {
+      const puts = calls.filter((call) => call.method === 'PUT' && call.url.includes('hunk-reviews'));
+      expect(puts).toHaveLength(1);
+      return puts[0].body as { revision: string; state: string; hunks: Array<{ filePath: string; hunkRange: string }> };
+    });
+    expect(written.revision).toBe('rev-1');
+    expect(written.state).toBe('reviewed');
+    expect(written.hunks).toEqual([{ filePath: 'src/app.ts', hunkRange: '@@ -1,2 +1,3 @@' }]);
+
+    // The read this is diffed against is stubbed empty, so a reconcile that did
+    // not remember what it already asked for would rewrite Changes forever.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls.filter((call) => call.method === 'PUT' && call.url.includes('hunk-reviews'))).toHaveLength(1);
   });
 
   it('puts no decision panel up from either handle', async () => {

@@ -115,15 +115,17 @@ export function createConversationRouter({ repository, database, capabilities, a
     if (!explorer.workspaces.some((workspace) => workspace.path === workspacePath) || !existsSync(workspacePath) || !statSync(workspacePath).isDirectory()) {
       return response.status(400).json({ error: 'Select a repository from this local workspace.' });
     }
+    // Selection writes are idempotent. Besides avoiding needless SQLite work,
+    // this is a server-side circuit breaker for a regressed client that
+    // accidentally replays the already-selected path after query invalidation.
+    if (explorer.selectedPath === workspacePath) return response.json(explorer);
     database.prepare(`INSERT INTO shared_conversation_workspace_selection (conversation_id, workspace_path, updated_at)
       VALUES (?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET workspace_path = excluded.workspace_path, updated_at = excluded.updated_at`)
       .run(request.params.id, workspacePath, new Date().toISOString());
     // Provider sessions are rooted in the previous repository. Never resume
     // one after Repo Explorer changes the conversation's working directory.
-    if (explorer.selectedPath !== workspacePath) {
-      repository.setConversationClaudeSessionId(request.params.id, null);
-      repository.setConversationCodexThreadId(request.params.id, null);
-    }
+    repository.setConversationClaudeSessionId(request.params.id, null);
+    repository.setConversationCodexThreadId(request.params.id, null);
     response.json({ selectedPath: workspacePath, workspaces: explorer.workspaces.map((workspace) => ({ ...workspace, selected: workspace.path === workspacePath })) });
   });
 

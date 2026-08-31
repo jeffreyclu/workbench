@@ -68,6 +68,42 @@ export function toBlockLevelFiles(files: WorkspaceDiffFile[]): WorkspaceDiffFile
   });
 }
 
+/** Match stored verdicts onto the blocks currently on screen by *content*,
+ * falling back to content only when it is unambiguous.
+ *
+ * A stored row remembers the range it was answered at, but a range is a line
+ * number: insert a function above an untouched block and every range below it
+ * moves, even though nothing about that code changed. Matching on the range
+ * alone made the reviewer answer those blocks again. An exact
+ * (range, hash) hit still wins, so nothing about same-revision reading
+ * changes; a moved block is recognised by its hash; and a file that repeats
+ * the same block content at two ranges is left unmatched rather than guessed
+ * at, because carrying a verdict to the wrong block is worse than asking
+ * again.
+ *
+ * Returned in the order given, duplicates included: the caller decides what
+ * first-wins means for a verdict and for a note. */
+export function resolveCarriedBlockReviews<Review extends { filePath: string; blockRange: string; contentHash: string }>(
+  blocks: Map<string, ReviewBlockIdentity>,
+  reviews: readonly Review[],
+): Array<{ identity: ReviewBlockIdentity; review: Review }> {
+  const byContent = new Map<string, ReviewBlockIdentity[]>();
+  for (const identity of blocks.values()) {
+    const key = `${identity.filePath}\u0000${identity.contentHash}`;
+    const held = byContent.get(key);
+    if (held) held.push(identity);
+    else byContent.set(key, [identity]);
+  }
+  const matches: Array<{ identity: ReviewBlockIdentity; review: Review }> = [];
+  for (const review of reviews) {
+    const candidates = byContent.get(`${review.filePath}\u0000${review.contentHash}`) ?? [];
+    const identity = candidates.find((candidate) => candidate.range === review.blockRange)
+      ?? (candidates.length === 1 ? candidates[0] : undefined);
+    if (identity) matches.push({ identity, review });
+  }
+  return matches;
+}
+
 /** Content hashes for every block of every file, keyed by the decision-hunk id
  * the reused components address. Built from the same split the block-level
  * files came from, so the two can never disagree. */

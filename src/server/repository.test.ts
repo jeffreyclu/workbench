@@ -78,6 +78,51 @@ describe('WorkItemRepository', () => {
     expect(reviews.map((review) => review.contentHash).sort()).toEqual(['hash-after', 'hash-before']);
   });
 
+  /** A verdict answers a piece of code, not a revision. Rebasing or pushing a
+   * follow-up commit changes the revision of every block in the diff including
+   * the untouched ones, so a revision-scoped read threw the whole review away
+   * and asked the same questions again. */
+  it('carries a block verdict onto a later revision when the content is unchanged', () => {
+    const item = repository.create({ title: 'Carried verdict', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-x', state: 'reviewed', note: 'checked the empty case' });
+
+    expect(repository.listDiffBlockReviews({ workItemId: item.id }, 'rev-2'))
+      .toEqual([expect.objectContaining({ revision: 'rev-1', contentHash: 'hash-x', state: 'reviewed', note: 'checked the empty case' })]);
+  });
+
+  it('lets the answer given at this revision supersede the one before it', () => {
+    const item = repository.create({ title: 'Superseded verdict', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-x', state: 'needs_changes' });
+    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-2', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-x', state: 'reviewed' });
+
+    const reviews = repository.listDiffBlockReviews({ workItemId: item.id }, 'rev-2');
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]).toEqual(expect.objectContaining({ revision: 'rev-2', state: 'reviewed' }));
+  });
+
+  /** What the reviewer wrote outlives the state it was written under, the same
+   * way it already did across a state change within one revision. */
+  it('carries a note onto the later verdict about the same content', () => {
+    const item = repository.create({ title: 'Carried note', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-x', state: 'commented', note: 'why is this retried?' });
+    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-2', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-x', state: 'reviewed' });
+
+    expect(repository.listDiffBlockReviews({ workItemId: item.id }, 'rev-2')[0])
+      .toEqual(expect.objectContaining({ revision: 'rev-2', state: 'reviewed', note: 'why is this retried?' }));
+  });
+
+  /** Two blocks that happen to hold the same lines were answered separately.
+   * Collapsing them by content would silently drop one of those answers. */
+  it('keeps both answers when one file repeats the same block content at two ranges', () => {
+    const item = repository.create({ title: 'Twin blocks', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,4 +1,4 @@', contentHash: 'twin', state: 'reviewed' });
+    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -40,4 +40,4 @@', contentHash: 'twin', state: 'needs_changes' });
+
+    const reviews = repository.listDiffBlockReviews({ workItemId: item.id }, 'rev-2');
+    expect(reviews).toHaveLength(2);
+    expect(reviews.map((review) => review.state).sort()).toEqual(['needs_changes', 'reviewed']);
+  });
+
   it('upserts every hunk in one review decision through the batch boundary', () => {
     const item = repository.create({ title: 'Cross-file review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const reviews = repository.upsertDiffHunkReviews({ workItemId: item.id }, {
@@ -1936,14 +1981,22 @@ describe('WorkItemRepository', () => {
       expect(repository.listSharedMessages(10, null, conversation.id).messages.find((entry) => entry.id === message.id)?.status).toBe('completed');
     });
 
-    it('renewLeases extends only the caller-owned, still-live leases', () => {
+    it('renewLeases revives a late heartbeat only while the caller still owns the work', () => {
       const run = createQueuedRun();
       repository.claimRun(run.id, 'owner-a', 1_000);
+      const conversation = repository.createConversation();
+      const ownedMessage = repository.createSharedMessage('claude', 'working', 'running', conversation.id);
+      const otherMessage = repository.createSharedMessage('codex', 'other process', 'running', conversation.id);
+      repository.claimSharedMessage(ownedMessage.id, 'owner-a', -1);
+      repository.claimSharedMessage(otherMessage.id, 'owner-b', -1);
       const before = repository.getRun(run.id);
       repository.renewLeases('owner-a', 60_000);
       // Renewing does not change status; this asserts renewal does not throw and leaves status running.
       expect(repository.getRun(run.id)?.status).toBe('running');
       expect(before?.status).toBe('running');
+      const reclaimed = repository.reclaimExpired(0);
+      expect(reclaimed.recoveredMessageIds).not.toContain(ownedMessage.id);
+      expect(reclaimed.recoveredMessageIds).toContain(otherMessage.id);
     });
 
     it('claimSharedMessage acquires a lease and prevents double-claim', () => {
