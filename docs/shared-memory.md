@@ -294,3 +294,22 @@ toasted by the caller.
 Balance that against double-toasting: when the inner hook already calls `handleApiError` with a
 toast, the caller must stay silent for that path. Assert both directions in tests — the path that
 must toast, and the path that must delegate.
+
+## An enumerated review-comment list is the whole scope (2026-08-31)
+
+When Jeffrey says "address the bot comments" — or names any fixed set of items — that list is the
+entire scope of the edit. Fix exactly those items and stop. Do not add tests for the code you just
+touched, do not tidy neighboring code, and do not fold in improvements that seem obviously correct.
+If a fix genuinely requires touching a file outside the stated scope, say so and get agreement
+before doing it; that is a question, not a licence.
+
+A bot suggestion does not widen the scope either. On PR #14774 a review bot asked for a duplicated
+tooltip string to be extracted into `frontend/src/components/connectors/utils.ts` and imported by
+both the V2 card and the legacy `connector-row-status.tsx`. Following it edited two files outside
+`manage-tabs/connectors-v2/`, which collides with Jeffrey's standing rule that the connectors V2
+work stays inside its own folder behind one gated entry point. The right move was to keep the
+constant inside the V2 folder, or to leave the duplication and reply to the bot — not to follow the
+suggestion into legacy code.
+
+Learned when a six-comment instruction produced an eleven-file commit (`58f3c1512c`) whose largest
+part, three new test files totalling ~219 of 260 inserted lines, nobody had asked for.

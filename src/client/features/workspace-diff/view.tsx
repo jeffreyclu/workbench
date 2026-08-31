@@ -192,23 +192,23 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const hasLocalReviewableChanges = (diff?.changedFiles ?? 0) > 0 || snapshots.some((snapshot) => snapshot.diff.changedFiles > 0);
   const hasChosenSource = useRef(false);
   useEffect(() => {
-    // Open on a linked pull request only when the local checkout has nothing
-    // to review. Decided once, so later local edits never yank the reviewer
-    // out of a pull request they are working through.
+    // The opening source is decided once, from the first loaded response.
+    // Later edits - and any repository the reviewer picks themselves - must
+    // never yank the source control back, which would unmount the repository
+    // picker and make the Workspace button unclickable.
     if (hasChosenSource.current || query.isLoading || snapshotsQuery.isLoading) return;
     hasChosenSource.current = true;
+    // Open on a linked pull request only when the local checkout has nothing
+    // to review, so a reviewer working through a PR is never pulled out of it.
     if (!hasLocalReviewableChanges && availablePullRequests.length > 0) {
       setSelectedPullRequestUrl(availablePullRequests[0]);
       setReviewSource('pull-request');
+      return;
     }
-  }, [query.isLoading, snapshotsQuery.isLoading, hasLocalReviewableChanges, availablePullRequests]);
-  useEffect(() => {
-    // A clean checkout displays its latest immutable record. Keep the source
+    // A clean checkout opens on its latest immutable record. Keep the source
     // control truthful instead of making a history record look like live work.
-    if (reviewSource === 'workspace' && diff?.changedFiles === 0 && snapshots.length > 0 && availablePullRequests.length === 0) {
-      setReviewSource('history');
-    }
-  }, [reviewSource, diff?.changedFiles, snapshots.length, availablePullRequests.length]);
+    if (reviewSource === 'workspace' && diff?.changedFiles === 0 && snapshots.length > 0) setReviewSource('history');
+  }, [query.isLoading, snapshotsQuery.isLoading, hasLocalReviewableChanges, availablePullRequests, reviewSource, diff?.changedFiles, snapshots.length]);
 
   const displayedDiff: ReviewSourceDiff | null | undefined = isPullRequestSource ? pullRequestDiff : selectedSnapshot?.diff ?? diff;
   const agentEditingWorkspace = activeWorkspacePaths
@@ -446,10 +446,14 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     }
     setSelectedPullRequestUrl(null);
     setReviewSource('workspace');
+    // Picking a repository means reading that repository's live changes, not
+    // whichever recorded version the previous checkout fell back to.
+    setSelectedSnapshotId('');
     if (value !== explorer.data?.selectedPath) selectWorkspace.mutate(value);
   };
 
   const selectWorkspaceSource = () => {
+    hasChosenSource.current = true;
     setReviewSource('workspace');
     setSelectedPullRequestUrl(null);
     setSelectedSnapshotId('');

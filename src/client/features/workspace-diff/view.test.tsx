@@ -234,6 +234,38 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(screen.queryByText('No uncommitted changes to review.')).toBeNull();
   });
 
+  it('keeps the repository picker reachable on a clean checkout that has recorded versions', async () => {
+    const repositoryA = '/tmp/repository-a';
+    const repositoryB = '/tmp/repository-b';
+    let selectedPath = repositoryA;
+    const recordedFile: WorkspaceDiffFile = { path: 'src/recorded.ts', previousPath: null, status: 'modified', additions: 1, deletions: 0, isBinary: false, patch: '@@ -1 +1 @@\n+recorded' };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath, workspaces: [{ path: repositoryA, label: 'repository-a' }, { path: repositoryB, label: 'repository-b' }] });
+      if (url.endsWith('/workspaces/selection')) {
+        selectedPath = JSON.parse(String(init?.body)).workspacePath;
+        return json({ selectedPath, workspaces: [{ path: repositoryA, label: 'repository-a' }, { path: repositoryB, label: 'repository-b' }] });
+      }
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [{ id: 'recorded-run', capturedAt: '2026-08-28T12:40:02.798Z', originatingAgentRunId: 'run-1', commitHash: 'abcdef123456', diff: workspaceDiff([recordedFile], 'recorded-run') }] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([]) });
+      if (url.includes('/hunk-reviews')) return json({ reviews: [] });
+      return json({});
+    });
+    renderView(fetchMock);
+
+    // A clean checkout still opens on its recorded version...
+    expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
+    // ...but choosing Workspace must stay possible, or the repository picker
+    // it gates can never be reached again.
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace' }));
+    const picker = await screen.findByLabelText('Workspace');
+    expect(picker).toHaveValue(repositoryA);
+
+    fireEvent.change(picker, { target: { value: repositoryB } });
+    await waitFor(() => expect(screen.getByLabelText('Workspace')).toHaveValue(repositoryB));
+    expect(screen.queryByRole('heading', { name: 'Workspace review record' })).not.toBeInTheDocument();
+  });
+
   it('uses the server-selected repository after remount and never replays a stale local repository preference', async () => {
     const repositoryA = '/tmp/repository-a';
     const repositoryB = '/tmp/repository-b';
