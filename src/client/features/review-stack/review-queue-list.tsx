@@ -13,21 +13,26 @@ function StateGlyph({ state }: { state: DiffHunkReviewState | null }) {
 
 function QueueRow({ entry, isActive, onSelect }: { entry: ReviewQueueEntry; isActive: boolean; onSelect: (id: string) => void }) {
   const { decision, routing, relationships } = entry;
-  return <li className={`review-queue-row tier-${routing.tier.toLowerCase()}${isActive ? ' is-active' : ''}${decision.state ? ' is-judged' : ''}`}>
-    <button type="button" aria-current={isActive} onClick={() => onSelect(decision.id)}>
-      <span className="review-queue-tier" title={routing.reason}>{routing.tier}</span>
-      <span className="review-queue-body">
+  return <li>
+    <button
+      type="button"
+      aria-current={isActive}
+      onClick={() => onSelect(decision.id)}
+      className={`stack-card review-card tier-${routing.tier.toLowerCase()}${isActive ? ' is-active' : ''}${decision.state ? ' is-judged' : ''}`}
+    >
+      <span className="review-card-head">
+        <span className="review-card-tier" title={routing.reason}>{routing.tier}</span>
         <strong>{decision.subject ?? decision.behavior}</strong>
-        {/* The reason, not the score: a queue that sorts without saying why
-            gets overridden or ignored. */}
-        <em>{routing.reason}</em>
-        <small>
-          {changeTypeLabel(decision.changeType)} · +{decision.additions}/−{decision.deletions}
-          {relationships.degree > 0 && ` · ${relationships.degree} related`}
-          {entry.showsMap && ' · map'}
-        </small>
+        <span className="review-card-state"><StateGlyph state={decision.state} /></span>
       </span>
-      <span className="review-queue-state"><StateGlyph state={decision.state} /></span>
+      {/* The reason, not the score: a queue that sorts without saying why
+          gets overridden or ignored. */}
+      <em>{routing.reason}</em>
+      <small>
+        {changeTypeLabel(decision.changeType)} · +{decision.additions}/−{decision.deletions}
+        {relationships.degree > 0 && ` · ${relationships.degree} related`}
+        {entry.showsMap && ' · map'}
+      </small>
     </button>
   </li>;
 }
