@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { WorkspaceDiffFile } from '../../../shared/contracts.js';
+import type { DiffBlockReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { ReviewStackView } from './ReviewStackView.js';
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -63,7 +63,7 @@ const CLIENT_AUTH_PATCH = [
 
 const twoDecisionDiff = { ...diff, files: [file('src/server/auth.ts', AUTH_PATCH), file('src/client/auth.ts', CLIENT_AUTH_PATCH)] };
 
-function renderReview(reviewDiff = diff) {
+function renderReview(reviewDiff = diff, seededReviews: DiffBlockReview[] = []) {
   const calls: Array<{ url: string; method: string; body: unknown }> = [];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -72,7 +72,7 @@ function renderReview(reviewDiff = diff) {
     if (url.includes('/workspace-diff/snapshots')) return json({ snapshots: [] });
     if (url.includes('/workspace-diff/block-reviews')) return init?.method === 'PUT'
       ? json({ review: { id: 'r1', revision: 'rev-1', filePath: 'src/server/auth.ts', blockRange: '@@', contentHash: 'h', state: 'reviewed', note: null, updatedAt: '2026-01-01' } })
-      : json({ reviews: [] });
+      : json({ reviews: seededReviews });
     if (url.includes('/review-assist/lookup')) return json({ answer: null });
     if (url.includes('/workspace-diff')) return json({ diff: reviewDiff });
     return json({});
@@ -262,5 +262,40 @@ describe('ReviewStackView', () => {
     const changed = Array.from(document.querySelectorAll('.review-full-file-row.changed'));
     expect(changed.map((row) => row.getAttribute('data-line'))).toEqual(['21', '22']);
     expect(document.querySelector('.review-full-file-row.removed')).not.toBeNull();
+  });
+
+  it('offers the composer on a block without opening it, so the code stays in front of the reviewer', async () => {
+    renderReview();
+    expect(await screen.findByRole('button', { name: 'Comment on this block' })).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'Comment on this block' })).toBeNull();
+  });
+
+  it('carries an existing comment forward when the block is later marked reviewed', async () => {
+    // The block's storage identity is the surface's own, hash included, so it
+    // is read off a real write rather than guessed at here.
+    const discovery = renderReview();
+    fireEvent.click(await screen.findByRole('button', { name: /Reviewed/ }));
+    const written = await waitFor(() => {
+      const put = discovery.find((call) => call.method === 'PUT' && call.url.includes('block-reviews'));
+      expect(put).toBeDefined();
+      return put!.body as { filePath: string; blockRange: string; contentHash: string };
+    });
+    cleanup();
+    vi.unstubAllGlobals();
+
+    const note = 'A token of "*" skips verification entirely.';
+    const calls = renderReview(diff, [{
+      id: 'r1', revision: 'rev-1', filePath: written.filePath, blockRange: written.blockRange,
+      contentHash: written.contentHash, state: 'commented', note, updatedAt: '2026-01-01',
+    }]);
+
+    expect(await screen.findByText(note)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: /Reviewed/ }));
+    // Every upsert overwrites the note column, so a verdict saved without a
+    // note has to resend the one already there or the comment is deleted.
+    await waitFor(() => {
+      const put = calls.find((call) => call.method === 'PUT' && call.url.includes('block-reviews'));
+      expect(put?.body).toMatchObject({ state: 'reviewed', note });
+    });
   });
 });

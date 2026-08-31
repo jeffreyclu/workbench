@@ -1,5 +1,13 @@
 ## Workbench frontend lessons
 
+### Compact desktop navigation icons share one center axis
+
+*Correction from Jeffrey, 2026-08-30.* In the collapsed desktop sidebar, the W mark, every
+destination glyph, active-button glyph, and footer Search glyph must be centered on the same
+vertical axis. Hiding nav labels with `font-size: 0` does not remove a flex `gap`: set the collapsed
+item gap to zero and restore it only for the expanded state. Center the footer control in the full
+rail content box instead of applying nested horizontal padding that offsets Search.
+
 ### New Task Linear identifiers resolve beyond the current sync scope
 
 *Confirmed 2026-08-25.* The New Task modal searches through

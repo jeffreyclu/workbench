@@ -19,6 +19,7 @@ import { ReviewFullFilePane } from './review-full-file-pane.js';
 import { indexReviewBlocks, reviewBlockStorageKey, toBlockLevelFiles } from './review-blocks.js';
 import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
+import { ReviewBlockNote } from './review-block-note.js';
 import { ReviewQueueList } from './review-queue-list.js';
 import { REVIEW_TIER_LABELS } from './review-routing.js';
 import { DEFAULT_REVIEW_MAP_OVERLAYS, type ReviewMapOverlays } from './review-map-overlays.js';
@@ -97,6 +98,18 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     return [{ id: review.id, revision: review.revision, filePath: review.filePath, hunkRange: review.blockRange, state: review.state, note: review.note, updatedAt: review.updatedAt }];
   }), [blockReviews.data, blocks]);
 
+  // Notes are keyed the way verdicts are, by block. They are read back
+  // separately from the verdicts because a note outlives the state it was
+  // saved with: a block commented on and later marked reviewed still holds
+  // what the reviewer said about it.
+  const savedNotes = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const review of blockReviews.data?.reviews ?? []) {
+      if (review.note) map.set(reviewBlockStorageKey(review.filePath, review.blockRange, review.contentHash), review.note);
+    }
+    return map;
+  }, [blockReviews.data]);
+
   const decisions = useMemo(() => buildReviewDecisions(blockFiles, currentReviews), [blockFiles, currentReviews]);
   const changeMap = useMemo(() => buildChangeMap(decisions), [decisions]);
   // Escalation input, declared before the queue that consumes it and filled
@@ -172,12 +185,16 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     if (activeId) rememberAssist(activeId, cachedAnswers);
   }, [activeId, cachedAnswers, rememberAssist]);
 
-  const saveVerdict = useCallback((state: DiffHunkReviewState) => {
+  const saveVerdict = useCallback((state: DiffHunkReviewState, note?: string) => {
     if (!active || !revision) return;
     // One thought can span several blocks; the verdict is recorded against
     // every block it covers so none of them comes back as unanswered.
     for (const identity of active.identities) {
-      upsertBlockReview.mutate({ filePath: identity.filePath, blockRange: identity.range, contentHash: identity.contentHash, state });
+      // The row's note column is overwritten on every upsert, so a verdict
+      // saved without one carries the block's existing note forward. Marking a
+      // block reviewed after commenting on it must not erase the comment.
+      const carried = note ?? savedNotes.get(identity.storageKey);
+      upsertBlockReview.mutate({ filePath: identity.filePath, blockRange: identity.range, contentHash: identity.contentHash, state, ...(carried ? { note: carried } : {}) });
     }
     // Reconcile with Changes. A block verdict is Review's unit, but Changes
     // addresses hunks, so a hunk is only claimed once every block inside it has
@@ -191,8 +208,17 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
 
     const next = nextUnsettledBlockId(queue, active.decision.id);
     if (next) selectBlock(next);
-  }, [active, blockReviews.data, files, queue, revision, selectBlock, upsertBlockReview, upsertHunkReviews]);
+  }, [active, blockReviews.data, files, queue, revision, savedNotes, selectBlock, upsertBlockReview, upsertHunkReviews]);
 
+  // An entry is one thought spread over blocks, so the first note found on any
+  // of them is the note about that thought.
+  const activeNote = useMemo(() => {
+    for (const identity of active?.identities ?? []) {
+      const found = savedNotes.get(identity.storageKey);
+      if (found) return found;
+    }
+    return null;
+  }, [active, savedNotes]);
   const claim = useMemo(() => active ? blockClaim(active.decision) : null, [active]);
   const changedLoc = useMemo(() => files.reduce((total, file) => total + file.additions + file.deletions, 0), [files]);
   const selectNextDecision = useCallback(() => {
@@ -273,6 +299,13 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
               </ul>
             </div>
             <DiffReviewActions saving={upsertBlockReview.isPending} error={upsertBlockReview.error instanceof Error ? upsertBlockReview.error.message : null} onSave={saveVerdict} />
+            <ReviewBlockNote
+              blockId={active.decision.id}
+              note={activeNote}
+              saving={upsertBlockReview.isPending}
+              error={upsertBlockReview.error instanceof Error ? upsertBlockReview.error.message : null}
+              onSave={saveVerdict}
+            />
           </DiffReviewDecisionDetailCard>
 
           {/* The map is a camera for the critical parts, not a dashboard: it is
