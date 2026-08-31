@@ -644,6 +644,14 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-diff-block.state-commented { --state-tone: #9ab6d8; }
 .diff-review-diff-block.settled { border-left-color: var(--state-tone); }
 .diff-review-diff-block.settled .diff-review-diff-block-header { background: color-mix(in srgb, var(--state-tone) 9%, #1b1b18); }
+/* A handled change keeps its header — the reviewer has to be able to see that
+   it exists and reach it — and loses its diff, which is the part that costs
+   reading time. */
+.diff-review-diff-block.collapsed .diff-review-diff-block-header code { color: #77766f; }
+.diff-review-diff-block-handled { flex: 0 0 auto; padding: 1px 6px; color: var(--state-tone); background: color-mix(in srgb, var(--state-tone) 14%, transparent); border: 1px solid color-mix(in srgb, var(--state-tone) 35%, transparent); border-radius: 999px; font: 500 9px 'DM Mono'; font-style: normal; text-transform: uppercase; letter-spacing: .06em; }
+.diff-review-diff-block-unfold { display: flex; align-items: center; gap: 10px; width: 100%; padding: 5px 10px; color: #6f6e68; background: #141412; border: 0; border-top: 1px dashed #2b2b27; cursor: pointer; font: 500 10px 'DM Mono'; text-align: left; }
+.diff-review-diff-block-unfold span:last-child { margin-left: auto; color: #85847d; text-decoration: underline; text-underline-offset: 2px; }
+.diff-review-diff-block-unfold:hover, .diff-review-diff-block-unfold:focus-visible { color: #b3b2a9; background: #1a1a17; outline: 0; }
 .diff-review-diff-block.active { position: relative; z-index: 1; border-left-color: var(--acid); background: #16170e; box-shadow: 0 0 0 1px #414a20, 0 0 30px -8px #c6f43266; scroll-margin-block: 48px; }
 /* Spotlight: while a decision is selected its block stays lit and the rest of
  * the file recedes, so a long diff reads as one focused block in context. The
@@ -1460,6 +1468,12 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .review-canvas-node.is-linked { border-color: #4d5836; }
 .review-canvas-node.is-active { border-color: var(--acid); background: #1b2113; }
 .review-canvas-node.state-reviewed { opacity: .62; }
+/* Done with, or never Jeffrey's to read: greyed out of the way rather than
+   dropped, so the canvas still counts the same changes the diff does. Hover and
+   selection bring it back to full strength — it is de-emphasised, not disabled. */
+.review-canvas-node.is-handled { opacity: .38; filter: grayscale(1); }
+.review-canvas-node.is-handled:hover, .review-canvas-node.is-handled:focus-visible, .review-canvas-node.is-handled.is-active { opacity: 1; filter: none; }
+.review-canvas-node.is-handled .review-canvas-node-meta em { color: #6f6e68; text-transform: uppercase; letter-spacing: .05em; font-size: 9px; }
 .review-canvas-node-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .review-canvas-node-head b { flex: 0 0 auto; padding: 1px 5px; color: #15200d; background: #6f7d47; border-radius: 4px; font: 700 9px 'DM Mono'; }
 .review-canvas-node.is-active .review-canvas-node-head b { background: var(--acid); }

@@ -31,10 +31,15 @@ function fileTail(filePath: string): string {
  * hunk without any translation between them.
  */
 export const ReviewChangeCanvas = memo(function ReviewChangeCanvas({
-  map, selectedId, selectionTick, openDetailFor, onSelect,
+  map, selectedId, selectionTick, openDetailFor, handled, onSelect,
 }: {
   map: ChangeMap;
   selectedId: string | null;
+  /** Changes already dealt with, mapped to why — 'Approved', 'Delegated'. They
+   * are greyed rather than dropped: the canvas is a map of the whole change,
+   * and a node missing from it would make the diff and the map disagree about
+   * how many changes there are. */
+  handled?: Map<string, string>;
   /** Bumped on every selection, including reselecting the same node, so the
    * canvas re-reveals a node the reviewer scrolled away from. */
   selectionTick: number;
@@ -104,22 +109,25 @@ export const ReviewChangeCanvas = memo(function ReviewChangeCanvas({
         <svg className="review-canvas-edges" width={LANE_WIDTH} height={height} aria-hidden="true">
           {edges.map((edge) => <path key={edge.id} className={`review-canvas-edge${edge.touches ? ' is-touching' : ''}`} d={edge.d} />)}
         </svg>
-        {map.nodes.map((node, index) => <button
+        {map.nodes.map((node, index) => {
+          const settledAs = handled?.get(node.id) ?? null;
+          return <button
           key={node.id}
           type="button"
           {...{ [REVIEW_CANVAS_NODE_ATTRIBUTE]: node.id }}
-          className={`review-canvas-node state-${node.state ?? 'pending'}${node.id === selectedId ? ' is-active' : ''}${node.id !== selectedId && linked.has(node.id) ? ' is-linked' : ''}`}
+          className={`review-canvas-node state-${node.state ?? 'pending'}${node.id === selectedId ? ' is-active' : ''}${node.id !== selectedId && linked.has(node.id) ? ' is-linked' : ''}${settledAs ? ' is-handled' : ''}`}
           style={{ top: index * ROW, height: NODE_HEIGHT }}
           aria-current={node.id === selectedId}
           aria-haspopup="dialog"
           aria-expanded={openDetailFor === node.id}
-          aria-label={`Change ${node.ordinal}: ${node.behavior} in ${node.filePath} — open decision details`}
+          aria-label={`Change ${node.ordinal}: ${node.behavior} in ${node.filePath} — ${settledAs ? `${settledAs} · ` : ''}open decision details`}
           onClick={(event) => onSelect(node.id, event.currentTarget)}
         >
           <span className="review-canvas-node-head"><b>{node.ordinal}</b><code>{fileTail(node.filePath)}</code></span>
           <span className="review-canvas-node-behavior">{node.behavior}</span>
-          <span className="review-canvas-node-meta"><i>+{node.additions}</i><i>−{node.deletions}</i>{node.state && <em>{node.state}</em>}</span>
-        </button>)}
+          <span className="review-canvas-node-meta"><i>+{node.additions}</i><i>−{node.deletions}</i>{settledAs ? <em>{settledAs}</em> : node.state && <em>{node.state}</em>}</span>
+        </button>;
+        })}
       </div>
     </div>
   </section>;

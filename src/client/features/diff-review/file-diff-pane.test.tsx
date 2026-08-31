@@ -46,6 +46,50 @@ function renderPane(activeDecisionId: string) {
 }
 
 describe('review file diff pane', () => {
+  it('collapses a handled block to its header and still lets it be opened by hand', () => {
+    const { container } = render(<DiffReviewFileDiffPane
+      filePath="src/example.ts"
+      editorUrl={null}
+      hunks={hunks}
+      decisions={[decision(null)]}
+      // Selected elsewhere, so this block is not the one being read: a handled
+      // block only collapses when it is not under the reviewer's cursor.
+      activeDecisionId="other-decision"
+      handledBlocks={new Map([[hunks[0].decisionId, 'Delegated']])}
+      onSelect={() => {}}
+    />);
+
+    // The point of delegating a change is to stop paying to read it, so the
+    // code goes and only the header and the reason stay.
+    expect(container.querySelector('.diff-review-diff-block.collapsed')).not.toBeNull();
+    expect(container.querySelectorAll('.diff-line')).toHaveLength(0);
+    expect(screen.getByText('Delegated')).toBeInTheDocument();
+
+    // Hidden, not dropped: a reviewer who wants to check the delegate's work
+    // has to be able to get at the diff.
+    fireEvent.click(screen.getByRole('button', { name: /^Show the diff for .* in src\/example.ts/ }));
+    expect(container.querySelectorAll('.diff-line').length).toBeGreaterThan(0);
+    expect(container.querySelector('.diff-review-diff-block.collapsed')).toBeNull();
+  });
+
+  it('never collapses the block the reviewer is on', () => {
+    const { container } = render(<DiffReviewFileDiffPane
+      filePath="src/example.ts"
+      editorUrl={null}
+      hunks={hunks}
+      decisions={[decision('reviewed')]}
+      activeDecisionId={hunks[0].decisionId}
+      handledBlocks={new Map([[hunks[0].decisionId, 'Approved']])}
+      onSelect={() => {}}
+    />);
+
+    // Hiding the code under the selection reads as a broken pane, so the
+    // handled marking stays and the collapse does not.
+    expect(container.querySelector('.diff-review-diff-block.collapsed')).toBeNull();
+    expect(container.querySelectorAll('.diff-line').length).toBeGreaterThan(0);
+    expect(screen.getByText('Approved')).toBeInTheDocument();
+  });
+
   it('renders each line with its source indentation intact', () => {
     const { container } = renderPane(hunks[0].decisionId);
     const codeCells = [...container.querySelectorAll('.diff-line-code')].map((cell) => cell.textContent);

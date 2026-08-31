@@ -86,14 +86,19 @@ function renderReview(reviewDiff = diff, seededReviews: DiffBlockReview[] = []) 
 /** The handle on the canvas for a change in this file. Node ids are decision
  * ids, so this is the same change the gutter marker and the queue address. */
 function canvasNode(filePath: string) {
-  return screen.getByRole('button', { name: new RegExp(`^Change \\d+: .* in ${filePath}$`) });
+  return screen.getByRole('button', { name: new RegExp(`^Change \\d+: .* in ${filePath}(?: — .*)?$`) });
+}
+
+/** Waits for the canvas to have drawn, addressed by the same handle. */
+async function canvasNodeReadyFor(filePath: string) {
+  await screen.findByRole('button', { name: new RegExp(`^Change \\d+: .* in ${filePath}(?: — .*)?$`) });
 }
 
 /** The card is the code and the canvas and nothing else, so there is no panel
  * to open and no verdict button to press: a block is judged with the keyboard,
  * against the change the card is already on. */
 async function judgeActiveBlock(filePath = 'src/server/auth.ts') {
-  await screen.findByRole('button', { name: new RegExp(`^Change \\d+: .* in ${filePath}$`) });
+  await screen.findByRole('button', { name: new RegExp(`^Change \\d+: .* in ${filePath}(?: — .*)?$`) });
   fireEvent.keyDown(document, { key: 'r' });
 }
 
@@ -199,9 +204,52 @@ describe('ReviewStackView', () => {
     expect(screen.queryByRole('button', { name: 'Comment on this block' })).toBeNull();
   });
 
+  it('greys the changes already handled and leaves the ones still owed at full strength', async () => {
+    renderReview();
+    await canvasNodeReadyFor('src/server/auth.ts');
+
+    const nodes = [...document.querySelectorAll('.review-canvas-node')];
+    const labelled = (path: string) => nodes.find((node) => node.getAttribute('aria-label')?.includes(path));
+
+    // An import-only change is routed below Jeffrey's reading time, so the
+    // canvas has to say so without him opening it.
+    expect(labelled('src/app.ts')?.classList.contains('is-handled')).toBe(true);
+    // The auth change is the one still owed: greying it would hide the work.
+    expect(labelled('src/server/auth.ts')?.classList.contains('is-handled')).toBe(false);
+  });
+
+  it('greys a change in the canvas once a verdict is recorded against it', async () => {
+    const discovery = renderReview();
+    await judgeActiveBlock();
+
+    // The block's storage identity is the surface's own, hash included, so it
+    // is read off a real write rather than guessed at here.
+    const written = await waitFor(() => {
+      const put = discovery.find((call) => call.method === 'PUT' && call.url.includes('block-reviews'));
+      expect(put).toBeDefined();
+      return put!.body as { filePath: string; blockRange: string; contentHash: string };
+    });
+    cleanup();
+    vi.unstubAllGlobals();
+
+    renderReview(diff, [{
+      id: 'r1', revision: 'rev-1', filePath: written.filePath, blockRange: written.blockRange,
+      contentHash: written.contentHash, state: 'reviewed', note: null, updatedAt: '2026-01-01',
+    }]);
+
+    await waitFor(() => {
+      const node = [...document.querySelectorAll('.review-canvas-node')]
+        .find((candidate) => candidate.getAttribute('aria-label')?.includes('src/server/auth.ts'));
+      // A change with a verdict on it is done, and the canvas has to say so
+      // before Jeffrey spends a read finding that out.
+      expect(node?.classList.contains('is-handled')).toBe(true);
+      expect(node?.getAttribute('aria-label')).toContain('Approved');
+    });
+  });
+
   it('puts no decision panel up from either handle', async () => {
     renderReview();
-    await screen.findByRole('button', { name: /^Change \d+: .* in src\/server\/auth.ts$/ });
+    await screen.findByRole('button', { name: /^Change \d+: .* in src\/server\/auth.ts(?: — .*)?$/ });
 
     // A canvas node and a gutter marker both only move the selection: neither
     // opens a panel over the code, and nothing is left waiting behind them.
@@ -215,7 +263,7 @@ describe('ReviewStackView', () => {
 
   it('focuses the hunk and its canvas node together, whichever one is picked', async () => {
     renderReview(twoDecisionDiff);
-    await screen.findByRole('button', { name: /^Change \d+: .* in src\/server\/auth.ts$/ });
+    await screen.findByRole('button', { name: /^Change \d+: .* in src\/server\/auth.ts(?: — .*)?$/ });
     expect(canvasNode('src/server/auth.ts')).toHaveClass('is-active');
     expect(screen.getByLabelText('Full diff for src/server/auth.ts')).toBeInTheDocument();
 
@@ -232,7 +280,7 @@ describe('ReviewStackView', () => {
 
   it('acknowledges a handle press even on the change already selected', async () => {
     renderReview();
-    await screen.findByRole('button', { name: /^Change \d+: .* in src\/server\/auth.ts$/ });
+    await screen.findByRole('button', { name: /^Change \d+: .* in src\/server\/auth.ts(?: — .*)?$/ });
     const node = () => canvasNode('src/server/auth.ts');
     const block = () => document.querySelector('.diff-review-diff-block.active')!;
     const marker = () => document.querySelector('.diff-review-block-marker')!;
@@ -256,7 +304,7 @@ describe('ReviewStackView', () => {
 
   it('opens the change under either handle, and closes it on a second press', async () => {
     renderReview(twoDecisionDiff);
-    await screen.findByRole('button', { name: /^Change \d+: .* in src\/server\/auth.ts$/ });
+    await screen.findByRole('button', { name: /^Change \d+: .* in src\/server\/auth.ts(?: — .*)?$/ });
     const brief = () => document.querySelector('.review-change-brief');
     const marker = () => document.querySelector('.diff-review-block-marker')!;
 
@@ -312,7 +360,7 @@ describe('ReviewStackView', () => {
   it('marks the active flagged block reviewed with r', async () => {
     const calls = renderReview();
     // There is no panel at all: the shortcut answers the block the card is on.
-    await screen.findByRole('button', { name: /^Change \d+: .* in src\/server\/auth.ts$/ });
+    await screen.findByRole('button', { name: /^Change \d+: .* in src\/server\/auth.ts(?: — .*)?$/ });
     fireEvent.keyDown(document, { key: 'r' });
     await waitFor(() => expect(calls.some((call) => call.method === 'PUT' && (call.body as { state: string }).state === 'reviewed')).toBe(true));
   });

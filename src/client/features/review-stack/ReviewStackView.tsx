@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { DiffHunkReview, DiffHunkReviewState } from '../../../shared/contracts.js';
 import { buildChangeMap } from '../../../shared/change-map.js';
-import { buildReviewDecisions } from '../../../shared/review-decisions.js';
+import { buildReviewDecisions, reviewStateLabel } from '../../../shared/review-decisions.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import type { ReviewAssistTaskIntent } from '../diff-review/decision-detail-card.js';
 import { useCachedReviewAssistAnswers } from '../diff-review/review-assist.js';
@@ -16,6 +16,7 @@ import { ReviewFullFilePane } from './review-full-file-pane.js';
 import { indexReviewBlocks, reviewBlockStorageKey, toBlockLevelFiles } from './review-blocks.js';
 import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
+import { REVIEW_TIER_LABELS } from './review-routing.js';
 import { ReviewChangeBrief } from './review-change-brief.js';
 import { ReviewChangeCanvas } from './review-change-canvas.js';
 import { selectReviewBlock, type ReviewSelection } from './review-selection.js';
@@ -110,6 +111,18 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   const assist = useBlockAssistAnswers(revision);
   const queue = useMemo(() => buildReviewQueue(decisions, changeMap, blocks, assist.answers), [decisions, changeMap, blocks, assist.answers]);
   const progress = useMemo(() => reviewQueueProgress(queue), [queue]);
+  // Changes the reviewer is done with, and the one word that says why. Two ways
+  // a change gets here: a verdict was recorded against it, or routing priced it
+  // below Jeffrey's reading time — T0 settles by proof and T1 hands the read to
+  // a model. Both surfaces read this one map, so the canvas and the code can
+  // never disagree about which changes are still owed.
+  const handled = useMemo(() => new Map(queue.flatMap((entry) => {
+    if (entry.decision.state !== null) return [[entry.decision.id, reviewStateLabel(entry.decision.state)] as const];
+    if (entry.routing.tier === 'T0' || entry.routing.tier === 'T1') {
+      return [[entry.decision.id, REVIEW_TIER_LABELS[entry.routing.tier]] as const];
+    }
+    return [];
+  })), [queue]);
 
   // One selection, with one writer per field: the queue writes the block, the
   // map writes only what is highlighted inside itself.
@@ -282,6 +295,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
                     readingMode={readingMode}
                     modeTitle={READING_MODE_TITLE}
                     openDetailFor={openChangeId}
+                    handledBlocks={handled}
                     renderDetail={(decisionId) => decisionId === active.decision.id
                       ? <ReviewChangeBrief
                           entry={active}
@@ -300,6 +314,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
               map={changeMap}
               selectedId={selectedId}
               selectionTick={selectionTick}
+              handled={handled}
               onSelect={openChange}
             />
           </div>
