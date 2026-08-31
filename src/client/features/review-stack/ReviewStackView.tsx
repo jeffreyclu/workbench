@@ -6,6 +6,7 @@ import { buildReviewDecisions } from '../../../shared/review-decisions.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import type { ReviewAssistTaskIntent } from '../diff-review/decision-detail-card.js';
 import { DiffReviewDecisionDetailCard } from '../diff-review/decision-detail-card.js';
+import { DecisionPopover, type DecisionPopoverAnchor } from '../diff-review/decision-popover.js';
 import { useCachedReviewAssistAnswers } from '../diff-review/review-assist.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
@@ -22,10 +23,8 @@ import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './r
 import { ReviewBlockNote } from './review-block-note.js';
 import { ReviewQueueList } from './review-queue-list.js';
 import { REVIEW_TIER_LABELS } from './review-routing.js';
-import { DEFAULT_REVIEW_MAP_OVERLAYS, type ReviewMapOverlays } from './review-map-overlays.js';
-import { ReviewPlaceMapPanel } from './review-place-map.js';
-import { buildReviewPlaceMap } from './review-places.js';
-import { highlightReviewPlace, highlightReviewRelationship, selectReviewBlock, type ReviewSelection } from './review-selection.js';
+import { REVIEW_CANVAS_NODE_ATTRIBUTE, ReviewChangeCanvas } from './review-change-canvas.js';
+import { selectReviewBlock, type ReviewSelection } from './review-selection.js';
 import { useBlockAssistAnswers } from './use-block-assist.js';
 import { useDiffBlockReviews, useUpsertDiffBlockReview } from './use-block-reviews.js';
 import { useReviewSource } from './use-review-source.js';
@@ -121,13 +120,12 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   // One selection, with one writer per field: the queue writes the block, the
   // map writes only what is highlighted inside itself.
   const [selection, setSelection] = useState<ReviewSelection | null>(null);
-  const [overlays, setOverlays] = useState<ReviewMapOverlays>(DEFAULT_REVIEW_MAP_OVERLAYS);
   const [selectionTick, setSelectionTick] = useState(0);
-  // Behaviour first: a block opens on the claim it makes, and the code is what
-  // the reviewer opens to falsify that claim. Reading line-by-line from the
-  // top is the failure mode this surface exists to break, and a pane that is
-  // already open is an invitation to do exactly that.
-  const [codeOpen, setCodeOpen] = useState(false);
+  // An open card is the code and the canvas, and nothing else. Everything a
+  // reviewer decides with — the claim, what is still owed, the verdict buttons,
+  // the comment — is one click away in the popover, anchored to whichever
+  // handle opened it: a gutter marker or a canvas node.
+  const [detailAnchor, setDetailAnchor] = useState<{ decisionId: string; anchor: DecisionPopoverAnchor; anchorAttribute: string } | null>(null);
   const selectedId = selection?.blockId ?? null;
   useEffect(() => {
     // Open on the top of the queue, and recover when the diff changes under a
@@ -137,17 +135,22 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     setSelection(selectReviewBlock(queue.find((entry) => !entry.routing.autoSettled)?.decision.id ?? queue[0].decision.id));
   }, [queue, selectedId]);
 
-  // Every block earns its own reading. The disclosure deliberately does not
-  // persist the way reading mode does: a remembered "always open" would put
-  // the code back in front of the claim, which is the thing being fixed.
-  useEffect(() => { setCodeOpen(false); }, [selectedId]);
-  const toggleCode = useCallback(() => setCodeOpen((open) => !open), []);
-
   const selectBlock = useCallback((decisionId: string) => {
     setSelection(selectReviewBlock(decisionId));
     setSelectionTick((tick) => tick + 1);
+    // Moving to another change closes a panel about the one being left, but a
+    // handle selects its own change before it opens the panel, so an unchanged
+    // id keeps the anchor — otherwise the handle would clear and immediately
+    // reopen and never toggle shut.
+    setDetailAnchor((current) => (current && current.decisionId === decisionId ? current : null));
     if (revision) writeReviewStackBlock(source.preferenceScope, revision, decisionId);
   }, [revision, source.preferenceScope]);
+
+  /** The one opener both handles share, so a gutter marker and a canvas node
+   * put up the same panel and each keeps re-anchoring to its own surface. */
+  const openDecisionDetail = useCallback((decisionId: string, anchor: DecisionPopoverAnchor, anchorAttribute = 'data-decision-marker') => {
+    setDetailAnchor((current) => (current?.decisionId === decisionId ? null : { decisionId, anchor, anchorAttribute }));
+  }, []);
 
   const active = queue.find((entry) => entry.decision.id === selectedId) ?? null;
   const activeFilePath = active?.decision.hunks[0]?.filePath ?? null;
@@ -165,15 +168,8 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     scope,
     activeFile?.path ?? null,
     fileSourceRevision(source.source?.revision),
-    codeOpen && readingMode === 'file' && wholeFileReadable,
+    readingMode === 'file' && wholeFileReadable,
   );
-
-  // Only an escalated block pays for the map. Everything below — the
-  // neighbourhood walk, the import scan, the layout — is skipped entirely for a
-  // block routing already settled, which is most of the queue.
-  const placeMap = useMemo(() => active?.showsMap && selectedId
-    ? buildReviewPlaceMap(changeMap, queue, files, selectedId, assist.answers)
-    : null, [active?.showsMap, selectedId, changeMap, queue, files, assist.answers]);
 
   // Cache-only, and keyed to the tier routing first priced the block at rather
   // than the tier it currently shows: an escalated block still reads back the
@@ -265,7 +261,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   // follows the existing queue selection and verdict writer, preserving the
   // same persistence and next-unsettled behavior as the visible Review button.
   useReviewKeyboardNavigation({
-    queue, activeId, activeFilePath, canMarkReviewed: Boolean(active && revision && !upsertBlockReview.isPending), onSelect: selectBlock, onMarkReviewed: markReviewed, onToggleReadingMode: toggleReadingMode, onToggleCode: toggleCode,
+    queue, activeId, activeFilePath, canMarkReviewed: Boolean(active && revision && !upsertBlockReview.isPending), onSelect: selectBlock, onMarkReviewed: markReviewed, onToggleReadingMode: toggleReadingMode,
   });
 
   if (source.isLoading) return <section className="review-stack" aria-label="Review stack loading" aria-busy="true"><p>Preparing the review queue…</p></section>;
@@ -295,92 +291,101 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
         <ReviewQueueList queue={queue} activeId={selectedId} onSelect={openCanvas} />
         {active && <div className="review-stack-detail">
           <button type="button" ref={backToStackRef} className="review-stack-back" onClick={() => setCanvasOpen(false)}>Back to stack</button>
-          <nav className="review-flow-controls" aria-label="Review keyboard shortcuts">
-            <button type="button" onClick={selectPreviousDecision} aria-keyshortcuts="k">Previous flagged <kbd>k</kbd></button>
-            <button type="button" onClick={selectNextDecision} aria-keyshortcuts="j">Next flagged <kbd>j</kbd></button>
-            <button type="button" onClick={selectPreviousFile} aria-keyshortcuts="[">Previous file <kbd>[</kbd></button>
-            <button type="button" onClick={selectNextFile} aria-keyshortcuts="]">Next file <kbd>]</kbd></button>
-            <span>Mark reviewed <kbd>r</kbd></span>
-          </nav>
-          {/* The claim leads. The obligations below it are the ways it can be
-              false, and the code below those is where a reviewer goes to try. */}
-          {claim && <section className="review-block-claim" aria-label="What this block claims">
-            <h4>This change claims</h4>
-            <p>{claim.primary}</p>
-            {claim.also.length > 0 && <ul>{claim.also.map((line) => <li key={line}>{line}</li>)}</ul>}
-          </section>}
-          <DiffReviewDecisionDetailCard decision={active.decision} taskIntent={taskIntent} decisions={decisions} tier={active.routing.tier}>
-            <div className="review-stack-obligations">
-              <h4>{REVIEW_TIER_LABELS[active.routing.tier]} — {active.routing.reason}</h4>
-              <ul>
-                {/* The badge shows the answer once there is one, and who owes
-                    it while there is not — an unanswered question and a proven
-                    one should never read the same. */}
-                {active.obligations.map((obligation) => <li key={obligation.id} className={`settled-by-${obligation.settledBy} outcome-${obligation.outcome}`}>
-                  <span>{obligation.outcome === 'unresolved' ? obligation.settledBy : obligation.outcome}</span>
-                  <div>{obligation.question}{obligation.evidence ? <em>{obligation.evidence}</em> : null}</div>
-                </li>)}
-              </ul>
+
+          {/* An open card is two panes and nothing else: the code on the left,
+              the canvas on the right, each scrolling on its own. They are two
+              readings of one thing, so they share a selection rather than
+              tracking one each — selecting a hunk moves the canvas, selecting a
+              node moves the code, and either handle opens the same decision. */}
+          <div className="review-stack-panes">
+            <div className="review-stack-code">
+              {activeFile && (readingMode === 'file'
+                ? <div className="review-full-file-shell">
+                    <button
+                      type="button"
+                      className="diff-review-reading-mode mode-file"
+                      title={READING_MODE_TITLE}
+                      onClick={toggleReadingMode}
+                    >Whole file</button>
+                    {wholeFileReadable
+                      ? <ReviewFullFilePane
+                          filePath={activeFile.path}
+                          file={fileSourceQuery.data?.file ?? null}
+                          isLoading={fileSourceQuery.isLoading}
+                          error={fileSourceQuery.error ? 'This file could not be read.' : null}
+                          hunks={fileHunks}
+                          activeDecisionId={active.decision.id}
+                          onSelect={selectBlock}
+                        />
+                      : <p className="review-full-file-note">A pull request has no local copy of this file, so it cannot be read whole here.</p>}
+                  </div>
+                : <DiffReviewFileDiffPane
+                    filePath={activeFile.path}
+                    editorUrl={activeFile.editorUrl ?? null}
+                    hunks={fileHunks}
+                    decisions={decisions}
+                    activeDecisionId={active.decision.id}
+                    selectionTick={selectionTick}
+                    changeMap={changeMap}
+                    readingMode={readingMode}
+                    modeTitle={READING_MODE_TITLE}
+                    openDetailFor={detailAnchor?.decisionId ?? null}
+                    onSelect={selectBlock}
+                    onOpenDetail={openDecisionDetail}
+                    onToggleReadingMode={toggleReadingMode}
+                  />)}
             </div>
-            <DiffReviewActions saving={upsertBlockReview.isPending} error={upsertBlockReview.error instanceof Error ? upsertBlockReview.error.message : null} onSave={saveVerdict} />
-            <ReviewBlockNote
-              blockId={active.decision.id}
-              note={activeNote}
-              saving={upsertBlockReview.isPending}
-              error={upsertBlockReview.error instanceof Error ? upsertBlockReview.error.message : null}
-              onSave={saveVerdict}
+            <ReviewChangeCanvas
+              map={changeMap}
+              selectedId={selectedId}
+              openDetailFor={detailAnchor?.decisionId ?? null}
+              selectionTick={selectionTick}
+              onSelect={selectBlock}
+              onOpenDetail={(decisionId, anchor) => openDecisionDetail(decisionId, anchor, REVIEW_CANVAS_NODE_ATTRIBUTE)}
             />
-          </DiffReviewDecisionDetailCard>
+          </div>
 
-          {/* The map is a camera for the critical parts, not a dashboard: it is
-              drawn only for a block that earned it. */}
-          {placeMap && selection && <ReviewPlaceMapPanel
-            placeMap={placeMap}
-            overlays={overlays}
-            selection={selection}
-            onToggleOverlay={(overlay) => setOverlays((current) => ({ ...current, [overlay]: !current[overlay] }))}
-            onHighlightPlace={(placeId) => setSelection((current) => (current ? highlightReviewPlace(current, placeId) : current))}
-            onHighlightRelationship={(relationshipId) => setSelection((current) => (current ? highlightReviewRelationship(current, relationshipId) : current))}
-          />}
-
-          {activeFile && <div className="review-block-code">
-            <button type="button" className="button secondary compact" onClick={toggleCode} aria-expanded={codeOpen} aria-controls="review-block-code-pane" aria-keyshortcuts="o">
-              {codeOpen ? 'Hide the code' : 'Read the code to falsify this'} <kbd>o</kbd>
-            </button>
-            {codeOpen && <div id="review-block-code-pane">{readingMode === 'file'
-            ? <div className="review-full-file-shell">
-                <button
-                  type="button"
-                  className="diff-review-reading-mode mode-file"
-                  title={READING_MODE_TITLE}
-                  onClick={toggleReadingMode}
-                >Whole file</button>
-                {wholeFileReadable
-                  ? <ReviewFullFilePane
-                      filePath={activeFile.path}
-                      file={fileSourceQuery.data?.file ?? null}
-                      isLoading={fileSourceQuery.isLoading}
-                      error={fileSourceQuery.error ? 'This file could not be read.' : null}
-                      hunks={fileHunks}
-                      activeDecisionId={active.decision.id}
-                      onSelect={selectBlock}
-                    />
-                  : <p className="review-full-file-note">A pull request has no local copy of this file, so it cannot be read whole here.</p>}
+          {/* Only ever the open block: both handles select before they open, so
+              a panel about some other change would be a panel whose verdict
+              buttons wrote somewhere the reviewer is not looking. */}
+          {detailAnchor && detailAnchor.decisionId === active.decision.id && <DecisionPopover
+            anchor={detailAnchor.anchor}
+            anchorId={detailAnchor.decisionId}
+            anchorAttribute={detailAnchor.anchorAttribute}
+            labelledBy="review-stack-decision-title"
+            onClose={() => setDetailAnchor(null)}
+          >
+            {/* The claim leads. The obligations below it are the ways it can be
+                false, and the code behind the panel is where a reviewer goes to
+                try. */}
+            {claim && <section className="review-block-claim" aria-label="What this block claims">
+              <h4>This change claims</h4>
+              <p>{claim.primary}</p>
+              {claim.also.length > 0 && <ul>{claim.also.map((line) => <li key={line}>{line}</li>)}</ul>}
+            </section>}
+            <DiffReviewDecisionDetailCard decision={active.decision} titleId="review-stack-decision-title" taskIntent={taskIntent} decisions={decisions} tier={active.routing.tier}>
+              <div className="review-stack-obligations">
+                <h4>{REVIEW_TIER_LABELS[active.routing.tier]} — {active.routing.reason}</h4>
+                <ul>
+                  {/* The badge shows the answer once there is one, and who owes
+                      it while there is not — an unanswered question and a proven
+                      one should never read the same. */}
+                  {active.obligations.map((obligation) => <li key={obligation.id} className={`settled-by-${obligation.settledBy} outcome-${obligation.outcome}`}>
+                    <span>{obligation.outcome === 'unresolved' ? obligation.settledBy : obligation.outcome}</span>
+                    <div>{obligation.question}{obligation.evidence ? <em>{obligation.evidence}</em> : null}</div>
+                  </li>)}
+                </ul>
               </div>
-            : <DiffReviewFileDiffPane
-            filePath={activeFile.path}
-            editorUrl={activeFile.editorUrl ?? null}
-            hunks={fileHunks}
-            decisions={decisions}
-            activeDecisionId={active.decision.id}
-            selectionTick={selectionTick}
-            changeMap={changeMap}
-            readingMode={readingMode}
-            modeTitle={READING_MODE_TITLE}
-            onSelect={selectBlock}
-            onToggleReadingMode={toggleReadingMode}
-          />}</div>}
-          </div>}
+              <DiffReviewActions saving={upsertBlockReview.isPending} error={upsertBlockReview.error instanceof Error ? upsertBlockReview.error.message : null} onSave={saveVerdict} />
+              <ReviewBlockNote
+                blockId={active.decision.id}
+                note={activeNote}
+                saving={upsertBlockReview.isPending}
+                error={upsertBlockReview.error instanceof Error ? upsertBlockReview.error.message : null}
+                onSave={saveVerdict}
+              />
+            </DiffReviewDecisionDetailCard>
+          </DecisionPopover>}
         </div>}
       </div>}
   </section>;

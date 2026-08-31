@@ -83,6 +83,20 @@ function renderReview(reviewDiff = diff, seededReviews: DiffBlockReview[] = []) 
   return calls;
 }
 
+/** The handle on the canvas for a change in this file. Node ids are decision
+ * ids, so this is the same change the gutter marker and the queue address. */
+function canvasNode(filePath: string) {
+  return screen.getByRole('button', { name: new RegExp(`in ${filePath} — open decision details`) });
+}
+
+/** The card shows the code and the canvas; everything a reviewer decides with
+ * is behind a handle, so a test that judges a block has to open one first. */
+async function openDecision(filePath = 'src/server/auth.ts') {
+  await screen.findByRole('button', { name: new RegExp(`in ${filePath} — open decision details`) });
+  fireEvent.click(canvasNode(filePath));
+  return screen.findByRole('button', { name: /Reviewed/ });
+}
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -132,7 +146,7 @@ describe('ReviewStackView', () => {
 
   it('records the verdict at block identity first, not at hunk identity', async () => {
     const calls = renderReview();
-    fireEvent.click(await screen.findByRole('button', { name: /Reviewed/ }));
+    fireEvent.click(await openDecision());
     await waitFor(() => {
       const write = calls.find((call) => call.method === 'PUT');
       expect(write?.url).toContain('/workspace-diff/block-reviews');
@@ -144,7 +158,7 @@ describe('ReviewStackView', () => {
 
   it('reconciles a fully answered hunk back into the Changes surface', async () => {
     const calls = renderReview();
-    fireEvent.click(await screen.findByRole('button', { name: /Reviewed/ }));
+    fireEvent.click(await openDecision());
     await waitFor(() => {
       // The auth hunk holds a single block, so answering that block answers the
       // whole hunk. Changes addresses hunks, so it is the parent hunk range that
@@ -184,38 +198,49 @@ describe('ReviewStackView', () => {
     await waitFor(() => expect(activeLabel()).toContain('authorize'));
   });
 
-  it('leads with the claim and keeps the code closed until it is opened to falsify it', async () => {
+  it('opens a card as the code and the canvas, and nothing else', async () => {
     renderReview();
-    // The claim is what a reviewer reads first. Line-by-line reading from an
-    // already-open pane is the habit this surface exists to break.
-    await screen.findByRole('region', { name: /what this block claims/i });
-    const open = screen.getByRole('button', { name: /read the code to falsify/i });
-    expect(open).toHaveAttribute('aria-expanded', 'false');
-    expect(document.querySelector('.diff-line')).toBeNull();
-
-    fireEvent.click(open);
-
+    // Both readings are there from the start — no disclosure to open, and no
+    // panel of controls in front of them.
     await waitFor(() => expect(document.querySelector('.diff-line')).not.toBeNull());
-    expect(screen.getByRole('button', { name: /hide the code/i })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('region', { name: 'Change canvas' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /what this block claims/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Reviewed/ })).toBeNull();
   });
 
-  it('closes the code again when the reviewer moves to the next block', async () => {
+  it('opens the decision popover from a canvas node and from the diff gutter', async () => {
+    renderReview();
+    await openDecision();
+    expect(screen.getByRole('region', { name: /what this block claims/i })).toBeInTheDocument();
+
+    // The handle that opened it closes it again.
+    fireEvent.click(canvasNode('src/server/auth.ts'));
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Reviewed/ })).toBeNull());
+
+    // The gutter marker beside the code opens the same decision.
+    fireEvent.click(document.querySelector('.diff-review-block-marker')!);
+    expect(await screen.findByRole('button', { name: /Reviewed/ })).toBeInTheDocument();
+  });
+
+  it('focuses the hunk and its canvas node together, whichever one is picked', async () => {
     renderReview(twoDecisionDiff);
-    await screen.findByRole('region', { name: /what this block claims/i });
-    fireEvent.keyDown(document, { key: 'o' });
-    await waitFor(() => expect(document.querySelector('.diff-line')).not.toBeNull());
+    await screen.findByRole('button', { name: /in src\/server\/auth.ts — open decision details/ });
+    expect(canvasNode('src/server/auth.ts')).toHaveClass('is-active');
+    expect(screen.getByLabelText('Full diff for src/server/auth.ts')).toBeInTheDocument();
 
-    fireEvent.keyDown(document, { key: 'j' });
+    // Picking a node moves the code to the hunk it stands for.
+    fireEvent.click(canvasNode('src/client/auth.ts'));
+    await waitFor(() => expect(screen.getByLabelText('Full diff for src/client/auth.ts')).toBeInTheDocument());
+    expect(canvasNode('src/client/auth.ts')).toHaveClass('is-active');
 
-    // Each block gets its own reading: a pane left open would put the code back
-    // in front of the next block's claim.
-    await waitFor(() => expect(document.querySelector('.diff-line')).toBeNull());
+    // And moving through the hunks moves the node, so the two never disagree.
+    fireEvent.keyDown(document, { key: 'k' });
+    await waitFor(() => expect(canvasNode('src/server/auth.ts')).toHaveClass('is-active'));
+    expect(canvasNode('src/client/auth.ts')).not.toHaveClass('is-active');
   });
 
   it('reads a block as its finished code by default and drops to the diff with d', async () => {
     renderReview();
-    await screen.findByRole('region', { name: /what this block claims/i });
-    fireEvent.keyDown(document, { key: 'o' });
     // The default reading is the code that will exist: a rewritten block is
     // judged as a whole construct rather than as an interleaving of two files.
     const toggle = await screen.findByRole('button', { name: /final code/i });
@@ -232,16 +257,12 @@ describe('ReviewStackView', () => {
 
   it('reopens in the reading mode the reviewer last chose', async () => {
     renderReview();
-    await screen.findByRole('region', { name: /what this block claims/i });
-    fireEvent.keyDown(document, { key: 'o' });
     await screen.findByRole('button', { name: /final code/i });
     fireEvent.keyDown(document, { key: 'd' });
     await screen.findByRole('button', { name: /^diff$/i });
 
     cleanup();
     renderReview();
-    await screen.findByRole('region', { name: /what this block claims/i });
-    fireEvent.keyDown(document, { key: 'o' });
 
     // A remount is not a new reviewer. Coming back to Review must not silently
     // put the pane back into final reading after it was deliberately left.
@@ -251,15 +272,14 @@ describe('ReviewStackView', () => {
 
   it('marks the active flagged block reviewed with r', async () => {
     const calls = renderReview();
-    await screen.findByRole('button', { name: /Reviewed/ });
+    // No panel is open: the shortcut answers the block the card is already on.
+    await screen.findByRole('button', { name: /in src\/server\/auth.ts — open decision details/ });
     fireEvent.keyDown(document, { key: 'r' });
     await waitFor(() => expect(calls.some((call) => call.method === 'PUT' && (call.body as { state: string }).state === 'reviewed')).toBe(true));
   });
 
   it('opens the whole file when the surrounding code is the argument', async () => {
     renderReview();
-    await screen.findByRole('region', { name: /what this block claims/i });
-    fireEvent.keyDown(document, { key: 'o' });
     await screen.findByRole('button', { name: /final code/i });
     // final → diff → whole file: one key, three magnifications of one block.
     fireEvent.keyDown(document, { key: 'd' });
@@ -284,7 +304,8 @@ describe('ReviewStackView', () => {
 
   it('offers the composer on a block without opening it, so the code stays in front of the reviewer', async () => {
     renderReview();
-    expect(await screen.findByRole('button', { name: 'Comment on this block' })).toBeInTheDocument();
+    await openDecision();
+    expect(screen.getByRole('button', { name: 'Comment on this block' })).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: 'Comment on this block' })).toBeNull();
   });
 
@@ -292,7 +313,7 @@ describe('ReviewStackView', () => {
     // The block's storage identity is the surface's own, hash included, so it
     // is read off a real write rather than guessed at here.
     const discovery = renderReview();
-    fireEvent.click(await screen.findByRole('button', { name: /Reviewed/ }));
+    fireEvent.click(await openDecision());
     const written = await waitFor(() => {
       const put = discovery.find((call) => call.method === 'PUT' && call.url.includes('block-reviews'));
       expect(put).toBeDefined();
@@ -307,8 +328,9 @@ describe('ReviewStackView', () => {
       contentHash: written.contentHash, state: 'commented', note, updatedAt: '2026-01-01',
     }]);
 
-    expect(await screen.findByText(note)).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: /Reviewed/ }));
+    const reviewed = await openDecision();
+    expect(screen.getByText(note)).toBeInTheDocument();
+    fireEvent.click(reviewed);
     // Every upsert overwrites the note column, so a verdict saved without a
     // note has to resend the one already there or the comment is deleted.
     await waitFor(() => {
