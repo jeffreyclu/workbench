@@ -72,6 +72,19 @@ export const ReviewChangeCanvas = memo(function ReviewChangeCanvas({
     const furthest = Math.max(0, pane.scrollHeight - pane.clientHeight);
     const top = Math.min(furthest, Math.max(0, row * ROW - (pane.clientHeight - NODE_HEIGHT) / 2));
     pane.scrollTo?.({ top, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    // The node is usually already in view, so the scroll above is often a no-op
+    // and the press would otherwise leave no trace. Same restart idiom as the
+    // code pane, so both halves of the card acknowledge the same press.
+    // Matched by reading the attribute rather than by an attribute selector: a
+    // decision id carries the hunk header, so it holds spaces and braces that
+    // do not survive being embedded in a selector.
+    const node = [...pane.querySelectorAll<HTMLElement>(`[${REVIEW_CANVAS_NODE_ATTRIBUTE}]`)]
+      .find((candidate) => candidate.getAttribute(REVIEW_CANVAS_NODE_ATTRIBUTE) === selectedId);
+    if (node) {
+      node.classList.remove('handle-pulse');
+      void node.offsetWidth;
+      node.classList.add('handle-pulse');
+    }
   }, [rows, selectedId, selectionTick]);
 
   const height = Math.max(0, map.nodes.length * ROW - NODE_GAP);

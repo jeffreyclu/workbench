@@ -189,12 +189,24 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
     // every frame and never arrive. Giving up after one look is what left the
     // reader parked next to the wrong change.
     let frame: number | undefined;
+    let pulsed = false;
     let issued: number | null = null;
     let settledFor = 0;
     let framesLeft = SCROLL_SETTLE_FRAMES;
     const step = () => {
       frame = undefined;
       const block = activeBlock.current;
+      // A handle press must read as a press even when the block it names is
+      // already on screen. Scrolling to a block you are looking at moves
+      // nothing, so without this the gutter marker and the canvas node both
+      // look like dead clicks. Restarted by hand: re-adding the class in the
+      // same frame it was removed would not replay the animation.
+      if (block && !pulsed) {
+        pulsed = true;
+        block.classList.remove('handle-pulse');
+        void block.offsetWidth;
+        block.classList.add('handle-pulse');
+      }
       if (block) {
         const target = landing(block);
         if (issued === null || Math.abs(target - issued) > 1) {

@@ -14,13 +14,16 @@ import { toFullFileReading } from './review-full-file.js';
  * lands. That is the reading for a refactor whose meaning lives in the code
  * around it — the one case where the block boundary lies, because the evidence
  * that the change is wrong is outside the three lines git gave you. */
-export const ReviewFullFilePane = memo(function ReviewFullFilePane({ filePath, file, isLoading, error, hunks, activeDecisionId, onSelect }: {
+export const ReviewFullFilePane = memo(function ReviewFullFilePane({ filePath, file, isLoading, error, hunks, activeDecisionId, selectionTick, onSelect }: {
   filePath: string;
   file: WorkspaceFileSource | null;
   isLoading: boolean;
   error: string | null;
   hunks: ReviewDiffHunk[];
   activeDecisionId: string | null;
+  /** Bumped on every selection, including re-picking the change already
+   * active, so a handle press always brings that change back into view. */
+  selectionTick: number;
   onSelect: (decisionId: string) => void;
 }) {
   const reading = useMemo(() => (file?.content ? toFullFileReading(file.content, hunks) : null), [file?.content, hunks]);
@@ -46,8 +49,13 @@ export const ReviewFullFilePane = memo(function ReviewFullFilePane({ filePath, f
     const target = container?.querySelector<HTMLElement>(`[data-line="${landing}"]`);
     if (!container || !target) return;
     container.scrollTop = Math.max(0, target.offsetTop - container.offsetTop - 48);
+    // Same acknowledgement the code and canvas panes give: a change already in
+    // view would otherwise show nothing when its handle is pressed again.
+    target.classList.remove('handle-pulse');
+    void target.offsetWidth;
+    target.classList.add('handle-pulse');
     setPending(null);
-  }, [landing, reading]);
+  }, [landing, reading, selectionTick]);
 
   if (isLoading) return <p className="review-full-file-note">Reading the whole file…</p>;
   if (error) return <p className="review-full-file-note">{error}</p>;

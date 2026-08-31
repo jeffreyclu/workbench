@@ -230,6 +230,30 @@ describe('ReviewStackView', () => {
     expect(canvasNode('src/client/auth.ts')).not.toHaveClass('is-active');
   });
 
+  it('acknowledges a handle press even on the change already selected', async () => {
+    renderReview();
+    await screen.findByRole('button', { name: /^Change \d+: .* in src\/server\/auth.ts$/ });
+    const node = () => canvasNode('src/server/auth.ts');
+    const block = () => document.querySelector('.diff-review-diff-block.active')!;
+    const marker = () => document.querySelector('.diff-review-block-marker')!;
+
+    // The change under both handles is the one already open, so nothing scrolls
+    // and nothing changes state: this is the press that used to do nothing at
+    // all once the popover behind the marker was removed.
+    expect(node()).toHaveClass('is-active');
+
+    fireEvent.click(node());
+    await waitFor(() => expect(node()).toHaveClass('handle-pulse'));
+    expect(block()).toHaveClass('handle-pulse');
+
+    block().classList.remove('handle-pulse');
+    node().classList.remove('handle-pulse');
+
+    fireEvent.click(marker());
+    await waitFor(() => expect(block()).toHaveClass('handle-pulse'));
+    expect(node()).toHaveClass('handle-pulse');
+  });
+
   it('reads a block as its finished code by default and drops to the diff with d', async () => {
     renderReview();
     // The default reading is the code that will exist: a rewritten block is

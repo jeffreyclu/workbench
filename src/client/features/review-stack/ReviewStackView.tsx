@@ -249,6 +249,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
                           error={fileSourceQuery.error ? 'This file could not be read.' : null}
                           hunks={fileHunks}
                           activeDecisionId={active.decision.id}
+                          selectionTick={selectionTick}
                           onSelect={selectBlock}
                         />
                       : <p className="review-full-file-note">A pull request has no local copy of this file, so it cannot be read whole here.</p>}
