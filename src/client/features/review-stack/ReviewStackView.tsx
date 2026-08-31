@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { DiffHunkReview, DiffHunkReviewState } from '../../../shared/contracts.js';
 import { buildChangeMap } from '../../../shared/change-map.js';
@@ -241,6 +241,26 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     if (previous) selectBlock(previous);
   }, [activeFilePath, queue, selectBlock]);
   const markReviewed = useCallback(() => saveVerdict('reviewed'), [saveVerdict]);
+  // The stack and the canvas are one surface, so a card click has to open
+  // something. Where both fit they sit side by side; on one column the canvas
+  // takes the space and the back control gives the stack back. Keyboard
+  // navigation deliberately does not force it open — it moves a selection the
+  // reader already has in front of them.
+  const [canvasOpen, setCanvasOpen] = useState(false);
+  const backToStackRef = useRef<HTMLButtonElement>(null);
+  const openCanvas = useCallback((decisionId: string) => {
+    selectBlock(decisionId);
+    setCanvasOpen(true);
+  }, [selectBlock]);
+  useEffect(() => {
+    if (!canvasOpen) return;
+    // Only where the canvas actually replaced the stack: there the card that
+    // was just clicked is now hidden, so focus would be dropped on the document
+    // body. Asking whether the control is on screen keeps the breakpoint in the
+    // stylesheet, which is the only place that decides this.
+    if (!backToStackRef.current?.offsetParent) return;
+    backToStackRef.current.focus();
+  }, [canvasOpen]);
   // b13bf425-4047-4b22-b7c3-85317d6819fe LEGACY-AFFECTING: Keyboard input
   // follows the existing queue selection and verdict writer, preserving the
   // same persistence and next-unsettled behavior as the visible Review button.
@@ -271,9 +291,10 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
 
     {queue.length === 0
       ? <p className="review-stack-empty">Nothing to review in this source.</p>
-      : <div className="review-stack-layout">
-        <ReviewQueueList queue={queue} activeId={selectedId} onSelect={selectBlock} />
+      : <div className={`review-stack-layout${canvasOpen ? ' is-canvas-open' : ''}`}>
+        <ReviewQueueList queue={queue} activeId={selectedId} onSelect={openCanvas} />
         {active && <div className="review-stack-detail">
+          <button type="button" ref={backToStackRef} className="review-stack-back" onClick={() => setCanvasOpen(false)}>Back to stack</button>
           <nav className="review-flow-controls" aria-label="Review keyboard shortcuts">
             <button type="button" onClick={selectPreviousDecision} aria-keyshortcuts="k">Previous flagged <kbd>k</kbd></button>
             <button type="button" onClick={selectNextDecision} aria-keyshortcuts="j">Next flagged <kbd>j</kbd></button>

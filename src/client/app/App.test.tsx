@@ -181,6 +181,26 @@ describe('primary navigation', () => {
     expect(await screen.findByRole('heading', { name: 'Insights' })).toBeTruthy();
   });
 
+  it('opens Reviews as its own destination, with reviews listed as stack cards', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes('/api/work-items/counts')
+        ? { active: 0, workbench: 0, archive: 0 }
+        : url.includes('/api/shared/conversations/unread-count')
+          ? { count: 0 }
+          : url.includes('/api/shared/conversations')
+            ? { conversations: [{ id: 'c1', title: 'Slop review', workItemId: null, forkedFromConversationId: null, archivedAt: null, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() }], nextCursor: null }
+            : { items: [], proposal: null, nextCursor: null };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reviews' }));
+    const rail = await screen.findByRole('complementary', { name: 'Reviews' });
+    expect((await within(rail).findByRole('button', { name: /Slop review/ })).className).toContain('stack-card');
+  });
+
   it('opens the Discovery inbox from a socket notification', async () => {
     vi.stubGlobal('WebSocket', TestWebSocket);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

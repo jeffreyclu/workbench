@@ -338,3 +338,16 @@ describe('interaction motion', () => {
     expect(styles).toContain('@media (prefers-reduced-motion: reduce)');
   });
 });
+
+describe('review stack and canvas', () => {
+  it('opens the canvas over the stack on one column, because a card click has to open something', () => {
+    const phone = styles.match(/@media \(max-width: 820px\) and \(pointer: coarse\) \{[\s\S]*?\n\}/)?.[0] ?? '';
+
+    expect(phone).toContain('.review-stack-layout.is-canvas-open .review-queue { display: none; }');
+    expect(phone).toContain('.review-stack-layout:not(.is-canvas-open) .review-stack-detail { display: none; }');
+    expect(phone).toContain('.review-stack-back { display: inline-flex; }');
+    // Where the rail and the canvas already fit side by side there is nothing
+    // to go back to, so the control must not appear there.
+    expect(styles.match(/^\.review-stack-back\s*\{[^}]*\}/m)?.[0] ?? '').toContain('display: none');
+  });
+});

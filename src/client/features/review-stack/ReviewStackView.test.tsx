@@ -107,6 +107,24 @@ describe('ReviewStackView', () => {
     expect(await screen.findByRole('button', { name: /settled automatically/ })).toBeInTheDocument();
   });
 
+  it('opens the canvas when a card is clicked and hands the stack back on request', async () => {
+    renderReview();
+    const queue = await screen.findByRole('navigation', { name: 'Review queue' });
+    const rows = await waitFor(() => {
+      const found = within(queue).queryAllByRole('button');
+      expect(found.length).toBeGreaterThan(0);
+      return found;
+    });
+    // Nothing is open until a card is chosen: the stack is the whole surface.
+    expect(document.querySelector('.review-stack-layout')).not.toHaveClass('is-canvas-open');
+
+    fireEvent.click(rows[0]);
+    expect(document.querySelector('.review-stack-layout')).toHaveClass('is-canvas-open');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to stack' }));
+    expect(document.querySelector('.review-stack-layout')).not.toHaveClass('is-canvas-open');
+  });
+
   it('states what is still owed rather than only what is done', async () => {
     renderReview();
     expect(await screen.findByRole('status')).toHaveTextContent(/1 to judge · 1 settled automatically/);
