@@ -297,3 +297,17 @@ isn't available") is a claim like any other and needs evidence before it is stat
 for an existing mechanism first — in Workbench specifically, assume a model call is available until
 proven otherwise. And when a heuristic is offered as a stand-in for a model judgment, say so explicitly
 instead of letting it be read as the real thing.
+
+## Remove the divergence instead of patching one side of it
+
+On 2026-08-31 (CON-194 connectors V2), a bug where the "Connected" section only reflected the first
+page of profiles was first fixed by making the unsearched list eagerly page itself out, so that it
+matched what the separate server-searched query already did. Jeffrey rejected that: "this still seems
+like a patch. we should fix both queries no??? they should behave consistently. why do they not?"
+
+The durable rule: when two code paths read the same data and behave differently, the fix is to
+eliminate the duplication so one path serves both cases, not to teach the second path to imitate the
+first. Making two caches, two cursors, or two result sets agree is a patch — they can always drift
+again, and every downstream feature has to remember which one it is reading. Ask why the divergence
+exists at all before making the sides match, and state the tradeoff plainly if collapsing them costs
+a capability.

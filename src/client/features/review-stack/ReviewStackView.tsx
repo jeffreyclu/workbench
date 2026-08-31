@@ -15,12 +15,14 @@ import { fileSourceRevision } from './review-full-file.js';
 import { ReviewFullFilePane } from './review-full-file-pane.js';
 import { indexReviewBlocks, resolveCarriedBlockReviews, toBlockLevelFiles } from './review-blocks.js';
 import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
-import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
+import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress, type ReviewQueueEntry } from './review-queue.js';
 import { REVIEW_TIER_LABELS } from './review-routing.js';
+import { isDelegatedTier, type DelegationTarget } from './review-delegation.js';
 import { ReviewChangeBrief } from './review-change-brief.js';
 import { ReviewChangeCanvas } from './review-change-canvas.js';
 import { selectReviewBlock, type ReviewSelection } from './review-selection.js';
 import { useBlockAssistAnswers } from './use-block-assist.js';
+import { useDelegatedReview } from './use-delegated-review.js';
 import { useDiffBlockReviews, useUpsertDiffBlockReview } from './use-block-reviews.js';
 import { useReviewSource } from './use-review-source.js';
 import { useReviewKeyboardNavigation } from './use-review-keyboard-navigation.js';
@@ -136,15 +138,16 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   const queue = useMemo(() => buildReviewQueue(decisions, changeMap, blocks, assist.answers), [decisions, changeMap, blocks, assist.answers]);
   const progress = useMemo(() => reviewQueueProgress(queue), [queue]);
   // Changes the reviewer is done with, and the one word that says why. Two ways
-  // a change gets here: a verdict was recorded against it, or routing priced it
-  // below Jeffrey's reading time — T0 settles by proof and T1 hands the read to
-  // a model. Both surfaces read this one map, so the canvas and the code can
+  // a change gets here: a verdict was recorded against it — including one a
+  // delegated turn recorded on its own — or T0 routing settled it by proof.
+  // T1 is deliberately not a third way. It used to be, and that was the lie
+  // this surface told: a block priced "delegated" was counted as done while
+  // nothing had actually been delegated. It now earns its verdict or stays
+  // owed. Both surfaces read this one map, so the canvas and the code can
   // never disagree about which changes are still owed.
   const handled = useMemo(() => new Map(queue.flatMap((entry) => {
     if (entry.decision.state !== null) return [[entry.decision.id, reviewStateLabel(entry.decision.state)] as const];
-    if (entry.routing.tier === 'T0' || entry.routing.tier === 'T1') {
-      return [[entry.decision.id, REVIEW_TIER_LABELS[entry.routing.tier]] as const];
-    }
+    if (entry.routing.tier === 'T0') return [[entry.decision.id, REVIEW_TIER_LABELS.T0] as const];
     return [];
   })), [queue]);
 
@@ -244,11 +247,15 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     for (const group of groupHunkVerdictsByState(owed)) reconcileHunkVerdicts(group);
   }, [carriedVerdicts, files, recordedHunks, reconcileHunkVerdicts, revision]);
 
-  const saveVerdict = useCallback((state: DiffHunkReviewState, note?: string) => {
-    if (!active || !revision) return;
+  // Writing a verdict, for any block, from any source. Split out of the
+  // keyboard/button path because a delegated answer records exactly the same
+  // verdict against a block that is not the open one — same rows, same
+  // reconciliation, no second persistence rule to keep in step.
+  const recordVerdict = useCallback((identities: ReviewQueueEntry['identities'], state: DiffHunkReviewState, note?: string) => {
+    if (!revision) return;
     // One thought can span several blocks; the verdict is recorded against
     // every block it covers so none of them comes back as unanswered.
-    for (const identity of active.identities) {
+    for (const identity of identities) {
       // The row's note column is overwritten on every upsert, so a verdict
       // saved without one carries the block's existing note forward. Marking a
       // block reviewed after commenting on it must not erase the comment.
@@ -261,12 +268,44 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     // written, so it does not wait for the block-review query to come back.
     const blockVerdicts = new Map(carriedVerdicts);
     const before = projectHunkVerdicts(files, blockVerdicts);
-    for (const identity of active.identities) blockVerdicts.set(identity.storageKey, state);
+    for (const identity of identities) blockVerdicts.set(identity.storageKey, state);
     for (const group of groupHunkVerdictsByState(newlyProjectedHunkVerdicts(before, projectHunkVerdicts(files, blockVerdicts)))) upsertHunkReviews.mutate(group);
+  }, [carriedVerdicts, files, revision, savedNotes, upsertBlockReview, upsertHunkReviews]);
 
+  const saveVerdict = useCallback((state: DiffHunkReviewState, note?: string) => {
+    if (!active || !revision) return;
+    recordVerdict(active.identities, state, note);
+    // Only a verdict the reviewer gave moves the selection. A delegated one
+    // must not shove the block he is reading out from under him.
     const next = nextUnsettledBlockId(queue, active.decision.id);
     if (next) selectBlock(next);
-  }, [active, carriedVerdicts, files, queue, revision, savedNotes, selectBlock, upsertBlockReview, upsertHunkReviews]);
+  }, [active, queue, recordVerdict, revision, selectBlock]);
+
+  // The changes routing already said were not Jeffrey's to open first. A block
+  // that already carries a verdict is never delegated — the answer exists.
+  const delegationTargets = useMemo((): DelegationTarget[] => queue.flatMap((entry) => (
+    entry.decision.state === null && !entry.routing.autoSettled && isDelegatedTier(entry.assistTier)
+      ? [{ decisionId: entry.decision.id, decision: entry.decision, tier: entry.assistTier }]
+      : []
+  )), [queue]);
+
+  // Delegated at the tier routing priced the block at, which is the same tier
+  // the panel reads back with, so the answer bought here is the answer shown.
+  // A confident T1 answer records the verdict; a T2 answer is only ever waiting
+  // to be read, and an unconfident one escalates through the same store the
+  // reviewer's own questions feed.
+  const delegation = useDelegatedReview({
+    targets: delegationTargets,
+    siblings: decisions,
+    taskIntent,
+    revision,
+    enabled: Boolean(revision),
+    onAnswer: (decisionId, answer) => assist.remember(decisionId, [answer]),
+    onAutoReview: (target) => {
+      const entry = queue.find((item) => item.decision.id === target.decisionId);
+      if (entry) recordVerdict(entry.identities, 'reviewed');
+    },
+  });
 
   const changedLoc = useMemo(() => files.reduce((total, file) => total + file.additions + file.deletions, 0), [files]);
   const markReviewed = useCallback(() => saveVerdict('reviewed'), [saveVerdict]);
@@ -309,6 +348,15 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
       <p className="review-stack-progress" role="status">
         {progress.remaining} to judge · {progress.settled} settled automatically · {progress.judged} of {progress.total} answered
       </p>
+      {/* Delegation is spending on Jeffrey's behalf, so it says so while it
+          happens and says what it could not cover when it stops. */}
+      {(delegation.running || delegation.failed > 0 || delegation.skipped > 0) && <p className="review-stack-delegation muted" role="status">
+        {delegation.running
+          ? `Delegating — ${delegation.completed} of ${delegation.total} changes answered.`
+          : `${delegation.completed} of ${delegation.total} changes delegated.`}
+        {delegation.failed > 0 && ` ${delegation.failed} could not be answered and are still owed.`}
+        {delegation.skipped > 0 && ` ${delegation.skipped} past the delegation limit were left for you.`}
+      </p>}
     </header>
 
     {changedLoc > STOPPING_POINT_LOC && <aside className="review-stopping-point" role="note" aria-label="Suggested stopping point">

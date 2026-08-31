@@ -24,6 +24,15 @@ import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js
 import { useGitHubPullRequestDiff } from '../github-diff/hooks.js';
 import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
 import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots } from './hooks.js';
+// Tier routing and the delegated sweep, reached across to the review stack.
+// These four are pure policy over a `ReviewDecision` — no block splitting, no
+// block rows, none of the machinery that is deliberately kept out of Changes.
+// What a change costs to answer is one decision, and it should not be made
+// twice with two sets of rules just because two tabs ask it.
+import { blockObligations } from '../review-stack/review-obligations.js';
+import { routeReviewBlock } from '../review-stack/review-routing.js';
+import { isDelegatedTier, type DelegationTarget } from '../review-stack/review-delegation.js';
+import { useDelegatedReview } from '../review-stack/use-delegated-review.js';
 import { workspaceDiffQueryKeys } from './data.js';
 import { readWorkspaceDiffSelection, writeWorkspaceDiffDecision, writeWorkspaceDiffSource } from '../../lib/preferences.js';
 import { useWorkspaceDiffKeyboardNavigation } from './use-keyboard-navigation.js';
@@ -205,6 +214,15 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const decisions = useMemo(() => buildReviewDecisions(displayedDiff?.files ?? [], hunkReviews.data?.reviews ?? []), [displayedDiff?.files, hunkReviews.data?.reviews]);
   const changeMap = useMemo(() => buildChangeMap(decisions), [decisions]);
   const orderedDecisions = useMemo(() => orderReviewDecisions(decisions, changeMap), [decisions, changeMap]);
+  // What a model answers instead of Jeffrey. Changes has no logic-block
+  // analysis to feed routing, so the tier is read from the change type and its
+  // risk signals alone; a decision already carrying a verdict is never
+  // delegated, so nothing is re-bought after it is answered.
+  const delegationTargets = useMemo((): DelegationTarget[] => decisions.flatMap((decision) => {
+    if (decision.state !== null) return [];
+    const routing = routeReviewBlock(decision, blockObligations(decision));
+    return isDelegatedTier(routing.tier) ? [{ decisionId: decision.id, decision, tier: routing.tier }] : [];
+  }), [decisions]);
   // Scores computed by the background pass that starts when an agent comes to
   // rest. Nothing here requests them; they stream in and populate whichever
   // decision panel the reviewer opens.
@@ -268,6 +286,25 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
       hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, hunkRange: hunk.hunkRange, contentHash: hunk.contentHash })),
       state,
     }), [upsertHunkReview]);
+
+  // The same delegation Review runs, against the hunk decisions Changes owns.
+  // A confident T1 answer records the reviewed verdict through the identical
+  // writer the buttons use, so it persists, reconciles, and can be reopened
+  // exactly like one Jeffrey gave. T2 is delegated but never auto-reviewed:
+  // routing priced it as a judgment call, and buying the answer early only
+  // means it is already waiting when the decision is opened.
+  const delegation = useDelegatedReview({
+    targets: delegationTargets,
+    siblings: decisions,
+    taskIntent: taskIntent ?? null,
+    revision: reviewRevision,
+    enabled: Boolean(reviewRevision),
+    onAutoReview: (target) => {
+      // The mutation surfaces its own error state; a rejected auto-verdict
+      // leaves the decision owed rather than tearing down the pane.
+      void recordDecisionState(target.decision, 'reviewed').catch(() => {});
+    },
+  });
 
   const saveDecision = useCallback(async (decision: ReviewDecision, state: DiffHunkReviewState) => {
     const nextId = nextPendingDecisionId(orderedDecisions, decision.id, changeMap);
@@ -416,6 +453,13 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                 <DiffReviewChangeMap map={changeMap} selectedId={selectedDecision?.id ?? null} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={(decisionId, anchor) => openDecisionDetail(decisionId, anchor, 'data-change-map-node')} />
                 {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
                 {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
+                {(delegation.running || delegation.failed > 0 || delegation.skipped > 0) && <p className="muted" role="status">
+                  {delegation.running
+                    ? `Delegating — ${delegation.completed} of ${delegation.total} decisions answered.`
+                    : `${delegation.completed} of ${delegation.total} decisions delegated.`}
+                  {delegation.failed > 0 && ` ${delegation.failed} could not be answered and are still owed.`}
+                  {delegation.skipped > 0 && ` ${delegation.skipped} past the delegation limit were left for you.`}
+                </p>}
                 {selectedDecision && <>
                   <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} commentCounts={isPullRequestSource ? commentCounts : undefined} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}

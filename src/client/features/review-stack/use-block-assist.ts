@@ -31,8 +31,11 @@ export function useBlockAssistAnswers(revision: string | undefined): {
       const base = stale ? new Map<string, readonly (string | null | undefined)[]>() : previous.answers;
       // Nothing cached for a block yet is the common case on first open, and
       // storing it would hand back a new Map on every render — a render loop
-      // rather than an escalation.
-      if (answers.length === 0 && !base.has(decisionId)) return stale ? { revision, answers: base } : previous;
+      // rather than an escalation. An empty read also never erases an answer
+      // already remembered: the cache-only lookup for the open block can come
+      // back empty for a moment after a delegated turn wrote one, and letting
+      // that through would drop the escalation that answer just earned.
+      if (answers.length === 0) return stale ? { revision, answers: base } : previous;
       if (!stale && sameAnswers(base.get(decisionId), answers)) return previous;
       const next = new Map(base);
       next.set(decisionId, answers);
