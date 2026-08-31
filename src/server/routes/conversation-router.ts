@@ -63,7 +63,11 @@ export function createConversationRouter({ repository, database, capabilities, a
     // keep an old worktree selected after the run exits.
     const savedPath = usableWorkspace(selected?.workspace_path);
     const savedPathIsUsable = Boolean(savedPath && candidates.includes(savedPath) && !isRunWorktree(savedPath));
-    const selectedPath = linkedPath ?? (savedPathIsUsable ? savedPath : defaultPath);
+    // Only a live run outranks the reviewer. A linked task's own checkout is
+    // just the default opening repository; recomputing it here on every
+    // explorer refetch would silently undo the repository the reviewer picked
+    // and snap the picker back one render after each switch.
+    const selectedPath = activePath ?? (savedPathIsUsable ? savedPath : defaultPath);
     // A stored choice may point to a garbage-collected run worktree. Repair
     // it server-side so every client converges on the usable checkout.
     if (selected && !savedPathIsUsable) {
@@ -72,7 +76,7 @@ export function createConversationRouter({ repository, database, capabilities, a
         .run(conversationId, selectedPath, new Date().toISOString());
       else database.prepare('DELETE FROM shared_conversation_workspace_selection WHERE conversation_id = ?').run(conversationId);
     }
-    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: path === linkedPath ? `${basename(sourcePath ?? path)} · agent worktree` : basename(path), selected: path === selectedPath })) };
+    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: path === activePath ? `${basename(sourcePath ?? path)} · agent worktree` : basename(path), selected: path === selectedPath })) };
   };
   router.get('/api/shared/conversations', (request, response) => {
     repository.ensureDefaultConversation();

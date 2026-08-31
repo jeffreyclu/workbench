@@ -144,6 +144,31 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     }
   });
 
+  it('keeps a manually picked conversation repository over the linked task checkout', async () => {
+    const linkedWorkspace = mkdtempSync(join(tmpdir(), 'workbench-linked-workspace-'));
+    writeFileSync(join(linkedWorkspace, 'package.json'), '{}');
+    const item = repository.create({ title: 'Switch repository', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: linkedWorkspace, dueDate: null });
+    const conversation = repository.createConversation('Switch repository', item.id);
+
+    try {
+      const selection = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/workspaces/selection`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspacePath: process.cwd() }),
+      });
+      expect(selection.status).toBe(200);
+
+      // The picker refetches the explorer straight after every switch. The
+      // linked task's own checkout must not win that recomputation.
+      const explorer = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/workspaces`);
+      const body = await explorer.json() as { selectedPath: string | null; workspaces: Array<{ path: string; selected: boolean }> };
+      expect(body.selectedPath).toBe(process.cwd());
+      expect(body.workspaces.find((workspace) => workspace.selected)?.path).toBe(process.cwd());
+    } finally {
+      rmSync(linkedWorkspace, { recursive: true, force: true });
+    }
+  });
+
   it('treats selecting the current conversation workspace as an idempotent no-op', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'workbench-current-workspace-'));
     writeFileSync(join(workspace, 'package.json'), '{}');
