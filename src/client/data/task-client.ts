@@ -33,6 +33,7 @@ export const taskClient = {
   restoreWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/restore`, { method: 'POST' }),
   completeWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/complete`, { method: 'POST' }),
   deleteWorkItem: (id: string) => request<void>(`/api/work-items/${id}`, { method: 'DELETE' }),
+  undeleteWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/undelete`, { method: 'POST' }),
   addActivity: (id: string, input: Pick<Activity, 'actor' | 'kind' | 'body'>) => request<{ activity: Activity }>(`/api/work-items/${id}/activity`, { method: 'POST', body: JSON.stringify(input) }),
   createAgentRun: (id: string, input: Pick<AgentRun, 'kind' | 'requestedTarget' | 'instructions'>) => request<{ runs: AgentRun[] }>(`/api/work-items/${id}/runs`, { method: 'POST', body: JSON.stringify({ kind: input.kind, target: input.requestedTarget, instructions: input.instructions }) }),
   cancelAgentRun: (id: string) => request<{ run: AgentRun }>(`/api/agent-runs/${id}/cancel`, { method: 'POST' }),

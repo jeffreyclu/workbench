@@ -157,6 +157,7 @@ const baselineInventory = [
   'POST /api/work-items/:id/restore',
   'POST /api/work-items/:id/complete',
   'DELETE /api/work-items/:id',
+  'POST /api/work-items/:id/undelete',
   'POST /api/work-items/:id/activity',
   'POST /mcp',
   'GET /mcp',

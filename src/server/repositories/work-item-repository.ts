@@ -392,6 +392,14 @@ export class WorkItemRepository {
     return Number(this.database.prepare('UPDATE work_items SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(deletedAt, id).changes) > 0;
   }
 
+  /** Reverses `softDelete`: clears deleted_at so the row reappears in every list/get query. Returns the timestamp it was deleted at (needed to un-cascade linked conversations), or null if the row wasn't deleted. */
+  undelete(id: string, updatedAt: string): string | null {
+    const row = this.database.prepare('SELECT deleted_at FROM work_items WHERE id = ? AND deleted_at IS NOT NULL').get(id) as { deleted_at: string } | undefined;
+    if (!row) return null;
+    this.database.prepare('UPDATE work_items SET deleted_at = NULL, updated_at = ? WHERE id = ?').run(updatedAt, id);
+    return row.deleted_at;
+  }
+
   setArchived(id: string, fields: { archivedAt: string; completedAt: string | null; status: WorkItem['status']; updatedAt: string }): void {
     this.database.prepare('UPDATE work_items SET archived_at = ?, completed_at = ?, status = ?, updated_at = ? WHERE id = ?')
       .run(fields.archivedAt, fields.completedAt, fields.status, fields.updatedAt, id);

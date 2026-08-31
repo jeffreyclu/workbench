@@ -93,4 +93,18 @@ export class WorkItemService {
       return true;
     });
   }
+
+  /** Reverses `delete`: clears the task's deleted_at and un-cascades only the conversations deleted alongside it. */
+  undelete(id: string): WorkItem | null {
+    const now = new Date().toISOString();
+    return this.unitOfWork.transaction(() => {
+      const deletedAt = this.workItems.undelete(id, now);
+      if (!deletedAt) return null;
+      this.database.prepare(`UPDATE shared_conversations SET deleted_at = NULL, updated_at = ?
+        WHERE deleted_at = ? AND (work_item_id = ? OR id IN (
+          SELECT conversation_id FROM agent_runs WHERE work_item_id = ? AND conversation_id IS NOT NULL
+        ))`).run(now, deletedAt, id, id);
+      return this.collaborators.get(id);
+    });
+  }
 }

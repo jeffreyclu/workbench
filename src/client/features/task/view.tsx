@@ -285,8 +285,8 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         // Keep the detail mounted until the required verdict persists.
         setFeedbackTarget({ conversationId: detail.data?.conversations.at(0)?.id ?? null, workItemId: id });
       } else onClose();
-      const undoable = action === 'archive' || action === 'complete';
-      toast.success(lifecycleSuccessMessage[action], undoable ? { action: () => lifecycle.mutate('restore'), actionLabel: 'Undo', duration: 10_000 } : undefined);
+      const undoAction = action === 'delete' ? () => undeleteTask.mutate() : action === 'archive' || action === 'complete' ? () => lifecycle.mutate('restore') : undefined;
+      toast.success(lifecycleSuccessMessage[action], undoAction ? { action: undoAction, actionLabel: 'Undo', duration: 10_000 } : undefined);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['work-items'] }),
         queryClient.invalidateQueries({ queryKey: ['archived-work-items'] }),
@@ -296,6 +296,18 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       ]);
     },
     onError: (error, action) => toastError(lifecycleErrorSummary[action], error),
+  });
+  const undeleteTask = useMutation({
+    mutationFn: () => api.undeleteWorkItem(id),
+    onSuccess: async () => {
+      toast.success('Task restored.');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['work-items'] }),
+        queryClient.invalidateQueries({ queryKey: ['work-item-counts'] }),
+        queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
+      ]);
+    },
+    onError: (error) => toastError('Could not restore the task.', error),
   });
   const togglePin = useMutation({
     mutationFn: () => api.updateWorkItem(id, { status: detail.data?.item.status === 'pinned' ? 'ready' : 'pinned' }),
@@ -692,7 +704,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       )}
 
       {executionPlanArchivePromptOpen && <FollowUpArchiveDialog count={selectedExecutionTaskIndexes.size} pending={resolveExecutionPlan.isPending} onClose={() => setExecutionPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolveExecutionPlan.mutate({ resolution: 'accepted', archiveParent })} />}
-      {deleteTaskPromptOpen && <ConfirmationDialog title={`Delete “${item.title}”?`} description="This permanently deletes the task and cannot be undone." confirmLabel="Delete task" pending={lifecycle.isPending} onClose={() => setDeleteTaskPromptOpen(false)} onConfirm={() => lifecycle.mutate('delete')} />}
+      {deleteTaskPromptOpen && <ConfirmationDialog title={`Delete “${item.title}”?`} description="This deletes the task. You can undo it for a few seconds after." confirmLabel="Delete task" pending={lifecycle.isPending} onClose={() => setDeleteTaskPromptOpen(false)} onConfirm={() => lifecycle.mutate('delete')} />}
       {feedbackTarget && <SessionFeedbackPrompt onSubmit={async (rating: SessionFeedbackRating) => { await api.createSessionFeedback({ ...feedbackTarget, rating }); setFeedbackTarget(null); onClose(); }} />}
 
       <details className="detail-section task-collapsible workspace-review-section">

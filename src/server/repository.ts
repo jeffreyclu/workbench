@@ -1754,6 +1754,11 @@ export class WorkItemRepository {
     return this.workItemLifecycle.delete(id);
   }
 
+  /** Reverses `delete`: clears deleted_at so the task reappears in every list/get query. */
+  undeleteWorkItem(id: string): WorkItem | null {
+    return this.workItemLifecycle.undelete(id);
+  }
+
   private logBulkEdit(before: WorkItem, after: WorkItem | null): void {
     if (!after) return;
     const edits = summarizeWorkItemChanges(before, after);

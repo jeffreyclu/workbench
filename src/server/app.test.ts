@@ -1047,6 +1047,29 @@ describe('destructive operations soft-delete instead of hard-deleting', () => {
     expect(response.status).toBe(404);
   });
 
+  it('undeletes a work item and its cascade-deleted conversation, restoring both to their list views', async () => {
+    const item = repository.create({ title: 'Undelete me', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Linked', item.id);
+    await fetch(`${baseUrl}/api/work-items/${item.id}`, { method: 'DELETE' });
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}/undelete`, { method: 'POST' });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { item: { id: string } };
+    expect(body.item.id).toBe(item.id);
+
+    expect(repository.get(item.id)).not.toBeNull();
+    expect(repository.list().some((entry) => entry.id === item.id)).toBe(true);
+    const conversationRow = database.prepare('SELECT deleted_at FROM shared_conversations WHERE id = ?').get(conversation.id) as { deleted_at: string | null };
+    expect(conversationRow.deleted_at).toBeNull();
+  });
+
+  it('404s an undelete for a work item that was never deleted', async () => {
+    const item = repository.create({ title: 'Never deleted', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    const response = await fetch(`${baseUrl}/api/work-items/${item.id}/undelete`, { method: 'POST' });
+    expect(response.status).toBe(404);
+  });
+
   it('deletes a conversation from listings while keeping the row and logging the action', async () => {
     const conversation = repository.createConversation('To be deleted');
 

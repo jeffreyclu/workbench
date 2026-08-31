@@ -605,6 +605,13 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     response.status(204).end();
   });
 
+  router.post('/api/work-items/:id/undelete', (request, response) => {
+    const item = repository.undeleteWorkItem(request.params.id);
+    if (!item) return response.status(404).json({ error: 'Work item not found.' });
+    repository.addAuditEntry('destructive_action', 'workbench', `Restored deleted work item ${request.params.id}`, request.params.id);
+    response.json({ item });
+  });
+
   router.post('/api/work-items/:id/activity', (request, response) => {
     if (!repository.get(request.params.id)) {
       return response.status(404).json({ error: 'Work item not found.' });
