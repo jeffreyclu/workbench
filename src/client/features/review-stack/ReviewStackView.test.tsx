@@ -162,16 +162,16 @@ describe('ReviewStackView', () => {
     });
   });
 
-  it('suggests a stopping point only after more than 400 changed lines', async () => {
-    const boundaryDiff = { ...diff, files: [{ ...diff.files[0], additions: 400, deletions: 0 }] };
-    renderReview(boundaryDiff);
+  it('reports the full diff size as files, additions and deletions', async () => {
+    const sizedDiff = { ...diff, files: [{ ...diff.files[0], additions: 401, deletions: 27 }] };
+    renderReview(sizedDiff);
     await screen.findByRole('region', { name: 'Change canvas' });
-    expect(screen.queryByRole('note', { name: 'Suggested stopping point' })).not.toBeInTheDocument();
-    cleanup();
 
-    const largeDiff = { ...diff, files: [{ ...diff.files[0], additions: 401, deletions: 0 }] };
-    renderReview(largeDiff);
-    expect(await screen.findByRole('note', { name: 'Suggested stopping point' })).toHaveTextContent('401 changed lines');
+    const stat = await screen.findByRole('note', { name: 'Diff size' });
+    expect(stat).toHaveTextContent('1 file changed');
+    expect(stat).toHaveTextContent('+401');
+    expect(stat).toHaveTextContent('−27');
+    expect(stat).toHaveTextContent('428 changed lines');
   });
 
   it('moves linearly between flagged blocks and changed files with keyboard shortcuts', async () => {

@@ -34,6 +34,7 @@ describe('runtime promotion worker', () => {
     const run = repository.createRun(item.id, 'analysis', 'codex', 'codex', '');
     expect(repository.claimRun(run.id, OWNER_ID, 60_000)).toBe(true);
     const promotion = repository.createSharedMessage('system', 'Promotion queued.', 'queued', conversation.id, [], 'promotion');
+    const requeue = vi.spyOn(repository, 'requeueExpiredPromotionMessages');
     const worker = startRuntimePromotionWorker(repository);
 
     await vi.advanceTimersByTimeAsync(0);
@@ -43,11 +44,34 @@ describe('runtime promotion worker', () => {
     }));
     expect(promoteRuntimeMock).not.toHaveBeenCalled();
 
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(requeue).toHaveBeenCalledOnce();
+
     repository.updateRun(run.id, { status: 'completed' });
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(promoteRuntimeMock).toHaveBeenCalledOnce();
     expect(repository.getSharedMessageById(promotion.id)?.status).toBe('completed');
     worker.stop();
+  });
+
+  it('retries transient SQLite contention instead of crashing the runtime', async () => {
+    const conversation = repository.createConversation('Promotion after contention');
+    repository.createSharedMessage('system', 'Promotion queued.', 'queued', conversation.id, [], 'promotion');
+    const original = repository.requeueExpiredPromotionMessages.bind(repository);
+    vi.spyOn(repository, 'requeueExpiredPromotionMessages')
+      .mockImplementationOnce(() => { throw Object.assign(new Error('database is locked'), { errcode: 5 }); })
+      .mockImplementation(() => original());
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const worker = startRuntimePromotionWorker(repository);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(promoteRuntimeMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(promoteRuntimeMock).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('SQLite busy'));
+
+    worker.stop();
+    warning.mockRestore();
   });
 });

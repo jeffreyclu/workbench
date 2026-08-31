@@ -241,6 +241,26 @@ describe('classifyExecution', () => {
     ]);
   });
 
+  it('waits for an accepted Claude interjection after the initial result', async () => {
+    const { directory } = fakeAgentDirectory('exit 1', [
+      'IFS= read -r first',
+      'sleep 0.05',
+      `printf '%s\\n' '{"type":"result","result":"Initial answer."}'`,
+      'IFS= read -r second',
+      `printf '%s\\n' '{"type":"result","result":"Applied the interjection."}'`,
+    ].join('\n'));
+    let steer: ((body: string) => Promise<boolean>) | null = null;
+    const resultPromise = runAgentCommandWithFallback(
+      'claude', directory, 'Start the task.', undefined, undefined, undefined, 'economy',
+      undefined, undefined, 'analysis', undefined, undefined,
+      (ready) => { steer = ready; }, undefined, false, false,
+    );
+
+    await waitFor(() => steer !== null);
+    await expect(steer!('Change direction now.')).resolves.toBe(true);
+    await expect(resultPromise).resolves.toEqual(expect.objectContaining({ output: 'Applied the interjection.' }));
+  });
+
   it('shows streamed text once rather than twice when the completed block arrives', async () => {
     // Real deltas arrive over time. The pause exceeds the progress flush window,
     // so this tests incremental visibility rather than chunk luck.
@@ -713,6 +733,24 @@ describe('classifyExecution', () => {
       await executeAgentRun(repository, run, 'stale-owner', 3_000);
       expect(isAgentRunActive(run.id)).toBe(false);
       expect(repository.getRun(run.id)?.status).toBe('running');
+    } finally {
+      database.close();
+    }
+  });
+
+  it('keeps the subprocess alive through transient SQLite heartbeat contention', async () => {
+    const completed = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Completed after contention' } });
+    const { directory } = fakeAgentDirectory(`/bin/sleep 1.2\nprintf '%s\\n' '${completed}'`, 'exit 1');
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Heartbeat contention', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'analysis', 'codex', 'codex', 'Finish normally.');
+    const renew = vi.spyOn(repository, 'renewRunLease');
+    renew.mockImplementationOnce(() => { throw Object.assign(new Error('database is locked'), { errcode: 5 }); });
+
+    try {
+      await executeAgentRun(repository, run, 'owner-process', 3_000);
+      expect(repository.getRun(run.id)).toEqual(expect.objectContaining({ status: 'completed', output: 'Completed after contention' }));
     } finally {
       database.close();
     }

@@ -45,10 +45,14 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
   // the current stall, so repeated ticks don't spam the log every 5s. Resets to false
   // once capacity frees up, so the next stall can log again.
   let stallLogged = false;
+  const logSafely = (...args: Parameters<WorkItemRepository['logDiagnostic']>) => {
+    try { repository.logDiagnostic(...args); }
+    catch (error) { console.error('[scheduler] Could not persist diagnostic:', error); }
+  };
   const heartbeat = setInterval(() => {
     try { repository.renewLeases(OWNER_ID, LEASE_MS, activeAgentRunIds()); }
     catch (error) {
-      repository.logDiagnostic('scheduler_error', 'scheduler', 'failure', `Heartbeat failed: ${String(error)}`, undefined, 'heartbeat_error');
+      logSafely('scheduler_error', 'scheduler', 'failure', `Heartbeat failed: ${String(error)}`, undefined, 'heartbeat_error');
     }
   }, HEARTBEAT_MS);
   heartbeat.unref();
@@ -58,7 +62,7 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
     try {
       const { recoveredRunIds, failedRunIds } = repository.reclaimExpired(undefined, activeAgentRunIds());
       if (recoveredRunIds.length || failedRunIds.length) {
-        repository.logDiagnostic(
+        logSafely(
           'scheduler_tick',
           'scheduler',
           'success',
@@ -82,7 +86,7 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
       const stalled = runIds.length === 0 && allDue.runIds.length > 0;
       if (stalled) {
         if (!stallLogged) {
-          repository.logDiagnostic(
+          logSafely(
             'scheduler_tick',
             'scheduler',
             'success',
@@ -97,18 +101,19 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
         const run = repository.getRun(runId);
         if (!run) continue;
         void executeAgentRun(repository, run, OWNER_ID, LEASE_MS).catch((error) => {
-          repository.logDiagnostic('scheduler_error', 'scheduler', 'failure', `Dispatch failed for run ${runId}: ${String(error)}`, undefined, 'dispatch_error');
+          logSafely('scheduler_error', 'scheduler', 'failure', `Dispatch failed for run ${runId}: ${String(error)}`, undefined, 'dispatch_error');
         });
       }
     } catch (error) {
-      repository.logDiagnostic('scheduler_error', 'scheduler', 'failure', `Tick failed: ${String(error)}`, Date.now() - start, 'tick_error');
+      logSafely('scheduler_error', 'scheduler', 'failure', `Tick failed: ${String(error)}`, Date.now() - start, 'tick_error');
     }
   };
   const tick = setInterval(runTick, TICK_MS);
   tick.unref();
 
   const retention = setInterval(() => {
-    repository.runRetentionCleanup();
+    try { repository.runRetentionCleanup(); }
+    catch (error) { logSafely('scheduler_error', 'scheduler', 'failure', `Retention cleanup failed: ${String(error)}`, undefined, 'retention_error'); }
   }, RETENTION_MS);
   retention.unref();
 

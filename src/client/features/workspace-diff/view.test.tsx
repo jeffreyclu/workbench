@@ -50,30 +50,26 @@ afterEach(() => {
 });
 
 describe('WorkspaceDiffView decision queue', () => {
-  it('suggests a stopping point only after more than 400 changed lines', async () => {
-    const renderAtSize = (additions: number) => {
-      const file: WorkspaceDiffFile = {
-        path: 'src/large-change.ts', previousPath: null, status: 'modified', additions, deletions: 0, isBinary: false,
-        patch: '@@ -1 +1 @@ largeChange\n-before\n+after',
-      };
-      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
-        if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
-        if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], `large-${additions}`) });
-        if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
-        throw new Error(`Unexpected request: ${url}`);
-      });
-      renderView(fetchMock);
+  it('reports the full diff size as files, additions and deletions', async () => {
+    const file: WorkspaceDiffFile = {
+      path: 'src/large-change.ts', previousPath: null, status: 'modified', additions: 401, deletions: 27, isBinary: false,
+      patch: '@@ -1 +1 @@ largeChange\n-before\n+after',
     };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'large-401') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
 
-    renderAtSize(400);
-    await screen.findByRole('navigation', { name: 'Review decision queue' });
-    expect(screen.queryByRole('note', { name: 'Suggested stopping point' })).not.toBeInTheDocument();
-    cleanup();
-
-    renderAtSize(401);
-    expect(await screen.findByRole('note', { name: 'Suggested stopping point' })).toHaveTextContent('401 changed lines');
+    const stat = await screen.findByRole('note', { name: 'Diff size' });
+    expect(stat).toHaveTextContent('1 file changed');
+    expect(stat).toHaveTextContent('+401');
+    expect(stat).toHaveTextContent('−27');
+    expect(stat).toHaveTextContent('428 changed lines');
   });
 
   it('moves through pending blocks and changed files, then marks the active block reviewed', async () => {

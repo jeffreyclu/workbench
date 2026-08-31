@@ -1473,7 +1473,7 @@ describe('WorkItemRepository', () => {
     const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);
     const earlier = repository.createSharedMessage('jeffrey', 'Do this afterward', 'queued', conversation.id, [], 'codex');
     const interjected = repository.createSharedMessage('jeffrey', 'Do this next', 'queued', conversation.id, [], 'codex');
-    const replies = await interjectQueuedSharedMessage(repository, interjected.id);
+    const replies = await interjectQueuedSharedMessage(repository, interjected.id, async () => ({ granted: false, operation: null }));
     expect(replies).not.toBeNull();
     if (!replies) throw new Error('Interjection was not dispatched.');
     expect(replies).toEqual([]);
@@ -1495,8 +1495,9 @@ describe('WorkItemRepository', () => {
       return true;
     });
 
-    await expect(interjectQueuedSharedMessage(repository, interjected.id)).resolves.toEqual([expect.objectContaining({ id: running.id })]);
-    expect(delivered).toBe('Use this direction');
+    await expect(interjectQueuedSharedMessage(repository, interjected.id, async () => ({ granted: false, operation: null }))).resolves.toEqual([expect.objectContaining({ id: running.id })]);
+    expect(delivered).toContain('Use this direction');
+    expect(delivered).toContain('External-action guardrail');
     expect(repository.getSharedMessageById(running.id)).toEqual(expect.objectContaining({ status: 'running' }));
     expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'completed' }));
     expect(repository.getSharedMessageById(interjected.id)?.interjectionStreamOffset).toBe(1);
@@ -1509,7 +1510,8 @@ describe('WorkItemRepository', () => {
     const interjected = repository.createSharedMessage('jeffrey', 'Stop exploring and implement it.', 'queued', conversation.id, [], 'codex');
 
     // The click happens before app-server has returned the turn id.
-    await expect(interjectQueuedSharedMessage(repository, interjected.id)).resolves.toEqual([]);
+    const denyExternalAction = async () => ({ granted: false as const, operation: null });
+    await expect(interjectQueuedSharedMessage(repository, interjected.id, denyExternalAction)).resolves.toEqual([]);
     expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'queued', queuePriority: 1 }));
 
     let delivered = '';
@@ -1517,9 +1519,10 @@ describe('WorkItemRepository', () => {
       delivered = body;
       return true;
     });
-    await deliverPendingSharedInterjections(repository, running.id);
+    await deliverPendingSharedInterjections(repository, running.id, denyExternalAction);
 
-    expect(delivered).toBe('Stop exploring and implement it.');
+    expect(delivered).toContain('Stop exploring and implement it.');
+    expect(delivered).toContain('External-action guardrail');
     expect(repository.getSharedMessageById(running.id)).toEqual(expect.objectContaining({ status: 'running' }));
     expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'completed' }));
   });
@@ -1530,7 +1533,7 @@ describe('WorkItemRepository', () => {
     const interjected = repository.createSharedMessage('jeffrey', 'Focus on the repro.', 'queued', conversation.id, [], 'auto');
     registerActiveReplySteering(running.id, async () => true);
 
-    await expect(interjectQueuedSharedMessage(repository, interjected.id)).resolves.toEqual([expect.objectContaining({ id: running.id })]);
+    await expect(interjectQueuedSharedMessage(repository, interjected.id, async () => ({ granted: false, operation: null }))).resolves.toEqual([expect.objectContaining({ id: running.id })]);
     expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'completed' }));
   });
 
@@ -1548,7 +1551,7 @@ describe('WorkItemRepository', () => {
       return true;
     });
 
-    await expect(interjectQueuedSharedMessage(repository, interjected.id)).resolves.toEqual([]);
+    await expect(interjectQueuedSharedMessage(repository, interjected.id, async () => ({ granted: false, operation: null }))).resolves.toEqual([]);
     expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'queued' }));
   });
 

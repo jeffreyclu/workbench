@@ -14,6 +14,7 @@ import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js
 import { notifyAgentRunFinished } from './slack-notify.js';
 import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
+import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 
 const MAX_OUTPUT_BYTES = 1_000_000;
@@ -1240,6 +1241,11 @@ ${AGENT_EXECUTION_CONTRACT}`;
     let toolStarts = 0;
     const toolStartsAtCacheHandoff = 0;
     let steerAgentInput: AgentInputSteering | null = null;
+    // One successful stream-json write corresponds to one terminal Claude
+    // result. Keep stdin open until every accepted input has reached that
+    // boundary; otherwise the initial result can close the process while an
+    // already-accepted interjection is still waiting behind it.
+    let pendingClaudeInputs = 0;
     let lastReportedUsage = '';
     // See UsageSample: `--forward-subagent-text` can surface the same provider
     // response more than once. Account for one provider request, never its
@@ -1370,7 +1376,8 @@ ${AGENT_EXECUTION_CONTRACT}`;
           // filter in interjectQueuedSharedMessage), so keeping stdin open past this
           // point only leaves the process waiting for input that will never arrive —
           // the run would never reach `child.on('close')` and stay stuck "live" forever.
-          if (agent === 'claude' && child.stdin.writable) {
+          if (agent === 'claude') pendingClaudeInputs = Math.max(0, pendingClaudeInputs - 1);
+          if (agent === 'claude' && pendingClaudeInputs === 0 && child.stdin.writable) {
             child.stdin.end();
             const terminalShutdown = setTimeout(() => {
               if (child.exitCode === null) stopProcessTree();
@@ -1445,7 +1452,9 @@ ${AGENT_EXECUTION_CONTRACT}`;
         resolve(false);
         return;
       }
+      pendingClaudeInputs += 1;
       child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: body } })}\n`, (error) => {
+        if (error) pendingClaudeInputs = Math.max(0, pendingClaudeInputs - 1);
         resolve(!error && !stopping && !cancellationRequested && child.exitCode === null);
       });
     });
@@ -1667,7 +1676,10 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       else if (!repository.renewRunLease(run.id, ownerId, leaseMs)) controller.abort(new Error('Agent run lease ownership lost.'));
       else repository.renewWorkspaceLease(run.id, leaseMs);
     } catch (error) {
-      controller.abort(error);
+      // SQLite permits one writer at a time. Missing a single heartbeat is
+      // recoverable inside the lease window; aborting the provider here turned
+      // harmless contention into an apparent user cancellation.
+      if (!isTransientSqliteContention(error)) controller.abort(error);
     }
   }, Math.max(1_000, Math.floor(leaseMs / 3)));
   leaseHeartbeat.unref();

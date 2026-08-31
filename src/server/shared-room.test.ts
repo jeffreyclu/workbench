@@ -463,6 +463,70 @@ describe('shared-room Codex warming', () => {
     expect(requests.find((request) => request.method === 'turn/start')?.params.input[0].text).toBe('Full recovery prompt.');
   });
 
+  it('retries a rejected Codex interjection until the active turn accepts it', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-codex-steer-retry-'));
+    temporaryDirectories.push(directory);
+    const log = join(directory, 'requests.log');
+    const fakeAppServer = [
+      '#!/bin/sh',
+      `IFS= read -r initialize; printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
+      `IFS= read -r bootstrap; printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}'`,
+      `IFS= read -r turn; printf '%s\\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-1"}}}'`,
+      `IFS= read -r steer1; printf '%s\\n' "$steer1" >> '${log}'; printf '%s\\n' '{"jsonrpc":"2.0","id":4,"error":{"message":"turn temporarily busy"}}'`,
+      `IFS= read -r steer2; printf '%s\\n' "$steer2" >> '${log}'; printf '%s\\n' '{"jsonrpc":"2.0","id":5,"result":{"turnId":"turn-1"}}'`,
+      `printf '%s\\n' '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"itemId":"message-1","delta":"Applied the interjection."}}'`,
+      `printf '%s\\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"id":"turn-1","status":"completed"}}}'`,
+      'while IFS= read -r request; do :; done',
+    ].join('\n');
+    writeFileSync(join(directory, 'codex'), fakeAppServer);
+    chmodSync(join(directory, 'codex'), 0o755);
+    process.env.PATH = directory;
+    let accepted = false;
+
+    const result = await runSteerableCodex(
+      'Start the task.', directory, new AbortController().signal,
+      () => undefined,
+      (steer) => { void steer('Change direction now.').then((value) => { accepted = value; }); },
+      () => undefined, () => undefined,
+    );
+
+    expect(result.output).toBe('Applied the interjection.');
+    expect(accepted).toBe(true);
+    const requests = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(requests).toHaveLength(2);
+    expect(requests.every((request) => request.method === 'turn/steer')).toBe(true);
+  });
+
+  it('settles a pending Codex interjection when the active turn ends first', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-codex-steer-terminal-'));
+    temporaryDirectories.push(directory);
+    const fakeAppServer = [
+      '#!/bin/sh',
+      `IFS= read -r initialize; printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
+      `IFS= read -r bootstrap; printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}'`,
+      `IFS= read -r turn; printf '%s\\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-1"}}}'`,
+      `IFS= read -r steer; printf '%s\\n' '{"jsonrpc":"2.0","id":4,"error":{"message":"turn temporarily busy"}}'`,
+      `printf '%s\\n' '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"itemId":"message-1","delta":"Initial answer."}}'`,
+      `printf '%s\\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"id":"turn-1","status":"completed"}}}'`,
+      'while IFS= read -r request; do :; done',
+    ].join('\n');
+    writeFileSync(join(directory, 'codex'), fakeAppServer);
+    chmodSync(join(directory, 'codex'), 0o755);
+    process.env.PATH = directory;
+    let accepted: boolean | null = null;
+
+    const result = await runSteerableCodex(
+      'Start the task.', directory, new AbortController().signal,
+      () => undefined,
+      (steer) => { void steer('Change direction now.').then((value) => { accepted = value; }); },
+      () => undefined, () => undefined,
+    );
+    await waitFor(() => accepted !== null);
+
+    expect(result.output).toBe('Initial answer.');
+    expect(accepted).toBe(false);
+  });
+
   it('contains a closed app-server stdin pipe to the turn instead of crashing Workbench', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-codex-epipe-'));
     temporaryDirectories.push(directory);

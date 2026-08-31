@@ -268,3 +268,29 @@ Practically: read the audited files with `git show main:<path>` (or an equivalen
 rather than switching branches, so a dirty working tree is never disturbed. If in-progress branch
 work is genuinely relevant, it goes in a clearly separated "not yet on main" section, never mixed
 into the main inventory. Confirm and state which ref the analysis was taken from.
+
+## Feature-flag gates must never fall through to legacy while flags resolve (2026-08-31)
+
+Jeffrey, on Connectors V2: seeing the legacy skeleton render before the V2 skeleton is "unacceptable".
+A gate that reads `useFeatureFlag(...)` alone treats "not resolved yet" as `false`, so every V2 user
+briefly mounts the legacy view — running its queries and flashing a layout V2 never shows. Gate on
+flag readiness as a third `pending` state that renders the new view's own skeleton, and route every
+render site that paints before the gated component (page-level tab skeletons included) through the
+same hook so they cannot disagree.
+
+## Every failed user-triggered mutation must raise an error toast
+
+Jeffrey's standing rule (2026-08-31), stated after a failed connector-profile revoke returned
+silently: a user action that fails MUST tell the user it failed. Silence is never acceptable, and
+"the failure is visible because the list did not change" is not a substitute for a toast.
+
+The trap is a multi-step action where only some steps report. Helpers that signal failure by
+resolving `false` or returning a `{ status: 'error' }` result — rather than throwing — raise no
+toast of their own, and this repo registers no global React Query `MutationCache` `onError`, so a
+mutation failure is reported only where a caller handles it explicitly. Before assuming an
+upstream layer toasts, read it: confirm each failure path either raises its own toast or is
+toasted by the caller.
+
+Balance that against double-toasting: when the inner hook already calls `handleApiError` with a
+toast, the caller must stay silent for that path. Assert both directions in tests — the path that
+must toast, and the path that must delegate.

@@ -777,6 +777,15 @@ activity arrives, it must retain that chronological position; switching away
 from and back to the conversation must not append it at the live stream's
 current bottom.
 
+*Delivery guarantee, 2026-08-31.* Interjection is enforced by Workbench's
+agent lifecycle, not left to a provider's willingness or a single transport
+attempt. Codex retries `turn/steer` for as long as the targeted turn remains
+active. Claude keeps its stream-json process open until every input Workbench
+successfully wrote—including interjections—has produced a terminal result.
+Any shared-conversation fallback to Codex must use the steerable app-server;
+the one-shot `codex exec` transport is never a valid fallback for an active
+conversation because it cannot receive live input.
+
 ### In-progress "thinking" activity is a log, not a finished report
 
 *Fix from Claude, 2026-08-25.* The huge-circle-and-missing-space bug Jeffrey

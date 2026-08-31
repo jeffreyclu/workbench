@@ -1379,8 +1379,11 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .review-stack-source label { color: #908f88; font: 700 10px 'DM Mono'; text-transform: uppercase; letter-spacing: .08em; }
 .review-stack-source select { max-width: 380px; padding: 5px 8px; color: #e2e1d9; background: #171715; border: 1px solid #373731; border-radius: 6px; font: 500 12px 'DM Mono'; }
 .review-stack-progress { margin: 0 0 0 auto; color: #908f88; font: 500 11px 'DM Mono'; }
-.review-stopping-point { display: flex; gap: 8px; margin: 14px 0 0; padding: 10px 12px; color: #d8d7cf; background: #252520; border: 1px solid #69684f; border-radius: 7px; font: 500 12px/1.45 'DM Mono'; }
-.review-stopping-point strong { color: #f4c632; }
+.review-diff-stat { display: flex; align-items: center; gap: 10px; margin: 14px 0 0; padding: 8px 12px; color: #8f8e86; background: #1f1f1c; border: 1px solid #33322c; border-radius: 7px; font: 500 12px/1.45 'DM Mono'; }
+.review-diff-stat strong { color: #d8d7cf; font-weight: 600; }
+.review-diff-stat-added { color: #6fbf73; }
+.review-diff-stat-removed { color: #e07a6a; }
+.review-diff-stat-total { margin-left: auto; }
 .review-stack-empty { color: #908f88; font: 500 12px 'DM Mono'; }
 .review-stack-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; padding-top: 16px; }
 /* The stack and the open card are the same space: choosing a card gives the

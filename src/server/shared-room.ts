@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, executionProgressSteer, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, executionProgressSteer, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -14,6 +14,9 @@ import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from 
 import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
 import { groundTurnWithHaiku } from './turn-grounding-ai.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
+import { isTransientSqliteContention } from './sqlite-contention.js';
+
+export { isTransientSqliteContention } from './sqlite-contention.js';
 
 const activeReplies = new Map<string, AbortController>();
 const replyRunIds = new Map<string, string>();
@@ -41,13 +44,6 @@ export function interjectionSteeringPrompt(body: string): string {
  * conversation renders the activity immediately instead of waiting for its
  * polling fallback.
  */
-export function isTransientSqliteContention(error: unknown): boolean {
-  const candidate = error as { code?: unknown; errcode?: unknown; message?: unknown } | null;
-  return candidate?.errcode === 5
-    || candidate?.code === 'SQLITE_BUSY'
-    || (typeof candidate?.message === 'string' && /database is (?:locked|busy)/i.test(candidate.message));
-}
-
 /** Intermediate stream snapshots are disposable; the in-memory provider
  * result is persisted again at terminal completion. A short WAL writer clash
  * must therefore skip one snapshot, not abort the provider or crash runtime. */
@@ -289,7 +285,9 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
     let buffered = ''; let output = ''; let liveOutput = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
     let usage: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
     let peakContextTokens = 0;
-    const pendingSteers = new Map<number, (accepted: boolean) => void>();
+    type PendingCodexSteer = { body: string; resolve: (accepted: boolean) => void };
+    const pendingSteers = new Map<number, PendingCodexSteer>();
+    const pendingSteerRetries = new Map<ReturnType<typeof setTimeout>, PendingCodexSteer>();
     let steerCount = 0;
     const cacheHandoffRequested = false;
     let toolStarts = 0;
@@ -316,8 +314,13 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
       publishLiveOutput();
     };
     const rejectPendingSteers = () => {
-      for (const resolveSteer of pendingSteers.values()) resolveSteer(false);
+      for (const pending of pendingSteers.values()) pending.resolve(false);
       pendingSteers.clear();
+      for (const [retry, pending] of pendingSteerRetries) {
+        clearTimeout(retry);
+        pending.resolve(false);
+      }
+      pendingSteerRetries.clear();
     };
     let startupTimeout: ReturnType<typeof setTimeout> | null = null;
     const stop = () => { try { process.kill(child.pid ? -child.pid : child.pid!, 'SIGTERM'); } catch { child.kill('SIGTERM'); } };
@@ -347,13 +350,29 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
       });
       return id;
     };
+    const issueSteer = (pending: PendingCodexSteer) => {
+      if (!threadId || !turnId || settled) {
+        pending.resolve(false);
+        return;
+      }
+      const id = request('turn/steer', { threadId, expectedTurnId: turnId, clientUserMessageId: randomUUID(), input: [{ type: 'text', text: interjectionSteeringPrompt(pending.body), text_elements: [] }] });
+      pendingSteers.set(id, pending);
+    };
+    const retrySteer = (pending: PendingCodexSteer) => {
+      const retry = setTimeout(() => {
+        pendingSteerRetries.delete(retry);
+        issueSteer(pending);
+      }, 100);
+      retry.unref();
+      pendingSteerRetries.set(retry, pending);
+    };
     const steer: ActiveReplySteering = (body) => {
       if (!threadId || !turnId || settled) return Promise.resolve(false);
       return new Promise((resolveSteer) => {
         // `turn/steer` is delivered into the agent's current context, not as a
-        // separate response. Make the immediate, in-place behavior explicit.
-        const id = request('turn/steer', { threadId, expectedTurnId: turnId, clientUserMessageId: randomUUID(), input: [{ type: 'text', text: interjectionSteeringPrompt(body), text_elements: [] }] });
-        pendingSteers.set(id, resolveSteer);
+        // separate response. A transient rejection is not a user-visible
+        // failure: keep trying for the lifetime of this active turn.
+        issueSteer({ body, resolve: resolveSteer });
       });
     };
     const cancel = () => {
@@ -384,17 +403,15 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         else if (event.result?.thread?.id && !threadId) { threadId = event.result.thread.id; request('turn/start', codexTurnStartParams(threadId, cwd, prompt)); }
         else if (event.result?.turn?.id && !turnId) { turnId = event.result.turn.id; if (startupTimeout) clearTimeout(startupTimeout); onReady(steer); }
         if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
-          const resolveSteer = pendingSteers.get(event.id)!;
+          const pending = pendingSteers.get(event.id)!;
           pendingSteers.delete(event.id);
           if (event.result?.turnId) {
             turnId = event.result.turnId;
             steerCount += 1;
-            resolveSteer(true);
+            pending.resolve(true);
           } else {
-            resolveSteer(false);
+            retrySteer(pending);
           }
-          // A rejected steer leaves the human message queued. The active turn
-          // keeps streaming and no second reply is started.
           continue;
         }
         if (event.method === 'item/agentMessage/delta' && typeof event.params?.delta === 'string') {
@@ -452,8 +469,9 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         }
         if (event.error) {
           if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
-            pendingSteers.get(event.id)!(false);
+            const pending = pendingSteers.get(event.id)!;
             pendingSteers.delete(event.id);
+            retrySteer(pending);
           } else {
             stop();
             fail(new Error(String(event.error.message ?? 'Codex app-server request failed.')));
@@ -970,10 +988,17 @@ export async function runSharedBackgroundJob(
     ? repository.claimQueuedPromotionMessage(messageId, OWNER_ID, LEASE_MS)
     : repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS);
   if (!claimed) return;
-  const leaseHeartbeat = setInterval(() => repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS), HEARTBEAT_MS);
+  const controller = new AbortController();
+  const leaseHeartbeat = setInterval(() => {
+    try { repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS); }
+    catch (error) {
+      // One skipped heartbeat is safe inside a 45-second lease. A transient
+      // writer clash must never escape a timer callback and crash every agent.
+      if (!isTransientSqliteContention(error)) controller.abort(error);
+    }
+  }, HEARTBEAT_MS);
   leaseHeartbeat.unref();
 
-  const controller = new AbortController();
   activeReplies.set(messageId, controller);
   try {
     const body = await job(controller.signal, (partial) => updateLiveSharedBody(repository, messageId, partial));
@@ -1014,13 +1039,17 @@ export async function replyInSharedRoom(
     repository.updateSharedMessage(messageId, { status: 'failed', error: 'Could not claim the linked agent run.' });
     return;
   }
+  const controller = new AbortController();
   const leaseHeartbeat = setInterval(() => {
-    repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS);
-    if (runId) repository.renewRunLease(runId, OWNER_ID, LEASE_MS);
+    try {
+      repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS);
+      if (runId) repository.renewRunLease(runId, OWNER_ID, LEASE_MS);
+    } catch (error) {
+      if (!isTransientSqliteContention(error)) controller.abort(error);
+    }
   }, HEARTBEAT_MS);
   leaseHeartbeat.unref();
 
-  const controller = new AbortController();
   activeReplies.set(messageId, controller);
   if (runId) {
     replyRunIds.set(messageId, runId);
@@ -1131,26 +1160,25 @@ export async function replyInSharedRoom(
       groundingContinuation: turnGrounding.continuation,
     });
     const guardedPrompt = prompt;
-    let result: { output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; codexThreadId?: string; peakContextTokens?: number };
-    try {
-      result = agent === 'codex'
-      ? await runSteerableCodex(guardedPrompt, cwd, controller.signal, (partial) => {
+    const runCodexReply = async (codexPrompt: string, resumeThreadId?: string | null, expiredThreadPrompt?: string) =>
+      runSteerableCodex(codexPrompt, cwd, controller.signal, (partial) => {
         if (controller.signal.aborted) return;
         updateLiveSharedBody(repository, messageId, partial, runId);
       }, (steer) => {
         registerActiveReplySteering(messageId, steer);
-        // A click can arrive while the app-server is still creating its turn.
-        // Keep that explicitly promoted human message queued, then deliver it
-        // as soon as the same live session exposes turn/steer.
         void deliverPendingSharedInterjections(repository, messageId);
       }, (event) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, [event])), (usage) => {
         persistNonTerminalAgentUpdate(() => {
           const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
           repository.updateSharedMessage(messageId, telemetry);
-          if (runId) { repository.updateRun(runId, telemetry); repository.addAgentRunDiagnostic(runId, messageId, agent, 'usage', telemetry); }
+          if (runId) { repository.updateRun(runId, telemetry); repository.addAgentRunDiagnostic(runId, messageId, 'codex', 'usage', telemetry); }
         });
-      }, linkedConversation?.codexThreadId, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, Boolean(runId && MUTATING_RUN_KINDS.has(repository.getRun(runId)?.kind ?? 'analysis')), freshPrompt)
-        .then(({ output, threadId, usage, peakContextTokens }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage, peakContextTokens, fallbackFrom: null, fallbackReason: null }))
+      }, resumeThreadId, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, Boolean(runId && MUTATING_RUN_KINDS.has(repository.getRun(runId)?.kind ?? 'analysis')), expiredThreadPrompt)
+        .then(({ output, threadId, usage, peakContextTokens }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage, peakContextTokens, fallbackFrom: null, fallbackReason: null }));
+    let result: { output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; codexThreadId?: string; peakContextTokens?: number };
+    try {
+      result = agent === 'codex'
+      ? await runCodexReply(guardedPrompt, linkedConversation?.codexThreadId, freshPrompt)
       : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
       if (controller.signal.aborted) return;
       updateLiveSharedBody(repository, messageId, partial, runId);
@@ -1172,9 +1200,16 @@ export async function replyInSharedRoom(
       registerActiveReplySteering(messageId, steer);
       void deliverPendingSharedInterjections(repository, messageId);
     } : undefined,
-    linkedConversation?.claudeSessionId ?? undefined, true, !isPairedReply, undefined, claudeScopeRecoveryPrompt(freshPrompt, cwd));
+    linkedConversation?.claudeSessionId ?? undefined, true, false, undefined, claudeScopeRecoveryPrompt(freshPrompt, cwd));
     } catch (error) {
-      if (agent !== 'claude' || !linkedConversation?.claudeSessionId || !isMissingClaudeSessionError(error)) throw error;
+      if (agent === 'claude' && !isPairedReply && isAgentCapacityError(error)) {
+        const reason = error instanceof Error ? error.message : String(error);
+        repository.updateSharedMessage(messageId, { body: '● Claude is at capacity. Continuing this tracked turn with steerable Codex…', author: 'codex', model: modelFor('codex', profile), fallbackFrom: 'claude', fallbackReason: reason.slice(0, 500) });
+        if (runId) repository.updateRun(runId, { agent: 'codex', model: modelFor('codex', profile), fallbackFrom: 'claude', fallbackReason: reason.slice(0, 500) });
+        const recovered = await runCodexReply(`${guardedPrompt}\n\nRecovery handoff: Claude is unavailable due to its usage limit. Complete the original request directly.`);
+        result = { ...recovered, fallbackFrom: 'claude', fallbackReason: reason.slice(0, 500) };
+      } else {
+        if (agent !== 'claude' || !linkedConversation?.claudeSessionId || !isMissingClaudeSessionError(error)) throw error;
       repository.setConversationClaudeSessionId(target.conversationId, null);
       repository.updateSharedMessage(messageId, { body: '● Claude session expired. Restarting this turn in a fresh session…' });
       result = await runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(freshPrompt, cwd), (partial) => {
@@ -1191,7 +1226,8 @@ export async function replyInSharedRoom(
       })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
         registerActiveReplySteering(messageId, steer);
         void deliverPendingSharedInterjections(repository, messageId);
-      }, undefined, false, !isPairedReply);
+      }, undefined, false, false);
+      }
     }
     if (result.agent === 'codex') {
       const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile);
@@ -1209,16 +1245,7 @@ export async function replyInSharedRoom(
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the turn to Codex.';
       if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'agent_fallback', reason);
       repository.updateSharedMessage(messageId, { body: '● Claude reported an invalid workspace-scope blocker. Handing this tracked turn to Codex…', fallbackFrom: 'claude', fallbackReason: reason });
-      const recovered = await runAgentCommandWithFallback('codex', cwd, `${guardedPrompt}\n\nRecovery handoff: Claude incorrectly claimed it lacked workspace access. Complete the original request directly. Do not repeat that claim; report only observed commands, files changed, verification, and concrete blockers.`, (partial) => {
-        if (controller.signal.aborted) return;
-        updateLiveSharedBody(repository, messageId, partial, runId);
-      }, controller.signal, undefined, profile, (usage) => {
-        persistNonTerminalAgentUpdate(() => {
-          const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
-          repository.updateSharedMessage(messageId, telemetry);
-          if (runId) repository.updateRun(runId, telemetry);
-        });
-      }, undefined, runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, undefined, undefined, true);
+      const recovered = await runCodexReply(`${guardedPrompt}\n\nRecovery handoff: Claude incorrectly claimed it lacked workspace access. Complete the original request directly. Do not repeat that claim; report only observed commands, files changed, verification, and concrete blockers.`);
       result = { ...recovered, fallbackFrom: 'claude', fallbackReason: reason };
       repository.updateSharedMessage(messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
       if (runId) repository.updateRun(runId, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
@@ -1298,7 +1325,11 @@ export function cancelSharedReply(repository: WorkItemRepository, messageId: str
   return { ...message, status: 'canceled' as const };
 }
 
-export async function interjectQueuedSharedMessage(repository: WorkItemRepository, messageId: string): Promise<SharedMessage[] | null> {
+export async function interjectQueuedSharedMessage(
+  repository: WorkItemRepository,
+  messageId: string,
+  classifyAuthorization: typeof classifyExternalActionAuthorization = classifyExternalActionAuthorization,
+): Promise<SharedMessage[] | null> {
   // Priority is durable intent: if the provider session is still starting, its
   // onReady callback will retry this message instead of making the user click
   // Interject again. Only explicit Interject uses queuePriority.
@@ -1314,7 +1345,7 @@ export async function interjectQueuedSharedMessage(repository: WorkItemRepositor
   const thread = repository.listAllSharedMessages(message.conversationId);
   const messageIndex = thread.findIndex((candidate) => candidate.id === message.id);
   const precedingThread = messageIndex >= 0 ? thread.slice(0, messageIndex) : thread;
-  const authorization = await classifyExternalActionAuthorization({
+  const authorization = await classifyAuthorization({
     currentMessage: message.body,
     precedingHumanMessage: [...precedingThread].reverse().find((candidate) => candidate.author === 'jeffrey')?.body,
     precedingAgentMessage: [...precedingThread].reverse().find((candidate) => candidate.author === 'codex' || candidate.author === 'claude')?.body,
@@ -1342,7 +1373,11 @@ export async function interjectQueuedSharedMessage(repository: WorkItemRepositor
 }
 
 /** Deliver explicitly interjected messages that arrived before Codex was ready. */
-export async function deliverPendingSharedInterjections(repository: WorkItemRepository, replyId: string): Promise<void> {
+export async function deliverPendingSharedInterjections(
+  repository: WorkItemRepository,
+  replyId: string,
+  classifyAuthorization: typeof classifyExternalActionAuthorization = classifyExternalActionAuthorization,
+): Promise<void> {
   const reply = repository.getSharedMessageById(replyId);
   if (!reply || reply.status !== 'running' || (reply.author !== 'codex' && reply.author !== 'claude')) return;
   const pending = repository.listAllSharedMessages(reply.conversationId)
@@ -1350,7 +1385,7 @@ export async function deliverPendingSharedInterjections(repository: WorkItemRepo
     .filter((message) => message.dispatchTarget === 'auto' || message.dispatchTarget === 'both' || message.dispatchTarget === reply.author)
     .sort((left, right) => (right.queuePriority ?? 0) - (left.queuePriority ?? 0));
   for (const message of pending) {
-    const steered = await interjectQueuedSharedMessage(repository, message.id);
+    const steered = await interjectQueuedSharedMessage(repository, message.id, classifyAuthorization);
     // The session ended or rejected input. Leave this and any older
     // interjections queued for the normal dispatcher; do not start a parallel
     // provider turn or cancel the current one.

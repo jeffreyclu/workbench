@@ -33,8 +33,6 @@ import { useReviewKeyboardNavigation } from './use-review-keyboard-navigation.js
  * never claims a two-way toggle Review no longer has. */
 const READING_MODE_TITLE = 'Cycle the reading: final code, unified diff, whole file (d)';
 
-const STOPPING_POINT_LOC = 400;
-
 /**
  * The review stack: an alternative to the Changes view, not a replacement.
  *
@@ -46,8 +44,8 @@ const STOPPING_POINT_LOC = 400;
  * its own, so Changes behaves exactly as it did before this existed.
  *
  * b13bf425-4047-4b22-b7c3-85317d6819fe LEGACY-AFFECTING: Existing Review
- * stack sessions now accept document-level shortcuts and show a stopping cue
- * for large diffs. This stays here, instead of the shared Changes surface, so
+ * stack sessions now accept document-level shortcuts and show the full diff
+ * size. This stays here, instead of the shared Changes surface, so
  * it cannot change selection or review behavior for the older review flow.
  */
 export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent = null, pullRequestUrlCandidates }: {
@@ -331,7 +329,10 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     },
   });
 
-  const changedLoc = useMemo(() => files.reduce((total, file) => total + file.additions + file.deletions, 0), [files]);
+  // The full size of the diff under review, always shown: how many files, how
+  // many lines added, how many removed. It reports the numbers and leaves the
+  // judgment of when to stop reading to the reviewer.
+  const diffStat = useMemo(() => files.reduce((total, file) => ({ files: total.files + 1, additions: total.additions + file.additions, deletions: total.deletions + file.deletions }), { files: 0, additions: 0, deletions: 0 }), [files]);
   const markReviewed = useCallback(() => saveVerdict('reviewed'), [saveVerdict]);
   // There is no stack to return to: the card is the whole surface, so the
   // selection only ever moves between blocks. Keyboard navigation and clicks
@@ -383,9 +384,12 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
       </p>}
     </header>
 
-    {changedLoc > STOPPING_POINT_LOC && <aside className="review-stopping-point" role="note" aria-label="Suggested stopping point">
-      <strong>{changedLoc} changed lines.</strong> This is a good stopping point: save your decisions and continue with a fresh pass.
-    </aside>}
+    <aside className="review-diff-stat" role="note" aria-label="Diff size">
+      <strong>{diffStat.files} {diffStat.files === 1 ? 'file' : 'files'} changed</strong>
+      <span className="review-diff-stat-added">+{diffStat.additions}</span>
+      <span className="review-diff-stat-removed">−{diffStat.deletions}</span>
+      <span className="review-diff-stat-total">{diffStat.additions + diffStat.deletions} changed lines</span>
+    </aside>
 
     {queue.length === 0
       ? <p className="review-stack-empty">Nothing to review in this source.</p>

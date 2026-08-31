@@ -37,8 +37,6 @@ import { workspaceDiffQueryKeys } from './data.js';
 import { readWorkspaceDiffSelection, writeWorkspaceDiffDecision, writeWorkspaceDiffSource } from '../../lib/preferences.js';
 import { useWorkspaceDiffKeyboardNavigation } from './use-keyboard-navigation.js';
 
-const STOPPING_POINT_LOC = 400;
-
 /** The parts of a diff this review surface reads, whichever source produced
  * it. A local workspace diff satisfies it directly; a pull request is adapted
  * onto it so both are reviewed through one decision queue. */
@@ -59,7 +57,7 @@ function DiffSkeleton() {
 
 /**
  * b13bf425-4047-4b22-b7c3-85317d6819fe LEGACY-AFFECTING: Changes now exposes
- * the same large-diff stopping cue and linear keyboard review flow as Review.
+ * the same full diff size line and linear keyboard review flow as Review.
  * The new controls delegate to Changes' existing selection and hunk-review
  * mutation so its source handling, persistence, and auto-advance stay intact.
  */
@@ -245,7 +243,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   });
   const selectedDecision = orderedDecisions.find((decision) => decision.id === selectedDecisionId) ?? orderedDecisions[0] ?? null;
   const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
-  const changedLoc = useMemo(() => displayedDiff?.files.reduce((total, file) => total + file.additions + file.deletions, 0) ?? 0, [displayedDiff?.files]);
+  // The full size of the diff under review, always shown: how many files, how
+  // many lines added, how many removed. It reports the numbers and leaves the
+  // judgment of when to stop reading to the reviewer.
+  const diffStat = useMemo(() => (displayedDiff?.files ?? []).reduce((total, file) => ({ files: total.files + 1, additions: total.additions + file.additions, deletions: total.deletions + file.deletions }), { files: 0, additions: 0, deletions: 0 }), [displayedDiff?.files]);
   const changedFilePaths = useMemo(() => displayedDiff?.files.map((file) => file.path) ?? [], [displayedDiff?.files]);
   // The same AI score the detail panel shows, reduced to a band for the gutter
   // dot, so severity is readable straight off the diff instead of only after
@@ -436,9 +437,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
         <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={refreshSource} disabled={isRefreshing}><RefreshCw size={13} className={isRefreshing ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>
       </div>
     </header>
-    {changedLoc > STOPPING_POINT_LOC && <aside className="review-stopping-point" role="note" aria-label="Suggested stopping point">
-      <strong>{changedLoc} changed lines.</strong> This is a good stopping point: save your decisions and continue with a fresh pass.
-    </aside>}
+    <aside className="review-diff-stat" role="note" aria-label="Diff size">
+      <strong>{diffStat.files} {diffStat.files === 1 ? 'file' : 'files'} changed</strong>
+      <span className="review-diff-stat-added">+{diffStat.additions}</span>
+      <span className="review-diff-stat-removed">−{diffStat.deletions}</span>
+      <span className="review-diff-stat-total">{diffStat.additions + diffStat.deletions} changed lines</span>
+    </aside>
     {isHandoffOpen && <ModalDialog className="review-handoff-dialog" labelledBy="review-handoff-dialog-title" onClose={() => setIsHandoffOpen(false)}>
       <header className="review-handoff-dialog-header">
         <div className="review-handoff-dialog-icon"><ClipboardCheck size={20} /></div>
