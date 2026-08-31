@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { RefreshCw } from 'lucide-react';
 import type { DiffHunkReview, DiffHunkReviewState } from '../../../shared/contracts.js';
 import { buildChangeMap } from '../../../shared/change-map.js';
@@ -10,6 +11,7 @@ import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import { buildFileDiffHunks } from '../diff-review/logic.js';
 import { readReviewStackReadingMode, writeReviewStackBlock, writeReviewStackReadingMode, type ReviewStackReadingMode } from '../../lib/preferences.js';
 import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceFileSource } from '../workspace-diff/hooks.js';
+import { workspaceDiffData, workspaceDiffQueryKeys } from '../workspace-diff/data.js';
 import { reviewSourceKind } from './source.js';
 import { fileSourceRevision } from './review-full-file.js';
 import { ReviewFullFilePane } from './review-full-file-pane.js';
@@ -70,6 +72,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
     setReadingMode(next);
     writeReviewStackReadingMode(next);
   }, [readingMode]);
+  const queryClient = useQueryClient();
   const source = useReviewSource(scope, pullRequestUrlCandidates);
   const files = useMemo(() => source.source?.files ?? [], [source.source]);
   // Blocks are cut once, and both the diff the reviewer reads and the identity
@@ -294,12 +297,33 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   // A confident T1 answer records the verdict; a T2 answer is only ever waiting
   // to be read, and an unconfident one escalates through the same store the
   // reviewer's own questions feed.
+  // The surrounding code a delegated answer keeps asking for. Read through the
+  // same query the whole-file pane uses, so a file already open costs nothing
+  // and twenty blocks inside one file are one fetch, not twenty. Only the
+  // sources whose after-state this checkout can actually read: for a pull
+  // request the loader returns nothing and the turn falls back to the hunks.
+  const fileRevision = fileSourceRevision(source.source?.revision);
+  const loadFileContext = useCallback(async (target: DelegationTarget) => {
+    if (!wholeFileReadable) return [];
+    const paths = [...new Set(target.decision.hunks.map((hunk) => hunk.filePath))].slice(0, 2);
+    const files = await Promise.all(paths.map(async (path) => {
+      const { file } = await queryClient.fetchQuery({
+        queryKey: workspaceDiffQueryKeys.fileSource(scope, path, fileRevision),
+        queryFn: () => workspaceDiffData.getFileSource(scope, path, fileRevision),
+        staleTime: fileRevision ? Infinity : 0,
+      });
+      return file.content ? { filePath: path, content: file.content } : null;
+    }));
+    return files.filter((file): file is { filePath: string; content: string } => file !== null);
+  }, [fileRevision, queryClient, scope, wholeFileReadable]);
+
   const delegation = useDelegatedReview({
     targets: delegationTargets,
     siblings: decisions,
     taskIntent,
     revision,
     enabled: Boolean(revision),
+    loadFileContext,
     onAnswer: (decisionId, answer) => assist.remember(decisionId, [answer]),
     onAutoReview: (target) => {
       const entry = queue.find((item) => item.decision.id === target.decisionId);

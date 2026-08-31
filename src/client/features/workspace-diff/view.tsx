@@ -218,11 +218,17 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // analysis to feed routing, so the tier is read from the change type and its
   // risk signals alone; a decision already carrying a verdict is never
   // delegated, so nothing is re-bought after it is answered.
+  const reviewIsTestOnly = useMemo(() => decisions.length > 0 && decisions.every((decision) => decision.changeType === 'test_only'), [decisions]);
+  // The tier each decision is priced at — and the key its assist answers are
+  // bought and read back under. The detail card has to be handed the same one
+  // the delegated turn spent, or the answer already paid for sits in the cache
+  // under a key nothing ever reads and the panel opens empty.
+  const decisionTiers = useMemo(() => new Map(decisions.map((decision) =>
+    [decision.id, routeReviewBlock(decision, blockObligations(decision), null, { reviewIsTestOnly }).tier] as const)), [decisions, reviewIsTestOnly]);
   const delegationTargets = useMemo((): DelegationTarget[] => decisions.flatMap((decision) => {
-    if (decision.state !== null) return [];
-    const routing = routeReviewBlock(decision, blockObligations(decision));
-    return isDelegatedTier(routing.tier) ? [{ decisionId: decision.id, decision, tier: routing.tier }] : [];
-  }), [decisions]);
+    const tier = decisionTiers.get(decision.id);
+    return decision.state === null && tier && isDelegatedTier(tier) ? [{ decisionId: decision.id, decision, tier }] : [];
+  }), [decisions, decisionTiers]);
   // Scores computed by the background pass that starts when an agent comes to
   // rest. Nothing here requests them; they stream in and populate whichever
   // decision panel the reviewer opens.
@@ -466,7 +472,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                   <div className="diff-review-workbench">
                     {selectedFile && <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} />}
                     {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={<DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />} onClose={() => setDetailAnchor(null)}>
-                      <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null}>
+                      <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null}>
                         <DiffReviewActions key={popoverDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(popoverDecision, state)} />
                       </DiffReviewDecisionDetailCard>
                     </DecisionPopover>}

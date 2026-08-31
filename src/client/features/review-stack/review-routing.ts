@@ -15,6 +15,13 @@ export const REVIEW_TIER_LABELS: Record<ReviewTier, string> = {
   T0: 'Automatic', T1: 'Delegated', T2: 'Read', T3: 'Study',
 };
 
+/** What routing needs to know about the review a block sits in. */
+export interface ReviewRoutingContext {
+  /** True when every change in the review is test code, which is the one case
+   * where a test edit has no production block to be judged alongside. */
+  reviewIsTestOnly: boolean;
+}
+
 export interface ReviewRouting {
   tier: ReviewTier;
   /** Why this tier, in the reviewer's words. A queue that sorts without
@@ -24,10 +31,16 @@ export interface ReviewRouting {
   autoSettled: boolean;
 }
 
-/** At or above this weight, a hazard is not a note to leave on a settled
- * block: it is the reason to read it. Below it the block still leaves T0 — a
- * hazard is never nothing — but a bounded delegated read answers it. */
-const HAZARD_STUDY_WEIGHT = 7;
+/** At or above this weight, a hazard is what Jeffrey opens the diff for: a
+ * guard that stopped rejecting input, or a failure that stopped being
+ * reported. Nothing lighter earns study — the compiler found it, said what it
+ * was, and a delegated turn can answer it. */
+const HAZARD_STUDY_WEIGHT = 10;
+
+/** Between this and study, a hazard is read but not studied. Below it — a
+ * moved boundary, a changed loop bound, an extra return — the hazard is real
+ * and still leaves T0, but it is a bounded question, so it is delegated. */
+const HAZARD_READ_WEIGHT = 7;
 
 /** The costliest hazard the compiler put on a block, or null when it found
  * none. Unknown names are skipped rather than trusted: a hazard this bundle
@@ -54,11 +67,18 @@ function readsAsNonRunning(analysis: BlockAnalysis | null): boolean {
   return analysis !== null && analysis.score === 0 && NON_RUNNING_EFFECTS.has(analysis.effect);
 }
 
-/** Bigger than this is not one thought regardless of what it touches. */
-const STUDY_CHANGED_LINES = 40;
+/** Bigger than this is not one thought regardless of what it touches. Set
+ * where a block stops being skimmable rather than where it stops being small:
+ * size is length, not risk, and a queue that studied every long block spent
+ * Jeffrey's day on the diff's shape instead of its dangers. */
+const STUDY_CHANGED_LINES = 150;
+/** A human question on a block smaller than this is delegated rather than
+ * read. The question is still owed an answer; it is not owed *his* answer
+ * until there is enough code under it to be worth the interruption. */
+const READ_CHANGED_LINES = 30;
 /** Under this, a proof-settled block is small enough that reading it costs
  * less than arguing with the router about it. */
-const TRIVIAL_CHANGED_LINES = 60;
+const TRIVIAL_CHANGED_LINES = 200;
 
 function changedLines(decision: Pick<ReviewDecision, 'additions' | 'deletions'>): number {
   return decision.additions + decision.deletions;
@@ -162,6 +182,10 @@ export function routeReviewBlock(
   /** What the compiler read inside the block. Null whenever the file could not
    * be parsed, which is the ordinary case and routes exactly as before. */
   analysis: BlockAnalysis | null = null,
+  /** What the rest of the review looks like. Routing is otherwise a per-block
+   * decision, but one question genuinely needs the whole change set: a test
+   * edit is only interesting when the tests are the change. */
+  context: ReviewRoutingContext = { reviewIsTestOnly: false },
 ): ReviewRouting {
   if (isGeneratedOutput(decision)) return { tier: 'T0', reason: 'Generated output — review its source, not this.', autoSettled: true };
   if (isFormattingOnlyChange(decision)) return { tier: 'T0', reason: 'Whitespace only — the code is byte-identical.', autoSettled: true };
@@ -170,13 +194,23 @@ export function routeReviewBlock(
     return { tier: 'T0', reason: 'Moved unchanged — every line survives on both sides.', autoSettled: true };
   }
 
+  // Tests ship to nobody. Beside a production change they are the evidence for
+  // it, and the block that changed the behaviour is where that evidence is
+  // judged — reading the assertions separately is the same review twice. A
+  // review that is *only* tests has no such block, so there the tests are the
+  // change and route on their own merits.
+  if (decision.changeType === 'test_only' && !context.reviewIsTestOnly) {
+    return { tier: 'T0', reason: 'Test-only — judged with the production change it covers.', autoSettled: true };
+  }
+
   // Above every heuristic below, and below every proof above. The four rules
   // already passed are proofs that the code did not change; a hazard is a proof
   // read off the AST that it did, so it outranks obligations guessed from text.
   const hazard = gravestHazard(analysis?.hazards ?? []);
   if (hazard) {
+    const weight = LOGIC_HAZARD_WEIGHT[hazard];
     return {
-      tier: LOGIC_HAZARD_WEIGHT[hazard] >= HAZARD_STUDY_WEIGHT ? 'T3' : 'T2',
+      tier: weight >= HAZARD_STUDY_WEIGHT ? 'T3' : weight >= HAZARD_READ_WEIGHT ? 'T2' : 'T1',
       reason: LOGIC_HAZARD_REASONS[hazard],
       autoSettled: false,
     };
@@ -210,12 +244,22 @@ export function routeReviewBlock(
     return { tier: 'T1', reason: 'Nothing here runs — types and literals the compiler already checks.', autoSettled: false };
   }
 
+  // Two signals, not three. `auth` and `persistence` name damage that outlives
+  // the deploy — a request let through, a database migrated wrong. `public_api`
+  // used to sit here and fired on the word `export`, which in this codebase is
+  // most of the diff: it made study the default and the default is what buried
+  // the real ones.
   const humanObligations = obligations.filter((obligation) => obligation.settledBy === 'human');
-  const gravest = decision.riskSignals.filter((signal) => signal === 'auth' || signal === 'persistence' || signal === 'public_api');
+  const gravest = decision.riskSignals.filter((signal) => signal === 'auth' || signal === 'persistence');
   if (gravest.length > 0) return { tier: 'T3', reason: `Costly to get wrong: ${gravest.join(', ')}.`, autoSettled: false };
-  if (humanObligations.length > 1) return { tier: 'T3', reason: 'Several independent things to be sure of.', autoSettled: false };
   if (size > STUDY_CHANGED_LINES) return { tier: 'T3', reason: 'Large enough that reading it is the work.', autoSettled: false };
-  return { tier: 'T2', reason: humanObligations[0]?.question ?? 'Needs a judgment call.', autoSettled: false };
+  // A human obligation is a question nothing in the patch can answer. That
+  // makes it worth asking — but on a small block, asking a model first and
+  // showing Jeffrey the answer costs him a glance instead of a read.
+  if (humanObligations.length > 0 && size > READ_CHANGED_LINES) {
+    return { tier: 'T2', reason: humanObligations[0]!.question, autoSettled: false };
+  }
+  return { tier: 'T1', reason: humanObligations[0]?.question ?? 'Bounded enough to delegate.', autoSettled: false };
 }
 
 /** A lower-tier block that turned out to reach further than it looked. The
@@ -232,6 +276,45 @@ export function escalateRouting(routing: ReviewRouting, reason: string): ReviewR
 export function escalateRoutingToStudy(routing: ReviewRouting, reason: string): ReviewRouting {
   return { tier: 'T3', reason, autoSettled: false };
 }
+
+/** How many blocks one review is allowed to cost Jeffrey.
+ *
+ * Routing says which changes are risky; this says how many of them he actually
+ * opens. The two are not the same problem. A 300-file branch can contain forty
+ * defensible "read this" cards, and a queue that hands back forty is a queue
+ * nobody finishes — an unfinished queue reviews nothing, while the three that
+ * mattered sit unread at position thirty. Twelve is one sitting. Everything
+ * past it is delegated, not dropped: the turn is still bought and the answer is
+ * still there when he goes looking. */
+export const HUMAN_REVIEW_BUDGET = 12;
+
+/** How dangerous a block is next to the others in the same review.
+ *
+ * This never chooses a tier. It only orders the blocks routing already sent to
+ * a human against each other, so that when there are more of them than there
+ * are seats, the seats go to the worst ones rather than to whichever files the
+ * diff happened to list first. */
+export function blockReviewRisk(
+  routing: ReviewRouting,
+  decision: Pick<ReviewDecision, 'riskSignals' | 'additions' | 'deletions'>,
+  analysis: BlockAnalysis | null = null,
+): number {
+  if (routing.autoSettled) return 0;
+  const hazard = gravestHazard(analysis?.hazards ?? []);
+  const signals = decision.riskSignals.reduce((total, signal) => total + (RISK_SIGNAL_WEIGHT[signal] ?? 0), 0);
+  return tierRank(routing.tier) * 100
+    + (hazard ? LOGIC_HAZARD_WEIGHT[hazard] * 20 : 0)
+    + signals
+    + Math.min(analysis?.score ?? 0, 100)
+    + Math.min(changedLines(decision), 400) / 10;
+}
+
+/** What each signal is worth when the seats are being handed out. `auth` and
+ * `persistence` outrank the rest by the same logic that lets them reach study
+ * at all: they name damage that survives the deploy. */
+const RISK_SIGNAL_WEIGHT: Record<string, number> = {
+  auth: 60, persistence: 55, public_api: 15, cross_file: 10, error_path: 10,
+};
 
 export function tierRank(tier: ReviewTier): number {
   return REVIEW_TIERS.indexOf(tier);

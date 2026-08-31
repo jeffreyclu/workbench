@@ -182,6 +182,21 @@ export function blockedWriterTestSuiteCommand(command: string): boolean {
   return runsPackageSuite || runsTestRunner;
 }
 
+/**
+ * Normal npm/pnpm/yarn/npx/vitest/jest commands pass through the Writer PATH
+ * shim, which can inspect the shell's real cwd at execution time. The stream
+ * guard only needs to stop direct binary invocations that bypass that shim.
+ *
+ * This distinction matters when a conversation starts in a Writer repository
+ * and the agent later changes its shell cwd to Workbench: judging every tool
+ * call from the provider process's original cwd used to kill legitimate
+ * Workbench verification and report the result as a cancellation.
+ */
+export function bypassesWriterTestCommandGuard(command: string): boolean {
+  const normalized = command.replace(/\\\n/g, ' ').replace(/\s+/g, ' ').trim();
+  return /(?:^|[\s;&|])(?:node\s+)?[^\s;&|]*\/(?:[^\s;&|]*\/)*(?:vitest|jest)(?:\.m?js)?(?:\s|$)/i.test(normalized);
+}
+
 /** Branch state is runtime-owned. Workbench agents may inspect Git but cannot mutate refs/worktrees. */
 export function blockedWorkbenchBranchCommand(command: string): boolean {
   return command.split(/(?:&&|\|\||;|\n)/).some((segment) => {
@@ -1314,7 +1329,10 @@ ${AGENT_EXECUTION_CONTRACT}`;
       for (const line of lines.filter(Boolean)) {
         lastEventAt = Date.now();
         const toolCommand = toolCommandFromAgentEvent(agent, line);
-        const blockedWriterSuite = Boolean(toolCommand && isWriterWorkspace(cwd) && blockedWriterTestSuiteCommand(toolCommand));
+        // Ordinary test launchers are guarded by the PATH shim using the
+        // Bash tool's real cwd. Only direct binary bypasses are decided here,
+        // where the provider process cwd is the best available boundary.
+        const blockedWriterSuite = Boolean(toolCommand && isWriterWorkspace(cwd) && bypassesWriterTestCommandGuard(toolCommand) && blockedWriterTestSuiteCommand(toolCommand));
         const blockedWorkbenchBranch = Boolean(toolCommand && isWorkbenchWorkspace(cwd) && blockedWorkbenchBranchCommand(toolCommand));
         const blockedDependencyBootstrap = Boolean(toolCommand && cwd.includes('/.workbench/run-worktrees/') && blockedWorkbenchDependencyBootstrapCommand(toolCommand));
         const blockedCommand = blockedWriterSuite || blockedWorkbenchBranch || blockedDependencyBootstrap;
@@ -1323,7 +1341,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
             ? 'a full Writer test-suite command'
             : blockedWorkbenchBranch ? 'a Workbench Git branch/worktree mutation' : 'a dependency bootstrap inside a provisioned run worktree';
           terminationError = new Error(`Workbench blocked ${reason} before execution: ${toolCommand.slice(0, 500)}`);
-          cancellationRequested = true;
           progress += `${progress ? '\n\n' : ''}● Blocked ${reason}.`;
           stopProcessTree();
           continue;

@@ -1,12 +1,18 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { blockedWorkbenchBranchCommand, blockedWorkbenchDependencyBootstrapCommand, blockedWriterTestSuiteCommand, isWorkbenchWorkspace, isWriterWorkspace } from './agent-runner.js';
+import { blockedWorkbenchBranchCommand, blockedWorkbenchDependencyBootstrapCommand, blockedWriterTestSuiteCommand, bypassesWriterTestCommandGuard, isWorkbenchWorkspace, isWriterWorkspace } from './agent-runner.js';
 
 const guard = fileURLToPath(new URL('../../scripts/writer-agent-bin/test-command-guard.mjs', import.meta.url));
 const bin = (name: string) => fileURLToPath(new URL(`../../scripts/writer-agent-bin/${name}`, import.meta.url));
 function check(name: string, ...args: string[]) {
   return spawnSync(process.execPath, [guard, bin(name), ...args], { encoding: 'utf8', env: { ...process.env, WORKBENCH_WRITER_TEST_GUARD_CHECK_ONLY: '1' } });
+}
+function checkInWorkspace(cwd: string, name: string, ...args: string[]) {
+  return spawnSync(process.execPath, [guard, bin(name), ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, WORKBENCH_WRITER_TEST_GUARD_CHECK_ONLY: '1', WORKBENCH_WRITER_TEST_GUARD_CWD: cwd },
+  });
 }
 
 describe('Writer agent test command guard', () => {
@@ -18,6 +24,14 @@ describe('Writer agent test command guard', () => {
     expect(blockedWriterTestSuiteCommand('node node_modules/vitest/vitest.mjs run')).toBe(true);
     expect(blockedWriterTestSuiteCommand('pnpm --filter frontend test:unit')).toBe(true);
     expect(blockedWriterTestSuiteCommand('node_modules/.bin/vitest run src/components/feature.test.ts')).toBe(false);
+    expect(bypassesWriterTestCommandGuard('npx vitest run')).toBe(false);
+    expect(bypassesWriterTestCommandGuard('node node_modules/vitest/vitest.mjs run')).toBe(true);
+    expect(bypassesWriterTestCommandGuard('/repo/node_modules/.bin/vitest run')).toBe(true);
+  });
+
+  it('scopes the executable test guard to the shell current working directory', () => {
+    expect(checkInWorkspace('/Users/jeffrey.lu/dev/writer-monorepo', 'npx', 'vitest', 'run').status).toBe(126);
+    expect(checkInWorkspace('/Users/jeffrey.lu/dev/workbench', 'npx', 'vitest', 'run').status).toBe(0);
   });
 
   it('blocks Workbench branch and worktree mutations while allowing inspection', () => {

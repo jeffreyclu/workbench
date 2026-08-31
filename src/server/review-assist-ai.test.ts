@@ -45,6 +45,28 @@ function mockStreamingWorker(answer = 'This adds a bounded retry around the sync
   });
 }
 
+describe('whole-file context', () => {
+  it('puts the file in the prompt without moving the answer out of the panel\'s reach', async () => {
+    vi.resetModules();
+    const writes: string[] = [];
+    const spawn = mockStreamingWorker('Answered with the file in hand.\nCONFIDENCE: high', [], writes);
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { requestReviewAssist, lookupReviewAssist } = await import('./review-assist-ai.js');
+    const database = openDatabase(':memory:');
+
+    const withFile = { ...decision, fileContext: [{ filePath: 'src/sync.ts', content: 'export function sync() { retry(3); }' }] };
+    await requestReviewAssist(database, 'explain', withFile, null, undefined, 'T1');
+
+    const prompt = writes.join('');
+    expect(prompt).toContain('export function sync() { retry(3); }');
+
+    // The panel reads the cache back without any file — it renders a decision,
+    // not a checkout — so context must not be part of the key. Keyed, every
+    // delegated answer would be invisible to the surface it was bought for.
+    expect(lookupReviewAssist(database, 'explain', decision, null, 'T1')).toContain('Answered with the file in hand.');
+  });
+});
+
 describe('requestReviewAssist caching', () => {
   it('spawns once for a question and reuses the persisted answer on a repeat request', async () => {
     vi.resetModules();

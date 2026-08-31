@@ -69,6 +69,21 @@ describe('delegation policy', () => {
   });
 });
 
+function decisionsAcross(count: number): ReviewDecision[] {
+  return buildReviewDecisions(Array.from({ length: count }, (_, index) => file(`src/app-${index}.ts`, [
+    '@@ -1,2 +1,3 @@',
+    ' const start = 1;',
+    `+const limit${index} = 2;`,
+    ' export const done = true;',
+  ].join('\n'))), []);
+}
+
+/** The same sweep, with the switch that a refetch flips underneath it. */
+function GatedHarness({ targets, enabled, onAutoReview }: { targets: DelegationTarget[]; enabled: boolean; onAutoReview: (target: DelegationTarget) => void }) {
+  useDelegatedReview({ targets, siblings: [], taskIntent: null, revision: 'rev-1', enabled, onAutoReview });
+  return null;
+}
+
 describe('useDelegatedReview', () => {
   it('buys one answer per change and records the verdict a confident one earned', async () => {
     const fetchMock = stubAssist(CONFIDENT);
@@ -88,6 +103,47 @@ describe('useDelegatedReview', () => {
     await settle();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(autoReviewed).toEqual([decision.id]);
+  });
+
+  // The failure this exists for: the review stack reads its revision off a
+  // query, so one render with the diff still in flight turns the sweep off and
+  // straight back on. Claims are taken before the request leaves, so a sweep
+  // that dies holding them leaves every change it had not reached marked
+  // attempted and unasked — the first two answers land and the rest of the
+  // revision is never delegated at all.
+  it('gives back what an interrupted sweep never spent and finishes the revision', async () => {
+    const gates: Array<() => void> = [];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      await new Promise<void>((resolve) => { gates.push(resolve); });
+      return new Response(JSON.stringify({ answer: CONFIDENT }), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const open = async () => {
+      const waiting = gates.splice(0);
+      for (const resolve of waiting) resolve();
+      await settle();
+    };
+
+    const all = decisionsAcross(4);
+    expect(all).toHaveLength(4);
+    const targets: DelegationTarget[] = all.map((decision) => ({ decisionId: decision.id, decision, tier: 'T1' }));
+    const autoReviewed: string[] = [];
+    const record = (target: DelegationTarget) => { autoReviewed.push(target.decisionId); };
+
+    const view = render(<GatedHarness targets={targets} enabled onAutoReview={record} />);
+    await settle();
+    // Two workers are in flight; the other two changes are claimed and queued.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    view.rerender(<GatedHarness targets={targets} enabled={false} onAutoReview={record} />);
+    await settle();
+    await open();
+
+    view.rerender(<GatedHarness targets={targets} enabled onAutoReview={record} />);
+    await settle();
+    for (let round = 0; round < 6 && autoReviewed.length < 4; round += 1) await open();
+
+    expect([...autoReviewed].sort()).toEqual(all.map((decision) => decision.id).sort());
   });
 
   it('spends the turn on a T2 change but leaves the verdict to the reviewer', async () => {

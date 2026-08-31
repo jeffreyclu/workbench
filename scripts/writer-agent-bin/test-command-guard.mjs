@@ -7,6 +7,16 @@ const guardDirectory = resolve(dirname(process.argv[1]));
 const invokedAs = basename(process.argv[2] || '');
 const args = process.argv.slice(3);
 const filePattern = /(?:^|\/)[^\s/]+\.(?:test|spec)\.[cm]?[jt]sx?$/i;
+const writerRepositoryNames = new Set(['writer-monorepo', 'fe.web-app', 'be.mcp-gateway', 'connector-gateway']);
+
+function isWriterWorkspace(input) {
+  for (let current = resolve(input); ; current = dirname(current)) {
+    const name = basename(current);
+    if (writerRepositoryNames.has(name) || [...writerRepositoryNames].some((repository) => name.startsWith(`${repository}-`))) return true;
+    const parent = dirname(current);
+    if (parent === current) return false;
+  }
+}
 
 function hasExplicitTestFile(values) { return values.some((value) => filePattern.test(value)); }
 function packageRunsTests(command, values) {
@@ -23,10 +33,12 @@ function isInformational(values) { return values.includes('--help') || values.in
 function denied(command, values) { return isTestInvocation(command, values) && !isInformational(values) && !hasExplicitTestFile(values); }
 
 if (process.env.WORKBENCH_WRITER_TEST_GUARD_CHECK_ONLY === '1') {
-  process.stdout.write(denied(invokedAs, args) ? 'denied\n' : 'allowed\n');
-  process.exit(denied(invokedAs, args) ? 126 : 0);
+  const scopedCwd = process.env.WORKBENCH_WRITER_TEST_GUARD_CWD;
+  const blocked = denied(invokedAs, args) && (!scopedCwd || isWriterWorkspace(scopedCwd));
+  process.stdout.write(blocked ? 'denied\n' : 'allowed\n');
+  process.exit(blocked ? 126 : 0);
 }
-if (denied(invokedAs, args)) {
+if (isWriterWorkspace(process.cwd()) && denied(invokedAs, args)) {
   process.stderr.write(`Workbench blocked a full Writer test-suite command: ${invokedAs} ${args.join(' ')}\nRun one directly relevant test file (for example: vitest run src/path/feature.test.ts).\n`);
   process.exit(126);
 }

@@ -322,6 +322,14 @@ export const REVIEW_ASSIST_MAX_HUNKS = 50;
 export const REVIEW_ASSIST_MAX_LINES_PER_HUNK = 200;
 export const REVIEW_ASSIST_MAX_LINE_LENGTH = 4_000;
 
+/** How much whole-file context one delegated request may carry, and for how
+ * many files. A block's own files only: this is the surrounding code a skim
+ * kept saying it lacked, not an attempt to ship the repository into a prompt.
+ * Truncated rather than rejected, because a half-read file still answers more
+ * questions than a hunk on its own. */
+export const REVIEW_ASSIST_MAX_CONTEXT_FILES = 3;
+export const REVIEW_ASSIST_MAX_CONTEXT_CHARS = 60_000;
+
 /** Accepts payloads from tabs opened before the current release while applying
  * the exact same representative bound as the current client. This is a rolling
  * compatibility boundary: a runtime handoff must not turn an old, valid diff
@@ -400,6 +408,14 @@ export const reviewAssistRequestSchema = z.object({
       residualSymbols: z.array(z.string().min(1).max(200)).max(12),
       clearedSymbols: z.array(z.string().min(1).max(200)).max(12),
     }).default({ symbols: [], hunks: [], residualSymbols: [], clearedSymbols: [] }),
+    // The after-state of the files this block changes, when the calling surface
+    // can read them. Defaulted empty, like the evidence packs: a surface with no
+    // file access — a GitHub pull request, or a tab opened before this existed —
+    // posts the payload it always did and gets the hunks-only answer.
+    fileContext: z.array(z.object({
+      filePath: z.string().min(1).max(2_000),
+      content: z.string().transform((text) => text.slice(0, REVIEW_ASSIST_MAX_CONTEXT_CHARS)),
+    })).transform((files) => files.slice(0, REVIEW_ASSIST_MAX_CONTEXT_FILES)).default([]),
   }),
   taskIntent: z.object({
     title: z.string().max(2_000),

@@ -23,6 +23,10 @@ export type ReviewAssistDecision = {
    * declarations. Optional because a stale tab still posts the old payload. */
   coverageEvidence?: CoverageEvidence;
   referenceEvidence?: ReferenceEvidence;
+  /** The after-state of the files this block changes, when the calling surface
+   * could read them. Optional for the same reason as the evidence packs, and
+   * excluded from the cache key by `hashRequest`. */
+  fileContext?: Array<{ filePath: string; content: string }>;
 };
 
 export type ReviewAssistTaskIntent = { title: string; description: string } | null;
@@ -56,8 +60,16 @@ const CHANGES_AGENT_SYSTEM_PROMPT = [
  * a corrected rubric recomputes stale answers once instead of serving the old
  * judgement forever. Bumped to 7 when the tiers started buying different
  * models: every T2 and T3 answer already cached was produced by the cheap turn
- * and would otherwise keep being served with the deep tier's authority. */
-const ASSIST_PROMPT_VERSION = 7;
+ * and would otherwise keep being served with the deep tier's authority.
+ *
+ * Bumped to 8 when the confidence question was recalibrated. The old wording
+ * asked for low confidence "whenever answering properly needed something you
+ * were not given", and a diff fragment always does — so 12 of the first 17
+ * delegated answers came back low, every one of them escalated, and delegation
+ * handed the whole queue back to the reviewer with extra steps. Those answers
+ * are cached judgements made against the wrong question and must not survive
+ * the fix. */
+const ASSIST_PROMPT_VERSION = 8;
 
 // Answer length is the dominant latency term once the session is primed:
 // measured on this machine a warm turn spends ~0.9s on session overhead and the
@@ -163,9 +175,12 @@ function spendFor(tier: ReviewAssistTier | null): AssistSpend {
  * like a settled one and the reviewer never learns which is which. */
 const CONFIDENCE_DIRECTIVE = [
   `End with a line "${REVIEW_ASSIST_CONFIDENCE_PREFIX} high" or "${REVIEW_ASSIST_CONFIDENCE_PREFIX} low".`,
-  'Say low whenever answering properly needed something you were not given, then add a line',
-  `"${REVIEW_ASSIST_MISSING_PREFIX} <what you needed>".`,
-  'A low answer is routed to a human rather than trusted, so confidence you do not have is the one mistake here that costs the most.',
+  'This rates the answer you just gave, at the depth you were asked for. It is not a wish list.',
+  'You are never given the whole repository, and the question above was written knowing that:',
+  'if the material in this message answers it, say high even though callers, the rest of the file, or the test suite were withheld.',
+  'Say low only when the question itself cannot be answered from what you were shown — the change is unintelligible without something absent, or answering would require asserting something about code not in this message —',
+  `and then add a line "${REVIEW_ASSIST_MISSING_PREFIX} <what would have to be read>".`,
+  'Low sends the block back to a human, so it must mean this question was priced too cheaply, not that more context would have been pleasant.',
 ].join(' ');
 
 /** Keyed on exactly what the prompt reads. Only `compare_task_intent` puts the
@@ -275,6 +290,17 @@ function buildPrompt(action: ReviewAssistAction, decision: ReviewAssistDecision,
   // deletion directive was written to prevent.
   if (references && references.clearedSymbols.length > 0) {
     parts.push(`No surviving line anywhere in this review mentions ${references.clearedSymbols.join(', ')}. This review is not the whole repository, so that narrows the risk without clearing it: say references outside the reviewed files remain unverified.`);
+  }
+  // The system prompt tells every worker it cannot see past the hunks, because
+  // for most requests that is true and a worker that forgets it invents call
+  // sites. When the file is actually here, that standing instruction is wrong
+  // and has to be revoked explicitly for these paths — left in place, the model
+  // reads the file and still reports it as unseen.
+  const fileContext = decision.fileContext ?? [];
+  if (fileContext.length > 0) {
+    const contextText = fileContext.map((file) => `${file.filePath}:\n${file.content}`).join('\n\n');
+    parts.push(`Whole files, as this change leaves them (the diff above is the change; this is the code around it):\n${contextText}`);
+    parts.push(`You can see all of ${fileContext.map((file) => file.filePath).join(', ')}. For those files the usual "you were shown only the hunks" limit does not apply: read them before saying something is not visible, and cite line numbers from them.`);
   }
   if (parityContractApplies(action, changeType)) parts.push(PARITY_DIRECTIVE);
   if (action === 'score_risk') parts.push(`Defensible range for this change type: ${CHANGE_TYPE_RISK_BANDS[changeType]}. Leave it only for a reason you state in the second line.`);

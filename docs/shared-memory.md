@@ -231,3 +231,40 @@ call, and follow it only with findings that raise or lower the cost of reviewing
 dropped declaration, a still-referenced removal, a risk flag, an untested new symbol. When nothing
 raises the cost, say that explicitly and name the checks that came back clean; "cheap to review" is
 itself a critical answer.
+
+## Paginated lists: never auto-drain, and research the server contract first
+
+Jeffrey's correction on 2026-08-31, during the Connectors V2 manage-connectors work: when a paginated
+list shows incomplete data, do not "fix" it by auto-fetching every page in a loop. He rejected both
+shapes of that patch — a capped drain ("why is there a fucking cap? we're supposed to have infinite
+scroll") and an uncapped one ("we can't drain the paging query"). Draining is a workaround that hides
+a broken contract behind extra requests; the paging query itself has to return the correct rows.
+
+He also drew the general method rule from the same episode: "this might need a backend refactor. i
+don't know yet. research before blindly changing shit." When a data-completeness bug could originate
+server-side, read the actual server contract — route handlers, query schemas, pagination limits —
+before editing frontend code. In practice that meant reading `WriterInternal/be.mcp-gateway` through
+the GitHub API (no clone needed), which disproved the offset-arithmetic hypothesis I was about to
+implement and located the real gap in the endpoint's missing filters.
+
+The failure mode to avoid is proposing a client-side compensation (drain, larger page size, second
+query, synthesized rows) for something the endpoint cannot express. Name the backend gap and let
+Jeffrey decide whether the fix belongs there.
+
+## Audits and static analysis run against `main`, not the checked-out branch
+
+Jeffrey's correction on 2026-08-31, during the Manage Connectors action-catalog analysis: "YOU GUYS
+SHOULD BE AUDITING MAIN NOT THE DIRTY WORKTREE FYI". I had begun cataloguing connector actions from
+whatever branch happened to be checked out in `~/dev/writer-monorepo` — at that moment a feature
+branch (`feat/con-connectors-v2-projection`) carrying in-progress, uncommitted work.
+
+The rule is general: when the deliverable is an audit, inventory, catalog, coverage analysis, or any
+other description of what the system *is*, the baseline is the repository's default branch. In-flight
+branch work is a proposal, not the system of record, and describing it as current state produces a
+document that is wrong the moment the branch is rebased or abandoned — and worse, invents test cases
+for behavior that never shipped.
+
+Practically: read the audited files with `git show main:<path>` (or an equivalent read-only view)
+rather than switching branches, so a dirty working tree is never disturbed. If in-progress branch
+work is genuinely relevant, it goes in a clearly separated "not yet on main" section, never mixed
+into the main inventory. Confirm and state which ref the analysis was taken from.

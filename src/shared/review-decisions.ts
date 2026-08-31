@@ -1,5 +1,7 @@
 import {
   boundReviewAssistLines,
+  REVIEW_ASSIST_MAX_CONTEXT_CHARS,
+  REVIEW_ASSIST_MAX_CONTEXT_FILES,
   REVIEW_ASSIST_MAX_HUNKS,
   type DiffHunkReview,
   type DiffHunkReviewState,
@@ -397,7 +399,17 @@ export function reviewStateShortLabel(state: DiffHunkReviewState | null): string
 /** The one place a decision is turned into an AI-assist request payload. Both
  * the reviewer's click and the background scorer go through it, so a decision
  * hashes to the same cache key from either side. */
-export function reviewAssistDecisionPayload(decision: ReviewDecision, allDecisions: ReviewDecision[] = []): {
+export function reviewAssistDecisionPayload(
+  decision: ReviewDecision,
+  allDecisions: ReviewDecision[] = [],
+  /** The after-state of the files this decision touches, when the calling
+   * surface can read them. Omitted where it cannot, which is why every
+   * consumer treats it as absent by default. It is deliberately not part of
+   * the assist cache key: the same block asks the same question with or
+   * without its file, so a surface that can read files must not fragment the
+   * cache away from one that cannot. */
+  fileContext: Array<{ filePath: string; content: string }> = [],
+): {
   behavior: string;
   state: string;
   changeType: ReviewChangeType;
@@ -405,6 +417,7 @@ export function reviewAssistDecisionPayload(decision: ReviewDecision, allDecisio
   hunks: Array<{ filePath: string; location: string; lines: string[] }>;
   coverageEvidence: CoverageEvidence;
   referenceEvidence: ReferenceEvidence;
+  fileContext: Array<{ filePath: string; content: string }>;
 } {
   const boundHunk = <T extends { filePath: string; location: string; lines: string[] }>(hunk: T): T => ({
     ...hunk,
@@ -431,5 +444,9 @@ export function reviewAssistDecisionPayload(decision: ReviewDecision, allDecisio
     hunks,
     coverageEvidence: { ...coverageEvidence, hunks: coverageEvidence.hunks.map(boundHunk) },
     referenceEvidence: { ...referenceEvidence, hunks: referenceEvidence.hunks.map(boundHunk) },
+    fileContext: fileContext
+      .filter((file) => hunks.some((hunk) => hunk.filePath === file.filePath))
+      .slice(0, REVIEW_ASSIST_MAX_CONTEXT_FILES)
+      .map((file) => ({ filePath: file.filePath.slice(0, 2_000), content: file.content.slice(0, REVIEW_ASSIST_MAX_CONTEXT_CHARS) })),
   };
 }

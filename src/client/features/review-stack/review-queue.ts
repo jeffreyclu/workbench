@@ -3,7 +3,7 @@ import type { ReviewDecision } from '../../../shared/review-decisions.js';
 import { blockObligations, type ReviewObligation } from './review-obligations.js';
 import { blockRelationships, relationshipEscalation, warrantsRelationshipMap, type ReviewRelationships } from './review-relationships.js';
 import { assistAnswersEscalationReason } from './review-escalation.js';
-import { escalateRouting, escalateRoutingToStudy, routeReviewBlock, settleObligations, tierRank, type ReviewRouting, type ReviewTier } from './review-routing.js';
+import { HUMAN_REVIEW_BUDGET, blockReviewRisk, escalateRouting, escalateRoutingToStudy, routeReviewBlock, settleObligations, tierRank, type ReviewRouting, type ReviewTier } from './review-routing.js';
 import type { ReviewBlockIdentity } from './review-blocks.js';
 import type { BlockAnalysis } from './logic-blocks.js';
 
@@ -77,6 +77,10 @@ export function buildReviewQueue(
    * exactly as it did before tiered answers existed. */
   assistAnswers: ReadonlyMap<string, readonly (string | null | undefined)[]> = new Map(),
 ): ReviewQueueEntry[] {
+  // The one thing a block cannot see about itself. A test edit is evidence for
+  // the production change beside it — unless there is no production change, and
+  // then the tests are what the review is.
+  const reviewIsTestOnly = decisions.length > 0 && decisions.every((decision) => decision.changeType === 'test_only');
   const entries = decisions.map((decision): ReviewQueueEntry => {
     const relationships = blockRelationships(map, decision.id);
     const identities = decision.hunks.flatMap((hunk) => { const identity = blocks.get(hunk.id); return identity ? [identity] : []; });
@@ -84,7 +88,7 @@ export function buildReviewQueue(
     // Settled here as well as inside routing, because the entry is what the
     // reviewer reads: a question shown without its answer is the claim again.
     const obligations = settleObligations(blockObligations(decision), decision, analysis);
-    let routing = routeReviewBlock(decision, obligations, analysis);
+    let routing = routeReviewBlock(decision, obligations, analysis, { reviewIsTestOnly });
     const assistTier = routing.tier;
     // Discovering broader impact is the one thing routing cannot see from the
     // patch alone, so it is applied after the neighbourhood is known.
@@ -101,7 +105,43 @@ export function buildReviewQueue(
       analysis,
     };
   });
-  return entries.sort(compareEntries);
+  return applyHumanReviewBudget(entries).sort(compareEntries);
+}
+
+/** Hand out the seats.
+ *
+ * Routing prices each block on its own, which is the right way to price it and
+ * the wrong way to bound a day: every block can be individually defensible and
+ * the pile still be unreadable. So once the whole review is priced, the blocks
+ * routed to a person are ranked against each other and everything past the
+ * budget drops to delegated — the model answers it, and the answer is waiting
+ * if Jeffrey goes looking. A block that something escalated is ranked above one
+ * that merely routed high: an escalation is a turn that read the block and
+ * reported back, not a guess made from the patch.
+ */
+function applyHumanReviewBudget(entries: ReviewQueueEntry[]): ReviewQueueEntry[] {
+  const seated = new Set(entries
+    .filter((entry) => entry.decision.state === null && !entry.routing.autoSettled && tierRank(entry.routing.tier) >= tierRank('T2'))
+    .sort((left, right) => budgetRank(right) - budgetRank(left))
+    .slice(0, HUMAN_REVIEW_BUDGET)
+    .map((entry) => entry.decision.id));
+  return entries.map((entry) => {
+    if (entry.routing.autoSettled || tierRank(entry.routing.tier) < tierRank('T2')) return entry;
+    if (entry.decision.state !== null || seated.has(entry.decision.id)) return entry;
+    return {
+      ...entry,
+      routing: { tier: 'T1', reason: `${entry.routing.reason} Delegated — ${HUMAN_REVIEW_BUDGET} riskier changes come first.`, autoSettled: false },
+      assistTier: 'T1',
+      showsMap: false,
+    };
+  });
+}
+
+/** Escalated blocks are worth a seat ahead of blocks of the same tier that
+ * were never looked at, so the escalation is what breaks the tie. */
+function budgetRank(entry: ReviewQueueEntry): number {
+  const escalated = entry.routing.tier !== entry.assistTier ? 150 : 0;
+  return blockReviewRisk(entry.routing, entry.decision, entry.analysis) + escalated;
 }
 
 /** The next block still owed an answer, skipping everything routing settled.
