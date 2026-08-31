@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentRunReviewHandoff, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type InsightsTimeframe, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState, type UpsertDiffHunkReviewsInput, type DiffBlockReview, type UpsertDiffBlockReviewInput } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentRunReviewHandoff, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type InsightsTimeframe, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState, type UpsertDiffHunkReviewsInput, type DiffBlockReview, type UpsertDiffBlockReviewInput, type CreateStandaloneReviewInput, type StandaloneReview } from '../shared/contracts.js';
 import type { FeedbackWeight, QueueContext, QueuePlan } from './queue-intelligence.js';
 import { listProjects, resolveProjectName } from './project-registry.js';
 import type { WorkbenchDatabase } from './database.js';
@@ -28,6 +28,11 @@ import { ConversationService } from './services/conversation-service.js';
 import { normalizeLabels, providerSyncFields, providerValues, sameProviderValue, type ProviderFieldValue, type ProviderSnapshotRow, type ProviderSnapshotValues } from './repositories/provider-sync-support.js';
 
 export type { ProviderWorkItem } from './services/provider-sync-service.js';
+
+/** Who a diff verdict belongs to. A standalone review is a first-class third
+ * option: it is not a task and not a conversation, and its verdicts live in
+ * their own tables. */
+export type DiffReviewScope = { workItemId: string } | { conversationId: string } | { reviewId: string };
 
 /** Who applied a lifecycle move, and what forced it when Workbench applied it as a cascade. */
 export interface LifecycleContext { actor?: Activity['actor']; reason?: string }
@@ -87,6 +92,35 @@ interface DiffBlockReviewRow {
 
 function mapDiffBlockReview(row: DiffBlockReviewRow): DiffBlockReview {
   return { id: row.id, revision: row.revision, filePath: row.file_path, blockRange: row.block_range, contentHash: row.content_hash, state: row.state, note: row.note, updatedAt: row.updated_at };
+}
+
+interface StandaloneReviewRow {
+  id: string;
+  title: string;
+  source_kind: 'pull-request' | 'repository';
+  pull_request_url: string | null;
+  repository_path: string | null;
+  ref: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapStandaloneReview(row: StandaloneReviewRow): StandaloneReview {
+  const source: StandaloneReview['source'] = row.source_kind === 'pull-request'
+    ? { kind: 'pull-request', url: row.pull_request_url! }
+    : { kind: 'repository', repositoryPath: row.repository_path!, ref: row.ref };
+  return { id: row.id, title: row.title, source, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+/** A review opened from a link or a picker is already named by what it points
+ * at, so nothing forces the reviewer to invent a title first. */
+function defaultStandaloneReviewTitle(input: CreateStandaloneReviewInput): string {
+  if (input.pullRequestUrl) {
+    const match = /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/.exec(input.pullRequestUrl);
+    return match ? `${match[1]}/${match[2]} #${match[3]}` : input.pullRequestUrl;
+  }
+  const name = (input.repositoryPath ?? '').split('/').filter(Boolean).pop() ?? 'Review';
+  return input.ref ? `${name} — ${input.ref}` : name;
 }
 
 function mapSavedWorkItemFilter(row: SavedWorkItemFilterRow): SavedWorkItemFilter {
@@ -896,7 +930,8 @@ export class WorkItemRepository {
     return row ? this.getRun(row.id) : null;
   }
 
-  upsertDiffHunkReview(scope: { workItemId: string } | { conversationId: string }, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {
+  upsertDiffHunkReview(scope: DiffReviewScope, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {
+    if ('reviewId' in scope) return this.upsertStandaloneReviewHunkReview(scope.reviewId, input);
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
     const now = new Date().toISOString();
     this.database.prepare(`INSERT INTO diff_hunk_reviews (id, ${column}, revision, file_path, hunk_range, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -906,7 +941,7 @@ export class WorkItemRepository {
       .get(id, input.revision, input.filePath, input.hunkRange) as unknown as DiffHunkReviewRow);
   }
 
-  upsertDiffHunkReviews(scope: { workItemId: string } | { conversationId: string }, input: UpsertDiffHunkReviewsInput): DiffHunkReview[] {
+  upsertDiffHunkReviews(scope: DiffReviewScope, input: UpsertDiffHunkReviewsInput): DiffHunkReview[] {
     return this.transaction(() => input.hunks.map((hunk) => this.upsertDiffHunkReview(scope, {
       revision: input.revision,
       filePath: hunk.filePath,
@@ -916,7 +951,11 @@ export class WorkItemRepository {
     })));
   }
 
-  listDiffHunkReviews(scope: { workItemId: string } | { conversationId: string }, revision: string): DiffHunkReview[] {
+  listDiffHunkReviews(scope: DiffReviewScope, revision: string): DiffHunkReview[] {
+    if ('reviewId' in scope) {
+      return (this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM standalone_review_hunk_reviews WHERE review_id = ? AND revision = ? ORDER BY file_path ASC, hunk_range ASC`)
+        .all(scope.reviewId, revision) as unknown as DiffHunkReviewRow[]).map(mapDiffHunkReview);
+    }
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
     return (this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM diff_hunk_reviews WHERE ${column} = ? AND revision = ? ORDER BY file_path ASC, hunk_range ASC`)
       .all(id, revision) as unknown as DiffHunkReviewRow[]).map(mapDiffHunkReview);
@@ -925,7 +964,8 @@ export class WorkItemRepository {
   /** Block-level review state for the Review surface. Kept entirely separate
    * from `diff_hunk_reviews`: Changes must read and write exactly what it did
    * before this table existed. */
-  upsertDiffBlockReview(scope: { workItemId: string } | { conversationId: string }, input: UpsertDiffBlockReviewInput): DiffBlockReview {
+  upsertDiffBlockReview(scope: DiffReviewScope, input: UpsertDiffBlockReviewInput): DiffBlockReview {
+    if ('reviewId' in scope) return this.upsertStandaloneReviewBlockReview(scope.reviewId, input);
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
     const now = new Date().toISOString();
     this.database.prepare(`INSERT INTO diff_block_reviews (id, ${column}, revision, file_path, block_range, content_hash, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -935,10 +975,72 @@ export class WorkItemRepository {
       .get(id, input.revision, input.filePath, input.blockRange, input.contentHash) as unknown as DiffBlockReviewRow);
   }
 
-  listDiffBlockReviews(scope: { workItemId: string } | { conversationId: string }, revision: string): DiffBlockReview[] {
+  listDiffBlockReviews(scope: DiffReviewScope, revision: string): DiffBlockReview[] {
+    if ('reviewId' in scope) {
+      return (this.database.prepare(`SELECT id, revision, file_path, block_range, content_hash, state, note, updated_at FROM standalone_review_block_reviews WHERE review_id = ? AND revision = ? ORDER BY file_path ASC, block_range ASC`)
+        .all(scope.reviewId, revision) as unknown as DiffBlockReviewRow[]).map(mapDiffBlockReview);
+    }
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
     return (this.database.prepare(`SELECT id, revision, file_path, block_range, content_hash, state, note, updated_at FROM diff_block_reviews WHERE ${column} = ? AND revision = ? ORDER BY file_path ASC, block_range ASC`)
       .all(id, revision) as unknown as DiffBlockReviewRow[]).map(mapDiffBlockReview);
+  }
+
+  private upsertStandaloneReviewHunkReview(reviewId: string, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {
+    const now = new Date().toISOString();
+    this.database.prepare(`INSERT INTO standalone_review_hunk_reviews (id, review_id, revision, file_path, hunk_range, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(review_id, revision, file_path, hunk_range) DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
+      .run(randomUUID(), reviewId, input.revision, input.filePath, input.hunkRange, input.state, input.note ?? null, now);
+    this.touchStandaloneReview(reviewId);
+    return mapDiffHunkReview(this.database.prepare(`SELECT id, revision, file_path, hunk_range, state, note, updated_at FROM standalone_review_hunk_reviews WHERE review_id = ? AND revision = ? AND file_path = ? AND hunk_range = ?`)
+      .get(reviewId, input.revision, input.filePath, input.hunkRange) as unknown as DiffHunkReviewRow);
+  }
+
+  private upsertStandaloneReviewBlockReview(reviewId: string, input: UpsertDiffBlockReviewInput): DiffBlockReview {
+    const now = new Date().toISOString();
+    this.database.prepare(`INSERT INTO standalone_review_block_reviews (id, review_id, revision, file_path, block_range, content_hash, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(review_id, revision, file_path, block_range, content_hash) DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
+      .run(randomUUID(), reviewId, input.revision, input.filePath, input.blockRange, input.contentHash, input.state, input.note ?? null, now);
+    this.touchStandaloneReview(reviewId);
+    return mapDiffBlockReview(this.database.prepare(`SELECT id, revision, file_path, block_range, content_hash, state, note, updated_at FROM standalone_review_block_reviews WHERE review_id = ? AND revision = ? AND file_path = ? AND block_range = ? AND content_hash = ?`)
+      .get(reviewId, input.revision, input.filePath, input.blockRange, input.contentHash) as unknown as DiffBlockReviewRow);
+  }
+
+  private touchStandaloneReview(reviewId: string): void {
+    this.database.prepare('UPDATE standalone_reviews SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), reviewId);
+  }
+
+  /** Reviews that stand on their own: created from a pull request link or a
+   * repository, with no conversation behind them. */
+  createStandaloneReview(input: CreateStandaloneReviewInput): StandaloneReview {
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    const kind = input.pullRequestUrl ? 'pull-request' : 'repository';
+    const title = input.title?.trim() || defaultStandaloneReviewTitle(input);
+    this.database.prepare(`INSERT INTO standalone_reviews (id, title, source_kind, pull_request_url, repository_path, ref, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, title, kind, input.pullRequestUrl ?? null, input.repositoryPath ?? null, input.ref ?? null, now, now);
+    return this.getStandaloneReview(id)!;
+  }
+
+  listStandaloneReviews(): StandaloneReview[] {
+    return (this.database.prepare('SELECT * FROM standalone_reviews ORDER BY updated_at DESC').all() as unknown as StandaloneReviewRow[]).map(mapStandaloneReview);
+  }
+
+  getStandaloneReview(id: string): StandaloneReview | null {
+    const row = this.database.prepare('SELECT * FROM standalone_reviews WHERE id = ?').get(id) as unknown as StandaloneReviewRow | undefined;
+    return row ? mapStandaloneReview(row) : null;
+  }
+
+  deleteStandaloneReview(id: string): boolean {
+    if (!this.getStandaloneReview(id)) return false;
+    return this.transaction(() => {
+      // The verdict tables cascade only when foreign keys are enforced, so the
+      // rows are removed explicitly rather than assumed away.
+      this.database.prepare('DELETE FROM standalone_review_hunk_reviews WHERE review_id = ?').run(id);
+      this.database.prepare('DELETE FROM standalone_review_block_reviews WHERE review_id = ?').run(id);
+      this.database.prepare('DELETE FROM standalone_reviews WHERE id = ?').run(id);
+      return true;
+    });
   }
 
   createSessionFeedback(input: { conversationId?: string | null; workItemId?: string | null; rating: SessionFeedbackRating }): SessionFeedback | null {

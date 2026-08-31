@@ -15,7 +15,9 @@ import {
  * data access, not Changes' state — but it owns the selection, the default and
  * the remembered preference. Nothing here can move what Changes is showing. */
 export function useReviewSource(scope: WorkspaceDiffScope, pullRequestUrlCandidates?: string[]) {
-  const preferenceScope = 'conversationId' in scope ? `conversation:${scope.conversationId}` : `work-item:${scope.workItemId}`;
+  const preferenceScope = 'conversationId' in scope ? `conversation:${scope.conversationId}`
+    : 'reviewId' in scope ? `review:${scope.reviewId}`
+    : `work-item:${scope.workItemId}`;
   const remembered = useMemo(() => readReviewStackSelection(preferenceScope), [preferenceScope]);
 
   const diffQuery = useWorkspaceDiff(scope);

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDownRight, ArrowUpRight, Check, ExternalLink, FileDiff, MessageSquare, TriangleAlert } from 'lucide-react';
 import { languageFromPath, SyntaxHighlight } from '../../components/markdown/syntax-highlight.js';
 import { CHANGE_RELATION_LABELS, type ChangeMap } from '../../../shared/change-map.js';
@@ -81,7 +81,7 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, readingMode = 'diff', modeTitle, onSelect, onOpenDetail, onToggleReadingMode }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, readingMode = 'diff', modeTitle, onSelect, onOpenDetail, onToggleReadingMode }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
@@ -102,6 +102,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
    * without it the marker can only move the selection. It replaces the
    * portalled popover for a surface whose card is the panes and nothing
    * floating over them. */
+  renderDetail?: (decisionId: string) => ReactNode;
   /** Defaults to the unified diff, so the Changes surface that also mounts this
    * pane keeps the reading it has always had. Review opts into `final`. */
   readingMode?: DiffReadingMode;
@@ -389,6 +390,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
                 <span>{line.newLine ?? ''}</span>
                 <span><span className="diff-line-marker">{line.text.slice(0, 1) || ' '}</span><SyntaxHighlight code={line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
               </div>)}
+          {renderDetail && openDetailFor === decisionId && renderDetail(decisionId)}
           </div>
         </section>;
       })}

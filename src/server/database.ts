@@ -1858,6 +1858,63 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // A review no longer needs a conversation to exist. Its source is its own
+    // record: a pull request URL, or a local checkout plus the ref to read.
+    //
+    // Its verdicts get their own tables rather than a third scope column on
+    // `diff_hunk_reviews` / `diff_block_reviews`. Those tables carry a
+    // `CHECK (work_item_id IS NOT NULL OR conversation_id IS NOT NULL)` that
+    // a review-scoped row would violate, and relaxing it in SQLite means
+    // rebuilding tables that already hold recorded verdicts. Additive tables
+    // leave every existing verdict exactly where it is.
+    id: '069_standalone_reviews',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS standalone_reviews (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          source_kind TEXT NOT NULL CHECK (source_kind IN ('pull-request', 'repository')),
+          pull_request_url TEXT,
+          repository_path TEXT,
+          ref TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK ((source_kind = 'pull-request' AND pull_request_url IS NOT NULL)
+              OR (source_kind = 'repository' AND repository_path IS NOT NULL))
+        );
+        CREATE INDEX IF NOT EXISTS idx_standalone_reviews_updated
+          ON standalone_reviews(updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS standalone_review_hunk_reviews (
+          id TEXT PRIMARY KEY,
+          review_id TEXT NOT NULL REFERENCES standalone_reviews(id) ON DELETE CASCADE,
+          revision TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          hunk_range TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('reviewed', 'needs_changes', 'commented')),
+          note TEXT,
+          updated_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_standalone_review_hunk_reviews_key
+          ON standalone_review_hunk_reviews(review_id, revision, file_path, hunk_range);
+
+        CREATE TABLE IF NOT EXISTS standalone_review_block_reviews (
+          id TEXT PRIMARY KEY,
+          review_id TEXT NOT NULL REFERENCES standalone_reviews(id) ON DELETE CASCADE,
+          revision TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          block_range TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('reviewed', 'needs_changes', 'commented')),
+          note TEXT,
+          updated_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_standalone_review_block_reviews_key
+          ON standalone_review_block_reviews(review_id, revision, file_path, block_range, content_hash);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

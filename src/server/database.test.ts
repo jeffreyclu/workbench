@@ -79,6 +79,7 @@ const EXPECTED_MIGRATIONS = [
   '066_shared_message_kind',
   '067_shared_turn_groundings',
   '068_diff_block_reviews',
+  '069_standalone_reviews',
 ];
 
 describe('openDatabase', () => {
@@ -171,6 +172,26 @@ describe('openDatabase', () => {
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_diff_block_reviews_conversation_key'").get()).toBeTruthy();
     // Hunk-level review state is untouched by the block table existing.
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'diff_hunk_reviews'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds standalone review storage when upgrading from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    // A database that has already recorded through 068 would skip a change
+    // made only to the base schema, which is the failure this asserts against.
+    current.exec('DROP TABLE standalone_review_block_reviews; DROP TABLE standalone_review_hunk_reviews; DROP TABLE standalone_reviews;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '069_standalone_reviews'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'standalone_reviews'").get()).toBeTruthy();
+    const columns = (upgraded.prepare('PRAGMA table_info(standalone_reviews)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['title', 'source_kind', 'pull_request_url', 'repository_path', 'ref']));
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_standalone_review_block_reviews_key'").get()).toBeTruthy();
+    // Conversation- and task-scoped verdicts keep their own tables untouched.
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'diff_block_reviews'").get()).toBeTruthy();
     upgraded.close();
   });
 

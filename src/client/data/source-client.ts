@@ -1,16 +1,20 @@
 import type { StaleReferenceReport } from '../../shared/stale-reference-contract.js';
 import type { BrokerConnection, BrokerSearchResponse, BrokerSourceId, ResolvedSourceDraft } from '../../shared/contracts';
 import type { ReviewAssistTier } from '../../shared/contracts';
-import type { DiffBlockReview, DiffHunkReview, DiffHunkReviewState, GitHubPullRequestDiff, UpsertDiffBlockReviewInput, UpsertDiffHunkReviewsInput, WorkspaceDiff, WorkspaceDiffSnapshot, WorkspaceFileSource, WorkspaceRefs } from '../../shared/contracts';
+import type { CreateStandaloneReviewInput, DiffBlockReview, DiffHunkReview, DiffHunkReviewState, GitHubPullRequestDiff, StandaloneReview, UpsertDiffBlockReviewInput, UpsertDiffHunkReviewsInput, WorkspaceDiff, WorkspaceDiffSnapshot, WorkspaceFileSource, WorkspaceRefs } from '../../shared/contracts';
 import { request } from './request';
 
 // A conversation with no linked task still has a real workspace (see
 // resolveSharedReplyWorkingDirectory server-side), so the diff surface is
 // scoped to either a task or a conversation rather than a task alone.
-export type WorkspaceDiffScope = { workItemId: string } | { conversationId: string };
-const workspaceDiffBasePath = (scope: WorkspaceDiffScope) => 'workItemId' in scope
-  ? `/api/work-items/${scope.workItemId}`
-  : `/api/shared/conversations/${scope.conversationId}`;
+// A standalone review is the third scope: it was created from a pull request
+// link or a repository and never needed a thread behind it.
+export type WorkspaceDiffScope = { workItemId: string } | { conversationId: string } | { reviewId: string };
+const workspaceDiffBasePath = (scope: WorkspaceDiffScope) => {
+  if ('workItemId' in scope) return `/api/work-items/${scope.workItemId}`;
+  if ('reviewId' in scope) return `/api/reviews/${scope.reviewId}`;
+  return `/api/shared/conversations/${scope.conversationId}`;
+};
 
 /** Wire-level action union for `/api/review-assist*`; mirrors
  * `reviewAssistRequestSchema` in shared contracts. */
@@ -39,6 +43,11 @@ export const sourceClient = {
   getStaleReferences: (id: string) => request<{ report: StaleReferenceReport }>(`/api/work-items/${id}/workspace-diff/stale-references`),
   getWorkItemWorkspaces: (id: string) => request<{ selectedPath: string | null; workspaces: Array<{ path: string; label: string; selected: boolean }> }>(`/api/work-items/${id}/workspaces`),
   selectWorkItemWorkspace: (id: string, workspacePath: string) => request<{ selectedPath: string; workspaces: Array<{ path: string; label: string; selected: boolean }> }>(`/api/work-items/${id}/workspaces/selection`, { method: 'PUT', body: JSON.stringify({ workspacePath }) }),
+  listStandaloneReviews: () => request<{ reviews: StandaloneReview[] }>('/api/reviews'),
+  createStandaloneReview: (input: CreateStandaloneReviewInput) => request<{ review: StandaloneReview }>('/api/reviews', { method: 'POST', body: JSON.stringify(input) }),
+  deleteStandaloneReview: (id: string) => request<{ deleted: boolean }>(`/api/reviews/${id}`, { method: 'DELETE' }),
+  listReviewRepositories: () => request<{ repositories: Array<{ path: string; label: string }> }>('/api/reviews/repositories'),
+  listReviewRepositoryRefs: (repositoryPath: string) => request<{ refs: WorkspaceRefs }>(`/api/reviews/repositories/refs?repositoryPath=${encodeURIComponent(repositoryPath)}`),
   getGitHubPullRequestDiff: (url: string, page = 1) => request<{ diff: GitHubPullRequestDiff }>(`/api/github/pull-request-diff?url=${encodeURIComponent(url)}&page=${page}`),
   assessDiffBlocks: (blocks: Array<{ key: string; lines: string[] }>) => request<{ assessments: Record<string, { risk: number | null; reasoning: string }> }>('/api/diff-confidence', { method: 'POST', body: JSON.stringify({ blocks }) }),
   lookupDiffConfidenceBlocks: (blocks: Array<{ key: string; lines: string[] }>) => request<{ assessments: Record<string, { risk: number | null; reasoning: string }> }>('/api/diff-confidence/lookup', { method: 'POST', body: JSON.stringify({ blocks }) }),

@@ -1073,6 +1073,20 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 /* Reviews reuse the rail's card surface, but list plainly rather than through
    the conversation virtualizer, so the row gap has to come from the list. */
 .review-target-list { display: grid; align-content: start; gap: 6px; }
+/* A standalone review card carries its own delete control, so the card is a
+   row holding the open button rather than being the button itself. */
+.standalone-review-card { display: flex; align-items: stretch; gap: 6px; padding: 0; border: 0; background: none; }
+.standalone-review-card .review-target-open { flex: 1; }
+.standalone-review-card > .icon-button { align-self: center; }
+.standalone-review-card.active .review-target-open { color: #e7e6df; background: #1d1d1a; border-color: #33332e; outline: 2px solid #c9cbd3; outline-offset: -2px; }
+.rail-section-heading { padding: 14px 10px 4px; border-top: 1px solid var(--line); margin-top: 8px; }
+/* The new-review form: one field per line, label above control. */
+.new-review-dialog .dialog-body { display: grid; gap: 14px; }
+.new-review-dialog .field { display: grid; gap: 6px; font: 10px 'DM Mono'; color: #8d8c85; }
+.new-review-dialog .field input, .new-review-dialog .field select { padding: 8px 10px; color: #e7e6df; background: #121318; border: 1px solid #292d3d; border-radius: 6px; font: 12px 'DM Mono'; }
+.new-review-dialog .segmented-control { display: flex; gap: 6px; }
+.new-review-dialog .segmented-control .button.active { color: #e7e6df; border-color: #59683a; }
+.dialog-subtitle { margin: 4px 0 0; color: #85847d; font: 10px 'DM Mono'; }
 .conversation-tabs button { display: grid; gap: 6px; width: 100%; min-height: 88px; padding: 12px 10px; color: #8d8c85; background: #121318; border: 1px solid #292d3d; border-radius: 8px; text-align: left; }
 .conversation-tabs button:hover { background: #1a1e16; border-color: #59683a; }.conversation-tabs button.active { color: #e7e6df; background: #1d1d1a; border-color: #33332e; outline: 2px solid #c9cbd3; outline-offset: -2px; }
 .conversation-tabs button:disabled { cursor: default; opacity: 0.65; }

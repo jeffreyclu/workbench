@@ -613,6 +613,38 @@ export const upsertDiffBlockReviewSchema = z.object({
 
 export type UpsertDiffBlockReviewInput = z.infer<typeof upsertDiffBlockReviewSchema>;
 
+/** A review that exists on its own terms.
+ *
+ * Reviewing a diff never actually required a conversation — the conversation
+ * was only ever where a pull-request link happened to be pasted. A standalone
+ * review carries its own source instead: a pull request URL, or a local
+ * checkout plus the branch or worktree to read. Its verdicts are keyed to the
+ * review itself, so nothing about it depends on a thread existing. */
+export interface StandaloneReview {
+  id: string;
+  title: string;
+  source:
+    | { kind: 'pull-request'; url: string }
+    | { kind: 'repository'; repositoryPath: string; ref: string | null };
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Exactly one source: a pull request link, or a repository (optionally
+ * pinned to a ref). Accepting both would leave the review with no answer to
+ * "what am I reading?" until the reviewer picked one anyway. */
+export const createStandaloneReviewSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  pullRequestUrl: z.string().trim().url().max(1_000).optional(),
+  repositoryPath: z.string().trim().min(1).max(1_000).optional(),
+  ref: z.string().trim().min(1).max(300).optional(),
+}).refine(
+  (input) => Boolean(input.pullRequestUrl) !== Boolean(input.repositoryPath),
+  { message: 'Give a pull request link or pick a repository.' },
+);
+
+export type CreateStandaloneReviewInput = z.infer<typeof createStandaloneReviewSchema>;
+
 export interface WorkspacePublishStatus {
   branch: string | null;
   hasOrigin: boolean;

@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { basename, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { createSessionFeedbackSchema, createSharedConversationSchema, createSharedMessageSchema, setConversationPinnedSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema, upsertDiffBlockReviewSchema, upsertDiffHunkReviewsSchema } from '../../shared/contracts.js';
@@ -13,6 +13,7 @@ import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history
 import { parseFollowUpPlan } from '../app-exports.js';
 import { isRuntimeApproval } from '../runtime-promotion.js';
 import { PROMOTION_QUEUED_MESSAGE } from '../promotion-messages.js';
+import { listCandidateWorkspaces } from '../workspace-candidates.js';
 import type { RouteContext } from '../route-context.js';
 
 export function createConversationRouter({ repository, database, capabilities, admin }: RouteContext) {
@@ -43,12 +44,7 @@ export function createConversationRouter({ repository, database, capabilities, a
       .filter((run) => run.status === 'queued' || run.status === 'running')
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.resolvedWorkspace ?? null;
     const selected = database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversationId) as { workspace_path: string } | undefined;
-    const root = dirname(process.cwd());
-    const candidates = readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => join(root, entry.name))
-      .filter((path) => existsSync(join(path, '.git')) || existsSync(join(path, 'package.json')))
-      .map((path) => resolve(path));
+    const candidates = listCandidateWorkspaces();
     // A linked task can predate its explicit workspace assignment. Reuse the
     // same repository resolver as agent dispatch so Changes is immediately
     // usable instead of making the user rediscover the repository manually.

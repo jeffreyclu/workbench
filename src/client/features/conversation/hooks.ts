@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
+import { workspaceDiffScopeKey } from '../workspace-diff/data.js';
 import { pullRequestUrls } from '../github-diff/logic.js';
 import { useGitHubPullRequestDiffPreviews } from '../github-diff/hooks.js';
 import { useWorkspaceDiff, useWorkspaceDiffSnapshots } from '../workspace-diff/hooks.js';
@@ -22,8 +23,8 @@ export function useConversationChangesAvailability(scope: WorkspaceDiffScope | n
   // snapshot. Keep the tab available for those reviewable recorded changes.
   const snapshots = useWorkspaceDiffSnapshots(scope, workspaceDiff.data?.diff?.revision);
   const wasRunning = useRef(isRunning);
-  const previousScopeKey = useRef(scope ? ('conversationId' in scope ? `conversation:${scope.conversationId}` : `work-item:${scope.workItemId}`) : null);
-  const scopeKey = scope ? ('conversationId' in scope ? `conversation:${scope.conversationId}` : `work-item:${scope.workItemId}`) : null;
+  const previousScopeKey = useRef(scope ? workspaceDiffScopeKey(scope) : null);
+  const scopeKey = scope ? workspaceDiffScopeKey(scope) : null;
   useEffect(() => {
     // A completed run can have produced its diff in a detached Workbench
     // worktree. Refresh once per scope transition without reopening a stale
