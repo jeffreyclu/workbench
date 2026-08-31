@@ -31,14 +31,19 @@ function fileTail(filePath: string): string {
  * hunk without any translation between them.
  */
 export const ReviewChangeCanvas = memo(function ReviewChangeCanvas({
-  map, selectedId, selectionTick, onSelect,
+  map, selectedId, selectionTick, openDetailFor, onSelect,
 }: {
   map: ChangeMap;
   selectedId: string | null;
   /** Bumped on every selection, including reselecting the same node, so the
    * canvas re-reveals a node the reviewer scrolled away from. */
   selectionTick: number;
-  onSelect: (decisionId: string) => void;
+  /** The change whose decision popover is open, so the node that opened it
+   * reads as expanded. */
+  openDetailFor?: string | null;
+  /** A node press is a handle press: it names the change and hands over the
+   * element the popover anchors to, exactly as the gutter marker does. */
+  onSelect: (decisionId: string, anchor: HTMLElement) => void;
 }) {
   const body = useRef<HTMLDivElement | null>(null);
   const rows = useMemo(() => new Map(map.nodes.map((node, index) => [node.id, index])), [map.nodes]);
@@ -106,8 +111,10 @@ export const ReviewChangeCanvas = memo(function ReviewChangeCanvas({
           className={`review-canvas-node state-${node.state ?? 'pending'}${node.id === selectedId ? ' is-active' : ''}${node.id !== selectedId && linked.has(node.id) ? ' is-linked' : ''}`}
           style={{ top: index * ROW, height: NODE_HEIGHT }}
           aria-current={node.id === selectedId}
-          aria-label={`Change ${node.ordinal}: ${node.behavior} in ${node.filePath}`}
-          onClick={() => onSelect(node.id)}
+          aria-haspopup="dialog"
+          aria-expanded={openDetailFor === node.id}
+          aria-label={`Change ${node.ordinal}: ${node.behavior} in ${node.filePath} — open decision details`}
+          onClick={(event) => onSelect(node.id, event.currentTarget)}
         >
           <span className="review-canvas-node-head"><b>{node.ordinal}</b><code>{fileTail(node.filePath)}</code></span>
           <span className="review-canvas-node-behavior">{node.behavior}</span>
