@@ -12,7 +12,7 @@ import { createServer } from 'node:http';
 import { attachRealtimeServer, retireRealtimeClients } from './realtime.js';
 import { collectMemoryDocuments, indexPendingMemory } from './memory-index.js';
 import { shutdownActiveAgentProcesses } from './agent-runner.js';
-import { shutdownExternalActionClassifier } from './external-action-ai.js';
+import { shutdownExternalActionClassifier, warmExternalActionClassifier } from './external-action-ai.js';
 import { shutdownTurnGroundingClassifier, warmTurnGroundingClassifier } from './turn-grounding-ai.js';
 import { configureRuntimeRetirement } from './runtime-retirement.js';
 
@@ -34,6 +34,7 @@ configureRuntimeRetirement(() => {
 warmDiffConfidenceModel();
 warmReviewAssist();
 warmTurnGroundingClassifier();
+warmExternalActionClassifier();
 
 // Keeps the vectorized memory index (memory-index.ts) warm so the very first
 // /api/activity-memory or /api/memory/search call after a restart does not

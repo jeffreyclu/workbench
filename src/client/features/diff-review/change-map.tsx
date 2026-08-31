@@ -71,6 +71,9 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
           {showingAll ? 'Focus on current change' : `Show all ${map.nodes.length} changes`}
         </button>}
       </div>}
+      {/* The two axes, said out loud. A diagram whose shape has to be guessed
+          at is a puzzle, and a reviewer already has one of those open. */}
+      <p className="change-map-key">Each row is a file. A change sits to the right of whatever caused it.</p>
       <ChangeMapCanvas
         layout={layout}
         selectedId={selectedId}

@@ -34,18 +34,23 @@ function pathPoints(path: string): { x: number; y: number }[] {
 }
 
 describe('change map layout', () => {
-  it('routes an edge that skips a column around the box in it instead of through it', () => {
+  it('runs an edge that skips a column along an empty band rather than across the box in it', () => {
     const layout = layoutChangeMap(skipping);
     const long = layout.edges.find((item) => item.id === 'a->c')!;
     const skipped = layout.nodes.find((item) => item.id === 'b')!;
+    const points = pathPoints(long.path);
 
-    // Three points — a port, a lane, a port — rather than one straight hop.
-    expect(long.path.split(' C ')).toHaveLength(3);
-    const lane = pathPoints(long.path)[1];
-    expect(lane.x).toBeGreaterThan(skipped.x);
-    expect(lane.x).toBeLessThan(skipped.x + CHANGE_MAP_NODE_WIDTH);
-    const clearsBox = lane.y < skipped.y || lane.y > skipped.y + CHANGE_MAP_NODE_HEIGHT;
-    expect(clearsBox).toBe(true);
+    // Out of the port, along a band, back into a port. The flat middle run is
+    // the part that has to pass the skipped box, so it is checked against
+    // every box rather than only against that one.
+    expect(points).toHaveLength(4);
+    expect(points[1].y).toBe(points[2].y);
+    expect(points[1].x).toBeLessThan(skipped.x);
+    expect(points[2].x).toBeGreaterThan(skipped.x + CHANGE_MAP_NODE_WIDTH);
+    for (const box of layout.nodes) {
+      const crossesBox = points[1].y > box.y && points[1].y < box.y + CHANGE_MAP_NODE_HEIGHT;
+      expect(crossesBox).toBe(false);
+    }
   });
 
   it('gives every line leaving one node its own place on the edge of the box', () => {
@@ -82,18 +87,29 @@ describe('change map layout', () => {
     expect(back[0].labelY).toBeGreaterThan(lowestBox);
   });
 
-  it('centres short columns against the tallest one so edges stay level', () => {
-    const lopsided: ChangeMap = {
-      nodes: [node('hub', 1, 3), node('leaf-1', 2), node('leaf-2', 3), node('leaf-3', 4)],
-      edges: [edge('hub', 'leaf-1'), edge('hub', 'leaf-2'), edge('hub', 'leaf-3')],
+  it('gives each file one named row and keeps every change to it inside that row', () => {
+    const shared: ChangeMap = {
+      nodes: [
+        { ...node('one', 1, 1), filePath: 'src/card.tsx' },
+        { ...node('two', 2, 1), filePath: 'src/card.tsx' },
+        { ...node('cause', 3, 2), filePath: 'src/hook.ts' },
+      ],
+      edges: [edge('cause', 'one'), edge('cause', 'two')],
       omittedEdges: 0,
     };
-    const layout = layoutChangeMap(lopsided);
-    const hub = layout.nodes.find((item) => item.id === 'hub')!;
-    const leaves = layout.nodes.filter((item) => item.id !== 'hub');
-    const leafMiddle = (Math.min(...leaves.map((leaf) => leaf.y)) + Math.max(...leaves.map((leaf) => leaf.y + CHANGE_MAP_NODE_HEIGHT))) / 2;
+    const layout = layoutChangeMap(shared);
 
-    expect(Math.abs((hub.y + CHANGE_MAP_NODE_HEIGHT / 2) - leafMiddle)).toBeLessThanOrEqual(1);
+    // Rows appear in the order their first change does, so the cause is read
+    // before the two changes it explains.
+    expect(layout.lanes.map((lane) => lane.filePath)).toEqual(['src/hook.ts', 'src/card.tsx']);
+    const card = layout.lanes.find((lane) => lane.filePath === 'src/card.tsx')!;
+    expect(card.nodeCount).toBe(2);
+    const inCard = layout.nodes.filter((item) => item.filePath === 'src/card.tsx');
+    expect(new Set(inCard.map((item) => item.y)).size).toBe(2);
+    for (const placed of inCard) {
+      expect(placed.y).toBeGreaterThanOrEqual(card.y);
+      expect(placed.y + CHANGE_MAP_NODE_HEIGHT).toBeLessThanOrEqual(card.y + card.height);
+    }
   });
 
   it('puts the same diff in the same places every time', () => {

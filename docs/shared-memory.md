@@ -313,3 +313,19 @@ suggestion into legacy code.
 
 Learned when a six-comment instruction produced an eleven-file commit (`58f3c1512c`) whose largest
 part, three new test files totalling ~219 of 260 inserted lines, nobody had asked for.
+
+## Design answers must cover the asset/data lifecycle, not just the code shape (2026-08-31)
+
+When Jeffrey asks "what options do we have" for something that depends on data or assets owned
+outside the repo, an answer scoped to in-repo types, refactors, and call sites is not an answer.
+On the connector-logo question he rejected a proposal built around a typed `ConnectorLogoRef`
+union and unified render props with: "this is only solving it from a code perspective... what
+happens when external logos get updated? or source images get moved? we need a single unified
+method for both retrieving AND rendering."
+
+The lesson generalizes past logos. For anything sourced from a third party or from object storage,
+the design must say what happens when the upstream artifact changes, moves, 404s, or expires — who
+re-fetches it, on what cadence, where the durable copy lives, how a version change propagates to
+clients and caches, and what renders when every source fails. Treat retrieval and rendering as one
+mechanism with one owner; a type union at the boundary is an implementation detail of that
+mechanism, never a substitute for it.

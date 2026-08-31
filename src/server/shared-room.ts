@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -929,6 +929,15 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     fallback: fallbackGrounding,
     resolved: resolvedGrounding,
   };
+  // One human message grants (or denies) one capability. Resolve it once and
+  // share the exact decision with both providers; separate model calls could
+  // disagree or make the second agent time out behind the first.
+  const currentMessage = latestHumanMessageForSharedReply(retrievalThread);
+  const precedingHumanMessage = precedingHumanMessageForSharedReply(retrievalThread);
+  const precedingAgentMessage = [...retrievalThread].reverse().find((message) => message.author === 'claude' || message.author === 'codex')?.body ?? '';
+  const authorization = process.env.VITEST
+    ? Promise.resolve<ExternalActionAuthorization>({ granted: false, operation: null })
+    : classifyExternalActionAuthorization({ currentMessage, precedingHumanMessage, precedingAgentMessage });
   // A linked task may predate classification. Use its deterministic routing
   // instead of treating every chat instruction as generic analysis, but let
   // the supervisor-resolved objective override that routing. This matters for
@@ -957,7 +966,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'
       ? repository.createRun(linkedItem.id, taskKind, queued.dispatchTarget, agent, fallbackGrounding.objective, conversationId, reply.id, 'manual', accountProfile)
       : null;
-    void replyInSharedRoom(repository, agent, reply.id, run?.id, grounding);
+    void replyInSharedRoom(repository, agent, reply.id, run?.id, grounding, authorization);
   }
   return replies;
 }
@@ -1024,6 +1033,7 @@ export async function replyInSharedRoom(
   messageId: string,
   runId?: string,
   groundingSnapshot?: SharedReplyGrounding,
+  authorizationSnapshot?: Promise<ExternalActionAuthorization>,
   _cacheCheckpoint?: string,
 ): Promise<void> {
   const target = repository.getSharedMessageById(messageId);
@@ -1115,7 +1125,7 @@ export async function replyInSharedRoom(
       if (agent === 'codex') warmSharedRoomCodex(cwd, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE);
       else warmAgentCommand(agent, cwd, profile, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, runKind);
     }
-    const externalAuthorizationPromise = classifyExternalActionAuthorization({
+    const externalAuthorizationPromise = authorizationSnapshot ?? classifyExternalActionAuthorization({
       currentMessage: latestUserMessage,
       precedingHumanMessage: precedingUserMessage,
       precedingAgentMessage: precedingAgentResponse,
@@ -1155,6 +1165,8 @@ export async function replyInSharedRoom(
       authoritativeObjective: turnGrounding.objective,
       groundingSource: turnGrounding.source,
       groundingContinuation: turnGrounding.continuation,
+      externalAuthorizationGranted: externalAuthorization.granted,
+      externalAuthorizationOperation: externalAuthorization.operation,
     });
     const guardedPrompt = prompt;
     const runCodexReply = async (codexPrompt: string, resumeThreadId?: string | null, expiredThreadPrompt?: string) =>

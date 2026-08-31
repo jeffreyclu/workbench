@@ -1,47 +1,74 @@
-import type { ChangeMap, ChangeMapEdge, ChangeMapNode } from '../../../shared/change-map.js';
+import { changeEdgeLabel, type ChangeMap, type ChangeMapEdge, type ChangeMapNode } from '../../../shared/change-map.js';
 
 /** Layout is presentation, so it stays out of `shared/change-map.ts`: the
  * relationships are the same whoever draws them. It is also fully
  * deterministic — no force simulation, no randomness — because a reviewer who
  * reopens the same diff must see the same picture in the same places.
  *
- * The diagram is only worth having if it can be read at a glance, so the
- * layout spends its effort on the three things that actually make a graph
- * legible: an edge never crosses a box, edges cross each other as rarely as
- * the layering allows, and two edges touching the same node arrive at two
- * different places on it. */
-export const CHANGE_MAP_NODE_WIDTH = 188;
-// Four lines: ordinal and label, file, counts, and the symbols the change
-// declares or removes.
-export const CHANGE_MAP_NODE_HEIGHT = 78;
-const COLUMN_GAP = 96;
-const ROW_GAP = 22;
+ * The picture is a grid a person can name: **a row is a file, a column is
+ * causal depth**. A change sits in its file's lane, one column right of the
+ * furthest change it depends on, so a reader can say out loud what they are
+ * looking at — "these two changes in the router caused those three in the
+ * card" — instead of decoding a packed graph of look-alike boxes.
+ *
+ * Two consequences fall out of that and are worth the code they cost: no edge
+ * is ever drawn across a box, because anything spanning more than one column
+ * is routed down the empty band between lanes; and two edges touching the same
+ * node arrive at two different places on it. */
+export const CHANGE_MAP_NODE_WIDTH = 260;
+/** A title over up to three lines, the declarations the change touches, and
+ * its line counts. Three lines is what it takes to finish a real change's
+ * sentence; a box that ends in an ellipsis is a box that has to be opened. */
+export const CHANGE_MAP_NODE_HEIGHT = 108;
+/** The strip at the top of a lane that carries the file path. */
+export const CHANGE_MAP_LANE_LABEL_HEIGHT = 24;
+
+const COLUMN_GAP = 88;
+const LANE_ROW_GAP = 14;
+const LANE_PAD_BOTTOM = 12;
+/** The empty band between two lanes. Long edges run along it, so it has to
+ * hold a few parallel lines without either lane being touched. */
+const LANE_GAP = 36;
 const PADDING = 14;
-/** A long edge is not drawn over the columns it flies past. It is given a slim
- * lane of its own in each one, reserved like a node but only tall enough to
- * keep neighbouring lines apart. */
-const LANE_HEIGHT = 16;
-/** Edges that point back the way they came run under the whole diagram rather
- * than back through it, each in its own channel. */
-const RETURN_CHANNEL_GAP = 28;
-const RETURN_CHANNEL_STEP = 13;
-/** Two down-and-up passes of the median heuristic. More sweeps stop paying for
- * themselves on graphs this size. */
-const ORDERING_SWEEPS = 4;
+/** How far apart two long edges sharing a band are held. */
+const EDGE_STEP = 7;
+/** Roughly one character of the label typeface, used to keep a label's whole
+ * width clear of the boxes rather than only its midpoint. */
+const LABEL_CHARACTER_WIDTH = 6.1;
 /** Ports fan out across the middle half of a node's edge, so the box keeps its
  * corners and the lines still separate. */
 const PORT_BAND = CHANGE_MAP_NODE_HEIGHT * 0.5;
+/** Edges that point back the way they came run under the whole diagram rather
+ * than back through it, each in its own channel. */
+const RETURN_CHANNEL_GAP = 26;
+const RETURN_CHANNEL_STEP = 13;
 
 export interface ChangeMapPlacedNode extends ChangeMapNode {
   x: number;
   y: number;
+  /** Causal depth: how many changes had to happen before this one. */
   column: number;
+  /** Which stack this node sits in inside its lane, when a file has more than
+   * one change at the same depth. */
   row: number;
+  lane: number;
+}
+
+/** One file's band across the diagram. The file path is written once, on the
+ * lane, rather than truncated into every box that belongs to it. */
+export interface ChangeMapLane {
+  id: string;
+  filePath: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  nodeCount: number;
 }
 
 export interface ChangeMapPlacedEdge extends ChangeMapEdge {
   /** SVG path from a port on the source node to a port on the target, bent
-   * through whatever lanes it was routed along. */
+   * along a lane band when it has more than one column to cross. */
   path: string;
   labelX: number;
   labelY: number;
@@ -52,19 +79,10 @@ export interface ChangeMapPlacedEdge extends ChangeMapEdge {
 
 export interface ChangeMapLayout {
   nodes: ChangeMapPlacedNode[];
+  lanes: ChangeMapLane[];
   edges: ChangeMapPlacedEdge[];
   width: number;
   height: number;
-}
-
-/** A slot in a column: either a decision's box or a corner of a long edge. */
-interface Cell {
-  id: string;
-  column: number;
-  height: number;
-  y: number;
-  /** Null for a routing lane, which belongs to an edge rather than a decision. */
-  nodeId: string | null;
 }
 
 interface Point {
@@ -100,12 +118,11 @@ function assignColumns(map: ChangeMap): Map<string, number> {
   const connected = map.nodes.filter((node) => node.degree > 0);
   for (const node of connected) columns.set(node.id, columnOf(node.id, incoming, memo, new Set()));
 
-  // Unrelated changes get their own trailing column instead of sharing column
-  // zero with the roots. A reviewer should be able to see at a glance which
-  // parts of the diff stand alone.
-  const isolatedColumn = connected.length === 0 ? 0 : Math.max(...connected.map((node) => columns.get(node.id) ?? 0)) + 1;
+  // A change nothing caused starts at the left, like any other root. It used
+  // to be given a trailing column of its own, which bought a label the dashed
+  // border already carries and cost the diagram a whole empty column of width.
   for (const node of map.nodes) {
-    if (node.degree === 0) columns.set(node.id, isolatedColumn);
+    if (node.degree === 0) columns.set(node.id, 0);
   }
 
   // Layering a cycle can leave a column with nothing in it. Closing the gaps
@@ -116,28 +133,8 @@ function assignColumns(map: ChangeMap): Map<string, number> {
   return columns;
 }
 
-function append(index: Map<string, string[]>, key: string, value: string): void {
+function append<K, T>(index: Map<K, T[]>, key: K, value: T): void {
   index.set(key, [...(index.get(key) ?? []), value]);
-}
-
-/** The median heuristic: a cell wants to sit level with the middle of whatever
- * it is attached to in the neighbouring column. Cells attached to nothing keep
- * the position they already had, so the order stays stable and deterministic. */
-function reorderLayer(layer: string[], neighbours: Map<string, string[]>, positions: Map<string, number>): string[] {
-  const keys = new Map<string, number>();
-  layer.forEach((id, index) => {
-    const attached = (neighbours.get(id) ?? [])
-      .map((neighbour) => positions.get(neighbour))
-      .filter((position): position is number => position !== undefined)
-      .sort((left, right) => left - right);
-    if (attached.length === 0) return keys.set(id, index);
-    const middle = attached.length >> 1;
-    keys.set(id, attached.length % 2 === 1 ? attached[middle] : (attached[middle - 1] + attached[middle]) / 2);
-  });
-  return layer
-    .map((id, index) => ({ id, index }))
-    .sort((left, right) => (keys.get(left.id)! - keys.get(right.id)!) || (left.index - right.index))
-    .map((entry) => entry.id);
 }
 
 function columnX(column: number): number {
@@ -152,7 +149,7 @@ function portY(top: number, count: number, index: number): number {
 }
 
 /** Horizontal-tangent cubics between consecutive points: the line leaves and
- * enters every box and lane flat, which is what makes a bundle of them read as
+ * enters every box and band flat, which is what makes a bundle of them read as
  * parallel rather than as a knot. */
 function smoothPath(points: Point[]): string {
   let path = `M ${points[0].x} ${points[0].y}`;
@@ -181,145 +178,162 @@ function pathMidpoint(points: Point[]): Point {
 export function layoutChangeMap(map: ChangeMap): ChangeMapLayout {
   const columns = assignColumns(map);
   const lastColumn = Math.max(...map.nodes.map((node) => columns.get(node.id) ?? 0), 0);
-  const layers: string[][] = Array.from({ length: lastColumn + 1 }, () => []);
-  const cells = new Map<string, Cell>();
-  const place = (cell: Cell) => {
-    cells.set(cell.id, cell);
-    layers[cell.column].push(cell.id);
-  };
 
-  for (const node of [...map.nodes].sort((left, right) => (columns.get(left.id)! - columns.get(right.id)!) || (left.ordinal - right.ordinal))) {
-    place({ id: node.id, column: columns.get(node.id)!, height: CHANGE_MAP_NODE_HEIGHT, y: 0, nodeId: node.id });
+  // Lanes appear in the order their first change does — shallowest column,
+  // then earliest change in the diff — so reading top to bottom follows the
+  // same order as reading the queue.
+  const ordered = [...map.nodes].sort((left, right) =>
+    (columns.get(left.id)! - columns.get(right.id)!) || (left.ordinal - right.ordinal));
+  const laneOrder: string[] = [];
+  const laneMembers = new Map<string, ChangeMapNode[]>();
+  for (const node of ordered) {
+    if (!laneMembers.has(node.filePath)) {
+      laneMembers.set(node.filePath, []);
+      laneOrder.push(node.filePath);
+    }
+    laneMembers.get(node.filePath)!.push(node);
   }
-
-  // A forward edge becomes a chain of cells, one per column it passes through.
-  // The intermediate ones are lanes, and because they take a slot they push the
-  // boxes aside instead of being drawn over them.
-  const chains = new Map<string, string[]>();
-  const returning: ChangeMapEdge[] = [];
-  for (const edge of map.edges) {
-    const from = columns.get(edge.fromId);
-    const to = columns.get(edge.toId);
-    if (from === undefined || to === undefined) continue;
-    if (to <= from) {
-      returning.push(edge);
-      continue;
-    }
-    const chain = [edge.fromId];
-    for (let column = from + 1; column < to; column += 1) {
-      const id = `${edge.id}@${column}`;
-      place({ id, column, height: LANE_HEIGHT, y: 0, nodeId: null });
-      chain.push(id);
-    }
-    chain.push(edge.toId);
-    chains.set(edge.id, chain);
-  }
-
-  const nextOf = new Map<string, string[]>();
-  const previousOf = new Map<string, string[]>();
-  for (const chain of chains.values()) {
-    for (let index = 0; index + 1 < chain.length; index += 1) {
-      append(nextOf, chain[index], chain[index + 1]);
-      append(previousOf, chain[index + 1], chain[index]);
-    }
-  }
-
-  for (let sweep = 0; sweep < ORDERING_SWEEPS; sweep += 1) {
-    const downward = sweep % 2 === 0;
-    const order = downward
-      ? layers.map((_, column) => column).slice(1)
-      : layers.map((_, column) => column).slice(0, -1).reverse();
-    for (const column of order) {
-      const reference = layers[downward ? column - 1 : column + 1];
-      const positions = new Map(reference.map((id, index) => [id, index]));
-      layers[column] = reorderLayer(layers[column], downward ? previousOf : nextOf, positions);
-    }
-  }
-
-  // Columns are centred against the tallest one. Left top-aligned, a column
-  // holding one box would sit level with the top of a column holding ten, and
-  // every edge between them would be a long diagonal.
-  const heights = layers.map((layer) => layer.reduce((total, id, index) => total + cells.get(id)!.height + (index === 0 ? 0 : ROW_GAP), 0));
-  const tallest = Math.max(...heights, CHANGE_MAP_NODE_HEIGHT);
-  layers.forEach((layer, column) => {
-    let y = PADDING + Math.round((tallest - heights[column]) / 2);
-    for (const id of layer) {
-      const cell = cells.get(id)!;
-      cell.y = y;
-      y += cell.height + ROW_GAP;
-    }
-  });
 
   const nodes: ChangeMapPlacedNode[] = [];
-  layers.forEach((layer, column) => {
-    let row = 0;
-    for (const id of layer) {
-      const cell = cells.get(id)!;
-      if (!cell.nodeId) continue;
-      const node = map.nodes.find((candidate) => candidate.id === cell.nodeId)!;
-      nodes.push({ ...node, column, row, x: columnX(column), y: cell.y });
-      row += 1;
+  const lanes: ChangeMapLane[] = [];
+  let cursor = LANE_GAP;
+  laneOrder.forEach((filePath, lane) => {
+    const members = laneMembers.get(filePath)!;
+    const top = cursor + CHANGE_MAP_LANE_LABEL_HEIGHT;
+    const taken = new Map<number, number>();
+    let rows = 1;
+    for (const node of members) {
+      const column = columns.get(node.id)!;
+      const row = taken.get(column) ?? 0;
+      taken.set(column, row + 1);
+      rows = Math.max(rows, row + 1);
+      nodes.push({ ...node, column, row, lane, x: columnX(column), y: top + row * (CHANGE_MAP_NODE_HEIGHT + LANE_ROW_GAP) });
     }
+    const height = CHANGE_MAP_LANE_LABEL_HEIGHT + rows * CHANGE_MAP_NODE_HEIGHT + (rows - 1) * LANE_ROW_GAP + LANE_PAD_BOTTOM;
+    lanes.push({ id: filePath, filePath, x: PADDING - 8, y: cursor, width: 0, height, nodeCount: members.length });
+    cursor += height + LANE_GAP;
   });
-  const placed = new Map(nodes.map((node) => [node.id, node]));
 
-  const centreOf = (cellId: string): Point => {
-    const cell = cells.get(cellId)!;
-    return cell.nodeId
-      ? { x: columnX(cell.column) + CHANGE_MAP_NODE_WIDTH / 2, y: cell.y + CHANGE_MAP_NODE_HEIGHT / 2 }
-      : { x: columnX(cell.column) + CHANGE_MAP_NODE_WIDTH / 2, y: cell.y + cell.height / 2 };
-  };
+  const width = PADDING * 2 + (lastColumn + 1) * (CHANGE_MAP_NODE_WIDTH + COLUMN_GAP) - COLUMN_GAP;
+  for (const lane of lanes) lane.width = width - 2 * (PADDING - 8);
+  const bottom = lanes.length === 0 ? CHANGE_MAP_NODE_HEIGHT : cursor - LANE_GAP;
+
+  // The empty bands a long edge may run along: above the first lane, between
+  // each neighbouring pair, and below the last.
+  const bands = [LANE_GAP / 2, ...lanes.map((lane) => lane.y + lane.height + LANE_GAP / 2)];
+
+  const placed = new Map(nodes.map((node) => [node.id, node]));
+  const centreY = (nodeId: string) => placed.get(nodeId)!.y + CHANGE_MAP_NODE_HEIGHT / 2;
+
+  const forward: ChangeMapEdge[] = [];
+  const returning: ChangeMapEdge[] = [];
+  for (const edge of map.edges) {
+    const from = placed.get(edge.fromId);
+    const to = placed.get(edge.toId);
+    if (!from || !to) continue;
+    (to.column > from.column ? forward : returning).push(edge);
+  }
 
   // Ports are handed out in the order the lines arrive vertically, so the fan
   // out of a node never crosses itself before it has left the box.
   const ports = new Map<string, { start: number; end: number }>();
   const assignPorts = (side: 'start' | 'end') => {
-    const grouped = new Map<string, string[]>();
-    for (const [edgeId, chain] of chains) {
-      const anchorNode = side === 'start' ? chain[0] : chain[chain.length - 1];
-      append(grouped, anchorNode, edgeId);
-    }
-    for (const [nodeId, edgeIds] of grouped) {
-      const node = placed.get(nodeId);
-      if (!node) continue;
-      const sorted = [...edgeIds].sort((left, right) => {
-        const leftChain = chains.get(left)!;
-        const rightChain = chains.get(right)!;
-        const leftNeighbour = side === 'start' ? leftChain[1] : leftChain[leftChain.length - 2];
-        const rightNeighbour = side === 'start' ? rightChain[1] : rightChain[rightChain.length - 2];
-        return (centreOf(leftNeighbour).y - centreOf(rightNeighbour).y) || left.localeCompare(right);
-      });
-      sorted.forEach((edgeId, index) => {
-        const existing = ports.get(edgeId) ?? { start: 0, end: 0 };
-        ports.set(edgeId, { ...existing, [side]: portY(node.y, sorted.length, index) });
+    const grouped = new Map<string, ChangeMapEdge[]>();
+    for (const edge of forward) append(grouped, side === 'start' ? edge.fromId : edge.toId, edge);
+    for (const [nodeId, list] of grouped) {
+      const node = placed.get(nodeId)!;
+      const far = (edge: ChangeMapEdge) => centreY(side === 'start' ? edge.toId : edge.fromId);
+      const sorted = [...list].sort((left, right) => (far(left) - far(right)) || left.id.localeCompare(right.id));
+      sorted.forEach((edge, index) => {
+        const existing = ports.get(edge.id) ?? { start: 0, end: 0 };
+        ports.set(edge.id, { ...existing, [side]: portY(node.y, sorted.length, index) });
       });
     }
   };
   assignPorts('start');
   assignPorts('end');
 
+  // An edge that crosses more than one column would fly over whatever sits in
+  // between, so it is put on the band nearest to both of its ends instead.
+  // Bands hold no boxes, which is what makes the detour safe rather than only
+  // usually safe.
+  const banded = new Map<string, number>();
+  const sharing = new Map<number, string[]>();
+  for (const edge of forward) {
+    if (placed.get(edge.toId)!.column - placed.get(edge.fromId)!.column < 2) continue;
+    const { start, end } = ports.get(edge.id)!;
+    const cost = (band: number) => Math.abs(band - start) + Math.abs(band - end);
+    const chosen = bands.reduce((best, band) => (cost(band) < cost(best) ? band : best), bands[0]);
+    banded.set(edge.id, chosen);
+    append(sharing, chosen, edge.id);
+  }
+  const spread = new Map<string, number>();
+  for (const [, ids] of sharing) {
+    const sorted = [...ids].sort();
+    sorted.forEach((id, index) => spread.set(id, (index - (sorted.length - 1) / 2) * EDGE_STEP));
+  }
+
+  /** A label that would land on a box is lifted just above it — a line's name
+   * printed underneath a change is a name nobody reads. The label is centred on
+   * its point, so it is its whole width that has to clear the box, not the
+   * point: half a name disappearing under a card is the same bug as all of it. */
+  const clearOfBoxes = (point: Point, text: string): number => {
+    const reach = text.length * LABEL_CHARACTER_WIDTH / 2 + 3;
+    const clash = nodes.find((node) => point.x + reach > node.x - 6 && point.x - reach < node.x + CHANGE_MAP_NODE_WIDTH + 6
+      && point.y > node.y - 9 && point.y < node.y + CHANGE_MAP_NODE_HEIGHT + 9);
+    return clash ? clash.y - 9 : point.y;
+  };
+
+  /** A label that would land on a lane's file path is lifted into the empty
+   * band just above that lane. Two pieces of text in the same place is the one
+   * thing that makes a diagram unreadable outright. */
+  const clearOfLaneLabels = (y: number): number => {
+    const clash = lanes.find((lane) => y > lane.y - 3 && y < lane.y + CHANGE_MAP_LANE_LABEL_HEIGHT + 3);
+    return clash ? clash.y - 9 : y;
+  };
+
   const edges: ChangeMapPlacedEdge[] = [];
-  for (const edge of map.edges) {
-    const chain = chains.get(edge.id);
-    if (!chain) continue;
+  for (const edge of forward) {
     const from = placed.get(edge.fromId)!;
     const to = placed.get(edge.toId)!;
     const port = ports.get(edge.id)!;
-    const points: Point[] = chain.map((cellId, index) => {
-      if (index === 0) return { x: from.x + CHANGE_MAP_NODE_WIDTH, y: port.start };
-      if (index === chain.length - 1) return { x: to.x, y: port.end };
-      return centreOf(cellId);
-    });
+    const start = { x: from.x + CHANGE_MAP_NODE_WIDTH, y: port.start };
+    const end = { x: to.x, y: port.end };
+    const band = banded.get(edge.id);
+    const points = band === undefined
+      ? [start, end]
+      : (() => {
+        const limit = LANE_GAP / 2 - 4;
+        const line = band + Math.max(-limit, Math.min(limit, spread.get(edge.id) ?? 0));
+        return [start, { x: start.x + COLUMN_GAP / 2, y: line }, { x: end.x - COLUMN_GAP / 2, y: line }, end];
+      })();
     const label = pathMidpoint(points);
-    edges.push({ ...edge, backward: false, path: smoothPath(points), labelX: label.x, labelY: label.y });
+    edges.push({ ...edge, backward: false, path: smoothPath(points), labelX: label.x, labelY: clearOfLaneLabels(clearOfBoxes(label, changeEdgeLabel(edge))) });
   }
 
-  const bottom = Math.max(...[...cells.values()].map((cell) => cell.y + cell.height), PADDING + CHANGE_MAP_NODE_HEIGHT);
+  // Two labels lifted clear of the same box can land on top of each other,
+  // which is the collision they were moved to avoid. Later ones step up into
+  // the band until they are clear, in an order fixed by position and then id
+  // so that the same diff still draws the same picture.
+  const settled: { x: number; y: number; reach: number }[] = [];
+  const byPosition = [...edges].sort((left, right) =>
+    (left.labelY - right.labelY) || (left.labelX - right.labelX) || left.id.localeCompare(right.id));
+  for (const edge of byPosition) {
+    const reach = changeEdgeLabel(edge).length * LABEL_CHARACTER_WIDTH / 2 + 3;
+    let y = edge.labelY;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const overlaps = settled.some((other) => Math.abs(other.y - y) < 12 && Math.abs(other.x - edge.labelX) < other.reach + reach);
+      if (!overlaps) break;
+      y -= 13;
+    }
+    edge.labelY = y;
+    settled.push({ x: edge.labelX, y, reach });
+  }
+
   let deepest = bottom;
   returning.forEach((edge, index) => {
-    const from = placed.get(edge.fromId);
-    const to = placed.get(edge.toId);
-    if (!from || !to) return;
+    const from = placed.get(edge.fromId)!;
+    const to = placed.get(edge.toId)!;
     const channelY = bottom + RETURN_CHANNEL_GAP + index * RETURN_CHANNEL_STEP;
     deepest = Math.max(deepest, channelY);
     const startX = from.x + CHANGE_MAP_NODE_WIDTH * 0.34;
@@ -335,10 +349,5 @@ export function layoutChangeMap(map: ChangeMap): ChangeMapLayout {
     });
   });
 
-  return {
-    nodes,
-    edges,
-    width: PADDING * 2 + (lastColumn + 1) * (CHANGE_MAP_NODE_WIDTH + COLUMN_GAP) - COLUMN_GAP,
-    height: deepest + PADDING,
-  };
+  return { nodes, lanes, edges, width, height: deepest + PADDING };
 }

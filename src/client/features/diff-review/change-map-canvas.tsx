@@ -1,21 +1,60 @@
 import { memo, type KeyboardEvent } from 'react';
 import { CHANGE_RELATIONS, changeEdgeLabel, type ChangeMapNode, changeEdgeContinuity } from '../../../shared/change-map.js';
-import { CHANGE_MAP_NODE_HEIGHT, CHANGE_MAP_NODE_WIDTH, type ChangeMapLayout } from './change-map-layout.js';
+import { CHANGE_MAP_LANE_LABEL_HEIGHT, CHANGE_MAP_NODE_HEIGHT, CHANGE_MAP_NODE_WIDTH, type ChangeMapLayout } from './change-map-layout.js';
 import { plainRelationText } from './change-map-logic.js';
 import type { DecisionPopoverAnchor } from './decision-popover.js';
 
 /** The drawing itself, shared by the whole-diff diagram and the per-decision
  * diagram beside an open decision panel. Both surfaces must read as the same
  * picture — same boxes, same arrows, same selection semantics — so the markup
- * lives in one place and the callers only decide which subgraph to hand it. */
+ * lives in one place and the callers only decide which subgraph to hand it.
+ *
+ * The picture has two axes a reader can name: down the page is the file, and
+ * across the page is what caused what. Everything drawn here serves that — the
+ * file path is written once on its lane instead of truncated into every box,
+ * and a box spends its room on a title a person can finish reading. */
+
+/** Few enough arrows that naming all of them helps rather than crowds. Above
+ * this, a label appears when the reviewer points at or selects a line. */
+const ALWAYS_LABEL_EDGES = 8;
+const TITLE_LINE_LIMIT = 29;
+const TITLE_LINES = 3;
 
 function truncate(value: string, limit: number): string {
   return value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
 }
 
-function fileTail(filePath: string): string {
-  const parts = filePath.split('/');
-  return parts.length <= 2 ? filePath : `…/${parts.slice(-2).join('/')}`;
+/** The end of a path, which is the part that identifies the file. Lanes are
+ * wide, so this only bites on genuinely deep paths. */
+function laneLabel(filePath: string, limit: number): string {
+  return filePath.length <= limit ? filePath : `…${filePath.slice(-(limit - 1))}`;
+}
+
+/** The change's sentence, broken across the box on word boundaries. Cutting
+ * every title at twenty characters — what the old box did — made every change
+ * read as an ellipsis; a title a person can finish is the point of the box. */
+function wrapLabel(text: string, limit: number, maxLines: number): string[] {
+  const lines: string[] = [];
+  let current = '';
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    if (current === '') {
+      current = truncate(word, limit);
+      continue;
+    }
+    const next = `${current} ${word}`;
+    if (next.length <= limit) {
+      current = next;
+      continue;
+    }
+    if (lines.length === maxLines - 1) {
+      current = truncate(next, limit);
+      break;
+    }
+    lines.push(current);
+    current = truncate(word, limit);
+  }
+  if (current !== '') lines.push(current);
+  return lines;
 }
 
 /** A declaration and what the patch did to it: `+` added, `−` removed, bare
@@ -84,19 +123,31 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
   const orderedEdges = [...layout.edges].sort((left, right) =>
     Number(left.fromId === selectedId || left.toId === selectedId) - Number(right.fromId === selectedId || right.toId === selectedId));
 
+  const selectedLane = layout.nodes.find((node) => node.id === selectedId)?.lane ?? null;
+
   const activate = (event: KeyboardEvent, action: () => void) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
     action();
   };
 
-  return <div className="change-map-canvas" role="group" aria-label={label} tabIndex={0}>
+  return <div className={`change-map-canvas${layout.edges.length <= ALWAYS_LABEL_EDGES ? ' labelled' : ''}`} role="group" aria-label={label} tabIndex={0}>
     <svg width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`}>
       <defs>
         {CHANGE_RELATIONS.map((relation) => <marker key={relation} id={`change-map-arrow-${relation}`} className={`change-map-arrow relation-${relation}`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M 0 1 L 8 4 L 0 7 z" />
         </marker>)}
       </defs>
+      {/* One band per file, named once. Everything inside it is a change to
+          that file, which is the fact the old diagram made a reader assemble
+          out of a truncated path repeated in every box. */}
+      {layout.lanes.map((lane, index) => <g key={lane.id} className={`change-map-lane${selectedLane === index ? ' selected' : ''}`} aria-hidden="true">
+        <rect className="change-map-lane-band" x={lane.x} y={lane.y} width={lane.width} height={lane.height} rx="9" />
+        <text className="change-map-lane-label" x={lane.x + 12} y={lane.y + CHANGE_MAP_LANE_LABEL_HEIGHT - 8}>
+          {laneLabel(lane.filePath, 64)}
+          <tspan className="change-map-lane-count" dx="10">{lane.nodeCount} {lane.nodeCount === 1 ? 'change' : 'changes'}</tspan>
+        </text>
+      </g>)}
       {orderedEdges.map((edge) => {
         const active = edge.id === selectedEdgeId;
         const touchesSelection = edge.fromId === selectedId || edge.toId === selectedId;
@@ -112,7 +163,7 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
             onClick={() => onSelectEdge(active ? null : edge.id)}
             onKeyDown={(event) => activate(event, () => onSelectEdge(active ? null : edge.id))}
           />
-          {(active || touchesSelection) && <text className="change-map-edge-label" x={edge.labelX} y={edge.labelY} textAnchor="middle">{changeEdgeLabel(edge)}</text>}
+          <text className="change-map-edge-label" x={edge.labelX} y={edge.labelY} textAnchor="middle">{changeEdgeLabel(edge)}</text>
         </g>;
       })}
       {layout.nodes.map((node) => {
@@ -123,6 +174,11 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
         const reviewed = node.state !== null;
         const dimmed = Boolean(selectedId) && !isSelected && connectedIds.size > 0 && !connectedIds.has(node.id);
         const band = riskBands?.get(node.id) ?? null;
+        const titleLines = wrapLabel(`${node.ordinal}. ${node.label}`, TITLE_LINE_LIMIT, TITLE_LINES);
+        const symbols = symbolLine(node.symbols, 32);
+        // The lines under the title follow it rather than sitting at the foot
+        // of the box, so a short change does not read as one with a hole in it.
+        const titleBottom = 24 + titleLines.length * 17;
         const openDetail = (anchor: DecisionPopoverAnchor) => {
           onSelect(node.id);
           onOpenDetail?.(node.id, anchor);
@@ -142,14 +198,17 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
           onClick={(event) => openDetail(event.currentTarget)}
           onKeyDown={(event) => activate(event, () => openDetail(event.currentTarget))}
         >
-          <rect className="change-map-node-body" x={node.x} y={node.y} width={CHANGE_MAP_NODE_WIDTH} height={CHANGE_MAP_NODE_HEIGHT} rx="7" />
+          <rect className="change-map-node-body" x={node.x} y={node.y} width={CHANGE_MAP_NODE_WIDTH} height={CHANGE_MAP_NODE_HEIGHT} rx="8" />
           <rect className="change-map-node-rail" x={node.x} y={node.y} width="3" height={CHANGE_MAP_NODE_HEIGHT} rx="1.5" />
-          <text className="change-map-node-title" x={node.x + 13} y={node.y + 23}>{node.ordinal}. {truncate(node.label, 20)}</text>
-          <text className="change-map-node-file" x={node.x + 13} y={node.y + 39}>{truncate(fileTail(node.filePath), 26)}</text>
-          <text className="change-map-node-counts" x={node.x + 13} y={node.y + 53}>+{node.additions} / -{node.deletions}{node.fileCount > 1 ? ` · ${node.fileCount} files` : ''}</text>
-          {symbolLine(node.symbols, 26) && <text className="change-map-node-symbols" x={node.x + 13} y={node.y + 68}>{symbolLine(node.symbols, 26)}</text>}
-          {cameFrom && <text className="change-map-node-trail" x={node.x + CHANGE_MAP_NODE_WIDTH - 9} y={node.y + CHANGE_MAP_NODE_HEIGHT - 8} textAnchor="end">came from</text>}
-          {band && <circle className={`change-map-node-risk-dot band-${band}`} cx={node.x + CHANGE_MAP_NODE_WIDTH - 9} cy={node.y + 9} r="3.5" />}
+          {titleLines.map((line, index) => <text key={index} className="change-map-node-title" x={node.x + 14} y={node.y + 24 + index * 17}>{line}</text>)}
+          {symbols && <text className="change-map-node-symbols" x={node.x + 14} y={node.y + titleBottom + 4}>{symbols}</text>}
+          <text className="change-map-node-counts" x={node.x + 14} y={node.y + titleBottom + (symbols ? 23 : 4)}>
+            <tspan className="added">+{node.additions}</tspan>
+            <tspan className="removed" dx="7">−{node.deletions}</tspan>
+            {node.fileCount > 1 && <tspan className="spans" dx="8">· {node.fileCount} files</tspan>}
+          </text>
+          {cameFrom && <text className="change-map-node-trail" x={node.x + CHANGE_MAP_NODE_WIDTH - 10} y={node.y + CHANGE_MAP_NODE_HEIGHT - 12} textAnchor="end">came from</text>}
+          {band && <circle className={`change-map-node-risk-dot band-${band}`} cx={node.x + CHANGE_MAP_NODE_WIDTH - 11} cy={node.y + 11} r="4" />}
         </g>;
       })}
     </svg>

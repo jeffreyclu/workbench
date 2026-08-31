@@ -494,6 +494,12 @@ operation and destination (for example, "post this summary as a comment on GitHu
 this Linear issue") authorizes only that exact operation. Generic task text, prior approvals, and
 unrelated external reads/writes remain denied.
 
+*Classifier lifecycle correction, 2026-08-31.* Authorization remains a lightweight model judgment,
+not a deterministic phrase matcher. Keep that classifier warm, start each timeout only when its queued
+judgment actually begins executing, and resolve the decision once per human message so Codex and Claude
+receive the same one-turn capability. A direct imperative such as “create a Linear card” is itself the
+grant; classifier cold-start or queue latency must not be misreported as a valid negative judgment.
+
 The Workbench supervisor should enforce this structurally, not rely on each agent remembering it:
 detect when a dispatched agent attempts an action against an external website or CLI without a
 permission grant tied to that specific request, and auto-deny it before it executes. Treat a direct

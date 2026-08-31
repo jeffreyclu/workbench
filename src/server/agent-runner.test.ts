@@ -485,6 +485,21 @@ describe('classifyExecution', () => {
     expect(externalActionContractForAuthorization(denied)).toBe(EXTERNAL_ACTION_CONTRACT);
   });
 
+  it('treats a direct request to create a Linear card as the current-turn grant', async () => {
+    let classifierPrompt = '';
+    const granted = await classifyExternalActionAuthorization({
+      currentMessage: 'ok create a linear card to address',
+      precedingHumanMessage: 'verify using slack/confluence',
+    }, async (prompt) => {
+      classifierPrompt = prompt;
+      return '{"granted":true,"operation":"Create the requested Linear card."}';
+    });
+
+    expect(classifierPrompt).toContain('CURRENT MESSAGE (the only possible grant):\nok create a linear card to address');
+    expect(granted).toEqual({ granted: true, operation: 'Create the requested Linear card.' });
+    expect(externalActionContractForAuthorization(granted)).toContain('Supervisor-issued external-action capability');
+  });
+
   it('retries an invalid authorization envelope instead of silently treating it as a denial', async () => {
     const outputs = ['not json', '{"granted":true,"operation":"Publish the approved timesheet."}'];
     const decision = await classifyExternalActionAuthorization(
