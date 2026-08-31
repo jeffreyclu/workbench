@@ -254,6 +254,30 @@ describe('ReviewStackView', () => {
     expect(node()).toHaveClass('handle-pulse');
   });
 
+  it('opens the change under either handle, and closes it on a second press', async () => {
+    renderReview(twoDecisionDiff);
+    await screen.findByRole('button', { name: /^Change \d+: .* in src\/server\/auth.ts$/ });
+    const brief = () => document.querySelector('.review-change-brief');
+    const marker = () => document.querySelector('.diff-review-block-marker')!;
+
+    // A press has to produce something to read, not only a highlight.
+    expect(brief()).toBeNull();
+
+    fireEvent.click(marker());
+    await waitFor(() => expect(brief()).not.toBeNull());
+    // It opens against the block it names, inside the diff.
+    expect(document.querySelector('.diff-review-diff-block.active .review-change-brief')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /mark reviewed/i })).toBeInTheDocument();
+
+    fireEvent.click(marker());
+    await waitFor(() => expect(brief()).toBeNull());
+
+    // The canvas node is the same handle, so it opens the same thing.
+    fireEvent.click(canvasNode('src/client/auth.ts'));
+    await waitFor(() => expect(screen.getByLabelText('Full diff for src/client/auth.ts')).toBeInTheDocument());
+    await waitFor(() => expect(brief()).not.toBeNull());
+  });
+
   it('reads a block as its finished code by default and drops to the diff with d', async () => {
     renderReview();
     // The default reading is the code that will exist: a rewritten block is

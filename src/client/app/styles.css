@@ -1454,6 +1454,28 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .review-canvas-node-meta { display: flex; gap: 7px; color: #77766f; font: 500 10px 'DM Mono'; }
 .review-canvas-node-meta i { font-style: normal; }
 .review-canvas-node-meta i:first-child { color: #8d9c62; }
+
+/* What a handle press opens: the change's brief, in the diff itself under the
+   block it belongs to. In flow rather than floating — the code pane is a
+   scroll container and anything absolute inside it is clipped at the edge. */
+.review-change-brief { display: flex; flex-direction: column; gap: 7px; margin: 0 0 6px; padding: 9px 11px; background: #16180f; border-left: 2px solid var(--acid); border-radius: 0 6px 6px 0; }
+.review-change-brief-routing { display: flex; align-items: baseline; gap: 8px; margin: 0; color: #a9a89f; font: 500 11px/1.4 'DM Mono'; }
+.review-change-brief-routing b { flex: 0 0 auto; padding: 1px 6px; color: #15200d; background: var(--acid); border-radius: 4px; font: 700 9px 'DM Mono'; text-transform: uppercase; letter-spacing: .06em; }
+.review-change-brief-routing span { min-width: 0; }
+.review-change-brief-close { margin-left: auto; padding: 1px 6px; color: #85847d; background: none; border: 1px solid #35352f; border-radius: 4px; cursor: pointer; font: 500 10px 'DM Mono'; }
+.review-change-brief-close:hover { color: #deddd6; border-color: #59683a; }
+.review-change-brief-effect { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; color: #deddd6; font: 500 11px 'DM Mono'; }
+.review-change-brief-effect em { padding: 1px 6px; color: #f0c674; background: #2a2416; border-radius: 4px; font: 500 10px 'DM Mono'; font-style: normal; }
+.review-change-brief-obligations { display: flex; flex-direction: column; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.review-change-brief-obligations li { display: flex; flex-direction: column; gap: 2px; padding-left: 9px; border-left: 1px solid #35352f; color: #b3b2a9; font: 500 11px/1.45 'DM Mono'; }
+.review-change-brief-obligations li.outcome-proven { border-left-color: #6f7d47; }
+.review-change-brief-obligations li.outcome-failed { border-left-color: #b4553f; }
+.review-change-brief-obligations li small { color: #77766f; font: 500 10px/1.4 'DM Mono'; }
+.review-change-brief-actions { display: flex; align-items: center; gap: 8px; }
+.review-change-brief-actions p[role='alert'] { margin: 0; color: #d98b76; font: 500 10px 'DM Mono'; }
+.review-change-brief-actions span[role='status'] { color: #77766f; font: 500 10px 'DM Mono'; }
+.review-change-brief-actions .review-approve { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; color: #15200d; background: var(--acid); border: none; border-radius: 5px; cursor: pointer; font: 700 11px 'DM Mono'; }
+.review-change-brief-actions .review-approve:disabled { color: #85847d; background: #26261f; cursor: default; }
 .review-canvas-node-meta em { margin-left: auto; font-style: normal; color: #85847d; }
 .review-place-map { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #171715; overflow-x: auto; }
 .review-place-map > header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }

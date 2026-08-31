@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDownRight, ArrowUpRight, Check, ExternalLink, FileDiff, MessageSquare, TriangleAlert } from 'lucide-react';
 import { languageFromPath, SyntaxHighlight } from '../../components/markdown/syntax-highlight.js';
 import { CHANGE_RELATION_LABELS, type ChangeMap } from '../../../shared/change-map.js';
@@ -81,7 +81,7 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, readingMode = 'diff', modeTitle, onSelect, onOpenDetail, onToggleReadingMode }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, readingMode = 'diff', modeTitle, onSelect, onOpenDetail, onToggleReadingMode }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
@@ -97,6 +97,12 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
    * severity the detail panel shows without opening it. */
   riskBands?: Map<string, string>;
   openDetailFor?: string | null;
+  /** Draws the open change's detail in the diff itself, under the block the
+   * handle names. Supplying this is what makes a gutter press open something:
+   * without it the marker can only move the selection. It replaces the
+   * portalled popover for a surface whose card is the panes and nothing
+   * floating over them. */
+  renderDetail?: (decisionId: string) => ReactNode;
   /** Defaults to the unified diff, so the Changes surface that also mounts this
    * pane keeps the reading it has always had. Review opts into `final`. */
   readingMode?: DiffReadingMode;
@@ -244,6 +250,10 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   // first block too — every active block sharing one ref would leave it on the
   // last one, scrolling past the start of the change.
   const lensShown = new Set<string>();
+  // Same rule for the open change's detail: one change can own several blocks
+  // in a file, and its brief belongs on the first of them rather than repeated
+  // down the file.
+  const detailShown = new Set<string>();
   let scrollTargetTaken = false;
 
   return <article className="diff-review-file-diff" aria-label={`Full diff for ${filePath}`}>
@@ -268,6 +278,8 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         const summary = linkIndex.get(decisionId) ?? null;
         const showLens = Boolean(summary) && !lensShown.has(decisionId);
         if (showLens) lensShown.add(decisionId);
+        const showDetail = Boolean(renderDetail) && openDetailFor === decisionId && !detailShown.has(decisionId);
+        if (showDetail) detailShown.add(decisionId);
         const peeking = peekDecisionId === decisionId;
         const marker = active ? null : markers.get(decisionId) ?? null;
         const ordinal = decision?.ordinal ?? null;
@@ -300,11 +312,13 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
               data-decision-marker={decisionId}
               // Only advertise a popover when one is actually wired: a marker
               // that announces a dialog and opens nothing is a dead click.
-              aria-haspopup={onOpenDetail ? 'dialog' : undefined}
-              aria-expanded={onOpenDetail ? openDetailFor === decisionId : undefined}
+              // An in-flow detail is not a dialog, so only the portalled
+              // popover may announce one.
+              aria-haspopup={onOpenDetail && !renderDetail ? 'dialog' : undefined}
+              aria-expanded={onOpenDetail || renderDetail ? openDetailFor === decisionId : undefined}
               // Same rule as the popup hint: with nothing wired the marker only
               // selects, so it must not announce details it cannot show.
-              aria-label={`Decision ${ordinal ?? ''} · ${reviewStateLabel(state)}${band ? ` · ${band} risk` : ''}${onOpenDetail ? ' — open decision details' : ''}`}
+              aria-label={`Decision ${ordinal ?? ''} · ${reviewStateLabel(state)}${band ? ` · ${band} risk` : ''}${onOpenDetail || renderDetail ? ' — open decision details' : ''}`}
               onClick={(event) => {
                 const anchor = event.currentTarget;
                 onSelect(decisionId);
@@ -322,6 +336,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
             <code>{hunk.range}</code>
             <small><b>+{hunk.additions}</b> <i>−{hunk.deletions}</i></small>
           </button>
+          {showDetail && renderDetail?.(decisionId)}
           {showLens && summary && <>
             <button
               type="button"

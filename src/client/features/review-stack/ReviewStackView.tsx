@@ -16,6 +16,7 @@ import { ReviewFullFilePane } from './review-full-file-pane.js';
 import { indexReviewBlocks, reviewBlockStorageKey, toBlockLevelFiles } from './review-blocks.js';
 import { groupHunkVerdictsByState, newlyProjectedHunkVerdicts, projectHunkVerdicts } from './review-hunk-projection.js';
 import { buildReviewQueue, nextUnsettledBlockId, reviewQueueProgress } from './review-queue.js';
+import { ReviewChangeBrief } from './review-change-brief.js';
 import { ReviewChangeCanvas } from './review-change-canvas.js';
 import { selectReviewBlock, type ReviewSelection } from './review-selection.js';
 import { useBlockAssistAnswers } from './use-block-assist.js';
@@ -114,6 +115,11 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   // map writes only what is highlighted inside itself.
   const [selection, setSelection] = useState<ReviewSelection | null>(null);
   const [selectionTick, setSelectionTick] = useState(0);
+  // Which change is open. Pressing a handle — the gutter marker or a canvas
+  // node — is what opens one: both name the same change, so both put its brief
+  // in the code pane under the block it belongs to. Pressing the open one
+  // again closes it.
+  const [openChangeId, setOpenChangeId] = useState<string | null>(null);
   // An open card is the code and the canvas, and nothing else: no decision
   // panel, in front of the panes or behind a handle. A verdict is recorded with
   // the keyboard, against the block the card is already on.
@@ -129,8 +135,19 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
   const selectBlock = useCallback((decisionId: string) => {
     setSelection(selectReviewBlock(decisionId));
     setSelectionTick((tick) => tick + 1);
+    // Moving the selection by any other means — the keyboard, a relationship
+    // link, saving a verdict — closes what a handle opened, so a brief never
+    // stays behind on a change the reader has left.
+    setOpenChangeId(null);
     if (revision) writeReviewStackBlock(source.preferenceScope, revision, decisionId);
   }, [revision, source.preferenceScope]);
+
+  /** What both handles do: move the selection to that change and open it. */
+  const openChange = useCallback((decisionId: string) => {
+    const closing = openChangeId === decisionId;
+    selectBlock(decisionId);
+    setOpenChangeId(closing ? null : decisionId);
+  }, [openChangeId, selectBlock]);
 
   const active = queue.find((entry) => entry.decision.id === selectedId) ?? null;
   const activeFilePath = active?.decision.hunks[0]?.filePath ?? null;
@@ -264,7 +281,18 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
                     changeMap={changeMap}
                     readingMode={readingMode}
                     modeTitle={READING_MODE_TITLE}
+                    openDetailFor={openChangeId}
+                    renderDetail={(decisionId) => decisionId === active.decision.id
+                      ? <ReviewChangeBrief
+                          entry={active}
+                          saving={upsertBlockReview.isPending}
+                          error={upsertBlockReview.error ? 'Try again.' : null}
+                          onMarkReviewed={markReviewed}
+                          onClose={() => setOpenChangeId(null)}
+                        />
+                      : null}
                     onSelect={selectBlock}
+                    onOpenDetail={openChange}
                     onToggleReadingMode={toggleReadingMode}
                   />)}
             </div>
@@ -272,7 +300,7 @@ export const ReviewStackView = memo(function ReviewStackView({ scope, taskIntent
               map={changeMap}
               selectedId={selectedId}
               selectionTick={selectionTick}
-              onSelect={selectBlock}
+              onSelect={openChange}
             />
           </div>
         </div>}
