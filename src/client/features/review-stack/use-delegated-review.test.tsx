@@ -29,7 +29,7 @@ function Harness({ targets, onAutoReview }: { targets: DelegationTarget[]; onAut
 }
 
 function stubAssist(answer: string) {
-  const fetchMock = vi.fn(async () => new Response(JSON.stringify({ answer }), { headers: { 'Content-Type': 'application/json' } }));
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ answer }), { headers: { 'Content-Type': 'application/json' } }));
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
