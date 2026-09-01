@@ -23,7 +23,7 @@ describe('LinearProvider outbound transport', () => {
       .mockResolvedValueOnce(rateLimited)
       .mockResolvedValueOnce(rateLimited)
       .mockResolvedValueOnce(ok);
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
 
     const provider = new LinearProvider('linear-token', [], [], policyFetch, sleep);
     await expect(provider.fetchTeams()).resolves.toEqual([]);
@@ -37,7 +37,7 @@ describe('LinearProvider outbound transport', () => {
   it('gives up after repeated 429s with a rate-limit-specific error, distinct from auth failures', async () => {
     const rateLimited = new Response('rate limited', { status: 429 });
     const policyFetch = vi.fn().mockResolvedValue(rateLimited);
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
 
     const provider = new LinearProvider('linear-token', [], [], policyFetch, sleep);
     await expect(provider.fetchTeams()).rejects.toThrow(/rate limit exceeded/i);
