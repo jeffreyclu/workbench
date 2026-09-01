@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { getGitHubPullRequestDiff, getGitHubPullRequestImage, parseGitHubPullRequestUrl } from './github-pull-request-diff.js';
+import { getGitHubPullRequestDiff, getGitHubPullRequestFile, getGitHubPullRequestImage, parseGitHubPullRequestUrl } from './github-pull-request-diff.js';
 
 describe('GitHub pull-request diffs', () => {
   it('parses GitHub pull-request URLs and rejects unrelated links', () => {
@@ -77,6 +77,25 @@ describe('GitHub pull-request diffs', () => {
     const image = await getGitHubPullRequestImage('https://github.com/writer/workbench/pull/24', 'assets/review.png', { token: 'secret', fetchForPolicy: () => fetchImpl as typeof fetch });
     expect(image).toMatchObject({ contentType: 'image/png', body: Buffer.from([1, 2, 3]) });
     expect(fetchImpl.mock.calls.some(([input]) => String(input).includes(`/contents/assets/review.png?ref=${'c'.repeat(40)}`))).toBe(true);
+  });
+
+  it('reads a whole PR file from Contents at the resolved head SHA', async () => {
+    const sha = 'f'.repeat(40);
+    const fetchImpl = vi.fn(async (_input: string | URL | Request) => new Response('export const enabled = true;\n', { status: 200 }));
+    const file = await getGitHubPullRequestFile('https://github.com/writer/workbench/pull/24', 'src/with space.ts', sha, { token: 'secret', fetchForPolicy: () => fetchImpl as typeof fetch });
+    expect(file).toEqual({ path: 'src/with space.ts', revision: sha, content: 'export const enabled = true;\n', unavailable: null });
+    expect(fetchImpl.mock.calls.some(([input]) => String(input).includes(`/contents/src/with%20space.ts?ref=${sha}`))).toBe(true);
+  });
+
+  it('keeps an unavailable PR file in the review instead of failing the whole reader', async () => {
+    const sha = '9'.repeat(40);
+    const fetchImpl = vi.fn(async () => new Response('', { status: 404 }));
+    await expect(getGitHubPullRequestFile('https://github.com/writer/workbench/pull/24', 'removed.ts', sha, { token: 'secret', fetchForPolicy: () => fetchImpl as typeof fetch })).resolves.toEqual({ path: 'removed.ts', revision: sha, content: null, unavailable: 'This file is not in the pull request head revision.' });
+  });
+
+  it('returns a stable error when Contents API rejects an otherwise readable PR file', async () => {
+    const fetchImpl = vi.fn(async () => new Response('', { status: 403 }));
+    await expect(getGitHubPullRequestFile('https://github.com/writer/workbench/pull/24', 'private.ts', '8'.repeat(40), { token: 'secret', fetchForPolicy: () => fetchImpl as typeof fetch })).rejects.toThrow('GitHub auth failed; reconnect in Sources.');
   });
 
   it('uses the head SHA, rather than the mutable head ref, as the review revision across force-pushes', async () => {

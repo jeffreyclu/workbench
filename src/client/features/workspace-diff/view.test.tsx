@@ -647,6 +647,28 @@ describe('WorkspaceDiffView pull-request source', () => {
     expect(screen.getByRole('button', { name: 'Load 100 more files' })).toBeInTheDocument();
   });
 
+  it('reads a pull-request file whole from GitHub instead of requiring a local checkout', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([], 'clean-revision') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      if (url.includes('/api/github/pull-request-diff')) return json({ diff: pullRequestDiff(1, null) });
+      if (url.includes('/api/github/pull-request-file')) return json({ file: { path: 'src/page-1.ts', revision: 'sha-42', content: 'after\n', unavailable: null } });
+      if (url.includes('/api/review-auto-score')) return json({ scores: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock, false, null, [pullRequestUrl]);
+
+    await findSelectedDecision('Changes behavior in src/page-1.ts.');
+    fireEvent.click(screen.getByRole('button', { name: 'Diff' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Final code' }));
+
+    expect(await screen.findByText('after')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/github/pull-request-file'))).toBe(true);
+  });
+
   it('accepts a pasted GitHub pull-request URL without a prior task reference', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

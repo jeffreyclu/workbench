@@ -21,7 +21,7 @@ import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
 import { DiffReviewChangeMap } from '../diff-review/change-map.js';
 import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js';
-import { useGitHubPullRequestDiff } from '../github-diff/hooks.js';
+import { useGitHubPullRequestDiff, useGitHubPullRequestFile } from '../github-diff/hooks.js';
 import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
 import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceCommitDiff, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots, useWorkspaceFileSource, useWorkspaceRefCommits, useWorkspaceRefDiff, useWorkspaceRefs, workspaceExplorerQueryKey } from './hooks.js';
 import { workspaceDiffScopeKeys } from './data.js';
@@ -383,17 +383,23 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     setReadingMode(next);
     writeReviewStackReadingMode(next);
   }, [readingMode]);
-  // Whole-file reading needs the file itself, and only a source this checkout
-  // can produce has one: a pull request's after-state lives on a head revision
-  // this checkout may never have fetched, so asking for it would read the local
-  // copy of the same path and mark the changes on the wrong text.
-  const wholeFileReadable = !isPullRequestSource;
-  const fileSourceQuery = useWorkspaceFileSource(
+  // PR after-state is fetched from GitHub at its resolved head SHA. This must
+  // not fall back to the local checkout: it may hold unrelated text at the
+  // same path. Binary files stay in the diff-only reader.
+  const wholeFileReadable = !selectedFile?.isBinary;
+  const workspaceFileSourceQuery = useWorkspaceFileSource(
     scope,
     selectedFile?.path ?? null,
     fileSourceRevision(displayedDiff?.revision),
-    readingMode === 'file' && wholeFileReadable,
+    readingMode === 'file' && wholeFileReadable && !isPullRequestSource,
   );
+  const githubFileSourceQuery = useGitHubPullRequestFile(
+    selectedPullRequestUrl,
+    selectedFile?.path ?? null,
+    displayedDiff?.revision ?? null,
+    readingMode === 'file' && wholeFileReadable && isPullRequestSource,
+  );
+  const fileSourceQuery = isPullRequestSource ? githubFileSourceQuery : workspaceFileSourceQuery;
 
   const recordDecisionState = useCallback((decision: ReviewDecision, state: DiffHunkReviewState) =>
     upsertHunkReview.mutateAsync({
@@ -640,7 +646,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                           <button type="button" className="diff-review-reading-mode mode-file" title={READING_MODE_TITLE} onClick={toggleReadingMode}>Whole file</button>
                           {wholeFileReadable
                             ? <ReviewFullFilePane filePath={selectedFile.path} file={fileSourceQuery.data?.file ?? null} isLoading={fileSourceQuery.isLoading} error={fileSourceQuery.error ? 'This file could not be read.' : null} hunks={fileHunks} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} onSelect={selectDecision} />
-                            : <p className="review-full-file-note">A pull request has no local copy of this file, so it cannot be read whole here.</p>}
+                            : <p className="review-full-file-note">This binary file cannot be read whole.</p>}
                         </div>
                       : null}
                     {/* Whole-file reading magnifies one file, so the decision's

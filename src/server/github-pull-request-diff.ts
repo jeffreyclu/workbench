@@ -1,4 +1,4 @@
-import type { GitHubPullRequestCommentsSummary, GitHubPullRequestDiff, GitHubPullRequestFile, ReviewCommit } from '../shared/contracts.js';
+import type { GitHubPullRequestCommentsSummary, GitHubPullRequestDiff, GitHubPullRequestFile, ReviewCommit, WorkspaceFileSource } from '../shared/contracts.js';
 import { createOutboundFetch, type OutboundPolicyName } from './outbound-policy.js';
 
 const pullRequestPattern = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/files)?\/?$/;
@@ -7,6 +7,7 @@ const COMMENTS_PER_PAGE = 100;
 const COMMITS_PER_PAGE = 100;
 const MAX_COMMIT_PAGES = 3;
 const commitShaPattern = /^[0-9a-f]{7,40}$/;
+const MAX_FILE_SOURCE_BYTES = 512 * 1024;
 
 type GitHubPullRequestResponse = {
   html_url: string;
@@ -296,4 +297,40 @@ export async function getGitHubPullRequestImage(
     throw githubRequestError(response, 'image');
   }
   return { body: Buffer.from(await response.arrayBuffer()), contentType };
+}
+
+/** Reads a changed PR file at the exact head commit rendered in the review.
+ *
+ * GitHub's Contents API is used instead of a local checkout because the PR
+ * branch can belong to a repository this machine has never cloned. The SHA is
+ * passed from the diff response, so a force-push cannot move this read to a
+ * different revision after the reviewer opens it. */
+export async function getGitHubPullRequestFile(
+  url: string,
+  path: string,
+  revision: string,
+  options: { token?: string; fetchForPolicy?: (policy: OutboundPolicyName) => typeof fetch } = {},
+): Promise<WorkspaceFileSource> {
+  const target = parseGitHubPullRequestUrl(url);
+  if (!target) throw new Error('Enter a GitHub pull request URL, such as github.com/owner/repo/pull/123.');
+  const answer = (revision: string | null, content: string | null, unavailable: string | null): WorkspaceFileSource =>
+    ({ path, revision, content, unavailable });
+  if (!path || path.startsWith('/') || path.split('/').includes('..')) return answer(null, null, 'That path cannot be read.');
+  if (!commitShaPattern.test(revision)) throw new Error('That is not a pull-request revision.');
+
+  const fetchImpl = (options.fetchForPolicy ?? createOutboundFetch)('github-api');
+  const repository = `https://api.github.com/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}`;
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+  const response = await fetchImpl(`${repository}/contents/${encodedPath}?ref=${encodeURIComponent(revision)}`, {
+    headers: { ...githubHeaders(options.token), Accept: 'application/vnd.github.raw+json' },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) {
+    if (response.status === 404) return answer(revision, null, 'This file is not in the pull request head revision.');
+    throw githubRequestError(response, 'file');
+  }
+  const body = Buffer.from(await response.arrayBuffer());
+  if (body.includes(0)) return answer(revision, null, 'This file is binary.');
+  if (body.byteLength > MAX_FILE_SOURCE_BYTES) return answer(revision, null, 'This file is too large to read whole.');
+  return answer(revision, body.toString('utf8'), null);
 }

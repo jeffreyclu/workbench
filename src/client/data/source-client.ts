@@ -53,6 +53,7 @@ export const sourceClient = {
   getGitHubPullRequestDiff: (url: string, page = 1) => request<{ diff: GitHubPullRequestDiff }>(`/api/github/pull-request-diff?url=${encodeURIComponent(url)}&page=${page}`),
   getGitHubPullRequestCommits: (url: string) => request<{ commits: ReviewCommit[] }>(`/api/github/pull-request-commits?url=${encodeURIComponent(url)}`),
   getGitHubPullRequestCommitDiff: (url: string, sha: string) => request<{ commit: ReviewCommit; files: GitHubPullRequestFile[] }>(`/api/github/pull-request-commit-diff?url=${encodeURIComponent(url)}&sha=${encodeURIComponent(sha)}`),
+  getGitHubPullRequestFile: (url: string, path: string, revision: string) => request<{ file: WorkspaceFileSource }>(`/api/github/pull-request-file?url=${encodeURIComponent(url)}&path=${encodeURIComponent(path)}&revision=${encodeURIComponent(revision)}`),
   assessDiffBlocks: (blocks: Array<{ key: string; lines: string[] }>) => request<{ assessments: Record<string, { risk: number | null; reasoning: string }> }>('/api/diff-confidence', { method: 'POST', body: JSON.stringify({ blocks }) }),
   lookupDiffConfidenceBlocks: (blocks: Array<{ key: string; lines: string[] }>) => request<{ assessments: Record<string, { risk: number | null; reasoning: string }> }>('/api/diff-confidence/lookup', { method: 'POST', body: JSON.stringify({ blocks }) }),
   requestReviewAssist: (input: {

@@ -33,6 +33,17 @@ export function useGitHubPullRequestCommitDiff(url: string | null, sha: string |
   });
 }
 
+/** A pull request file is immutable for the head SHA the server resolves, so
+ * reselecting a decision in the same file can reuse the downloaded content. */
+export function useGitHubPullRequestFile(url: string | null, path: string | null, revision: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: githubDiffQueryKeys.file(url ?? '', path ?? '', revision ?? ''),
+    queryFn: () => githubDiffData.getFile(url!, path!, revision!),
+    enabled: Boolean(url) && Boolean(path) && Boolean(revision) && enabled,
+    staleTime: Infinity,
+  });
+}
+
 export function useGitHubPullRequestDiffPreviews(urls: string[]) {
   return useQueries({
     queries: urls.map((url) => ({
