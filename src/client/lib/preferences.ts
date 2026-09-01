@@ -17,6 +17,7 @@ const reviewStackSelectionsStorageKey = 'workbench:review-stack-selections';
  * reviewer rather than per conversation, so moving between reviews does not
  * silently put the code pane back into interleaved diff. */
 const reviewStackReadingModeStorageKey = 'workbench:review-stack-reading-mode';
+const desktopNotificationsEnabledStorageKey = 'workbench:desktop-notifications-enabled';
 const lastOpenedItemStorageKeys = {
   conversation: 'workbench:last-opened-conversation',
   attention: 'workbench:last-opened-attention-item',
@@ -56,6 +57,22 @@ export function clearLastOpenedItem(surface: LastOpenedSurface): void {
     // Storage can be disabled in a private browser context.
   }
 }
+export function readDesktopNotificationsEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(desktopNotificationsEnabledStorageKey) !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+export function writeDesktopNotificationsEnabled(enabled: boolean): void {
+  try {
+    window.localStorage.setItem(desktopNotificationsEnabledStorageKey, String(enabled));
+  } catch {
+    // The preference still applies to this session even if it cannot be remembered.
+  }
+}
+
 export function readTaskModelProfiles(): Record<string, NonNullable<AgentRun['executionProfile']>> {
   try {
     const value = JSON.parse(window.localStorage.getItem(taskModelStorageKey) ?? '{}') as Record<string, unknown>;
