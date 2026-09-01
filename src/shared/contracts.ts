@@ -349,6 +349,24 @@ const reviewAssistLinesSchema = z.array(z.string())
   .transform(boundReviewAssistLines)
   .pipe(z.array(z.string().max(REVIEW_ASSIST_MAX_LINE_LENGTH)).max(REVIEW_ASSIST_MAX_LINES_PER_HUNK));
 
+/** How much attention the review stack routed a block to. It rides on the
+ * assist request because it changes what the answer is worth: a T1 skim and a
+ * T3 study are different questions, and a cache that ignored the tier would
+ * serve the cheap one wearing the expensive one's authority. Changes never
+ * sends it, so its requests hash exactly as they did before this existed. */
+export const REVIEW_ASSIST_TIERS = ['T0', 'T1', 'T2', 'T3'] as const;
+export type ReviewAssistTier = typeof REVIEW_ASSIST_TIERS[number];
+
+/** The line a tiered answer signs off with, so the review stack can tell an
+ * answer the model stands behind from one it could not. Only tiered requests
+ * are asked for it: a Changes answer gains no trailer it did not have before.
+ * Both prefixes live here because the server writes the instruction and the
+ * review stack reads the result, and a marker defined twice drifts. */
+export const REVIEW_ASSIST_CONFIDENCE_PREFIX = 'CONFIDENCE:';
+/** Names what the model needed and was not given, on the line after a low
+ * confidence marker. What it names is the reason the block escalates. */
+export const REVIEW_ASSIST_MISSING_PREFIX = 'MISSING:';
+
 export const reviewAssistRequestSchema = z.object({
   action: z.enum(['explain', 'what_could_break', 'compare_task_intent', 'score_risk']),
   decision: z.object({
@@ -403,6 +421,7 @@ export const reviewAssistRequestSchema = z.object({
     title: z.string().max(2_000),
     description: z.string().max(50_000),
   }).nullable().default(null),
+  tier: z.enum(REVIEW_ASSIST_TIERS).nullable().default(null),
 });
 
 /** One logic-block boundary the TypeScript compiler found inside a diff: the
@@ -588,6 +607,30 @@ export type UpsertDiffHunkReviewsInput = z.infer<typeof upsertDiffHunkReviewsSch
  * now reconciles up to the hunk row Changes reads, but that projection lives in
  * the Review surface: Changes still reads only its own table at its own
  * granularity, and a half-answered hunk is never claimed. */
+export interface DiffBlockReview {
+  id: string;
+  revision: string;
+  filePath: string;
+  blockRange: string;
+  /** Hash of the block's own lines. A block whose content changed asks its
+   * question again instead of inheriting a verdict given about other code. */
+  contentHash: string;
+  state: DiffHunkReviewState;
+  note: string | null;
+  updatedAt: string;
+}
+
+export const upsertDiffBlockReviewSchema = z.object({
+  revision: z.string().trim().min(1),
+  filePath: z.string().trim().min(1),
+  blockRange: z.string().trim().min(1),
+  contentHash: z.string().trim().min(1).max(64),
+  state: z.enum(['reviewed', 'needs_changes', 'commented']),
+  note: z.string().trim().min(1).optional(),
+});
+
+export type UpsertDiffBlockReviewInput = z.infer<typeof upsertDiffBlockReviewSchema>;
+
 /** A review that exists on its own terms.
  *
  * Reviewing a diff never actually required a conversation — the conversation
@@ -595,6 +638,31 @@ export type UpsertDiffHunkReviewsInput = z.infer<typeof upsertDiffHunkReviewsSch
  * review carries its own source instead: a pull request URL, or a local
  * checkout plus the branch or worktree to read. Its verdicts are keyed to the
  * review itself, so nothing about it depends on a thread existing. */
+export interface StandaloneReview {
+  id: string;
+  title: string;
+  source:
+    | { kind: 'pull-request'; url: string }
+    | { kind: 'repository'; repositoryPath: string; ref: string | null };
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Exactly one source: a pull request link, or a repository (optionally
+ * pinned to a ref). Accepting both would leave the review with no answer to
+ * "what am I reading?" until the reviewer picked one anyway. */
+export const createStandaloneReviewSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  pullRequestUrl: z.string().trim().url().max(1_000).optional(),
+  repositoryPath: z.string().trim().min(1).max(1_000).optional(),
+  ref: z.string().trim().min(1).max(300).optional(),
+}).refine(
+  (input) => Boolean(input.pullRequestUrl) !== Boolean(input.repositoryPath),
+  { message: 'Give a pull request link or pick a repository.' },
+);
+
+export type CreateStandaloneReviewInput = z.infer<typeof createStandaloneReviewSchema>;
+
 export interface WorkspacePublishStatus {
   branch: string | null;
   hasOrigin: boolean;

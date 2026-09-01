@@ -33,7 +33,7 @@ function isEditableTarget(target: EventTarget | null) {
 
 /** Owns Changes' document-level shortcuts without duplicating review state. */
 export function useWorkspaceDiffKeyboardNavigation({
-  decisions, filePaths, activeId, activeFilePath, canMarkReviewed, onSelect, onMarkReviewed,
+  decisions, filePaths, activeId, activeFilePath, canMarkReviewed, onSelect, onMarkReviewed, onToggleReadingMode,
 }: {
   decisions: ReviewDecision[];
   filePaths: string[];
@@ -42,6 +42,10 @@ export function useWorkspaceDiffKeyboardNavigation({
   canMarkReviewed: boolean;
   onSelect: (id: string) => void;
   onMarkReviewed: () => void;
+  /** Cycles the diff pane between the unified diff, the finished code and the
+   * whole file. Omitted, the key does nothing rather than claiming a reading
+   * the surface cannot draw. */
+  onToggleReadingMode?: () => void;
 }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -61,8 +65,12 @@ export function useWorkspaceDiffKeyboardNavigation({
         onMarkReviewed();
         return;
       }
+      if (event.key === 'd' && onToggleReadingMode) {
+        event.preventDefault();
+        onToggleReadingMode();
+      }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [activeFilePath, activeId, canMarkReviewed, decisions, filePaths, onMarkReviewed, onSelect]);
+  }, [activeFilePath, activeId, canMarkReviewed, decisions, filePaths, onMarkReviewed, onSelect, onToggleReadingMode]);
 }

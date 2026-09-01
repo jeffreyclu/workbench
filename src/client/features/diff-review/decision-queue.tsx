@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef } from 'react';
-import { Check, MessageSquare, TriangleAlert } from 'lucide-react';
+import { Check, LoaderCircle, MessageSquare, TriangleAlert } from 'lucide-react';
 import type { ReviewDecision } from './logic.js';
 import { reviewStateLabel, riskSignalLabel } from './logic.js';
 
@@ -23,12 +23,16 @@ function StateIcon({ state }: { state: ReviewDecision['state'] }) {
  * state-coloured fill, a distinct icon, and the written state in its accessible
  * name — because colour alone is not readable for everyone.
  */
-export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ decisions, selectedId, onSelect, commentCounts }: {
+export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ decisions, selectedId, onSelect, commentCounts, delegating }: {
   decisions: ReviewDecision[];
   selectedId: string;
   onSelect: (decisionId: string) => void;
   /** GitHub review-comment count per decision, keyed by decision id. Present only for a pull-request source. */
   commentCounts?: Map<string, number>;
+  /** Decisions whose delegated turn is still owed. An unsettled chip otherwise
+   * looks identical whether a model is about to answer it or nobody ever will,
+   * which is the difference between waiting and having to read it yourself. */
+  delegating?: ReadonlySet<string>;
 }) {
   const settled = decisions.filter((decision) => decision.state !== null).length;
   const selectedButton = useRef<HTMLButtonElement | null>(null);
@@ -50,17 +54,19 @@ export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ d
         const selected = decision.id === selectedId;
         const risks = decision.riskSignals.map(riskSignalLabel);
         const commentCount = commentCounts?.get(decision.id) ?? 0;
+        const awaiting = decision.state === null && Boolean(delegating?.has(decision.id));
         return <li key={decision.id}>
           <button
             type="button"
             ref={selected ? selectedButton : undefined}
-            className={`state-${decision.state ?? 'pending'}${decision.state === null ? '' : ' settled'}${selected ? ' selected' : ''}`}
+            className={`state-${decision.state ?? 'pending'}${decision.state === null ? '' : ' settled'}${awaiting ? ' delegating' : ''}${selected ? ' selected' : ''}`}
             aria-current={selected ? 'step' : undefined}
-            aria-label={`Decision ${decision.ordinal}: ${decision.behavior} — ${reviewStateLabel(decision.state)}${risks.length > 0 ? ` · ${risks.length} risk signals` : ''}${commentCount > 0 ? ` · ${commentCount} review comments` : ''}`}
+            aria-label={`Decision ${decision.ordinal}: ${decision.behavior} — ${reviewStateLabel(decision.state)}${risks.length > 0 ? ` · ${risks.length} risk signals` : ''}${commentCount > 0 ? ` · ${commentCount} review comments` : ''}${awaiting ? ' · awaiting delegated review' : ''}`}
             onClick={() => onSelect(decision.id)}
           >
             <b>{decision.ordinal}</b>
             <StateIcon state={decision.state} />
+            {awaiting && <LoaderCircle className="spin diff-review-queue-delegating" size={10} aria-hidden="true" />}
             {risks.length > 0 && <span className="diff-review-queue-risk-dot" title={risks.join(', ')} aria-hidden="true" />}
             {commentCount > 0 && <span className="diff-review-queue-comment-count" title={`${commentCount} GitHub review comments`} aria-hidden="true"><MessageSquare size={9} />{commentCount}</span>}
             {selected && <small>{decision.behavior}</small>}
