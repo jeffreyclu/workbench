@@ -82,7 +82,13 @@ export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: Memo
         role="presentation"
         onMouseDown={(event) => { if (event.target === event.currentTarget) closeOverlay(); }}
       >
-        <div className="global-search-panel" role="dialog" aria-modal="true" aria-label="Search everything">
+        <div
+          className="global-search-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Search everything"
+          onKeyDown={(event) => { if (event.key === 'Escape') closeOverlay(); }}
+        >
           <div className="search-box">
             <Search size={15} />
             <input
