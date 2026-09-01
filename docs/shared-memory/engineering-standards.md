@@ -580,3 +580,21 @@ human request. The Haiku worker is primed off the request path, and queued class
 start only when the request actually reaches the model—not while it waits behind warm-up. Future prompt
 work must preserve these properties: latest correction wins, agent narration never becomes user intent,
 Ask Both has parity, continuations are instant, and retries cannot drift across turns.
+
+## Scoping boundaries in specs are reasons, not bans (2026-09-01)
+
+While refining CON-226 (publishing a generated Connector Gateway client package), I wrote into the
+tech spec that the shared package "must not contain React, TanStack Query, Zod, forms, component
+props, or view-specific types." Jeffrey rejected the sentence twice — first as "we NEED to use zod
+and tanstack", then as "why the fuck not??" — because it reads as a blanket prohibition on tools the
+team actually wants, with no stated reason.
+
+The durable rule: when a spec draws a boundary around a shared package or module, state the
+constraint and the reason it exists, and separate the parts that are genuinely structural from the
+parts that are only sequencing. For this case the defensible split is: UI forms, component props,
+and view models stay out because they describe one app's UI rather than the API contract; React and
+TanStack Query stay out of the *core* layer only so it is framework-neutral, and belong in an
+optional React layer; Zod is not excluded at all — the real constraint is that the two frontends sit
+on incompatible Zod majors and the backend response schemas are still too loose to be worth
+validating against. A rule Jeffrey cannot trace to a tradeoff will be read as arbitrary and thrown
+out, correctly.
