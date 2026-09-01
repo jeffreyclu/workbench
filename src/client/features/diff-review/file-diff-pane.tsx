@@ -1,15 +1,10 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowDownRight, ArrowUpRight, Check, ExternalLink, FileDiff, LoaderCircle, MessageSquare, TriangleAlert } from 'lucide-react';
+import { ArrowDownRight, ArrowUpRight, Check, ExternalLink, FileDiff, MessageSquare, TriangleAlert } from 'lucide-react';
 import { languageFromPath, SyntaxHighlight } from '../../components/markdown/syntax-highlight.js';
 import { CHANGE_RELATION_LABELS, type ChangeMap } from '../../../shared/change-map.js';
 import { buildChangeLinkIndex, plainRelationText, type ChangeLink, type ChangeLinkSummary } from './change-map-logic.js';
 import type { ReviewDecision, ReviewDiffHunk } from './logic.js';
 import { reviewStateLabel } from './logic.js';
-import { toFinalStateRows } from './final-state-lines.js';
-
-/** How a block's code is drawn. `diff` is the unified two-sided reading;
- * `final` is the code as it will exist after the change. */
-export type DiffReadingMode = 'diff' | 'final';
 
 /** Breathing room left above a scrolled-to block, so the reader sees that the
  * change has a context above it rather than reading from the pane's edge. */
@@ -81,7 +76,7 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode = 'diff', modeTitle, onSelect, onOpenDetail, onToggleReadingMode }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, onSelect, onOpenDetail }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
@@ -103,42 +98,13 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
    * portalled popover for a surface whose card is the panes and nothing
    * floating over them. */
   renderDetail?: (decisionId: string) => ReactNode;
-  /** Changes the reviewer no longer has to read, mapped to why — 'Approved',
-   * 'Delegated'. A block named here collapses to its header, because the point
-   * of settling or delegating a change is to stop spending reading time on it.
-   * The value is shown as-is, so the surface that routes the work owns the
-   * wording rather than this pane guessing at it. */
-  handledBlocks?: Map<string, string>;
-  /** Decisions whose delegated turn is still owed. Marked on the block itself
-   * because a header count says a sweep is running, not which of the hunks in
-   * front of the reviewer is the one still waiting on it. */
-  delegating?: ReadonlySet<string>;
-  /** Defaults to the unified diff, so the Changes surface that also mounts this
-   * pane keeps the reading it has always had. Review opts into `final`. */
-  readingMode?: DiffReadingMode;
-  /** Overrides the mode button's tooltip for a surface that cycles more modes
-   * than this pane draws. Omitted, the button reads exactly as it always has. */
-  modeTitle?: string;
   onSelect: (decisionId: string) => void;
   onOpenDetail?: (decisionId: string, anchor: HTMLElement) => void;
-  /** Supplying this is what puts the reading-mode switch in the header: a
-   * surface that cannot change the mode should not advertise a control. */
-  onToggleReadingMode?: () => void;
 }) {
   const activeBlock = useRef<HTMLElement | null>(null);
   const lastSelection = useRef<string | null>(null);
   const diffBody = useRef<HTMLDivElement | null>(null);
   const [peekDecisionId, setPeekDecisionId] = useState<string | null>(null);
-  // Which collapsed deletion runs are open. A marker that only counts lines
-  // makes the one thing final reading cannot show — what used to be there —
-  // cost a whole mode switch, after which the reader has to find their place
-  // in an interleaved diff again. Opening the run in place keeps the rest of
-  // the block readable as code.
-  const [openRemovals, setOpenRemovals] = useState<ReadonlySet<string>>(() => new Set());
-  // Collapsing a handled change hides it, it does not remove it: the reviewer
-  // can still open any one of them by hand. Keyed by block, not by decision, so
-  // opening one hunk of a multi-hunk change does not unfold all of them.
-  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
   const language = languageFromPath(filePath);
   const decisionByHunkId = new Map(decisions.flatMap((decision) => decision.hunks.map((hunk) => [hunk.id, decision] as const)));
   // Only spotlight when the selected decision actually lives in this file:
@@ -253,10 +219,6 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   }, [activeDecisionId, filePath, selectionTick]);
 
   useEffect(() => setPeekDecisionId(null), [filePath]);
-  // Block keys are ranges, which repeat across files: carrying them over would
-  // unfold an unrelated block in the next file.
-  useEffect(() => setUnfolded(new Set()), [filePath]);
-
   const selectRelated = (decisionId: string) => {
     setPeekDecisionId(null);
     onSelect(decisionId);
@@ -271,19 +233,13 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   // in a file, and its brief belongs on the first of them rather than repeated
   // down the file.
   const detailShown = new Set<string>();
+  const repetitionShown = new Set<string>();
   let scrollTargetTaken = false;
 
   return <article className="diff-review-file-diff" aria-label={`Full diff for ${filePath}`}>
     <header>
       <span><FileDiff size={13} aria-hidden="true" /><code>{filePath}</code></span>
       <small>{hunks.length} {hunks.length === 1 ? 'block' : 'blocks'} in this file</small>
-      {onToggleReadingMode && <button
-        type="button"
-        className={`diff-review-reading-mode mode-${readingMode}`}
-        aria-pressed={readingMode === 'final'}
-        title={modeTitle ?? 'Toggle between the final code and the unified diff (d)'}
-        onClick={onToggleReadingMode}
-      >{readingMode === 'final' ? 'Final code' : 'Diff'}</button>}
       {editorUrl && <a href={editorUrl} aria-label={`Open ${filePath} in editor`} title="Open in editor"><ExternalLink size={13} aria-hidden="true" /></a>}
     </header>
     <div className={`diff-review-file-diff-body${spotlight ? ' spotlight' : ''}`} ref={diffBody}>
@@ -297,12 +253,8 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         if (showLens) lensShown.add(decisionId);
         const showDetail = Boolean(renderDetail) && openDetailFor === decisionId && !detailShown.has(decisionId);
         if (showDetail) detailShown.add(decisionId);
-        const handled = handledBlocks?.get(decisionId) ?? null;
-        // The selected change is never collapsed. The queue can land on a
-        // handled block — the last one settled, or a delegated block reached
-        // with the keyboard — and hiding the code under the reviewer's own
-        // cursor reads as a broken pane rather than as a saved read.
-        const collapsed = handled !== null && !active && !unfolded.has(hunk.range);
+        const showRepetition = Boolean(decision?.repetition) && !repetitionShown.has(decisionId);
+        if (showRepetition) repetitionShown.add(decisionId);
         const peeking = peekDecisionId === decisionId;
         const marker = active ? null : markers.get(decisionId) ?? null;
         const ordinal = decision?.ordinal ?? null;
@@ -311,14 +263,13 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         // A scored band outranks the raw signal count: once the model has read
         // the change, its severity is the more useful thing to show.
         const band = riskBands?.get(decisionId) ?? ((decision?.riskSignals.length ?? 0) > 0 ? 'signals' : null);
-        const awaiting = state === null && !handled && Boolean(delegating?.has(decisionId));
         return <section
           key={hunk.range}
           ref={scrollTarget ? activeBlock : undefined}
           tabIndex={-1}
-          className={`diff-review-diff-block state-${state ?? 'pending'}${state === null ? '' : ' settled'}${state === 'reviewed' ? ' reviewed' : ''}${handled ? ' handled' : ''}${awaiting ? ' delegating' : ''}${collapsed ? ' collapsed' : ''}${active ? ' active' : ''}${marker ? ` linked relation-${marker.relation}` : ''}`}
+          className={`diff-review-diff-block state-${state ?? 'pending'}${state === null ? '' : ' settled'}${state === 'reviewed' ? ' reviewed' : ''}${active ? ' active' : ''}${marker ? ` linked relation-${marker.relation}` : ''}`}
           aria-current={active ? 'location' : undefined}
-          aria-label={`${hunk.location} · ${reviewStateLabel(state)}${awaiting ? ' · awaiting delegated review' : ''}${active ? ' · selected decision' : ''}${marker ? ` · ${CHANGE_RELATION_LABELS[marker.relation]} relationship with change ${activeOrdinal ?? ''}` : ''}`}
+          aria-label={`${hunk.location} · ${reviewStateLabel(state)}${active ? ' · selected decision' : ''}${marker ? ` · ${CHANGE_RELATION_LABELS[marker.relation]} relationship with change ${activeOrdinal ?? ''}` : ''}`}
         >
           <div className="diff-review-block-gutter">
             {/* The standing facts about this decision — which one it is, whether
@@ -356,10 +307,12 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
             {marker && <span className="diff-review-diff-block-link-marker" aria-hidden="true">{marker.direction === 'upstream' ? <ArrowDownRight size={10} /> : <ArrowUpRight size={10} />}{activeOrdinal}</span>}
           </div>
           <div className="diff-review-diff-block-main">
+          {showRepetition && decision?.repetition && <aside className="diff-review-repetition" aria-label={`Repeated edit applies to ${decision.repetition.otherLocations} other ${decision.repetition.otherLocations === 1 ? 'location' : 'locations'}`}>
+            <strong>Repeated edit · applies to {decision.repetition.otherLocations} other {decision.repetition.otherLocations === 1 ? 'location' : 'locations'}</strong>
+            <ul>{decision.repetition.files.map((file) => <li key={file.filePath}><code>{file.filePath}</code><span>{file.locations.join(', ')} · <b>+{file.additions}</b> <i>−{file.deletions}</i></span></li>)}</ul>
+          </aside>}
           <button type="button" className="diff-review-diff-block-header" onClick={() => onSelect(decisionId)} aria-label={`Select the decision at ${hunk.location} in ${filePath}`}>
             <code>{hunk.range}</code>
-            {awaiting && <em className="diff-review-diff-block-delegating"><LoaderCircle className="spin" size={10} aria-hidden="true" />Delegated review running</em>}
-            {handled && <em className="diff-review-diff-block-handled">{handled}</em>}
             <small><b>+{hunk.additions}</b> <i>−{hunk.deletions}</i></small>
           </button>
           {showDetail && renderDetail?.(decisionId)}
@@ -385,50 +338,9 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
               </section>}
             </div>}
           </>}
-          {collapsed
-            ? <button
-                type="button"
-                className="diff-review-diff-block-unfold"
-                aria-expanded={false}
-                aria-label={`Show the diff for ${hunk.location} in ${filePath} — ${handled}`}
-                onClick={() => setUnfolded((open) => new Set(open).add(hunk.range))}
-              >
-                <span>{handled} · {hunk.lines.length} {hunk.lines.length === 1 ? 'line' : 'lines'} hidden</span>
-                <span>Show diff</span>
-              </button>
-            : hunk.lines.length === 0
+          {hunk.lines.length === 0
             ? <p className="muted">No text patch is available for this file.</p>
-            : readingMode === 'final'
-              ? toFinalStateRows(hunk.lines, hunk.enclosing).map((row) => row.type === 'anchor'
-                ? <div key={row.key} className="diff-line final anchor">
-                  <span aria-hidden="true">⋯</span>
-                  <span><SyntaxHighlight code={row.text} language={language} className="diff-line-code" /></span>
-                </div>
-                : row.type === 'removed'
-                ? <div key={row.key} className="diff-line-removal">
-                  <button
-                    type="button"
-                    className={`diff-line final removed${openRemovals.has(row.key) ? ' is-open' : ''}`}
-                    aria-expanded={openRemovals.has(row.key)}
-                    onClick={() => setOpenRemovals((open) => {
-                      const next = new Set(open);
-                      if (!next.delete(row.key)) next.add(row.key);
-                      return next;
-                    })}
-                  >
-                    <span aria-hidden="true">−</span>
-                    <span>{row.lines.length} {row.lines.length === 1 ? 'line' : 'lines'} removed</span>
-                  </button>
-                  {openRemovals.has(row.key) && row.lines.map((removed) => <div key={removed.key} className="diff-line final was-removed">
-                    <span>{removed.oldLine ?? ''}</span>
-                    <span><SyntaxHighlight code={removed.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
-                  </div>)}
-                </div>
-                : <div key={row.line.key} className={`diff-line final ${row.line.kind}`}>
-                  <span>{row.line.newLine ?? ''}</span>
-                  <span><SyntaxHighlight code={row.line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
-                </div>)
-              : hunk.lines.map((line) => <div key={line.key} className={`diff-line ${line.kind}`}>
+            : hunk.lines.map((line) => <div key={line.key} className={`diff-line ${line.kind}`}>
                 <span>{line.oldLine ?? ''}</span>
                 <span>{line.newLine ?? ''}</span>
                 <span><span className="diff-line-marker">{line.text.slice(0, 1) || ' '}</span><SyntaxHighlight code={line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>

@@ -66,6 +66,46 @@ describe('diff review queue logic', () => {
     expect(decisions[0].riskSignals).toContain('cross_file');
   });
 
+  it('collapses the same mechanical edit across files and summarizes every location', () => {
+    const repeated = (path: string, subject: string, value: string): WorkspaceDiffFile => ({
+      path, status: 'modified', additions: 1, deletions: 1, previousPath: null, isBinary: false,
+      patch: `@@ -10 +10 @@ function ${subject}()\n-return renderPanel(${value})\n+return renderPanel(${value}, compact)`,
+    });
+    const files = [
+      repeated('src/account.ts', 'renderAccount', 'account'),
+      repeated('src/profile.ts', 'renderProfile', 'profile'),
+      // A different extension is not the same mechanical transformation.
+      repeated('src/settings.py', 'renderSettings', 'settings'),
+    ];
+
+    const decisions = buildReviewDecisions(files, []);
+
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0]).toMatchObject({
+      behavior: 'Repeats the same edit across 2 locations in 2 files.',
+      filePaths: ['src/account.ts', 'src/profile.ts'],
+      repetition: {
+        otherLocations: 1,
+        files: [
+          { filePath: 'src/account.ts', locations: ['Line 10'], additions: 1, deletions: 1 },
+          { filePath: 'src/profile.ts', locations: ['Line 10'], additions: 1, deletions: 1 },
+        ],
+      },
+    });
+    expect(decisions[0].hunks).toHaveLength(2);
+    expect(decisions[0].riskSignals).toContain('cross_file');
+    expect(decisions[1].repetition).toBeUndefined();
+  });
+
+  it('does not collapse lone additions that happen to have the same shape', () => {
+    const file = (path: string, name: string): WorkspaceDiffFile => ({
+      path, status: 'modified', additions: 1, deletions: 0, previousPath: null, isBinary: false,
+      patch: `@@ -1 +1,2 @@\n const existing = true\n+const ${name} = true`,
+    });
+
+    expect(buildReviewDecisions([file('src/a.ts', 'alpha'), file('src/b.ts', 'beta')], [])).toHaveLength(2);
+  });
+
   it('pairs a new import block with the code that started using it, and leaves an unrelated import alone', () => {
     const consumerFile: WorkspaceDiffFile = {
       path: 'src/server/notify.ts', status: 'modified', additions: 4, deletions: 0, previousPath: null,

@@ -338,20 +338,3 @@ describe('interaction motion', () => {
     expect(styles).toContain('@media (prefers-reduced-motion: reduce)');
   });
 });
-
-describe('review stack and canvas', () => {
-  it('lays the card out as two panes with no stack rail to make room for', () => {
-    // The decision stack is gone from the stylesheet as well as the markup, so
-    // the layout is one column holding the card, not a rail beside it.
-    expect(styles).toContain('.review-stack-layout { display: grid; grid-template-columns: minmax(0, 1fr);');
-    expect(styles).not.toContain('is-canvas-open');
-    expect(styles).not.toContain('.review-stack-back');
-    expect(styles).not.toMatch(/^\.review-queue/m);
-
-    // Code left, canvas right, each scrolling on its own; on one column they
-    // become two rows rather than collapsing into one another.
-    expect(styles).toContain('.review-stack-panes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(232px, 30%);');
-    const phone = styles.match(/@media \(max-width: 820px\) and \(pointer: coarse\) \{[\s\S]*?\n\}/)?.[0] ?? '';
-    expect(phone).toContain('.review-stack-panes { grid-template-columns: minmax(0, 1fr); grid-template-rows:');
-  });
-});

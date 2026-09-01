@@ -72,7 +72,7 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(stat).toHaveTextContent('428 changed lines');
   });
 
-  it('moves through pending blocks and changed files, then marks the active block reviewed', async () => {
+  it('moves through pending blocks, keeps repeated files in one decision, then reviews every location', async () => {
     const files: WorkspaceDiffFile[] = [
       {
         path: 'src/first.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
@@ -108,13 +108,15 @@ describe('WorkspaceDiffView decision queue', () => {
     fireEvent.keyDown(document, { key: 'k' });
     await waitFor(() => expect(selectedName()).toMatch(/^Decision 1/));
     fireEvent.keyDown(document, { key: ']' });
-    await waitFor(() => expect(selectedName()).toMatch(/^Decision 3/));
+    await waitFor(() => expect(selectedName()).toMatch(/^Decision 1: Repeats the same edit across 2 locations in 2 files/));
+    expect(screen.getByLabelText('Repeated edit applies to 1 other location')).toHaveTextContent('src/first.ts');
+    expect(screen.getByLabelText('Repeated edit applies to 1 other location')).toHaveTextContent('src/second.ts');
     fireEvent.keyDown(document, { key: '[' });
     await waitFor(() => expect(selectedName()).toMatch(/^Decision 1/));
 
     fireEvent.keyDown(document, { key: 'r' });
     await waitFor(() => expect(writes).toHaveLength(1));
-    expect(writes[0]).toMatchObject({ state: 'reviewed', hunks: [{ filePath: 'src/first.ts' }] });
+    expect(writes[0]).toMatchObject({ state: 'reviewed', hunks: [{ filePath: 'src/first.ts' }, { filePath: 'src/second.ts' }] });
   });
 
   it('does not add phone-only decision navigation or a modal', async () => {
@@ -255,8 +257,9 @@ describe('WorkspaceDiffView decision queue', () => {
 
     // A clean checkout still opens on its recorded version...
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
-    // ...and the repository picker stays on screen there. Gating it on the
-    // workspace source removed it from the tab entirely for exactly this case.
+    // ...but choosing Workspace must stay possible, or the repository picker
+    // it gates can never be reached again.
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace' }));
     const picker = await screen.findByLabelText('Workspace');
     expect(picker).toHaveValue(repositoryA);
 
@@ -595,7 +598,7 @@ describe('WorkspaceDiffView pull-request source', () => {
     await waitFor(() => expect(requests.some((request) => request.startsWith('PUT') && request.includes('/hunk-reviews/batch') && request.includes('"revision":"sha-42"'))).toBe(true));
   });
 
-  it('restores the selected repository and decision after the Changes view remounts', async () => {
+  it('restores a selected repeated-edit group after the Changes view remounts', async () => {
     const persistedPullRequestDiff = {
       ...pullRequestDiff(1, null),
       files: [
@@ -618,15 +621,15 @@ describe('WorkspaceDiffView pull-request source', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'GitHub PR' }));
     const picker = await screen.findByLabelText('Pull request');
     fireEvent.change(picker, { target: { value: pullRequestUrl } });
-    await findSelectedDecision('Changes behavior in src/page-one.ts.');
-    fireEvent.click(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ }));
+    await findSelectedDecision('Repeats the same edit across 2 locations in 2 files.');
+    expect(screen.getByLabelText('Repeated edit applies to 1 other location')).toHaveTextContent('src/page-two.ts');
 
     cleanup();
     renderView(fetchMock, false, null, [pullRequestUrl]);
 
     expect(await screen.findByRole('heading', { name: 'Selectable scopes' })).toBeInTheDocument();
     expect(screen.getByLabelText('Pull request')).toHaveValue(pullRequestUrl);
-    expect(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
+    expect(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 1: Repeats the same edit/ })).toHaveAttribute('aria-current', 'step');
   });
 
   it('opens the linked pull request when the local checkout has nothing to review', async () => {
@@ -689,61 +692,5 @@ describe('WorkspaceDiffView pull-request source', () => {
     await openDecisionDetail(1);
     const popover = await screen.findByRole('dialog', { name: /./ });
     expect(within(popover).getByRole('region', { name: 'Related changes for this decision' })).toBeInTheDocument();
-  });
-});
-
-describe('WorkspaceDiffView readings and settled changes', () => {
-  it('cycles the reading from the diff to the finished code to the whole file', async () => {
-    const file: WorkspaceDiffFile = {
-      path: 'src/reading.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false,
-      patch: '@@ -1 +1 @@ readingChange\n-  return before()\n+  return after()',
-    };
-    const requested: string[] = [];
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      requested.push(url);
-      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
-      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
-      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'reading-revision') });
-      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
-      if (url.includes('/workspace-diff/file?')) return json({ file: { path: file.path, revision: null, content: '  return after()\n', unavailable: null } });
-      return json({}, 404);
-    });
-    renderView(fetchMock);
-
-    // Changes keeps the unified diff as its default reading.
-    expect(await screen.findByRole('button', { name: 'Diff' })).toBeInTheDocument();
-
-    fireEvent.keyDown(document, { key: 'd' });
-    expect(await screen.findByRole('button', { name: 'Final code' })).toBeInTheDocument();
-
-    fireEvent.keyDown(document, { key: 'd' });
-    expect(await screen.findByRole('button', { name: 'Whole file' })).toBeInTheDocument();
-    await waitFor(() => expect(requested.some((url) => url.includes('/workspace-diff/file?path=src%2Freading.ts'))).toBe(true));
-  });
-
-  it('collapses a change that already carries a verdict and counts what is still owed', async () => {
-    const file: WorkspaceDiffFile = {
-      path: 'src/settled.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
-      patch: '@@ -1 +1 @@ answeredChange\n-  return before()\n+  return after()\n@@ -20 +20 @@ owedChange\n-  send(old)\n+  send(next)',
-    };
-    const reviews: DiffHunkReview[] = [{
-      id: 'review-1', revision: 'settled-revision', filePath: file.path, hunkRange: '@@ -1 +1 @@ answeredChange',
-      contentHash: contentHashOfLines(['-  return before()', '+  return after()']), state: 'reviewed', note: null, updatedAt: '2026-08-30T00:00:00.000Z',
-    }];
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
-      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
-      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'settled-revision') });
-      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews });
-      return json({}, 404);
-    });
-    renderView(fetchMock);
-
-    // The answered change stops costing reading time: it collapses behind a
-    // control that says why, and the counts still owe the other one.
-    expect(await screen.findByRole('button', { name: /Show the diff for .* — Approved$/ })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(/of 2 answered/)).toHaveTextContent('1 of 2 answered'));
   });
 });

@@ -561,8 +561,6 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-decision-queue button.selected b { color: #e4e3dc; }
 .diff-review-decision-queue button.settled b { color: var(--state-tone); }
 .diff-review-decision-queue button svg { color: var(--state-tone); }
-.diff-review-decision-queue button.delegating { border-bottom: 2px solid #8c6f2c; }
-.diff-review-decision-queue button svg.diff-review-queue-delegating { color: #e6c75f; }
 /* Risk is a dot here and a number in the popover: at chip size the count is
    noise, but "this one has signals" still has to survive the compaction. */
 .diff-review-queue-risk-dot { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #d6bd76; }
@@ -682,10 +680,6 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-diff-block.settled { border-left-color: var(--state-tone); }
 .diff-review-diff-block.settled .diff-review-diff-block-header { background: color-mix(in srgb, var(--state-tone) 9%, #1b1b18); }
 .diff-review-diff-block.reviewed { opacity: 0.45; }
-/* A hunk waiting on a delegated turn: an amber rail plus a labelled spinner, so
-   "a model is answering this one" reads without relying on colour alone. */
-.diff-review-diff-block.delegating { box-shadow: inset 2px 0 0 #b08a2e; }
-.diff-review-diff-block-delegating { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; padding: 1px 6px; color: #e6c75f; background: #2b2414; border: 1px solid #8c6f2c; border-radius: 999px; font: 500 9px 'DM Mono'; font-style: normal; text-transform: uppercase; letter-spacing: .06em; }
 .diff-review-diff-block.reviewed.active, .diff-review-diff-block.reviewed:hover, .diff-review-diff-block.reviewed:focus-within { opacity: 1; }
 /* A handled change keeps its header — the reviewer has to be able to see that
    it exists and reach it — and loses its diff, which is the part that costs
@@ -737,6 +731,12 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-diff-block-header small b { color: #8bbd75; }.diff-review-diff-block-header small i { color: #d97b73; font-style: normal; }
 .diff-review-diff-block-header em { flex: 0 0 auto; font: 700 9px 'DM Mono'; font-style: normal; text-transform: uppercase; }
 .diff-review-diff-block p { margin: 0; padding: 10px; }
+.diff-review-repetition { display: grid; gap: 6px; padding: 8px 10px; color: #aaa9a2; border-bottom: 1px solid #34342e; background: #1c1d18; font: 10px/1.45 'DM Mono'; }
+.diff-review-repetition > strong { color: #c8d99a; font-size: 10px; }
+.diff-review-repetition ul { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.diff-review-repetition li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-width: 0; }
+.diff-review-repetition code { overflow: hidden; color: #d2d1c9; text-overflow: ellipsis; white-space: nowrap; }
+.diff-review-repetition li > span { flex: 0 0 auto; color: #77766f; }.diff-review-repetition b { color: #8bbd75; }.diff-review-repetition i { color: #d97b73; font-style: normal; }
 @media (prefers-reduced-motion: reduce) { .diff-review-diff-block, .diff-review-file-diff-body.spotlight .diff-review-diff-block:not(.active) { transition: none; } }
 .token.comment, .token.prolog, .token.doctype, .token.cdata { color: #74736b; }
 .token.punctuation { color: #b3b2ab; }
@@ -812,6 +812,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
   .change-map-scope { align-items: flex-start; flex-direction: column; }
   .change-map-scope button { min-height: 32px; }
   .diff-review-file-diff-body { max-height: 58vh; }
+  .diff-review-repetition li { align-items: flex-start; flex-direction: column; gap: 1px; }
+  .diff-review-repetition code { max-width: 100%; }
   .diff-review-decision-card { gap: 16px; padding: 14px 12px; }
   .diff-review-decision-card > header { align-items: flex-start; flex-direction: column-reverse; gap: 8px; }
   .diff-review-actions > div { display: grid; grid-template-columns: 1fr; }
@@ -1407,159 +1409,7 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .conversation-changes { order: 1; flex: 1 1 auto; min-width: 0; min-height: 0; padding: 0 28px 14px; overflow: auto; }
 .conversation-changes .workspace-diff { max-width: 1240px; margin: 0 auto; padding-top: 18px; border-top: 0; }
 .conversation-changes .github-diff { max-width: 1240px; margin: 0 auto; padding-top: 18px; border-top: 0; }
-/* The review stack is a third pane beside Changes. It reuses Changes' column
-   geometry and none of its selectors, so restyling one can never move the
-   other. */
-.conversation-review-layout.layout-review { display: flex; flex-direction: column; }
-.conversation-review-layout.layout-review .conversation-thread-pane { display: contents; }
-.conversation-review-layout.layout-review .shared-thread { display: none; }
-.conversation-review-layout.layout-review .shared-composer,
-.conversation-review-layout.layout-review .archived-composer-note { order: 2; flex: 0 0 auto; width: calc(100% - 56px); margin: 0 28px 20px; }
-.conversation-review { order: 1; flex: 1 1 auto; min-width: 0; min-height: 0; padding: 0 28px 14px; overflow: auto; }
-.review-stack { max-width: 1240px; margin: 0 auto; padding-top: 18px; }
-.review-stack > header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
-.review-stack-source { display: inline-flex; align-items: center; gap: 8px; }
-.review-stack-source label { color: #908f88; font: 700 10px 'DM Mono'; text-transform: uppercase; letter-spacing: .08em; }
-.review-stack-source select { max-width: 380px; padding: 5px 8px; color: #e2e1d9; background: #171715; border: 1px solid #373731; border-radius: 6px; font: 500 12px 'DM Mono'; }
-.review-stack-progress { margin: 0 0 0 auto; color: #908f88; font: 500 11px 'DM Mono'; }
-.review-diff-stat { display: flex; align-items: center; gap: 10px; margin: 14px 0 0; padding: 8px 12px; color: #8f8e86; background: #1f1f1c; border: 1px solid #33322c; border-radius: 7px; font: 500 12px/1.45 'DM Mono'; }
-.review-diff-stat strong { color: #d8d7cf; font-weight: 600; }
-.review-diff-stat-added { color: #6fbf73; }
-.review-diff-stat-removed { color: #e07a6a; }
-.review-diff-stat-total { margin-left: auto; }
-.review-stack-empty { color: #908f88; font: 500 12px 'DM Mono'; }
-.review-stack-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; padding-top: 16px; }
-/* The stack and the open card are the same space: choosing a card gives the
-   whole width to the code and the canvas, and Back to stack is the way out. */
-/* Two columns divided vertically, each scrolling down on its own. The height is
-   taken from the viewport rather than the content so both panes have something
-   to scroll inside — a pane sized by its own content never scrolls at all. */
-.review-stack-panes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(232px, 30%); gap: 14px; height: calc(100vh - 236px); min-height: 420px; }
-.review-stack-code { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; }
-.review-stack-code > * { flex: 1 1 auto; min-height: 0; }
-.review-stack-panes .diff-review-file-diff-body { max-height: none; }
-.review-stack-panes .review-full-file { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
-.review-stack-panes .review-full-file-body { max-height: none; }
-.review-card { align-content: start; }
-.review-card:hover { background: #1a1e16; border-color: #59683a; }
-.review-card.is-active { border-color: var(--acid); }
-.review-card.is-judged { opacity: .55; }
-.review-card-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.review-card-head strong { flex: 1; min-width: 0; overflow: hidden; font: 600 12px 'DM Mono'; text-overflow: ellipsis; white-space: nowrap; }
-.review-card-tier { flex: 0 0 auto; padding: 2px 5px; border-radius: 4px; background: #252520; color: #908f88; font: 700 10px 'DM Mono'; }
-.review-card.tier-t2 .review-card-tier { color: #f4c632; }
-.review-card.tier-t3 .review-card-tier { color: #15200d; background: var(--acid); }
-.review-card-state { flex: 0 0 auto; display: inline-flex; color: #908f88; }
-.review-card em { color: #b3b2a9; font: italic 400 11px/1.4 'DM Mono'; }
-.review-card small { color: #767569; font: 500 10px 'DM Mono'; }
-.review-stack-detail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.review-flow-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: #171715; }
-.review-flow-controls button { padding: 5px 7px; color: #b3b2a9; background: #252520; border: 1px solid #373731; border-radius: 5px; font: 700 10px 'DM Mono'; cursor: pointer; }
-.review-flow-controls button:hover, .review-flow-controls button:focus-visible { color: #15200d; background: var(--acid); border-color: var(--acid); }
-.review-flow-controls > span { margin-left: auto; color: #908f88; font: 500 10px 'DM Mono'; }
-.review-flow-controls kbd { padding: 1px 4px; color: #e2e1d9; background: #171715; border: 1px solid #494940; border-radius: 3px; font: 700 9px 'DM Mono'; }
-.review-block-claim { margin: 0 0 10px; padding: 10px 12px; border-left: 2px solid var(--acid); background: #1c1c18; }
-.review-block-claim h4 { margin: 0 0 5px; color: #767569; font: 700 9px 'DM Mono'; text-transform: uppercase; letter-spacing: 0.06em; }
-.review-block-claim p { margin: 0; color: #e2e1d9; font: 500 12px/1.55 'DM Mono'; }
-.review-block-claim ul { margin: 6px 0 0; padding: 0 0 0 14px; color: #b3b2a9; font: 500 11px/1.5 'DM Mono'; }
-.review-block-code { display: flex; flex-direction: column; gap: 8px; }
-.review-block-code > button { align-self: flex-start; }
-.review-block-code kbd { margin-left: 6px; }
-.review-block-note { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-.review-block-note-open { align-self: flex-start; }
-.review-block-note-saved { display: flex; gap: 7px; margin: 0; padding: 8px 10px; color: #c3c2b9; border-left: 2px solid #4d5836; background: #1a1b16; }
-.review-block-note-saved > svg { flex: none; margin-top: 2px; color: #8d9c62; }
-.review-block-note-saved p { margin: 0; font: 500 11px/1.55 'DM Mono'; white-space: pre-wrap; }
-.review-block-note-composer { border: 1px solid #35382d; border-radius: 8px; background: #16170f; }
-.review-block-note > p[role="alert"] { margin: 0; color: #e1a68f; font: 500 11px 'DM Mono'; }
-.review-block-note-actions { display: flex; gap: 8px; justify-content: flex-end; }
-.review-block-note-actions .review-request-changes { background: #e1a68f; }
-.review-full-file-shell { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
-.review-full-file { width: 100%; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.review-full-file > header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
-.review-full-file > header strong { font-family: var(--font-mono, monospace); font-size: 12px; font-weight: 500; }
-.review-full-file > header small { color: var(--muted); margin-right: auto; }
-.review-full-file > header nav { display: flex; gap: 4px; }
-.review-full-file-body { max-height: 60vh; overflow: auto; font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.5; }
-.review-full-file-row { display: flex; gap: 10px; padding: 0 10px; white-space: pre; }
-.review-full-file-row.changed { background: var(--diff-addition-bg, rgba(46, 160, 67, 0.12)); cursor: pointer; }
-.review-full-file-row.active { background: #1b2113; box-shadow: inset 3px 0 0 var(--acid); }
-@keyframes review-handle-pulse { from { box-shadow: 0 0 0 1px var(--acid), 0 0 26px -6px #c6f432aa; } to { box-shadow: 0 0 0 1px #41412000, 0 0 26px -6px #c6f43200; } }
-.diff-review-diff-block.handle-pulse, .review-canvas-node.handle-pulse, .review-full-file-row.handle-pulse { animation: review-handle-pulse 620ms ease-out; }
-@media (prefers-reduced-motion: reduce) { .diff-review-diff-block.handle-pulse, .review-canvas-node.handle-pulse, .review-full-file-row.handle-pulse { animation-duration: 1ms; } }
-.review-full-file-row.removed { color: var(--muted); font-style: italic; }
-.review-full-file-number { min-width: 40px; text-align: right; color: var(--muted); user-select: none; }
-.review-full-file-text { flex: 1; }
-.review-full-file-note { color: var(--muted); font-size: 12px; margin: 0; }
-.review-stack-obligations h4 { margin: 0 0 8px; color: #e2e1d9; font: 700 11px 'DM Mono'; }
-.review-stack-obligations ul { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.review-stack-obligations li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; color: #b3b2a9; font: 500 11px/1.5 'DM Mono'; }
-.review-stack-obligations li > span { padding: 1px 5px; border-radius: 4px; background: #252520; color: #767569; font: 700 9px 'DM Mono'; text-align: center; text-transform: uppercase; }
-.review-stack-obligations li.settled-by-human > span { color: #15200d; background: var(--acid); }
-.review-stack-obligations li.outcome-proven > span { color: #15200d; background: #6f8f52; }
-.review-stack-obligations li.outcome-failed > span { color: #2b1109; background: #d98a6a; }
-.review-stack-obligations li em { display: block; margin-top: 3px; color: #767569; font: 500 10px/1.4 'DM Mono'; font-style: normal; }
-.review-stack-obligations li.settled-by-ai > span { color: #f4c632; }
-.review-canvas { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; border: 1px solid var(--line); border-radius: 8px; background: #131311; }
-.review-canvas > header { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #252522; }
-.review-canvas > header h4 { margin: 0; color: #85847d; font: 700 10px 'DM Mono'; text-transform: uppercase; letter-spacing: .08em; }
-.review-canvas > header p { margin: 0 0 0 auto; color: #77766f; font: 500 10px 'DM Mono'; }
-.review-canvas-body { overflow-y: auto; overscroll-behavior-y: contain; padding: 10px; }
-.review-canvas-stage { position: relative; }
-.review-canvas-edges { position: absolute; top: 0; left: 0; overflow: visible; }
-.review-canvas-edge { fill: none; stroke: #3a3a33; stroke-width: 1.2; }
-.review-canvas-edge.is-touching { stroke: var(--acid); stroke-width: 1.6; }
-.review-canvas-node { position: absolute; left: 28px; right: 0; display: flex; flex-direction: column; gap: 3px; padding: 7px 9px; text-align: left; color: #b3b2a9; background: #191917; border: 1px solid #35352f; border-radius: 7px; cursor: pointer; }
-.review-canvas-node:hover { border-color: #59683a; background: #1a1e16; }
-.review-canvas-node.is-linked { border-color: #4d5836; }
-.review-canvas-node.is-active { border-color: var(--acid); background: #1b2113; }
-.review-canvas-node.state-reviewed { opacity: .62; }
-.review-canvas-node.is-delegating { border-color: #8c6f2c; }
-.review-canvas-node-delegating { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; color: #e6c75f; font-style: normal; text-transform: uppercase; letter-spacing: .05em; font-size: 9px; }
-/* Done with, or never Jeffrey's to read: greyed out of the way rather than
-   dropped, so the canvas still counts the same changes the diff does. Hover and
-   selection bring it back to full strength — it is de-emphasised, not disabled. */
-.review-canvas-node.is-handled { opacity: .38; filter: grayscale(1); }
-.review-canvas-node.is-handled:hover, .review-canvas-node.is-handled:focus-visible, .review-canvas-node.is-handled.is-active { opacity: 1; filter: none; }
-.review-canvas-node.is-handled .review-canvas-node-meta em { color: #6f6e68; text-transform: uppercase; letter-spacing: .05em; font-size: 9px; }
-.review-canvas-node-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.review-canvas-node-head b { flex: 0 0 auto; padding: 1px 5px; color: #15200d; background: #6f7d47; border-radius: 4px; font: 700 9px 'DM Mono'; }
-.review-canvas-node.is-active .review-canvas-node-head b { background: var(--acid); }
-.review-canvas-node-head code { overflow: hidden; color: #85847d; font: 10px 'DM Mono'; text-overflow: ellipsis; white-space: nowrap; }
-.review-canvas-node-behavior { overflow: hidden; color: #deddd6; font: 500 11px/1.35 'DM Mono'; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.review-canvas-node-meta { display: flex; gap: 7px; color: #77766f; font: 500 10px 'DM Mono'; }
-.review-canvas-node-meta i { font-style: normal; }
-.review-canvas-node-meta i:first-child { color: #8d9c62; }
 
-/* What a handle press opens: the change's brief, in the diff itself under the
-   block it belongs to. In flow rather than floating — the code pane is a
-   scroll container and anything absolute inside it is clipped at the edge. */
-.review-change-brief { display: flex; flex-direction: column; gap: 7px; margin: 0 0 6px; padding: 9px 11px; background: #16180f; border-left: 2px solid var(--acid); border-radius: 0 6px 6px 0; }
-.review-change-brief-routing { display: flex; align-items: baseline; gap: 8px; margin: 0; color: #a9a89f; font: 500 11px/1.4 'DM Mono'; }
-.review-change-brief-routing b { flex: 0 0 auto; padding: 1px 6px; color: #15200d; background: var(--acid); border-radius: 4px; font: 700 9px 'DM Mono'; text-transform: uppercase; letter-spacing: .06em; }
-.review-change-brief-routing span { min-width: 0; }
-.review-change-brief-close { margin-left: auto; padding: 1px 6px; color: #85847d; background: none; border: 1px solid #35352f; border-radius: 4px; cursor: pointer; font: 500 10px 'DM Mono'; }
-.review-change-brief-close:hover { color: #deddd6; border-color: #59683a; }
-.review-change-brief-effect { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; color: #deddd6; font: 500 11px 'DM Mono'; }
-.review-change-brief-effect em { padding: 1px 6px; color: #f0c674; background: #2a2416; border-radius: 4px; font: 500 10px 'DM Mono'; font-style: normal; }
-.review-change-brief-obligations { display: flex; flex-direction: column; gap: 5px; margin: 0; padding: 0; list-style: none; }
-.review-change-brief-obligations li { display: flex; flex-direction: column; gap: 2px; padding-left: 9px; border-left: 1px solid #35352f; color: #b3b2a9; font: 500 11px/1.45 'DM Mono'; }
-.review-change-brief-obligations li.outcome-proven { border-left-color: #6f7d47; }
-.review-change-brief-obligations li.outcome-failed { border-left-color: #b4553f; }
-.review-change-brief-obligations li small { color: #77766f; font: 500 10px/1.4 'DM Mono'; }
-.review-change-brief-actions { display: flex; align-items: center; gap: 8px; }
-.review-change-brief-actions p[role='alert'] { margin: 0; color: #d98b76; font: 500 10px 'DM Mono'; }
-.review-change-brief-actions span[role='status'] { color: #77766f; font: 500 10px 'DM Mono'; }
-.review-change-brief-actions .review-approve { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; color: #15200d; background: var(--acid); border: none; border-radius: 5px; cursor: pointer; font: 700 11px 'DM Mono'; }
-.review-change-brief-actions .review-approve:disabled { color: #85847d; background: #26261f; cursor: default; }
-.review-canvas-node-meta em { margin-left: auto; font-style: normal; color: #85847d; }
-.review-place-map { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #171715; overflow-x: auto; }
-.review-place-map > header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.review-place-map > header h4 { margin: 0; color: #e2e1d9; font: 700 11px 'DM Mono'; }
-.review-place-map > header p { margin: 0; color: #908f88; font: 500 11px 'DM Mono'; }
-.review-place-map-overlays { display: inline-flex; gap: 6px; margin-left: auto; }
-.review-place-map-overlay { padding: 3px 8px; border: 1px solid #373731; border-radius: 999px; background: transparent; color: #908f88; font: 700 9px 'DM Mono'; text-transform: uppercase; letter-spacing: .08em; cursor: pointer; }
-.review-place-map-overlay.on { color: #15200d; background: var(--acid); border-color: var(--acid); }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .spin { animation: spin .8s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes thinking-pulse { 0% { box-shadow: 0 0 0 0 #c6f43277; } 70% { box-shadow: 0 0 0 8px #c6f43200; } 100% { box-shadow: 0 0 0 0 #c6f43200; } }
@@ -1749,9 +1599,6 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
   .conversation-review-layout { border-top: 0; }
   .conversation-review-layout.layout-changes .conversation-thread-pane { display: contents; }
   .conversation-review-layout.layout-review .conversation-thread-pane { display: contents; }
-  /* No room for two columns, so the canvas sits under the code and each keeps
-     its own scroll rather than one long page that scrolls them together. */
-  .review-stack-panes { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(180px, 40%); height: calc(100vh - 180px); }
   .conversation-review-layout.layout-changes .shared-composer,
   .conversation-review-layout.layout-changes .archived-composer-note { width: auto; margin: 0; }
   .conversation-changes { padding: 0 14px 20px; }
@@ -2054,7 +1901,3 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-heuristic-summary p { margin: 0; color: #a9a89f; font-size: 12px; line-height: 1.55; }
 .diff-review-heuristic-summary p:first-child { color: var(--soft); }
 .diff-review-heuristic-warn { color: #e1a68f; }
-
-/* The delegated-review markers carry their own words, so with motion reduced the
-   icon holds still rather than disappearing. */
-@media (prefers-reduced-motion: reduce) { .diff-review-queue-delegating, .diff-review-diff-block-delegating .spin, .review-canvas-node-delegating .spin { animation: none; } }

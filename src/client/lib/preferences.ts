@@ -9,14 +9,6 @@ const conversationModelStorageKey = 'workbench:conversation-model-profiles';
 const taskModelStorageKey = 'workbench:task-model-profiles';
 const conversationDraftStorageKey = 'workbench:conversation-drafts';
 const workspaceDiffSelectionsStorageKey = 'workbench:workspace-diff-selections';
-/** The Review surface remembers its own source and its own block, under its
- * own key. Sharing Changes' key would mean opening Review moves the file
- * Changes is showing — the one thing the review stack is not allowed to do. */
-const reviewStackSelectionsStorageKey = 'workbench:review-stack-selections';
-/** Reading mode is a habit, not a selection: it is remembered once for the
- * reviewer rather than per conversation, so moving between reviews does not
- * silently put the code pane back into interleaved diff. */
-const reviewStackReadingModeStorageKey = 'workbench:review-stack-reading-mode';
 const lastOpenedItemStorageKeys = {
   conversation: 'workbench:last-opened-conversation',
   attention: 'workbench:last-opened-attention-item',
@@ -150,72 +142,5 @@ export function writeWorkspaceDiffDecision(scope: string, revision: string, deci
     window.localStorage.setItem(workspaceDiffSelectionsStorageKey, JSON.stringify(selections));
   } catch {
     // A decision can still be reviewed even if its browser preference cannot save.
-  }
-}
-
-
-type ReviewStackSelections = Record<string, { source: string; blocks: Record<string, string> }>;
-
-function readReviewStackSelections(): ReviewStackSelections {
-  try {
-    const value = JSON.parse(window.localStorage.getItem(reviewStackSelectionsStorageKey) ?? '{}') as Record<string, unknown>;
-    return Object.fromEntries(Object.entries(value).flatMap(([scope, selection]) => {
-      if (!selection || typeof selection !== 'object') return [];
-      const { source, blocks } = selection as Record<string, unknown>;
-      if (typeof source !== 'string' || !source) return [];
-      const validBlocks = blocks && typeof blocks === 'object'
-        ? Object.fromEntries(Object.entries(blocks).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[1])))
-        : {};
-      return [[scope, { source, blocks: validBlocks }]];
-    }));
-  } catch {
-    return {};
-  }
-}
-
-export function readReviewStackSelection(scope: string): { source: string; blocks: Record<string, string> } | null {
-  return readReviewStackSelections()[scope] ?? null;
-}
-
-export function writeReviewStackSource(scope: string, source: string): void {
-  try {
-    const selections = readReviewStackSelections();
-    selections[scope] = { source, blocks: selections[scope]?.blocks ?? {} };
-    window.localStorage.setItem(reviewStackSelectionsStorageKey, JSON.stringify(selections));
-  } catch {
-    // The queue stays usable when browser storage is unavailable.
-  }
-}
-
-/** The diff pane's `DiffReadingMode`, plus Review's own whole-file reading.
- * Declared here so preference storage does not depend on a feature component. */
-export type ReviewStackReadingMode = 'diff' | 'final' | 'file';
-
-export function readReviewStackReadingMode(): ReviewStackReadingMode | null {
-  try {
-    const value = window.localStorage.getItem(reviewStackReadingModeStorageKey);
-    return value === 'diff' || value === 'final' || value === 'file' ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-export function writeReviewStackReadingMode(mode: ReviewStackReadingMode): void {
-  try {
-    window.localStorage.setItem(reviewStackReadingModeStorageKey, mode);
-  } catch {
-    // The mode still applies to this session even if it cannot be remembered.
-  }
-}
-
-export function writeReviewStackBlock(scope: string, revision: string, blockId: string): void {
-  try {
-    const selections = readReviewStackSelections();
-    const selection = selections[scope];
-    if (!selection) return;
-    selection.blocks[revision] = blockId;
-    window.localStorage.setItem(reviewStackSelectionsStorageKey, JSON.stringify(selections));
-  } catch {
-    // A block can still be judged even if its browser preference cannot save.
   }
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentRunReviewHandoff, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type InsightsTimeframe, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState, type UpsertDiffHunkReviewsInput, type DiffBlockReview, type UpsertDiffBlockReviewInput, type CreateStandaloneReviewInput, type StandaloneReview } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentRunReviewHandoff, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type InsightsTimeframe, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState, type UpsertDiffHunkReviewsInput } from '../shared/contracts.js';
 import type { FeedbackWeight, QueueContext, QueuePlan } from './queue-intelligence.js';
 import { listProjects, resolveProjectName } from './project-registry.js';
 import type { WorkbenchDatabase } from './database.js';
@@ -32,7 +32,7 @@ export type { ProviderWorkItem } from './services/provider-sync-service.js';
 /** Who a diff verdict belongs to. A standalone review is a first-class third
  * option: it is not a task and not a conversation, and its verdicts live in
  * their own tables. */
-export type DiffReviewScope = { workItemId: string } | { conversationId: string } | { reviewId: string };
+export type DiffReviewScope = { workItemId: string } | { conversationId: string };
 
 /** Who applied a lifecycle move, and what forced it when Workbench applied it as a cascade. */
 export interface LifecycleContext { actor?: Activity['actor']; reason?: string }
@@ -78,18 +78,6 @@ function mapWorkspaceDiffSnapshot(row: WorkspaceDiffSnapshotRow): WorkspaceDiffS
  * The read order is preserved rather than re-sorted by path, because the caller
  * resolves these onto the blocks on screen first-wins: "the answer that counts
  * first" is the contract here, not alphabetical order. */
-function dedupeBlockReviewsByContent(reviews: DiffBlockReview[]): DiffBlockReview[] {
-  const winners = new Map<string, DiffBlockReview>();
-  const notes = new Map<string, string>();
-  for (const review of reviews) {
-    const content = `${review.filePath}\u0000${review.contentHash}`;
-    if (review.note && !notes.has(content)) notes.set(content, review.note);
-    const key = `${content}\u0000${review.blockRange}`;
-    if (!winners.has(key)) winners.set(key, review);
-  }
-  return [...winners.values()].map((review) => review.note ? review : { ...review, note: notes.get(`${review.filePath}\u0000${review.contentHash}`) ?? review.note });
-}
-
 interface DiffHunkReviewRow {
   id: string;
   revision: string;
@@ -119,50 +107,6 @@ function dedupeHunkReviewsByContent(reviews: DiffHunkReview[]): DiffHunkReview[]
     if (!winners.has(key)) winners.set(key, review);
   }
   return [...winners.values()].map((review) => review.note ? review : { ...review, note: notes.get(`${review.filePath}\u0000${review.contentHash}`) ?? review.note });
-}
-
-interface DiffBlockReviewRow {
-  id: string;
-  revision: string;
-  file_path: string;
-  block_range: string;
-  content_hash: string;
-  state: DiffHunkReviewState;
-  note: string | null;
-  updated_at: string;
-}
-
-function mapDiffBlockReview(row: DiffBlockReviewRow): DiffBlockReview {
-  return { id: row.id, revision: row.revision, filePath: row.file_path, blockRange: row.block_range, contentHash: row.content_hash, state: row.state, note: row.note, updatedAt: row.updated_at };
-}
-
-interface StandaloneReviewRow {
-  id: string;
-  title: string;
-  source_kind: 'pull-request' | 'repository';
-  pull_request_url: string | null;
-  repository_path: string | null;
-  ref: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-function mapStandaloneReview(row: StandaloneReviewRow): StandaloneReview {
-  const source: StandaloneReview['source'] = row.source_kind === 'pull-request'
-    ? { kind: 'pull-request', url: row.pull_request_url! }
-    : { kind: 'repository', repositoryPath: row.repository_path!, ref: row.ref };
-  return { id: row.id, title: row.title, source, createdAt: row.created_at, updatedAt: row.updated_at };
-}
-
-/** A review opened from a link or a picker is already named by what it points
- * at, so nothing forces the reviewer to invent a title first. */
-function defaultStandaloneReviewTitle(input: CreateStandaloneReviewInput): string {
-  if (input.pullRequestUrl) {
-    const match = /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/.exec(input.pullRequestUrl);
-    return match ? `${match[1]}/${match[2]} #${match[3]}` : input.pullRequestUrl;
-  }
-  const name = (input.repositoryPath ?? '').split('/').filter(Boolean).pop() ?? 'Review';
-  return input.ref ? `${name} — ${input.ref}` : name;
 }
 
 function mapSavedWorkItemFilter(row: SavedWorkItemFilterRow): SavedWorkItemFilter {
@@ -966,24 +910,6 @@ export class WorkItemRepository {
     return (this.database.prepare(`SELECT id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash FROM workspace_diff_snapshots WHERE ${column} = ? ORDER BY captured_at DESC`).all(id) as unknown as WorkspaceDiffSnapshotRow[]).map(mapWorkspaceDiffSnapshot);
   }
 
-  captureStandaloneReviewDiffSnapshot(reviewId: string, diff: WorkspaceDiff): WorkspaceDiffSnapshot {
-    const now = new Date().toISOString();
-    const id = randomUUID();
-    this.database.prepare(`INSERT OR IGNORE INTO standalone_review_diff_snapshots (id, review_id, revision, diff_json, captured_at)
-      VALUES (?, ?, ?, ?, ?)`).run(id, reviewId, diff.revision, JSON.stringify(diff), now);
-    return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at,
-        NULL AS originating_agent_run_id, NULL AS commit_hash
-      FROM standalone_review_diff_snapshots WHERE review_id = ? AND revision = ?`)
-      .get(reviewId, diff.revision) as unknown as WorkspaceDiffSnapshotRow);
-  }
-
-  listStandaloneReviewDiffSnapshots(reviewId: string): WorkspaceDiffSnapshot[] {
-    return (this.database.prepare(`SELECT id, revision, diff_json, captured_at,
-        NULL AS originating_agent_run_id, NULL AS commit_hash
-      FROM standalone_review_diff_snapshots WHERE review_id = ? ORDER BY captured_at DESC, rowid DESC`)
-      .all(reviewId) as unknown as WorkspaceDiffSnapshotRow[]).map(mapWorkspaceDiffSnapshot);
-  }
-
   latestAgentRunForSnapshot(scope: { workItemId: string } | { conversationId: string }): AgentRun | null {
     if ('workItemId' in scope) return this.listRuns(scope.workItemId)[0] ?? null;
     const row = this.database.prepare('SELECT id FROM agent_runs WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(scope.conversationId) as { id: string } | undefined;
@@ -991,7 +917,6 @@ export class WorkItemRepository {
   }
 
   upsertDiffHunkReview(scope: DiffReviewScope, input: { revision: string; filePath: string; hunkRange: string; contentHash: string; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {
-    if ('reviewId' in scope) return this.upsertStandaloneReviewHunkReview(scope.reviewId, input);
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
     const now = new Date().toISOString();
     this.database.prepare(`INSERT INTO diff_hunk_reviews (id, ${column}, revision, file_path, hunk_range, content_hash, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1024,27 +949,6 @@ export class WorkItemRepository {
    * hunk whose lines changed is never matched. The current revision wins a
    * tie, and every stored row remains untouched. */
   listDiffHunkReviews(scope: DiffReviewScope, revision: string): DiffHunkReview[] {
-    if ('reviewId' in scope) {
-      const currentSnapshot = this.database.prepare('SELECT captured_at, rowid FROM standalone_review_diff_snapshots WHERE review_id = ? AND revision = ?')
-        .get(scope.reviewId, revision) as { captured_at: string; rowid: number } | undefined;
-      const predecessor = currentSnapshot
-        ? this.database.prepare(`SELECT revision FROM standalone_review_diff_snapshots
-            WHERE review_id = ? AND (captured_at < ? OR (captured_at = ? AND rowid < ?))
-            ORDER BY captured_at DESC, rowid DESC LIMIT 1`)
-          .get(scope.reviewId, currentSnapshot.captured_at, currentSnapshot.captured_at, currentSnapshot.rowid) as { revision: string } | undefined
-        : undefined;
-      const currentRows = this.database.prepare(`SELECT id, revision, file_path, hunk_range, content_hash, state, note, updated_at
-        FROM standalone_review_hunk_reviews WHERE review_id = ? AND revision = ? ORDER BY updated_at DESC, rowid DESC`)
-        .all(scope.reviewId, revision) as unknown as DiffHunkReviewRow[];
-      const carriedRows = predecessor
-        ? this.database.prepare(`SELECT id, revision, file_path, hunk_range, content_hash, state, note, updated_at
-            FROM standalone_review_hunk_reviews WHERE review_id = ? AND revision = ? AND state = 'reviewed' AND content_hash <> ''
-            ORDER BY updated_at DESC, rowid DESC`)
-          .all(scope.reviewId, predecessor.revision) as unknown as DiffHunkReviewRow[]
-        : [];
-      return dedupeHunkReviewsByContent([...currentRows, ...carriedRows].map(mapDiffHunkReview));
-    }
-
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
     const currentSnapshot = this.database.prepare(`SELECT captured_at, rowid FROM workspace_diff_snapshots WHERE ${column} = ? AND revision = ?`)
       .get(id, revision) as { captured_at: string; rowid: number } | undefined;
@@ -1065,102 +969,6 @@ export class WorkItemRepository {
       : [];
     const rows = [...currentRows, ...carriedRows];
     return dedupeHunkReviewsByContent(rows.map(mapDiffHunkReview));
-  }
-
-  /** Block-level review state for the Review surface. Kept entirely separate
-   * from `diff_hunk_reviews`: Changes must read and write exactly what it did
-   * before this table existed. */
-  upsertDiffBlockReview(scope: DiffReviewScope, input: UpsertDiffBlockReviewInput): DiffBlockReview {
-    if ('reviewId' in scope) return this.upsertStandaloneReviewBlockReview(scope.reviewId, input);
-    const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
-    const now = new Date().toISOString();
-    this.database.prepare(`INSERT INTO diff_block_reviews (id, ${column}, revision, file_path, block_range, content_hash, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(${column}, revision, file_path, block_range, content_hash) WHERE ${column} IS NOT NULL DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
-      .run(randomUUID(), id, input.revision, input.filePath, input.blockRange, input.contentHash, input.state, input.note ?? null, now);
-    return mapDiffBlockReview(this.database.prepare(`SELECT id, revision, file_path, block_range, content_hash, state, note, updated_at FROM diff_block_reviews WHERE ${column} = ? AND revision = ? AND file_path = ? AND block_range = ? AND content_hash = ?`)
-      .get(id, input.revision, input.filePath, input.blockRange, input.contentHash) as unknown as DiffBlockReviewRow);
-  }
-
-  /** Verdicts for a revision, plus every verdict this scope has ever recorded
-   * about code that still hashes the same.
-   *
-   * A verdict is an answer about *content*, not about a revision: rebasing,
-   * amending, or pushing a follow-up commit changes the revision of every block
-   * in the diff, including the ones nobody touched. Filtering on revision alone
-   * therefore threw away the whole review each time the branch moved and asked
-   * the reviewer the same questions again. Rows from other revisions are
-   * carried forward here and matched on content by the caller; a block whose
-   * lines actually changed hashes differently and is never matched, so it still
-   * asks its question. The current revision's own row always wins a tie. */
-  listDiffBlockReviews(scope: DiffReviewScope, revision: string): DiffBlockReview[] {
-    const order = `ORDER BY CASE WHEN revision = ? THEN 0 ELSE 1 END ASC, updated_at DESC, rowid DESC`;
-    const rows = 'reviewId' in scope
-      ? this.database.prepare(`SELECT id, revision, file_path, block_range, content_hash, state, note, updated_at FROM standalone_review_block_reviews WHERE review_id = ? ${order}`)
-        .all(scope.reviewId, revision) as unknown as DiffBlockReviewRow[]
-      : (() => {
-        const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
-        return this.database.prepare(`SELECT id, revision, file_path, block_range, content_hash, state, note, updated_at FROM diff_block_reviews WHERE ${column} = ? ${order}`)
-          .all(id, revision) as unknown as DiffBlockReviewRow[];
-      })();
-    return dedupeBlockReviewsByContent(rows.map(mapDiffBlockReview));
-  }
-
-  private upsertStandaloneReviewHunkReview(reviewId: string, input: { revision: string; filePath: string; hunkRange: string; contentHash: string; state: DiffHunkReviewState; note?: string | null }): DiffHunkReview {
-    const now = new Date().toISOString();
-    this.database.prepare(`INSERT INTO standalone_review_hunk_reviews (id, review_id, revision, file_path, hunk_range, content_hash, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(review_id, revision, file_path, hunk_range, content_hash) DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
-      .run(randomUUID(), reviewId, input.revision, input.filePath, input.hunkRange, input.contentHash, input.state, input.note ?? null, now);
-    this.touchStandaloneReview(reviewId);
-    return mapDiffHunkReview(this.database.prepare(`SELECT id, revision, file_path, hunk_range, content_hash, state, note, updated_at FROM standalone_review_hunk_reviews WHERE review_id = ? AND revision = ? AND file_path = ? AND hunk_range = ? AND content_hash = ?`)
-      .get(reviewId, input.revision, input.filePath, input.hunkRange, input.contentHash) as unknown as DiffHunkReviewRow);
-  }
-
-  private upsertStandaloneReviewBlockReview(reviewId: string, input: UpsertDiffBlockReviewInput): DiffBlockReview {
-    const now = new Date().toISOString();
-    this.database.prepare(`INSERT INTO standalone_review_block_reviews (id, review_id, revision, file_path, block_range, content_hash, state, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(review_id, revision, file_path, block_range, content_hash) DO UPDATE SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at`)
-      .run(randomUUID(), reviewId, input.revision, input.filePath, input.blockRange, input.contentHash, input.state, input.note ?? null, now);
-    this.touchStandaloneReview(reviewId);
-    return mapDiffBlockReview(this.database.prepare(`SELECT id, revision, file_path, block_range, content_hash, state, note, updated_at FROM standalone_review_block_reviews WHERE review_id = ? AND revision = ? AND file_path = ? AND block_range = ? AND content_hash = ?`)
-      .get(reviewId, input.revision, input.filePath, input.blockRange, input.contentHash) as unknown as DiffBlockReviewRow);
-  }
-
-  private touchStandaloneReview(reviewId: string): void {
-    this.database.prepare('UPDATE standalone_reviews SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), reviewId);
-  }
-
-  /** Reviews that stand on their own: created from a pull request link or a
-   * repository, with no conversation behind them. */
-  createStandaloneReview(input: CreateStandaloneReviewInput): StandaloneReview {
-    const now = new Date().toISOString();
-    const id = randomUUID();
-    const kind = input.pullRequestUrl ? 'pull-request' : 'repository';
-    const title = input.title?.trim() || defaultStandaloneReviewTitle(input);
-    this.database.prepare(`INSERT INTO standalone_reviews (id, title, source_kind, pull_request_url, repository_path, ref, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(id, title, kind, input.pullRequestUrl ?? null, input.repositoryPath ?? null, input.ref ?? null, now, now);
-    return this.getStandaloneReview(id)!;
-  }
-
-  listStandaloneReviews(): StandaloneReview[] {
-    return (this.database.prepare('SELECT * FROM standalone_reviews ORDER BY updated_at DESC').all() as unknown as StandaloneReviewRow[]).map(mapStandaloneReview);
-  }
-
-  getStandaloneReview(id: string): StandaloneReview | null {
-    const row = this.database.prepare('SELECT * FROM standalone_reviews WHERE id = ?').get(id) as unknown as StandaloneReviewRow | undefined;
-    return row ? mapStandaloneReview(row) : null;
-  }
-
-  deleteStandaloneReview(id: string): boolean {
-    if (!this.getStandaloneReview(id)) return false;
-    return this.transaction(() => {
-      // The verdict tables cascade only when foreign keys are enforced, so the
-      // rows are removed explicitly rather than assumed away.
-      this.database.prepare('DELETE FROM standalone_review_hunk_reviews WHERE review_id = ?').run(id);
-      this.database.prepare('DELETE FROM standalone_review_block_reviews WHERE review_id = ?').run(id);
-      this.database.prepare('DELETE FROM standalone_reviews WHERE id = ?').run(id);
-      return true;
-    });
   }
 
   createSessionFeedback(input: { conversationId?: string | null; workItemId?: string | null; rating: SessionFeedbackRating }): SessionFeedback | null {
