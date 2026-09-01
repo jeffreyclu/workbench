@@ -851,6 +851,19 @@ describe('WorkItemRepository', () => {
     expect(repository.listSharedMessages(100, null, fork.id).messages.map((message) => message.body)).toEqual(['Second question', 'Second answer']);
   });
 
+  it('ignores preview promotion messages when choosing the exchange to fork', () => {
+    const conversation = repository.createConversation('Promoted thread');
+    repository.createSharedMessage('jeffrey', 'First question', 'completed', conversation.id);
+    repository.createSharedMessage('codex', 'First answer', 'completed', conversation.id);
+    repository.createSharedMessage('jeffrey', 'Latest real question', 'completed', conversation.id);
+    repository.createSharedMessage('claude', 'Latest real answer', 'completed', conversation.id);
+    repository.createSharedMessage('jeffrey', 'promote preview', 'completed', conversation.id);
+    repository.createSharedMessage('system', 'Promotion queued.', 'queued', conversation.id, [], 'promotion');
+
+    const fork = repository.forkConversation(conversation.id)!;
+    expect(repository.listSharedMessages(100, null, fork.id).messages.map((message) => message.body)).toEqual(['Latest real question', 'Latest real answer']);
+  });
+
   it('does not create a partial fork when the latest user message has no assistant reply', () => {
     const conversation = repository.createConversation('Unanswered thread');
     repository.createSharedMessage('jeffrey', 'Answered question', 'completed', conversation.id);

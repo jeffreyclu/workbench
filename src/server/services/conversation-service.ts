@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Activity, SharedConversation, SharedMessage, TaskClassification, WorkItem } from '../../shared/contracts.js';
 import type { WorkbenchDatabase } from '../database.js';
 import type { ConversationRepository } from '../repositories/conversation-repository.js';
+import { isRuntimeApproval } from '../runtime-promotion.js';
 import type { UnitOfWork } from '../unit-of-work.js';
 
 export interface ConversationCollaborators {
@@ -89,7 +90,10 @@ export class ConversationService {
   fork(id: string): SharedConversation | null {
     const source = this.collaborators.getConversation(id);
     if (!source) return null;
-    const messages = this.collaborators.listAllSharedMessages(source.id);
+    const messages = this.collaborators.listAllSharedMessages(source.id).filter((message) =>
+      String(message.dispatchTarget) !== 'promotion'
+      && !(message.author === 'jeffrey' && isRuntimeApproval(message.body))
+    );
     const userMessageIndex = messages.findLastIndex((message) => message.author === 'jeffrey');
     const reply = messages.slice(userMessageIndex + 1).findLast((message) => message.author === 'codex' || message.author === 'claude');
     if (userMessageIndex < 0 || !reply) throw new Error('A conversation needs a user message and assistant reply before it can be forked.');
