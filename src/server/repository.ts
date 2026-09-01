@@ -59,10 +59,11 @@ interface WorkspaceDiffSnapshotRow {
   captured_at: string;
   originating_agent_run_id: string | null;
   commit_hash: string | null;
+  repository_identity: string | null;
 }
 
 function mapWorkspaceDiffSnapshot(row: WorkspaceDiffSnapshotRow): WorkspaceDiffSnapshot {
-  return { id: row.id, revision: row.revision, diff: JSON.parse(row.diff_json) as WorkspaceDiff, capturedAt: row.captured_at, originatingAgentRunId: row.originating_agent_run_id, commitHash: row.commit_hash };
+  return { id: row.id, revision: row.revision, diff: JSON.parse(row.diff_json) as WorkspaceDiff, capturedAt: row.captured_at, originatingAgentRunId: row.originating_agent_run_id, commitHash: row.commit_hash, repositoryIdentity: row.repository_identity ?? null };
 }
 
 /** One verdict per block of content, in the order the read established: this
@@ -950,20 +951,20 @@ export class WorkItemRepository {
     };
   }
 
-  captureWorkspaceDiffSnapshot(scope: { workItemId: string } | { conversationId: string }, diff: WorkspaceDiff, provenance: { originatingAgentRunId?: string | null; commitHash?: string | null } = {}): WorkspaceDiffSnapshot {
+  captureWorkspaceDiffSnapshot(scope: { workItemId: string } | { conversationId: string }, diff: WorkspaceDiff, provenance: { originatingAgentRunId?: string | null; commitHash?: string | null; repositoryIdentity?: string | null } = {}): WorkspaceDiffSnapshot {
     const now = new Date().toISOString();
     const id = randomUUID();
     if ('workItemId' in scope) {
-      this.database.prepare(`INSERT OR IGNORE INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`).run(id, scope.workItemId, diff.revision, JSON.stringify(diff), now, provenance.originatingAgentRunId ?? null, provenance.commitHash ?? null);
-      return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash FROM workspace_diff_snapshots WHERE work_item_id = ? AND revision = ?`).get(scope.workItemId, diff.revision) as unknown as WorkspaceDiffSnapshotRow);
+      this.database.prepare(`INSERT OR IGNORE INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash, repository_identity) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)`).run(id, scope.workItemId, diff.revision, JSON.stringify(diff), now, provenance.originatingAgentRunId ?? null, provenance.commitHash ?? null, provenance.repositoryIdentity ?? null);
+      return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash, repository_identity FROM workspace_diff_snapshots WHERE work_item_id = ? AND revision = ?`).get(scope.workItemId, diff.revision) as unknown as WorkspaceDiffSnapshotRow);
     }
-    this.database.prepare(`INSERT OR IGNORE INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash) VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`).run(id, scope.conversationId, diff.revision, JSON.stringify(diff), now, provenance.originatingAgentRunId ?? null, provenance.commitHash ?? null);
-    return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash FROM workspace_diff_snapshots WHERE conversation_id = ? AND revision = ?`).get(scope.conversationId, diff.revision) as unknown as WorkspaceDiffSnapshotRow);
+    this.database.prepare(`INSERT OR IGNORE INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash, repository_identity) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)`).run(id, scope.conversationId, diff.revision, JSON.stringify(diff), now, provenance.originatingAgentRunId ?? null, provenance.commitHash ?? null, provenance.repositoryIdentity ?? null);
+    return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash, repository_identity FROM workspace_diff_snapshots WHERE conversation_id = ? AND revision = ?`).get(scope.conversationId, diff.revision) as unknown as WorkspaceDiffSnapshotRow);
   }
 
   listWorkspaceDiffSnapshots(scope: { workItemId: string } | { conversationId: string }): WorkspaceDiffSnapshot[] {
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
-    return (this.database.prepare(`SELECT id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash FROM workspace_diff_snapshots WHERE ${column} = ? ORDER BY captured_at DESC`).all(id) as unknown as WorkspaceDiffSnapshotRow[]).map(mapWorkspaceDiffSnapshot);
+    return (this.database.prepare(`SELECT id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash, repository_identity FROM workspace_diff_snapshots WHERE ${column} = ? ORDER BY captured_at DESC`).all(id) as unknown as WorkspaceDiffSnapshotRow[]).map(mapWorkspaceDiffSnapshot);
   }
 
   captureStandaloneReviewDiffSnapshot(reviewId: string, diff: WorkspaceDiff): WorkspaceDiffSnapshot {
@@ -972,14 +973,14 @@ export class WorkItemRepository {
     this.database.prepare(`INSERT OR IGNORE INTO standalone_review_diff_snapshots (id, review_id, revision, diff_json, captured_at)
       VALUES (?, ?, ?, ?, ?)`).run(id, reviewId, diff.revision, JSON.stringify(diff), now);
     return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at,
-        NULL AS originating_agent_run_id, NULL AS commit_hash
+        NULL AS originating_agent_run_id, NULL AS commit_hash, NULL AS repository_identity
       FROM standalone_review_diff_snapshots WHERE review_id = ? AND revision = ?`)
       .get(reviewId, diff.revision) as unknown as WorkspaceDiffSnapshotRow);
   }
 
   listStandaloneReviewDiffSnapshots(reviewId: string): WorkspaceDiffSnapshot[] {
     return (this.database.prepare(`SELECT id, revision, diff_json, captured_at,
-        NULL AS originating_agent_run_id, NULL AS commit_hash
+        NULL AS originating_agent_run_id, NULL AS commit_hash, NULL AS repository_identity
       FROM standalone_review_diff_snapshots WHERE review_id = ? ORDER BY captured_at DESC, rowid DESC`)
       .all(reviewId) as unknown as WorkspaceDiffSnapshotRow[]).map(mapWorkspaceDiffSnapshot);
   }

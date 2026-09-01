@@ -10,16 +10,28 @@ export const workspaceDiffScopeKey = (scope: WorkspaceDiffScope) => {
   return `conversation:${scope.conversationId}`;
 };
 
+/**
+ * Which repository the server will answer from is shared selection state, not
+ * a request parameter, so two repositories produce byte-identical URLs. Every
+ * entry is therefore keyed by the selected checkout as well: without it,
+ * picking a different repository in Repo Explorer keeps rendering the previous
+ * repository's cached diff, history and files until a refetch happens to land.
+ * The `*Prefix` keys stay repository-agnostic so an invalidation still reaches
+ * every repository's entry.
+ */
 export const workspaceDiffQueryKeys = {
-  detail: (scope: WorkspaceDiffScope) => ['workspace-diff', workspaceDiffScopeKey(scope)] as const,
-  snapshots: (scope: WorkspaceDiffScope) => ['workspace-diff-snapshots', workspaceDiffScopeKey(scope)] as const,
-  refs: (scope: WorkspaceDiffScope) => ['workspace-diff-refs', workspaceDiffScopeKey(scope)] as const,
-  refDiff: (scope: WorkspaceDiffScope, ref: string) => ['workspace-diff-ref', workspaceDiffScopeKey(scope), ref] as const,
-  refCommits: (scope: WorkspaceDiffScope, ref: string) => ['workspace-diff-ref-commits', workspaceDiffScopeKey(scope), ref] as const,
-  commitDiff: (scope: WorkspaceDiffScope, commit: string) => ['workspace-diff-commit', workspaceDiffScopeKey(scope), commit] as const,
-  status: (scope: WorkspaceDiffScope, revision: string) => ['workspace-diff-status', workspaceDiffScopeKey(scope), revision] as const,
-  fileSource: (scope: WorkspaceDiffScope, filePath: string, revision: string | null) => ['workspace-diff-file-source', workspaceDiffScopeKey(scope), filePath, revision] as const,
-  hunkReviews: (scope: WorkspaceDiffScope, revision: string | undefined) => ['workspace-diff-hunk-reviews', workspaceDiffScopeKey(scope), revision] as const,
+  detailPrefix: (scope: WorkspaceDiffScope) => ['workspace-diff', workspaceDiffScopeKey(scope)] as const,
+  snapshotsPrefix: (scope: WorkspaceDiffScope) => ['workspace-diff-snapshots', workspaceDiffScopeKey(scope)] as const,
+  hunkReviewsPrefix: (scope: WorkspaceDiffScope) => ['workspace-diff-hunk-reviews', workspaceDiffScopeKey(scope)] as const,
+  detail: (scope: WorkspaceDiffScope, workspacePath: string | null) => ['workspace-diff', workspaceDiffScopeKey(scope), workspacePath] as const,
+  snapshots: (scope: WorkspaceDiffScope, workspacePath: string | null) => ['workspace-diff-snapshots', workspaceDiffScopeKey(scope), workspacePath] as const,
+  refs: (scope: WorkspaceDiffScope, workspacePath: string | null) => ['workspace-diff-refs', workspaceDiffScopeKey(scope), workspacePath] as const,
+  refDiff: (scope: WorkspaceDiffScope, workspacePath: string | null, ref: string) => ['workspace-diff-ref', workspaceDiffScopeKey(scope), workspacePath, ref] as const,
+  refCommits: (scope: WorkspaceDiffScope, workspacePath: string | null, ref: string) => ['workspace-diff-ref-commits', workspaceDiffScopeKey(scope), workspacePath, ref] as const,
+  commitDiff: (scope: WorkspaceDiffScope, workspacePath: string | null, commit: string) => ['workspace-diff-commit', workspaceDiffScopeKey(scope), workspacePath, commit] as const,
+  status: (scope: WorkspaceDiffScope, workspacePath: string | null, revision: string) => ['workspace-diff-status', workspaceDiffScopeKey(scope), workspacePath, revision] as const,
+  fileSource: (scope: WorkspaceDiffScope, workspacePath: string | null, filePath: string, revision: string | null) => ['workspace-diff-file-source', workspaceDiffScopeKey(scope), workspacePath, filePath, revision] as const,
+  hunkReviews: (scope: WorkspaceDiffScope, workspacePath: string | null, revision: string | undefined) => ['workspace-diff-hunk-reviews', workspaceDiffScopeKey(scope), workspacePath, revision] as const,
 };
 
 export const workspaceDiffData = {

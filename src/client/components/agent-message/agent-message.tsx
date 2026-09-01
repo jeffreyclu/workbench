@@ -183,10 +183,14 @@ export function splitBodyAtInterjections(body: string, interjections: AgentMessa
   return segments.filter((segment) => segment.body.length > 0);
 }
 
-export function AgentMessageBody({ body, running, conversationId, workItemId, interjections, detailForSingle = false, typewriteOnCompletion = false }: { body: string; running: boolean; conversationId?: string; workItemId?: string; interjections?: Array<{ id: string; body: string; pending: boolean; streamOffset?: number | null }>; detailForSingle?: boolean; typewriteOnCompletion?: boolean }) {
+export function AgentMessageBody({ body, running, conversationId, workItemId, interjections, detailForSingle = false, typewriteOnCompletion = false, hasStreamed = false }: { body: string; running: boolean; conversationId?: string; workItemId?: string; interjections?: Array<{ id: string; body: string; pending: boolean; streamOffset?: number | null }>; detailForSingle?: boolean; typewriteOnCompletion?: boolean; hasStreamed?: boolean }) {
   const sectionIdPrefix = useId();
   const wasRunning = useRef(running);
-  const shouldTypewriteCompletion = typewriteOnCompletion && wasRunning.current && !running;
+  // A caller-supplied "has this message ever streamed" flag survives
+  // remounts (e.g. Codex+Claude row pairing changing this component's React
+  // key) that would otherwise reset the local wasRunning ref and silently
+  // skip the completion typewriter.
+  const shouldTypewriteCompletion = typewriteOnCompletion && (wasRunning.current || hasStreamed) && !running;
   useEffect(() => { wasRunning.current = running; }, [running]);
   const humanized = running ? humanizeRunOutput(body) : body;
   const visibleBody = hideWorkbenchControlBlocks(humanized);

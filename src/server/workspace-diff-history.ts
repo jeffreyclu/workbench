@@ -1,5 +1,5 @@
 import type { WorkItemRepository } from './repository.js';
-import { getWorkspaceCommitDiff, snapshotsForRepository } from './workspace-diff.js';
+import { getWorkspaceCommitDiff, repositoryIdentity, snapshotsForRepository } from './workspace-diff.js';
 
 type WorkspaceDiffScope = { workItemId: string } | { conversationId: string };
 
@@ -33,10 +33,11 @@ export async function captureRecordedWorkspaceDiffSnapshots(
     if (references.size >= MAX_REFERENCED_COMMITS) break;
   }
 
+  const identity = references.size > 0 ? await repositoryIdentity(workspacePath) : null;
   for (const reference of references) {
     try {
       const diff = await getWorkspaceCommitDiff(workspacePath, reference);
-      if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot(scope, diff, { commitHash: diff.revision.slice('commit:'.length) });
+      if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot(scope, diff, { commitHash: diff.revision.slice('commit:'.length), repositoryIdentity: identity });
     } catch {
       // Message bodies contain many hex-looking IDs. Only Git-resolvable commit
       // IDs become records; invalid or unrelated values are ignored.

@@ -199,6 +199,10 @@ function proxyHttp(incoming: import('node:http').IncomingMessage, outgoing: impo
     runtime.connections = Math.max(0, runtime.connections - 1);
   };
   outgoing.once('close', release);
+  // Client disconnects are routine (navigation, refresh, sleep/wake). A pipe
+  // can otherwise forward the resulting EPIPE to an unobserved response
+  // socket and crash the stable gateway process.
+  outgoing.on('error', release);
   const proxied = httpRequest({
     hostname: '127.0.0.1',
     port: runtime.port,
@@ -208,6 +212,10 @@ function proxyHttp(incoming: import('node:http').IncomingMessage, outgoing: impo
   }, (response) => {
     outgoing.writeHead(response.statusCode ?? 502, response.headers);
     response.once('end', release);
+    response.on('error', () => {
+      release();
+      if (!outgoing.destroyed) outgoing.destroy();
+    });
     response.pipe(outgoing);
   });
   proxied.on('error', (error) => {
@@ -263,7 +271,22 @@ function proxyWebSocket(incoming: IncomingMessage, socket: Socket, head: Buffer,
     path: incoming.url,
     headers: incoming.headers,
   });
+  // Both halves of a WebSocket tunnel are raw sockets. Either peer can vanish
+  // while the other half is still piping buffered bytes. Always consume that
+  // transport error and tear down the pair locally; an EPIPE must never escape
+  // as an uncaught process-level error and take port 5180 down.
+  socket.on('error', () => {
+    release();
+    proxied.destroy();
+  });
   proxied.once('upgrade', (response, backendSocket, backendHead) => {
+    const destroyPair = () => {
+      release();
+      if (!socket.destroyed) socket.destroy();
+      if (!backendSocket.destroyed) backendSocket.destroy();
+    };
+    socket.on('error', destroyPair);
+    backendSocket.on('error', destroyPair);
     const statusLine = `HTTP/${response.httpVersion} ${response.statusCode ?? 101} ${response.statusMessage ?? 'Switching Protocols'}`;
     const headers = response.rawHeaders.reduce<string[]>((lines, value, index) => {
       if (index % 2 === 0) lines.push(`${value}: ${response.rawHeaders[index + 1] ?? ''}`);

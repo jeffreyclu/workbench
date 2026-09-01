@@ -1,4 +1,4 @@
-import { execFile as execFileCallback } from 'node:child_process';
+import { execFile as execFileCallback, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -182,24 +182,46 @@ export async function repositoryIdentity(workspacePath: string): Promise<string 
 }
 
 /**
+ * The same identity, for the one caller that cannot await: schema migrations
+ * run synchronously. Never call this on a request path.
+ */
+export function repositoryIdentitySync(workspacePath: string): string | null {
+  // A path that no longer exists must stay unidentified. Resolving it would
+  // walk up to whatever repository happens to contain its parent directory,
+  // which is how a collected run worktree acquires a foreign identity.
+  if (!existsSync(workspacePath)) return null;
+  try {
+    const identity = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+      cwd: resolveWorkspaceRepository(workspacePath),
+      encoding: 'utf8',
+      maxBuffer: MAX_OUTPUT_BYTES,
+    }).trim();
+    return identity || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Keep only the records belonging to the selected checkout's repository. A
  * conversation or task can be pointed at several repositories over its life,
  * and another repository's history is not this one's: offering it makes the
  * repository picker lie about what the review surface is showing. A recorded
- * path that no longer resolves cannot be proven foreign, so its records are
- * kept rather than silently dropped.
+ * record is matched on the repository identity written when it was captured;
+ * a path is only re-read for legacy records that predate that. A record that
+ * can be attributed to no repository is dropped - showing it in every
+ * repository is the failure this exists to prevent.
  */
-export async function snapshotsForRepository<T extends { diff: { workspacePath: string } }>(snapshots: T[], workspacePath: string): Promise<T[]> {
+export async function snapshotsForRepository<T extends { repositoryIdentity: string | null; diff: { workspacePath: string } }>(snapshots: T[], workspacePath: string): Promise<T[]> {
   const identity = await repositoryIdentity(workspacePath);
   if (!identity) return snapshots;
+  // Only paths still on disk are worth asking Git about. Everything else has
+  // to rely on the identity recorded when the record was captured.
   const identities = new Map<string, string | null>();
-  for (const path of new Set(snapshots.map((snapshot) => snapshot.diff.workspacePath))) {
+  for (const path of new Set(snapshots.filter((snapshot) => !snapshot.repositoryIdentity).map((snapshot) => snapshot.diff.workspacePath))) {
     identities.set(path, existsSync(path) ? await repositoryIdentity(path) : null);
   }
-  return snapshots.filter((snapshot) => {
-    const recorded = identities.get(snapshot.diff.workspacePath);
-    return recorded === null || recorded === identity;
-  });
+  return snapshots.filter((snapshot) => (snapshot.repositoryIdentity ?? identities.get(snapshot.diff.workspacePath) ?? null) === identity);
 }
 
 export async function getWorkspaceDiff(workspacePath: string): Promise<WorkspaceDiff> {

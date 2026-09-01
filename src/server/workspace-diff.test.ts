@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { commitAndPushWorkspace, getWorkspaceBranchDiff, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceFileSource, getWorkspaceRefDiff, getWorkspaceWorktreeDiff, listWorkspaceRefCommits, listWorkspaceRefs, parseWorkspacePatch, parseWorktreeList, resolveWorkspaceRepository, snapshotsForRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceBranchDiff, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceFileSource, getWorkspaceRefDiff, getWorkspaceWorktreeDiff, listWorkspaceRefCommits, listWorkspaceRefs, parseWorkspacePatch, parseWorktreeList, repositoryIdentity, resolveWorkspaceRepository, snapshotsForRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -36,15 +36,27 @@ describe('workspace diff parsing', () => {
     execFileSync('git', ['commit', '--quiet', '-m', 'seed'], { cwd: selected });
     const worktree = join(selected, 'worktrees', 'run');
     execFileSync('git', ['worktree', 'add', '--quiet', '--detach', worktree], { cwd: selected });
-    const record = (workspacePath: string) => ({ id: workspacePath, diff: { workspacePath } });
+    const record = (workspacePath: string, repositoryIdentity: string | null = null) => ({ id: workspacePath, repositoryIdentity, diff: { workspacePath } });
+    const selectedIdentity = await repositoryIdentity(selected);
+    const otherIdentity = await repositoryIdentity(other);
+    const collected = join(selected, 'collected-worktree');
+    const collectedElsewhere = join(other, 'collected-worktree');
 
     const kept = await snapshotsForRepository(
-      [record(selected), record(worktree), record(other), record(join(selected, 'collected-worktree'))],
+      [
+        record(selected),
+        record(worktree),
+        record(other),
+        // Run worktrees are collected, so their path stops resolving. Only the
+        // identity recorded at capture time can still place them.
+        record(collected, selectedIdentity),
+        record(collectedElsewhere, otherIdentity),
+        record(join(selected, 'unattributable-worktree')),
+      ],
       selected,
     );
 
-    // A path that no longer resolves cannot be proven foreign, so it stays.
-    expect(kept.map((snapshot) => snapshot.id)).toEqual([selected, worktree, join(selected, 'collected-worktree')]);
+    expect(kept.map((snapshot) => snapshot.id)).toEqual([selected, worktree, collected]);
   });
 
   it('creates editor deep links only for files in an available local checkout', () => {

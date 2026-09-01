@@ -561,6 +561,10 @@ export interface WorkspaceDiffSnapshot {
   originatingAgentRunId: string | null;
   /** Full Git HEAD recorded with the snapshot, or its recovered commit. */
   commitHash: string | null;
+  /** Git's shared object store for the checkout this was captured in, so the
+   * record stays attributable after a run worktree is collected. Null only for
+   * records captured before the identity was written. */
+  repositoryIdentity: string | null;
 }
 
 export type DiffHunkReviewState = 'reviewed' | 'needs_changes' | 'commented';

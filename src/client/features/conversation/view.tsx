@@ -223,6 +223,12 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const [locallyReadConversationIds, setLocallyReadConversationIds] = useState<Set<string>>(new Set());
   const [exitingMessageIds, setExitingMessageIds] = useState<Set<string>>(new Set());
   const [retryingMessageIds, setRetryingMessageIds] = useState<Set<string>>(new Set());
+  // Codex+Claude dual replies flip a message's row between 'single' and
+  // 'pair' as the other agent's reply appears, which changes the row's React
+  // key and remounts AgentMessageBody — wiping its local "was this streaming"
+  // ref right as a message finishes. Track streamed IDs here instead, on the
+  // one ancestor that never remounts, so the completion typewriter survives it.
+  const streamedMessageIdsRef = useRef<Set<string>>(new Set());
   const conversationIdRef = useRef(conversationId);
   const pendingComposerSelectionRef = useRef<ComposerSelection | null>(null);
   // The server is authoritative across devices, while this map preserves an
@@ -1244,6 +1250,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           {conversationRenderRows.map((row) => {
             const renderMessage = (message: SharedMessage, inGroup: boolean) => {
               const isAgentMessage = message.author === 'codex' || message.author === 'claude';
+              if (isAgentMessage && message.status === 'running') streamedMessageIdsRef.current.add(message.id);
+              const hasStreamedMessage = streamedMessageIdsRef.current.has(message.id);
               const isQueuedMessage = message.status === 'queued';
               const isRetrying = retryingMessageIds.has(message.id);
               // Interjections are live input to a specific running provider.
@@ -1326,7 +1334,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                       )}
                       <article className={`shared-message shared-${message.author}${exitingMessageIds.has(message.id) ? ' shared-message-exiting' : ''}`}>
                         {renderHeader(isLast)}
-                        <AgentMessageBody body={segment.body} running={false} conversationId={message.conversationId} interjections={[]} detailForSingle />
+                        <AgentMessageBody body={segment.body} running={false} conversationId={message.conversationId} interjections={[]} detailForSingle typewriteOnCompletion={isAgentMessage} hasStreamed={hasStreamedMessage} />
                         {isLast && renderFooter()}
                       </article>
                     </div>;
@@ -1339,7 +1347,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                 {renderHeader(true)}
                 {message.status === 'running' && <p className="thinking">Live activity · {message.body ? 'receiving updates' : 'starting agent'}</p>}
                 {(message.body || liveInterjections.length > 0 || (isAgentMessage && message.status === 'running')) && (isAgentMessage || message.author === 'system'
-                  ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} interjections={liveInterjections} detailForSingle={message.status !== 'running'} typewriteOnCompletion={isAgentMessage || (message.author === 'system' && message.body.startsWith('Synthesis:'))} />
+                  ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} interjections={liveInterjections} detailForSingle={message.status !== 'running'} typewriteOnCompletion={isAgentMessage || (message.author === 'system' && message.body.startsWith('Synthesis:'))} hasStreamed={hasStreamedMessage} />
                   : <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: MarkdownCode, pre: MarkdownPre }}>{message.body}</ReactMarkdown></div>)}
                 {renderFooter()}
               </article>

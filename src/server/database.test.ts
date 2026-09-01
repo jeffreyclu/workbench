@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -83,6 +84,7 @@ const EXPECTED_MIGRATIONS = [
   '069_standalone_reviews',
   '070_diff_hunk_review_content_hash',
   '071_diff_hunk_review_hash_backfill',
+  '072_workspace_diff_snapshot_repository',
 ];
 
 describe('openDatabase', () => {
@@ -228,6 +230,39 @@ describe('openDatabase', () => {
     expect(upgraded.prepare("SELECT content_hash FROM diff_hunk_reviews WHERE id = 'recoverable-071'").get())
       .toEqual({ content_hash: contentHashOfLines([' const stable = true;', '-oldCall();', '+newCall();']) });
     expect(upgraded.prepare("SELECT content_hash FROM diff_hunk_reviews WHERE id = 'missing-071'").get()).toEqual({ content_hash: '' });
+    upgraded.close();
+  });
+
+  it('attributes existing history records to their repository when upgrading from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const checkout = join(directory, 'checkout');
+    mkdirSync(checkout);
+    execFileSync('git', ['init', '--quiet'], { cwd: checkout });
+    const identity = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: checkout, encoding: 'utf8' }).trim();
+
+    const current = openDatabase(path);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '072_workspace_diff_snapshot_repository'").run();
+    current.exec('DROP INDEX idx_workspace_diff_snapshots_repository;');
+    current.exec('ALTER TABLE workspace_diff_snapshots DROP COLUMN repository_identity;');
+    current.prepare(`INSERT INTO work_items (id, title, description, status, priority, queue_position, source, created_at, updated_at)
+      VALUES ('item-072', 'History', '', 'ready', 1, 1, 'manual', '2026-08-31T00:00:00.000Z', '2026-08-31T00:00:00.000Z')`).run();
+    const snapshot = (id: string, revision: string, workspacePath: string) => current
+      .prepare(`INSERT INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at)
+        VALUES (?, 'item-072', NULL, ?, ?, '2026-08-31T00:00:01.000Z')`)
+      .run(id, revision, JSON.stringify({ revision, workspacePath, files: [] }));
+    snapshot('present-072', 'rev-present', checkout);
+    snapshot('collected-072', 'rev-collected', join(checkout, 'collected-worktree'));
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT repository_identity FROM workspace_diff_snapshots WHERE id = 'present-072'").get())
+      .toEqual({ repository_identity: identity });
+    // A collected run worktree can no longer be asked. It must stay
+    // unattributed rather than inherit whichever repository contains its
+    // parent directory.
+    expect(upgraded.prepare("SELECT repository_identity FROM workspace_diff_snapshots WHERE id = 'collected-072'").get())
+      .toEqual({ repository_identity: null });
     upgraded.close();
   });
 

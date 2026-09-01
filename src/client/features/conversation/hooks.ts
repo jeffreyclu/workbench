@@ -35,7 +35,7 @@ export function useConversationChangesAvailability(scope: WorkspaceDiffScope | n
       return;
     }
     if (wasRunning.current && !isRunning && scope) {
-      void queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.detail(scope) });
+      void queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.detailPrefix(scope) });
     }
     wasRunning.current = isRunning;
   }, [isRunning, scope, scopeKey, queryClient]);
@@ -55,7 +55,10 @@ export function useConversationChangesAvailability(scope: WorkspaceDiffScope | n
 
   return {
     hasChanges: hasWorkspaceChanges || hasRecordedWorkspaceChanges || hasPullRequestChanges,
-    isLoading: workspaceDiff.isLoading || snapshots.isLoading || pullRequestDiffs.some((pullRequestDiff) => pullRequestDiff.isLoading),
+    // A scoped request that is still waiting for Repo Explorer's selection is
+    // pending, not loading. Reporting it as settled would hide Changes for the
+    // moment before the repository is known.
+    isLoading: (Boolean(scope) && (workspaceDiff.isPending || snapshots.isPending)) || pullRequestDiffs.some((pullRequestDiff) => pullRequestDiff.isLoading),
     isError,
     retry,
   };

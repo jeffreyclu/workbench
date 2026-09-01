@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { createApp, oauthCallbackBase, parseFollowUpPlan } from './app.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
+import { repositoryIdentity } from './workspace-diff.js';
 import { cancelAgentRun, isAgentRunActive } from './agent-runner.js';
 import { OWNER_ID } from './scheduler.js';
 import { previewRuntimeCapabilities } from './runtime-capabilities.js';
@@ -73,7 +74,11 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
       publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
       files: [{ path: 'src/preserved.ts', previousPath: null, status: 'added', additions: 1, deletions: 0, patch: '@@ -0,0 +1 @@\n+preserved', isBinary: false }],
     };
-    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff);
+    // The checkout this was captured in is gone - a collected run worktree -
+    // so only the identity recorded with it can still place it in the
+    // repository this task is reviewing.
+    const { selectedPath } = await (await fetch(`${baseUrl}/api/work-items/${item.id}/workspaces`)).json() as { selectedPath: string };
+    repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff, { repositoryIdentity: await repositoryIdentity(selectedPath) });
 
     const response = await fetch(`${baseUrl}/api/work-items/${item.id}/workspace-diff/snapshots`);
 

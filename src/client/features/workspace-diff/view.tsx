@@ -23,7 +23,7 @@ import { DiffReviewChangeMap } from '../diff-review/change-map.js';
 import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js';
 import { useGitHubPullRequestDiff } from '../github-diff/hooks.js';
 import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
-import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots, useWorkspaceFileSource } from './hooks.js';
+import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots, useWorkspaceFileSource, workspaceExplorerQueryKey } from './hooks.js';
 // Tier routing and the delegated sweep, reached across to the review stack.
 // These four are pure policy over a `ReviewDecision` — no block splitting, no
 // block rows, none of the machinery that is deliberately kept out of Changes.
@@ -35,7 +35,6 @@ import { isDelegatedTier, type DelegationTarget } from '../review-stack/review-d
 import { useDelegatedReview } from '../review-stack/use-delegated-review.js';
 import { fileSourceRevision } from '../review-stack/review-full-file.js';
 import { ReviewFullFilePane } from '../review-stack/review-full-file-pane.js';
-import { workspaceDiffQueryKeys } from './data.js';
 import { readReviewStackReadingMode, readWorkspaceDiffSelection, writeReviewStackReadingMode, writeWorkspaceDiffDecision, writeWorkspaceDiffSource, type ReviewStackReadingMode } from '../../lib/preferences.js';
 import { useWorkspaceDiffKeyboardNavigation } from './use-keyboard-navigation.js';
 
@@ -85,7 +84,9 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const workItemId = 'workItemId' in scope ? scope.workItemId : null;
   const preferenceScope = conversationId ? `conversation:${conversationId}` : `work-item:${workItemId}`;
   const rememberedSelection = useMemo(() => readWorkspaceDiffSelection(preferenceScope), [preferenceScope]);
-  const explorerKey = conversationId ? ['conversation-workspaces', conversationId] : ['work-item-workspaces', workItemId];
+  // The same key the diff hooks resolve the selected repository through, so
+  // one explorer read serves the whole panel.
+  const explorerKey = workspaceExplorerQueryKey(scope);
   const explorer = useQuery({
     queryKey: explorerKey,
     queryFn: () => conversationId ? conversationClient.getConversationWorkspaces(conversationId) : sourceClient.getWorkItemWorkspaces(workItemId!),
@@ -101,27 +102,15 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const selectWorkspace = useMutation({
     mutationFn: (workspacePath: string) => conversationId ? conversationClient.selectConversationWorkspace(conversationId, workspacePath) : sourceClient.selectWorkItemWorkspace(workItemId!, workspacePath),
     onSuccess: async () => {
+      // Only the explorer has to be re-read. Every diff, history and file entry
+      // is keyed by the selected repository, so the panel is already asking a
+      // different question the moment the selection lands - nothing stale to
+      // invalidate, and no window where the previous repository is on screen.
       await queryClient.invalidateQueries({ queryKey: explorerKey });
-      await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.detail(scope) });
-      await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.snapshots(scope) });
     },
   });
   const query = useWorkspaceDiff(scope);
   const snapshotsQuery = useWorkspaceDiffSnapshots(scope, query.data?.diff?.revision);
-  const selectedWorkspacePath = explorer.data?.selectedPath ?? undefined;
-  const previousWorkspacePath = useRef<string | undefined>(undefined);
-  const hasObservedWorkspace = useRef(false);
-  useEffect(() => {
-    // The first explorer response and the initial diff request both ask the
-    // server for its current selection. Subsequent changes mean the agent was
-    // assigned a different detached worktree, so replace the old diff now.
-    if (hasObservedWorkspace.current && previousWorkspacePath.current !== selectedWorkspacePath) {
-      void query.refetch();
-      void snapshotsQuery.refetch();
-    }
-    hasObservedWorkspace.current = true;
-    previousWorkspacePath.current = selectedWorkspacePath;
-  }, [selectedWorkspacePath, query.refetch, snapshotsQuery.refetch]);
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
   // React bails out of a state update that sets the same id, so re-picking the
   // decision already shown would render nothing and the diff would stay where
@@ -186,10 +175,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     // changes which ones exist. A record from the previous repository is not
     // in this one's history: drop the stale choice instead of leaving History
     // selected over a repository that has no records to show.
-    if (snapshotsQuery.isLoading) return;
+    if (snapshotsQuery.isPending) return;
     if (selectedSnapshotId && !snapshots.some((snapshot) => snapshot.id === selectedSnapshotId)) setSelectedSnapshotId(null);
     if (reviewSource === 'history' && snapshots.length === 0) setReviewSource('workspace');
-  }, [snapshots, selectedSnapshotId, reviewSource, snapshotsQuery.isLoading]);
+  }, [snapshots, selectedSnapshotId, reviewSource, snapshotsQuery.isPending]);
   const pullRequestQuery = useGitHubPullRequestDiff(reviewSource === 'pull-request' ? selectedPullRequestUrl : null);
   const isPullRequestSource = reviewSource === 'pull-request';
   const pullRequest = pullRequestQuery.data?.pages[0]?.diff ?? null;
@@ -205,7 +194,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     // Later edits - and any repository the reviewer picks themselves - must
     // never yank the source control back, which would unmount the repository
     // picker and make the Workspace button unclickable.
-    if (hasChosenSource.current || query.isLoading || snapshotsQuery.isLoading) return;
+    // `isPending`, not `isLoading`: both requests wait for Repo Explorer's
+    // selection, and a waiting request is not a loading one. Reading it as
+    // loaded would decide the opening source from an empty timeline.
+    if (hasChosenSource.current || query.isPending || snapshotsQuery.isPending) return;
     hasChosenSource.current = true;
     // Open on a linked pull request only when the local checkout has nothing
     // to review, so a reviewer working through a PR is never pulled out of it.
@@ -217,7 +209,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     // A clean checkout opens on its latest immutable record. Keep the source
     // control truthful instead of making a history record look like live work.
     if (reviewSource === 'workspace' && diff?.changedFiles === 0 && snapshots.length > 0) setReviewSource('history');
-  }, [query.isLoading, snapshotsQuery.isLoading, hasLocalReviewableChanges, availablePullRequests, reviewSource, diff?.changedFiles, snapshots.length]);
+  }, [query.isPending, snapshotsQuery.isPending, hasLocalReviewableChanges, availablePullRequests, reviewSource, diff?.changedFiles, snapshots.length]);
 
   const displayedDiff: ReviewSourceDiff | null | undefined = isPullRequestSource ? pullRequestDiff : selectedSnapshot?.diff ?? diff;
   const agentEditingWorkspace = activeWorkspacePaths
@@ -504,7 +496,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
 
   const workspaces = explorer.data?.workspaces ?? [];
   if (!isPullRequestSource) {
-    if (query.isLoading) return <DiffSkeleton />;
+    if (query.isPending) return <DiffSkeleton />;
     if (query.isError) return <section className="workspace-diff workspace-diff-error" aria-live="polite"><strong>Could not load local workspace changes.</strong><p>{query.error.message}</p><button type="button" className="button secondary compact" onClick={() => void query.refetch()} disabled={query.isFetching}>Retry</button></section>;
     // A pull request stays selectable even with no local checkout to fall back on.
     if (!diff && availablePullRequests.length === 0) return null;

@@ -36,7 +36,7 @@ import { assessDiffBlocks, lookupDiffConfidenceBlocks } from '../diff-confidence
 import { lookupReviewAssist, requestReviewAssist } from '../review-assist-ai.js';
 import { ensureReviewAutoScore, reviewAutoScoreView } from '../review-auto-score.js';
 import { findStaleReferences } from '../stale-references.js';
-import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceRefCommits, listWorkspaceRefs, snapshotsForRepository } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceRefCommits, listWorkspaceRefs, repositoryIdentity, snapshotsForRepository } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
@@ -182,8 +182,8 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
       const workingDirectory = taskWorkingDirectory(item.id);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
-      const [diff, commitHash] = await Promise.all([getWorkspaceDiff(workingDirectory), getWorkspaceHeadCommit(workingDirectory)]);
-      if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff, { originatingAgentRunId: repository.latestAgentRunForSnapshot({ workItemId: item.id })?.id ?? null, commitHash });
+      const [diff, commitHash, identity] = await Promise.all([getWorkspaceDiff(workingDirectory), getWorkspaceHeadCommit(workingDirectory), repositoryIdentity(workingDirectory)]);
+      if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff, { originatingAgentRunId: repository.latestAgentRunForSnapshot({ workItemId: item.id })?.id ?? null, commitHash, repositoryIdentity: identity });
       response.json({ diff });
     } catch (error) { next(error); }
   });

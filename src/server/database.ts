@@ -3,6 +3,26 @@ import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { estimateCostUsd } from './model-pricing.js';
 import { contentHashOfLines, splitPatchHunks } from '../shared/review-decisions.js';
+import { repositoryIdentitySync } from './workspace-diff.js';
+
+/**
+ * Attribute existing history records to the repository they were captured in.
+ * Only a checkout still on disk can be asked; a collected run worktree stays
+ * NULL and its records are read as unattributable rather than shown under
+ * whichever repository is selected next.
+ */
+function backfillWorkspaceDiffSnapshotRepositories(database: DatabaseSync) {
+  const rows = database.prepare(`SELECT id, json_extract(diff_json, '$.workspacePath') AS workspace_path
+    FROM workspace_diff_snapshots WHERE repository_identity IS NULL`).all() as Array<{ id: string; workspace_path: string | null }>;
+  const identities = new Map<string, string | null>();
+  const update = database.prepare('UPDATE workspace_diff_snapshots SET repository_identity = ? WHERE id = ?');
+  for (const row of rows) {
+    if (!row.workspace_path) continue;
+    if (!identities.has(row.workspace_path)) identities.set(row.workspace_path, repositoryIdentitySync(row.workspace_path));
+    const identity = identities.get(row.workspace_path);
+    if (identity) update.run(identity, row.id);
+  }
+}
 
 function backfillDiffHunkReviewContentHashes(database: DatabaseSync) {
   const rows = database.prepare(`SELECT id, work_item_id, conversation_id, revision, file_path, hunk_range
@@ -2000,6 +2020,23 @@ const schemaMigrations: readonly Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_standalone_review_diff_snapshots_captured
           ON standalone_review_diff_snapshots(review_id, captured_at DESC);
       `);
+    },
+  },
+  {
+    // History was scoped to a repository by re-reading the recorded
+    // workspacePath's Git identity at read time. Agent run worktrees are
+    // deliberately collected, so that path stops resolving and the record
+    // became unattributable - and was then shown in every repository the
+    // conversation had ever selected. Record the identity when it is still
+    // knowable, at capture time, and backfill it for the paths that survive.
+    id: '072_workspace_diff_snapshot_repository',
+    apply(database) {
+      database.exec(`
+        ALTER TABLE workspace_diff_snapshots ADD COLUMN repository_identity TEXT;
+        CREATE INDEX IF NOT EXISTS idx_workspace_diff_snapshots_repository
+          ON workspace_diff_snapshots(repository_identity) WHERE repository_identity IS NOT NULL;
+      `);
+      backfillWorkspaceDiffSnapshotRepositories(database);
     },
   },
 ];

@@ -176,4 +176,22 @@ describe('splitAgentResponse', () => {
     expect(container.textContent).not.toBe('');
     expect(container.textContent).not.toContain(body);
   });
+
+  it('still typewrites a freshly mounted completed bubble when hasStreamed is set', async () => {
+    // Codex+Claude row pairing remounts this component with a brand-new
+    // instance right as a message finishes, so the local wasRunning ref
+    // cannot be relied on alone — the caller-supplied hasStreamed flag must
+    // carry that "this message streamed" fact across the remount.
+    const body = 'Finished before the paired agent, so this remounted fresh.';
+    const { container } = render(<AgentMessageBody body={body} running={false} typewriteOnCompletion hasStreamed />);
+
+    expect(container.querySelector('.agent-markdown')).toHaveTextContent('');
+    expect(container.textContent).not.toContain(body);
+
+    await waitForFrame();
+    await waitForFrame();
+
+    expect(container.textContent).not.toBe('');
+    expect(container.textContent).not.toContain(body);
+  });
 });

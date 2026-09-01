@@ -8,7 +8,7 @@ import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
 import { resolveWorkingDirectory, runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, retrySharedSynthesis, runSharedBackgroundJob } from '../shared-room.js';
-import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceRefCommits, listWorkspaceRefs, snapshotsForRepository } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceRefCommits, listWorkspaceRefs, repositoryIdentity, snapshotsForRepository } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { parseFollowUpPlan } from '../app-exports.js';
 import { isRuntimeApproval } from '../runtime-promotion.js';
@@ -137,8 +137,8 @@ export function createConversationRouter({ repository, database, capabilities, a
     try {
       const workingDirectory = conversationWorkingDirectory(request.params.id);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
-      const [diff, commitHash] = await Promise.all([getWorkspaceDiff(workingDirectory), getWorkspaceHeadCommit(workingDirectory)]);
-      if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot({ conversationId: request.params.id }, diff, { originatingAgentRunId: repository.latestAgentRunForSnapshot({ conversationId: request.params.id })?.id ?? null, commitHash });
+      const [diff, commitHash, identity] = await Promise.all([getWorkspaceDiff(workingDirectory), getWorkspaceHeadCommit(workingDirectory), repositoryIdentity(workingDirectory)]);
+      if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot({ conversationId: request.params.id }, diff, { originatingAgentRunId: repository.latestAgentRunForSnapshot({ conversationId: request.params.id })?.id ?? null, commitHash, repositoryIdentity: identity });
       response.json({ diff });
     } catch (error) { next(error); }
   });
