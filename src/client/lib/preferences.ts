@@ -219,3 +219,40 @@ export function writeReviewStackBlock(scope: string, revision: string, blockId: 
     // A block can still be judged even if its browser preference cannot save.
   }
 }
+
+/**
+ * Where Jeffrey was reading a conversation: which pane (thread vs. changes)
+ * and which message was at the top of the thread. Restored on reopen so
+ * switching tasks mid-response or mid-diff-review does not lose the spot.
+ */
+const conversationReadingPositionStorageKey = 'workbench:conversation-reading-positions';
+
+export type ConversationReadingPosition = { pane: 'conversation' | 'changes'; messageId: string | null };
+
+function readConversationReadingPositions(): Record<string, ConversationReadingPosition> {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(conversationReadingPositionStorageKey) ?? '{}') as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(value).flatMap(([conversationId, position]) => {
+      if (!position || typeof position !== 'object') return [];
+      const { pane, messageId } = position as Record<string, unknown>;
+      if (pane !== 'conversation' && pane !== 'changes') return [];
+      return [[conversationId, { pane, messageId: typeof messageId === 'string' ? messageId : null }]];
+    }));
+  } catch {
+    return {};
+  }
+}
+
+export function readConversationReadingPosition(conversationId: string): ConversationReadingPosition | null {
+  return readConversationReadingPositions()[conversationId] ?? null;
+}
+
+export function writeConversationReadingPosition(conversationId: string, position: ConversationReadingPosition): void {
+  try {
+    const positions = readConversationReadingPositions();
+    positions[conversationId] = position;
+    window.localStorage.setItem(conversationReadingPositionStorageKey, JSON.stringify(positions));
+  } catch {
+    // Reading position is a convenience; losing it does not block reading.
+  }
+}

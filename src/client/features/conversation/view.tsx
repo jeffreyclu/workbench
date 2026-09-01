@@ -59,7 +59,7 @@ import { useNavigation } from '../../features/navigation/hooks';
 import { NavigationView } from '../../features/navigation/view';
 import { FollowUpArchiveDialog } from '../../components/dialogs/follow-up-archive-dialog';
 import { activityKindLabel, agentDecisionKinds, compactTokenCount, formatFileSize, formatRunBadge, formatRunTelemetry, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../lib/formatters';
-import { clearSentConversationDraft, readConversationDrafts, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeLastOpenedItem, writeTaskModelProfile } from '../../lib/preferences';
+import { clearSentConversationDraft, readConversationDrafts, readConversationReadingPosition, readLastOpenedItem, readTaskModelProfiles, writeConversationDraft, writeConversationReadingPosition, writeLastOpenedItem, writeTaskModelProfile } from '../../lib/preferences';
 import { QueueExplanationList } from '../../components/queue-explanations';
 import { RetrievedMemoryDialog } from '../../components/dialogs/retrieved-memory-dialog';
 import { ProjectColorDot, projectTheme } from '../../components/project/project-color';
@@ -103,6 +103,16 @@ export function composerSelectionFromConversation(conversation: Pick<SharedConve
     accountProfile: conversation.preferredAccountProfile ?? DEFAULT_ACCOUNT_PROFILE,
     dispatchTarget: conversation.preferredDispatchTarget ?? 'both',
   };
+}
+
+/** The first message row whose bottom edge has not yet scrolled past the top
+ * of the thread container — i.e. the one Jeffrey is currently reading. */
+function findTopVisibleMessageId(container: HTMLElement): string | null {
+  const containerTop = container.getBoundingClientRect().top;
+  for (const element of container.querySelectorAll<HTMLElement>('[data-message-id]')) {
+    if (element.getBoundingClientRect().bottom - containerTop > 4) return element.dataset.messageId ?? null;
+  }
+  return null;
 }
 
 export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'accountProfile' | 'inputTokens' | 'outputTokens' | 'completedAt' | 'createdAt' | 'executionProfile' | 'fallbackFrom' | 'fallbackReason' | 'cacheReadInputTokens' | 'kind'>): string {
@@ -357,6 +367,10 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const threadScrollRef = useRef<HTMLDivElement>(null);
   const isNearThreadBottomRef = useRef(true);
   const pendingInitialThreadScrollRef = useRef<string | null>(null);
+  // Set alongside pendingInitialThreadScrollRef when a saved reading position
+  // names a message to return to instead of the newest one.
+  const pendingInitialThreadAnchorRef = useRef<string | null>(null);
+  const activePaneRef = useRef<'conversation' | 'changes'>('conversation');
   // Phone conversations open directly onto the thread; header and composer
   // start collapsed into small toggle buttons to keep the thread the
   // dominant surface, and expand on tap rather than on scroll direction.
@@ -498,7 +512,12 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   // Explorer can deliberately select any attached local repository.
   const workspaceDiffScope: WorkspaceDiffScope | null = conversationId ? { conversationId } : null;
   const conversationIsRunning = selectedConversation?.state === 'working';
-  useEffect(() => { setActivePane('conversation'); }, [conversationId]);
+  useEffect(() => {
+    // Resume the pane Jeffrey was reading, not always the thread — a diff
+    // review interrupted by switching tasks should reopen on Changes.
+    setActivePane(conversationId ? readConversationReadingPosition(conversationId)?.pane ?? 'conversation' : 'conversation');
+  }, [conversationId]);
+  useEffect(() => { activePaneRef.current = activePane; }, [activePane]);
   useEffect(() => {
     if (activePane !== 'changes') setMobileComposerOpen(false);
   }, [activePane]);
@@ -1012,6 +1031,16 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     if (typeof container.scrollTo === 'function') container.scrollTo({ top: container.scrollHeight, behavior });
     else container.scrollTop = container.scrollHeight;
   };
+  const selectActivePane = (pane: 'conversation' | 'changes') => {
+    setActivePane(pane);
+    // Persist immediately rather than waiting for the next scroll pause, so
+    // switching tabs right before switching tasks still saves the pane.
+    if (conversationId) {
+      const container = threadScrollRef.current;
+      const messageId = isNearThreadBottomRef.current || !container ? null : findTopVisibleMessageId(container);
+      writeConversationReadingPosition(conversationId, { pane, messageId });
+    }
+  };
   useEffect(() => {
     // Re-marking read on every streamed token (via latestMessageLength) fired
     // this call as often as every 750ms for the whole duration of a run — by
@@ -1035,9 +1064,12 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     else setHasNewActivityBelow(true);
   }, [messages.data?.messages.length, latestMessageLength, proposedPlan]);
   useEffect(() => {
-    // Switching conversations always lands the reader at the newest message.
-    isNearThreadBottomRef.current = true;
+    // Switching conversations lands the reader back where they left off, or
+    // the newest message when no reading position was ever saved.
+    const savedAnchor = conversationId ? readConversationReadingPosition(conversationId)?.messageId ?? null : null;
+    isNearThreadBottomRef.current = !savedAnchor;
     pendingInitialThreadScrollRef.current = conversationId;
+    pendingInitialThreadAnchorRef.current = savedAnchor;
     setOlderMessagePages([]);
     setHasNewActivityBelow(false);
     setMobileHeaderOpen(false);
@@ -1054,8 +1086,12 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     const layoutFrame = window.requestAnimationFrame(() => {
       finalFrame = window.requestAnimationFrame(() => {
         if (pendingInitialThreadScrollRef.current !== conversationId) return;
-        scrollThreadToLatest('auto');
+        const anchorId = pendingInitialThreadAnchorRef.current;
+        const anchorElement = anchorId ? threadScrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(anchorId)}"]`) : null;
+        if (anchorElement) anchorElement.scrollIntoView({ block: 'start' });
+        else scrollThreadToLatest('auto');
         pendingInitialThreadScrollRef.current = null;
+        pendingInitialThreadAnchorRef.current = null;
       });
     });
     return () => {
@@ -1065,16 +1101,26 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   }, [conversationId, messages.isSuccess, messages.dataUpdatedAt, conversationRenderRows.length]);
   useEffect(() => {
     const container = threadScrollRef.current;
-    if (!container) return;
+    if (!container || !conversationId) return;
     const nearBottomThreshold = 120;
+    let writeTimeout: number | null = null;
     const updateNearBottom = () => {
       const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= nearBottomThreshold;
       isNearThreadBottomRef.current = nearBottom;
       if (nearBottom) setHasNewActivityBelow(false);
+      // Debounce the write to a pause in scrolling rather than every scroll
+      // tick, which fires far too often to persist synchronously.
+      if (writeTimeout !== null) window.clearTimeout(writeTimeout);
+      writeTimeout = window.setTimeout(() => {
+        writeConversationReadingPosition(conversationId, { pane: activePaneRef.current, messageId: nearBottom ? null : findTopVisibleMessageId(container) });
+      }, 400);
     };
     updateNearBottom();
     container.addEventListener('scroll', updateNearBottom, { passive: true });
-    return () => container.removeEventListener('scroll', updateNearBottom);
+    return () => {
+      container.removeEventListener('scroll', updateNearBottom);
+      if (writeTimeout !== null) window.clearTimeout(writeTimeout);
+    };
   }, [conversationId]);
   const jumpToLatest = () => {
     isNearThreadBottomRef.current = true;
@@ -1211,9 +1257,9 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                   : selectedConversationMissing ? 'Conversation not found'
                   : 'New conversation')}</h2></div>{conversationId && selectedConversation && <><button type="button" className="mobile-detail-close icon-button" aria-label="Close conversation" onClick={() => setRailOpen(true)}><X size={16} /></button><div className="conversation-window-actions" onPointerDown={(event) => { mobileHeaderDragStartY.current = event.clientY; }} onPointerUp={(event) => { if (mobileHeaderDragStartY.current !== null && event.clientY - mobileHeaderDragStartY.current <= -36) setMobileHeaderOpen(false); mobileHeaderDragStartY.current = null; }} onPointerCancel={() => { mobileHeaderDragStartY.current = null; }}>{linkedWorkItem.data?.item && onOpenTask && <button type="button" className="related-task-link icon-button" aria-label="Back to task" title="Back to task" onClick={() => onOpenTask(linkedWorkItem.data!.item.id)}><ArrowLeft size={16} /></button>}<button type="button" className="icon-button" onClick={() => setDecisionTreeOpen(true)} aria-label="Open agent decision tree" title="Open agent decision tree"><GitBranch size={14} /></button>{!selectedConversation.workItemId && <ConversationTaskPicker tasks={linkableTasks.data?.items ?? []} isLoading={linkableTasks.isLoading} isError={linkableTasks.isError} isPending={setConversationTask.isPending} onRetry={() => void linkableTasks.refetch()} onSelect={(workItemId) => setConversationTask.mutate(workItemId)} />}{selectedConversation.workItemId && <button type="button" className="icon-button conversation-unlink-task" onClick={() => setConversationTask.mutate(null)} disabled={setConversationTask.isPending} aria-label="Unlink task" title="Unlink task"><Link2Off size={14} /></button>}{linkedWorkItem.data?.item && <button type="button" className="icon-button complete-task-button" disabled={linkedTaskCompleted || completeLinkedTask.isPending} onClick={() => completeLinkedTask.mutate()} aria-label={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'} title={linkedTaskCompleted ? 'Task completed' : 'Complete linked task'}>{completeLinkedTask.isPending ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}</button>}{isPhoneChrome && <button type="button" className={`icon-button${selectedConversation.pinned ? ' icon-button-active' : ''}`} onClick={() => setConversationPinned.mutate(!selectedConversation.pinned)} disabled={setConversationPinned.isPending} aria-pressed={Boolean(selectedConversation.pinned)} aria-label={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'} title={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'}><Pin size={14} fill={selectedConversation.pinned ? 'currentColor' : 'none'} /></button>}{isPhoneChrome && linkedWorkItem.data?.item && <TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} disclosure />}{isPhoneChrome && renderManualExecutionKindControl()}<button className="icon-button" onClick={() => forkConversation.mutate(conversationId)} aria-label="Fork conversation" title="Fork into a new conversation"><MessageSquarePlus size={14} /></button>{conversationView === 'active' ? <button className="icon-button" onClick={() => archiveConversation.mutate(conversationId)} aria-label="Archive conversation" title="Archive conversation"><Archive size={14} /></button> : <button className="icon-button" onClick={() => restoreConversation.mutate(conversationId)} aria-label="Restore conversation" title="Restore conversation"><RefreshCw size={14} /></button>}<span className={`conversation-delete-control ${selectedConversation.workItemId ? 'is-disabled' : ''}`} tabIndex={selectedConversation.workItemId ? 0 : undefined}><button className="icon-button delete-conversation-button" disabled={Boolean(selectedConversation.workItemId)} onClick={() => setDeleteConversationPromptOpen(true)} aria-label="Delete conversation" aria-describedby={selectedConversation.workItemId ? 'linked-conversation-delete-help' : undefined} title={selectedConversation.workItemId ? undefined : 'Delete permanently'}><Trash2 size={14} /></button>{selectedConversation.workItemId && <span id="linked-conversation-delete-help" className="action-tooltip" role="tooltip">Delete the related task to delete this conversation.</span>}</span></div></>}</header>
         {isPhoneChrome && <div className="mobile-chrome-controls"><button type="button" className="mobile-conversation-toggle" onPointerDown={(event) => { mobileHeaderDragStartY.current = event.clientY; }} onPointerUp={(event) => { if (mobileHeaderDragStartY.current !== null && event.clientY - mobileHeaderDragStartY.current >= 36) setMobileHeaderOpen(true); mobileHeaderDragStartY.current = null; }} onPointerCancel={() => { mobileHeaderDragStartY.current = null; }} onClick={() => setMobileHeaderOpen(true)} aria-label="Expand conversation tray" title="Expand conversation tray"><span aria-hidden="true" /></button></div>}
-        {isPhoneChrome && conversationId && <div className="mobile-review-toggle"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-label="Conversation" title="Conversation" aria-pressed={activePane === 'conversation'} onClick={() => setActivePane('conversation')}><MessageSquare size={13} /><span>Conversation</span></button><button type="button" aria-label="Changes" aria-pressed={activePane === 'changes'} onClick={() => setActivePane('changes')} title={changesAvailability.hasChanges ? 'Review changes' : changesAvailability.isError ? 'Could not check for changes' : changesAvailability.isLoading ? 'Checking for changes…' : 'No changes to review'}><FileDiff size={13} /> <span>Changes</span></button></div></div>}
+        {isPhoneChrome && conversationId && <div className="mobile-review-toggle"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-label="Conversation" title="Conversation" aria-pressed={activePane === 'conversation'} onClick={() => selectActivePane('conversation')}><MessageSquare size={13} /><span>Conversation</span></button><button type="button" aria-label="Changes" aria-pressed={activePane === 'changes'} onClick={() => selectActivePane('changes')} title={changesAvailability.hasChanges ? 'Review changes' : changesAvailability.isError ? 'Could not check for changes' : changesAvailability.isLoading ? 'Checking for changes…' : 'No changes to review'}><FileDiff size={13} /> <span>Changes</span></button></div></div>}
         {isPhoneChrome && !mobileComposerOpen && <button type="button" className="mobile-composer-toggle icon-button" onClick={() => setMobileComposerOpen(true)} aria-label="Expand composer" title="Expand composer"><SquarePen size={16} /></button>}
-        {conversationId && <div className="thread-filter-bar"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-label="Conversation" title="Conversation" aria-pressed={activePane === 'conversation'} onClick={() => setActivePane('conversation')}><MessageSquare size={13} /><span>Conversation</span></button><button type="button" aria-label="Changes" aria-pressed={activePane === 'changes'} onClick={() => setActivePane('changes')} title={changesAvailability.hasChanges ? 'Review changes' : changesAvailability.isError ? 'Could not check for changes' : changesAvailability.isLoading ? 'Checking for changes…' : 'No changes to review'}><FileDiff size={13} /> <span>Changes</span></button></div>{changesAvailability.isError && <button type="button" className="button secondary compact" onClick={() => void changesAvailability.retry()} disabled={changesAvailability.isLoading}>Retry</button>}{selectedConversation && <button type="button" className={`icon-button${selectedConversation.pinned ? ' icon-button-active' : ''}`} onClick={() => setConversationPinned.mutate(!selectedConversation.pinned)} disabled={setConversationPinned.isPending} aria-pressed={Boolean(selectedConversation.pinned)} aria-label={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'} title={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'}><Pin size={13} fill={selectedConversation.pinned ? 'currentColor' : 'none'} /></button>}{!isPhoneChrome && linkedWorkItem.data?.item && <TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} disclosure />}{!isPhoneChrome && renderManualExecutionKindControl()}</div>}
+        {conversationId && <div className="thread-filter-bar"><div className="conversation-surface-tabs" role="group" aria-label="Conversation review layout"><button type="button" aria-label="Conversation" title="Conversation" aria-pressed={activePane === 'conversation'} onClick={() => selectActivePane('conversation')}><MessageSquare size={13} /><span>Conversation</span></button><button type="button" aria-label="Changes" aria-pressed={activePane === 'changes'} onClick={() => selectActivePane('changes')} title={changesAvailability.hasChanges ? 'Review changes' : changesAvailability.isError ? 'Could not check for changes' : changesAvailability.isLoading ? 'Checking for changes…' : 'No changes to review'}><FileDiff size={13} /> <span>Changes</span></button></div>{changesAvailability.isError && <button type="button" className="button secondary compact" onClick={() => void changesAvailability.retry()} disabled={changesAvailability.isLoading}>Retry</button>}{selectedConversation && <button type="button" className={`icon-button${selectedConversation.pinned ? ' icon-button-active' : ''}`} onClick={() => setConversationPinned.mutate(!selectedConversation.pinned)} disabled={setConversationPinned.isPending} aria-pressed={Boolean(selectedConversation.pinned)} aria-label={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'} title={selectedConversation.pinned ? 'Unpin conversation' : 'Pin conversation'}><Pin size={13} fill={selectedConversation.pinned ? 'currentColor' : 'none'} /></button>}{!isPhoneChrome && linkedWorkItem.data?.item && <TaskClassificationSelect itemId={linkedWorkItem.data.item.id} kind={linkedWorkItem.data.item.classificationKind} disclosure />}{!isPhoneChrome && renderManualExecutionKindControl()}</div>}
         <div className={`conversation-review-layout layout-${activePane}`}>
         <div className="conversation-thread-pane">
         <div className="shared-thread" ref={threadScrollRef}>
@@ -1322,7 +1368,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
               </>);
 
               if (splitIntoBubbles && segments) {
-                return <div key={message.id} className={`thread-virtual-row thread-segmented-message${inGroup ? ' reply-group-message' : ''}`}>
+                return <div key={message.id} data-message-id={message.id} className={`thread-virtual-row thread-segmented-message${inGroup ? ' reply-group-message' : ''}`}>
                   {segments.map((segment, index) => {
                     const isLast = index === segments.length - 1;
                     return <div key={`${message.id}-segment-${index}`} className="shared-message-segment-group">
@@ -1342,7 +1388,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                 </div>;
               }
 
-              return <div key={message.id} className={`thread-virtual-row${inGroup ? ' reply-group-message' : ''}`}>
+              return <div key={message.id} data-message-id={message.id} className={`thread-virtual-row${inGroup ? ' reply-group-message' : ''}`}>
               <article className={`shared-message shared-${message.author}${message.author === 'system' && message.status === 'queued' ? ' shared-system-queued' : ''}${exitingMessageIds.has(message.id) ? ' shared-message-exiting' : ''}`}>
                 {renderHeader(true)}
                 {message.status === 'running' && <p className="thinking">Live activity · {message.body ? 'receiving updates' : 'starting agent'}</p>}
