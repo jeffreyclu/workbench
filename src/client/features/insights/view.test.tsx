@@ -88,6 +88,22 @@ describe('InsightsView', () => {
     expect(container.querySelector('.insight-fit-row .recommended')).toBeNull();
   });
 
+  it('renders bugfix tasks as Bug fix in task-kind reports', async () => {
+    stubInsightsFetch({
+      retryRate: null, fallbackRate: null, byAgent: [], completedRuns: 2, completedTasks: 0,
+      medianTaskCycleMs: null, followUpsCreated: 0, inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
+      byKind: [{ kind: 'bugfix', completed: 1, failed: 1, canceled: 0, successRate: 0.5 }],
+      agentFit: [{ kind: 'bugfix', agent: 'codex', completed: 1, failed: 1, canceled: 0, successRate: 0.5, medianDurationMs: 1_000 }],
+      cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
+
+    expect(await screen.findAllByText('Bug fix')).toHaveLength(2);
+    expect(screen.queryByText('bugfix')).toBeNull();
+  });
+
   it('reports retry and handoff lifecycle events as a per-run frequency, including values above 100 per 100 runs', async () => {
     stubInsightsFetch({
       retryRate: 2.5, retryCount: 5, fallbackRate: 1.5, handoffCount: 3, byKind: [], completedRuns: 2, completedTasks: 0,

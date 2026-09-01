@@ -29,6 +29,7 @@ const kindLabels: Record<string, string> = {
   strategy: 'Strategy',
   execute: 'Execute',
   review: 'Review',
+  bugfix: 'Bug fix',
 };
 
 function formatPercent(value: number | null): string {
