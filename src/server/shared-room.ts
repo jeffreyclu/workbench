@@ -510,7 +510,7 @@ export async function runSteerableCodex(prompt: string, cwd: string, signal: Abo
       }, segmentResume, accountProfile, mutating);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (segmentResume && expiredThreadPrompt && /(?:thread|conversation).*(?:not found|does not exist|unknown)|no (?:thread|conversation) found/i.test(message)) {
+      if (segmentResume && expiredThreadPrompt && isMissingCodexThreadError(message)) {
         onProgress('● Codex thread expired. Restarting this turn in a fresh session…');
         segmentPrompt = expiredThreadPrompt;
         segmentResume = undefined;
@@ -532,6 +532,11 @@ export async function runSteerableCodex(prompt: string, cwd: string, signal: Abo
     break;
   }
   return { output: result.output, threadId: result.threadId, usage: aggregate, peakContextTokens };
+}
+
+export function isMissingCodexThreadError(value: unknown): boolean {
+  const message = value instanceof Error ? value.message : String(value);
+  return /(?:thread|conversation).*(?:not found|does not exist|unknown)|no (?:thread|conversation) found|no rollout found for (?:thread|conversation)(?: id)?/i.test(message);
 }
 
 export type TurnGrounding = {

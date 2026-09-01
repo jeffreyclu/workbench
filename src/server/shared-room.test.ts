@@ -478,7 +478,7 @@ describe('shared-room Codex warming', () => {
       `IFS= read -r initialize; printf '%s\n' "$initialize" >> '${log}'`,
       `printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
       `IFS= read -r bootstrap; printf '%s\n' "$bootstrap" >> '${log}'`,
-      `if [ "$count" -eq 1 ]; then printf '%s\n' '{"jsonrpc":"2.0","id":2,"error":{"message":"Thread not found"}}'; exit 0; fi`,
+      `if [ "$count" -eq 1 ]; then printf '%s\n' '{"jsonrpc":"2.0","id":2,"error":{"message":"no rollout found for thread id 01a058de-5fe3-7f32-8d47-6d4a306c2b3f"}}'; exit 0; fi`,
       `printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"fresh-thread"}}}'`,
       `IFS= read -r turn; printf '%s\n' "$turn" >> '${log}'`,
       `printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"fresh-turn"}}}'`,
