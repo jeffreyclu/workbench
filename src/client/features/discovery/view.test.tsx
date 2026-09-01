@@ -34,6 +34,31 @@ const inbox: DiscoveryInbox = {
 
 afterEach(() => { cleanup(); toast.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+describe('DiscoveryInboxView inbox query failures', () => {
+  it('shows an error with Retry and reloads the inbox', async () => {
+    let inboxRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/discovery?view=pending')) {
+        inboxRequests += 1;
+        if (inboxRequests === 1) return new Response(JSON.stringify({ error: 'Discovery service unavailable.' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify(inbox), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [], nextCursor: null, totalCount: 0, proposal: null }), { headers: { 'Content-Type': 'application/json' } });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DiscoveryInboxView onOpenTask={vi.fn()} onOpenStack={vi.fn()} /></QueryClientProvider>);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load discoveries. Check your network and try again.');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText(inbox.candidates[0].title)).toBeInTheDocument();
+    expect(inboxRequests).toBe(2);
+  });
+});
+
 describe('DiscoveryInboxView bulk review failures', () => {
   it('exposes the Pending and Reviewed views as linked tabs', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
