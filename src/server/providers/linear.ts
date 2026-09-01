@@ -146,27 +146,53 @@ function mapIssue(issue: LinearIssue): ProviderWorkItem {
   };
 }
 
+const maxRateLimitRetries = 5;
+const maxRateLimitDelayMs = 30_000;
+
+const defaultSleep = (ms: number) => new Promise<void>((done) => { setTimeout(done, ms); });
+
 export class LinearProvider {
   constructor(
     private readonly apiKey: string,
     private readonly teamIds: string[] = [],
     private readonly projectIds: string[] = [],
     private readonly fetchImpl: typeof fetch = createOutboundFetch('linear-api'),
+    private readonly sleepImpl: (ms: number) => Promise<void> = defaultSleep,
   ) {}
 
   private async request<T>(query: string, variables: Record<string, unknown> = {}, signal?: AbortSignal): Promise<T> {
     if (!this.apiKey) throw new Error('LINEAR_API_KEY is not configured.');
-    const response = await this.fetchImpl('https://api.linear.app/graphql', {
-      method: 'POST',
-      headers: { Authorization: this.apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, variables }),
-      signal,
-    });
-    const payload = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
-    if (payload.errors?.length) throw new Error(payload.errors.map((error) => error.message).join('; '));
-    if (!response.ok) throw new Error(`Linear returned ${response.status}.`);
-    if (!payload.data) throw new Error('Linear returned no data.');
-    return payload.data;
+
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await this.fetchImpl('https://api.linear.app/graphql', {
+        method: 'POST',
+        headers: { Authorization: this.apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, variables }),
+        signal,
+      });
+
+      if (response.status === 429) {
+        if (attempt >= maxRateLimitRetries) {
+          throw new Error(`Linear rate limit exceeded after ${attempt + 1} attempts. Try again later.`);
+        }
+        // Same exponential-backoff-with-jitter shape as the realtime websocket
+        // reconnect in src/client/hooks/realtime.ts, so both surfaces back off
+        // against Linear/the app server the same way.
+        const delay = Math.min(maxRateLimitDelayMs, 1_000 * 2 ** attempt);
+        const jitter = Math.round(delay * (0.2 * Math.random()));
+        await this.sleepImpl(delay + jitter);
+        continue;
+      }
+
+      const payload = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
+      if (payload.errors?.length) throw new Error(payload.errors.map((error) => error.message).join('; '));
+      if (!response.ok) {
+        const reason = response.status === 401 || response.status === 403 ? 'auth failure' : 'request failure';
+        throw new Error(`Linear returned ${response.status} (${reason}).`);
+      }
+      if (!payload.data) throw new Error('Linear returned no data.');
+      return payload.data;
+    }
   }
 
   async fetchTeams(): Promise<LinearTeam[]> {
