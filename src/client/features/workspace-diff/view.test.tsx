@@ -773,3 +773,53 @@ describe('WorkspaceDiffView cross-file decisions', () => {
     expect(await screen.findByLabelText(/1 decision across 3 files/)).toBeInTheDocument();
   });
 });
+
+describe('WorkspaceDiffView repository browser', () => {
+  /** The branch and commit endpoints shipped with no caller, so the selected
+   * repository could be seen in the picker but never browsed. */
+  it('browses the selected repository by branch and then by one commit', async () => {
+    const branchFile: WorkspaceDiffFile = {
+      path: 'src/on-branch.ts', previousPath: null, status: 'modified', additions: 3, deletions: 1, isBinary: false,
+      patch: '@@ -1 +1 @@ branchChange\n-before\n+after',
+    };
+    const commitFile: WorkspaceDiffFile = {
+      path: 'src/in-commit.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false,
+      patch: '@@ -1 +1 @@ commitChange\n-old\n+new',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench', selected: true }] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff/refs')) return json({ refs: {
+        base: 'main',
+        branches: [{ name: 'feature/current', current: true, ahead: 2 }, { name: 'feature/other', current: false, ahead: 1 }],
+        worktrees: [{ path: '/tmp/workbench', branch: 'feature/current', current: true }],
+      } });
+      if (url.includes('/workspace-diff/ref/commits?')) return json({ commits: [
+        { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', shortSha: 'aaaaaaa', title: 'Rename the reader', author: 'Jeffrey', committedAt: null },
+      ] });
+      if (url.includes('/workspace-diff/ref?')) return json({ diff: workspaceDiff([branchFile], 'branch:feature/current:base..tip') });
+      if (url.includes('/workspace-diff/commit?')) return json({ diff: workspaceDiff([commitFile], 'commit:aaaaaaa') });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([], 'clean') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Repository' }));
+
+    // Opens on the checked-out branch and reads what it adds on top of its base.
+    const branchPicker = await screen.findByRole('combobox', { name: 'Branch or worktree' });
+    await waitFor(() => expect(branchPicker).toHaveValue('branch:feature/current'));
+    expect(await screen.findByText('src/on-branch.ts')).toBeInTheDocument();
+
+    const commitPicker = await screen.findByRole('combobox', { name: 'Commit' });
+    expect(commitPicker).toHaveValue('');
+    expect(within(commitPicker).getByRole('option', { name: 'Whole branch vs main' })).toBeInTheDocument();
+
+    fireEvent.change(commitPicker, { target: { value: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } });
+
+    expect(await screen.findByText('src/in-commit.ts')).toBeInTheDocument();
+    expect(screen.queryByText('src/on-branch.ts')).not.toBeInTheDocument();
+  });
+});

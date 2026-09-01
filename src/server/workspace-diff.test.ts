@@ -59,6 +59,22 @@ describe('workspace diff parsing', () => {
     expect(kept.map((snapshot) => snapshot.id)).toEqual([selected, worktree, collected]);
   });
 
+  it('shows no other repository history for a directory Git cannot identify', async () => {
+    const repository = temporaryGitWorkspace();
+    const plain = mkdtempSync(join(tmpdir(), 'workbench-plain-'));
+    temporaryDirectories.push(plain);
+    const record = (workspacePath: string, repositoryIdentity: string | null = null) => ({ id: workspacePath, repositoryIdentity, diff: { workspacePath } });
+
+    const kept = await snapshotsForRepository(
+      [record(repository, await repositoryIdentity(repository)), record(plain)],
+      plain,
+    );
+
+    // Returning everything here is what put one repository's changes on screen
+    // under another repository's name in the picker.
+    expect(kept.map((snapshot) => snapshot.id)).toEqual([plain]);
+  });
+
   it('creates editor deep links only for files in an available local checkout', () => {
     const workspace = temporaryGitWorkspace();
     writeFileSync(join(workspace, 'file with spaces.ts'), 'export {};\n');

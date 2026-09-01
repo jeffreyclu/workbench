@@ -214,14 +214,20 @@ export function repositoryIdentitySync(workspacePath: string): string | null {
  */
 export async function snapshotsForRepository<T extends { repositoryIdentity: string | null; diff: { workspacePath: string } }>(snapshots: T[], workspacePath: string): Promise<T[]> {
   const identity = await repositoryIdentity(workspacePath);
-  if (!identity) return snapshots;
   // Only paths still on disk are worth asking Git about. Everything else has
   // to rely on the identity recorded when the record was captured.
   const identities = new Map<string, string | null>();
   for (const path of new Set(snapshots.filter((snapshot) => !snapshot.repositoryIdentity).map((snapshot) => snapshot.diff.workspacePath))) {
     identities.set(path, existsSync(path) ? await repositoryIdentity(path) : null);
   }
-  return snapshots.filter((snapshot) => (snapshot.repositoryIdentity ?? identities.get(snapshot.diff.workspacePath) ?? null) === identity);
+  const attributedTo = (snapshot: T) => snapshot.repositoryIdentity ?? identities.get(snapshot.diff.workspacePath) ?? null;
+  // A directory Git will not identify - not a repository at all, or one it
+  // refuses to read - is not "every repository". Returning the whole timeline
+  // for it was the leak itself: it put one repository's records on screen
+  // under a different repository's name in the picker. Such a checkout can
+  // only own the records captured from that exact path.
+  if (!identity) return snapshots.filter((snapshot) => attributedTo(snapshot) === null && snapshot.diff.workspacePath === workspacePath);
+  return snapshots.filter((snapshot) => attributedTo(snapshot) === identity);
 }
 
 export async function getWorkspaceDiff(workspacePath: string): Promise<WorkspaceDiff> {

@@ -34,6 +34,26 @@ export const workspaceDiffQueryKeys = {
   hunkReviews: (scope: WorkspaceDiffScope, workspacePath: string | null, revision: string | undefined) => ['workspace-diff-hunk-reviews', workspaceDiffScopeKey(scope), workspacePath, revision] as const,
 };
 
+/** Every cache root that answers from the selected repository. Switching the
+ * picker must evict all of them: between the selection landing on the server
+ * and the explorer read reporting the new path, any refetch already in flight
+ * answers from the new repository and would be stored under the previous
+ * repository's key - the stale entry a later visit then renders. */
+export const workspaceDiffQueryKeyRoots = [
+  'workspace-diff',
+  'workspace-diff-snapshots',
+  'workspace-diff-refs',
+  'workspace-diff-ref',
+  'workspace-diff-ref-commits',
+  'workspace-diff-commit',
+  'workspace-diff-status',
+  'workspace-diff-file-source',
+  'workspace-diff-hunk-reviews',
+] as const;
+
+export const workspaceDiffScopeKeys = (scope: WorkspaceDiffScope) =>
+  workspaceDiffQueryKeyRoots.map((root) => [root, workspaceDiffScopeKey(scope)] as const);
+
 export const workspaceDiffData = {
   get: (scope: WorkspaceDiffScope) => api.getWorkspaceDiff(scope),
   getSnapshots: (scope: WorkspaceDiffScope) => api.getWorkspaceDiffSnapshots(scope),

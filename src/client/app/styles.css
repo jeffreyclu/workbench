@@ -374,6 +374,8 @@ nav { display: grid; gap: 3px; }
 .workspace-repository-picker select { min-width: 0; max-width: 180px; color: inherit; border: 0; outline: 0; background: transparent; font: inherit; }
 .workspace-diff-timeline { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 0 7px; color: #aaa9a2; border: 1px solid #353530; border-radius: 6px; font: 700 10px 'DM Mono'; }
 .workspace-diff-timeline select { min-width: 0; max-width: 190px; color: inherit; border: 0; outline: 0; background: transparent; font: inherit; }
+.workspace-repository-ref, .workspace-repository-commit { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 0 7px; color: #aaa9a2; border: 1px solid #353530; border-radius: 6px; font: 700 10px 'DM Mono'; }
+.workspace-repository-ref select, .workspace-repository-commit select { min-width: 0; max-width: 190px; color: inherit; border: 0; outline: 0; background: transparent; font: inherit; }
 .workspace-pr-source { display: inline-flex; align-items: flex-start; flex-wrap: wrap; gap: 7px; }
 .workspace-pr-source form { display: inline-flex; min-height: 28px; overflow: hidden; border: 1px solid #353530; border-radius: 6px; background: #10110f; }
 .workspace-pr-source input { width: min(245px, 30vw); min-width: 150px; padding: 0 8px; color: #d7d6ce; border: 0; outline: 0; background: transparent; font: 600 11px 'DM Mono'; }
@@ -794,6 +796,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
   .workspace-diff > header > .workspace-diff-actions button, .github-diff > header > a { min-height: 44px; }
   .workspace-diff-timeline { flex: 0 1 160px; max-width: 100%; }
   .workspace-diff-timeline select { width: 100%; }
+  .workspace-repository-ref, .workspace-repository-commit { flex: 0 1 160px; max-width: 100%; }
+  .workspace-repository-ref select, .workspace-repository-commit select { width: 100%; }
   .diff-file-list > span { padding-block: 8px; }
   .diff-file-row { flex-basis: min(220px, 68vw); }
   .diff-file-list button { flex-basis: min(220px, 68vw); }

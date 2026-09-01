@@ -42,6 +42,26 @@ describe('WorkItemRepository', () => {
     expect(repository.listWorkspaceDiffSnapshots({ workItemId: item.id })).toEqual([expect.objectContaining({ id: first.id, diff, originatingAgentRunId: run.id, commitHash: '0123456789abcdef' })]);
   });
 
+  it('keeps a record per repository when two checkouts produce the same revision', () => {
+    const item = repository.create({ title: 'Two checkouts', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const diff = (workspacePath: string): WorkspaceDiff => ({
+      workspacePath, branch: 'feature/same', revision: 'identical-revision', changedFiles: 1, additions: 1, deletions: 0,
+      publish: { branch: 'feature/same', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
+      files: [{ path: 'src/version.ts', previousPath: null, status: 'added', additions: 1, deletions: 0, patch: '@@ -0,0 +1 @@\n+version', isBinary: false }],
+    });
+
+    const left = repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff('/tmp/left'), { repositoryIdentity: '/tmp/left/.git' });
+    const right = repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff('/tmp/right'), { repositoryIdentity: '/tmp/right/.git' });
+
+    // Identifying a record by revision alone discarded the second repository's
+    // capture and handed back the first repository's row, filing one
+    // repository's changes permanently under the other's name.
+    expect(right.id).not.toBe(left.id);
+    expect(right.diff.workspacePath).toBe('/tmp/right');
+    expect(repository.listWorkspaceDiffSnapshots({ workItemId: item.id })
+      .map((snapshot) => snapshot.repositoryIdentity).sort()).toEqual(['/tmp/left/.git', '/tmp/right/.git']);
+  });
+
   it('upserts a diff hunk review by identity and lists reviews scoped to the owning work item', () => {
     const item = repository.create({ title: 'Hunk review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const other = repository.create({ title: 'Other item', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });

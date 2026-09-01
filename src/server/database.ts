@@ -2039,6 +2039,28 @@ const schemaMigrations: readonly Migration[] = [
       backfillWorkspaceDiffSnapshotRepositories(database);
     },
   },
+  {
+    // Uniqueness still ignored the repository, so a record was identified by
+    // conversation and revision alone. Two checkouts that produce the same
+    // revision - a second clone, a fork, the same edit made twice - then
+    // collided: the INSERT OR IGNORE dropped the second repository's record
+    // and the read-back returned the first repository's row, permanently
+    // filed under the wrong repository. Identity is part of what makes a
+    // record unique, so it belongs in the index.
+    id: '073_workspace_diff_snapshot_repository_uniqueness',
+    apply(database) {
+      database.exec(`
+        DROP INDEX IF EXISTS idx_workspace_diff_snapshots_work_item_revision;
+        DROP INDEX IF EXISTS idx_workspace_diff_snapshots_conversation_revision;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_diff_snapshots_work_item_revision_repository
+          ON workspace_diff_snapshots(work_item_id, revision, ifnull(repository_identity, ''))
+          WHERE work_item_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_diff_snapshots_conversation_revision_repository
+          ON workspace_diff_snapshots(conversation_id, revision, ifnull(repository_identity, ''))
+          WHERE conversation_id IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

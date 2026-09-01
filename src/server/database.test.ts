@@ -85,6 +85,7 @@ const EXPECTED_MIGRATIONS = [
   '070_diff_hunk_review_content_hash',
   '071_diff_hunk_review_hash_backfill',
   '072_workspace_diff_snapshot_repository',
+  '073_workspace_diff_snapshot_repository_uniqueness',
 ];
 
 describe('openDatabase', () => {
@@ -242,8 +243,14 @@ describe('openDatabase', () => {
     const identity = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: checkout, encoding: 'utf8' }).trim();
 
     const current = openDatabase(path);
-    current.prepare("DELETE FROM schema_migrations WHERE id = '072_workspace_diff_snapshot_repository'").run();
-    current.exec('DROP INDEX idx_workspace_diff_snapshots_repository;');
+    current.prepare("DELETE FROM schema_migrations WHERE id IN ('072_workspace_diff_snapshot_repository', '073_workspace_diff_snapshot_repository_uniqueness')").run();
+    current.exec(`DROP INDEX idx_workspace_diff_snapshots_repository;
+      DROP INDEX idx_workspace_diff_snapshots_work_item_revision_repository;
+      DROP INDEX idx_workspace_diff_snapshots_conversation_revision_repository;
+      CREATE UNIQUE INDEX idx_workspace_diff_snapshots_work_item_revision
+        ON workspace_diff_snapshots(work_item_id, revision) WHERE work_item_id IS NOT NULL;
+      CREATE UNIQUE INDEX idx_workspace_diff_snapshots_conversation_revision
+        ON workspace_diff_snapshots(conversation_id, revision) WHERE conversation_id IS NOT NULL;`);
     current.exec('ALTER TABLE workspace_diff_snapshots DROP COLUMN repository_identity;');
     current.prepare(`INSERT INTO work_items (id, title, description, status, priority, queue_position, source, created_at, updated_at)
       VALUES ('item-072', 'History', '', 'ready', 1, 1, 'manual', '2026-08-31T00:00:00.000Z', '2026-08-31T00:00:00.000Z')`).run();
@@ -263,6 +270,34 @@ describe('openDatabase', () => {
     // parent directory.
     expect(upgraded.prepare("SELECT repository_identity FROM workspace_diff_snapshots WHERE id = 'collected-072'").get())
       .toEqual({ repository_identity: null });
+    upgraded.close();
+  });
+
+  it('makes history uniqueness repository-scoped when upgrading from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+
+    const current = openDatabase(path);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '073_workspace_diff_snapshot_repository_uniqueness'").run();
+    current.exec(`DROP INDEX idx_workspace_diff_snapshots_work_item_revision_repository;
+      DROP INDEX idx_workspace_diff_snapshots_conversation_revision_repository;
+      CREATE UNIQUE INDEX idx_workspace_diff_snapshots_work_item_revision
+        ON workspace_diff_snapshots(work_item_id, revision) WHERE work_item_id IS NOT NULL;`);
+    current.prepare(`INSERT INTO work_items (id, title, description, status, priority, queue_position, source, created_at, updated_at)
+      VALUES ('item-073', 'History', '', 'ready', 1, 1, 'manual', '2026-08-31T00:00:00.000Z', '2026-08-31T00:00:00.000Z')`).run();
+    current.prepare(`INSERT INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at, repository_identity)
+      VALUES ('left-073', 'item-073', NULL, 'same-revision', '{}', '2026-08-31T00:00:01.000Z', '/left/.git')`).run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    // The second repository's record was previously rejected by a unique index
+    // that identified a record by revision alone.
+    upgraded.prepare(`INSERT INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at, repository_identity)
+      VALUES ('right-073', 'item-073', NULL, 'same-revision', '{}', '2026-08-31T00:00:02.000Z', '/right/.git')`).run();
+    expect(upgraded.prepare("SELECT count(*) AS total FROM workspace_diff_snapshots WHERE revision = 'same-revision'").get())
+      .toEqual({ total: 2 });
+    expect(() => upgraded.prepare(`INSERT INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at, repository_identity)
+      VALUES ('duplicate-073', 'item-073', NULL, 'same-revision', '{}', '2026-08-31T00:00:03.000Z', '/right/.git')`).run()).toThrow();
     upgraded.close();
   });
 
