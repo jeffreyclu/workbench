@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GlobalSearch, NavigationView } from './view';
+import { GlobalSearch, NavigationView, PromotionQueueStatus } from './view';
 
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -137,6 +137,34 @@ describe('GlobalSearch', () => {
 
     expect(await screen.findByText('Showing 40 results.')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenLastCalledWith(expect.stringContaining('limit=40'), expect.anything());
+  });
+});
+
+describe('PromotionQueueStatus', () => {
+  it('uses a status announcement when keyboard focus reveals the read-only promotion details', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      queueLength: 1,
+      oldestQueuedAt: '2026-09-01T10:00:00.000Z',
+      running: null,
+      lastBuild: { status: 'succeeded', at: '2026-09-01T09:00:00.000Z', summary: 'Preview promoted' },
+    }), { headers: { 'Content-Type': 'application/json' } })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><PromotionQueueStatus /></QueryClientProvider>);
+
+    const trigger = screen.getByRole('button', { name: 'Promotion status' });
+    fireEvent.focus(trigger);
+
+    expect(await screen.findByRole('status', { name: 'Promotion status' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Promotion status' })).not.toBeInTheDocument();
+    expect(trigger).not.toHaveAttribute('aria-haspopup');
+    expect(trigger).toHaveAttribute('aria-controls', 'promotion-status');
+
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    fireEvent.blur(trigger, { relatedTarget: outside });
+
+    expect(screen.queryByRole('status', { name: 'Promotion status' })).not.toBeInTheDocument();
+    outside.remove();
   });
 });
 

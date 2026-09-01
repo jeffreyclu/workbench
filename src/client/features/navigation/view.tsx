@@ -16,6 +16,7 @@ export type NavigationViewName = 'active' | 'workbench' | 'archive' | 'artifacts
 
 const GLOBAL_SEARCH_RESULT_LIMIT = 20;
 const GLOBAL_SEARCH_MAX_RESULTS = 100;
+const PROMOTION_STATUS_ID = 'promotion-status';
 
 function useGlobalSearch(onSelectResult: (result: MemorySearchResult) => void) {
   const [query, setQuery] = useState('');
@@ -207,14 +208,14 @@ export function PromotionQueueStatus() {
       ref={buttonRef}
       type="button"
       className={`brand-mark brand-mark-${color}`}
+      aria-controls={PROMOTION_STATUS_ID}
       aria-expanded={open}
-      aria-haspopup="dialog"
       aria-label="Promotion status"
       onClick={() => (open ? setOpen(false) : show())}
       onFocus={show}
     >W</button>
     {open && data && anchor && createPortal(
-      <div className="promotion-status-popover" role="dialog" aria-label="Promotion status" style={{ top: anchor.top, left: anchor.left }}>
+      <div id={PROMOTION_STATUS_ID} className="promotion-status-popover" role="status" aria-atomic="true" aria-label="Promotion status" style={{ top: anchor.top, left: anchor.left }}>
         <div className="promotion-status-popover-row">
           <strong>Queue</strong>
           <span>{data.queueLength > 0 ? `${data.queueLength} waiting${data.oldestQueuedAt ? ` since ${new Date(data.oldestQueuedAt).toLocaleTimeString()}` : ''}` : 'Empty'}</span>
