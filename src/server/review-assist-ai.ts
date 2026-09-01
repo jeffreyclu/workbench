@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
 import { changeTypeLabel, isReviewChangeType, type ReviewChangeType } from '../shared/change-type.js';
-import { REVIEW_ASSIST_CONFIDENCE_PREFIX, REVIEW_ASSIST_MISSING_PREFIX, type ReviewAssistTier } from '../shared/contracts.js';
 import { auditCitations, auditReferenceClaims, citationAuditNote, referenceClaimNote, type CoverageEvidence, type ReferenceEvidence } from '../shared/coverage-evidence.js';
 import { auditParityTable, parityAuditNote, parityTableApplies, PARITY_DIRECTIVE } from '../shared/parity-table.js';
 
@@ -133,13 +132,6 @@ const PRIME_PROMPT = 'Instruction: reply with the single word ready.';
  * the worst of both: two cache entries, one answer, twice the spend. These are
  * appended only for a tiered request, so the untiered Changes prompt is byte
  * for byte the prompt it has always been. */
-const TIER_DIRECTIVES: Record<ReviewAssistTier, string> = {
-  T0: 'Depth: none. Proof settled this block before you were asked, so this is a formality. One line, and no speculation about what else it might reach.',
-  T1: 'Depth: skim. A bounded question with a bounded answer: at most three sentences, drawn from what this diff shows. Do not reason about callers you were not given.',
-  T2: 'Depth: read. A human reads this block after you. Say what they would otherwise have to work out for themselves, and skip what the diff already makes plain.',
-  T3: 'Depth: study. This one is costly to get wrong. Work through what it changes, what depends on it, and what would have to be true for it to be safe — and name which of those you could not check.',
-};
-
 /** What each tier actually costs. The directives above only ask the model to
  * look harder; until this existed every one of them was answered by the same
  * haiku/low turn, so 'study this one' and 'skim this one' differed in wording
@@ -157,38 +149,12 @@ type AssistSpend = { model: string; effort: string; timeoutMs: number };
 
 const DEFAULT_SPEND: AssistSpend = { model: 'haiku', effort: 'low', timeoutMs: 30_000 };
 
-const TIER_SPEND: Record<ReviewAssistTier, AssistSpend> = {
-  T0: DEFAULT_SPEND,
-  T1: DEFAULT_SPEND,
-  T2: { model: 'sonnet', effort: 'medium', timeoutMs: 90_000 },
-  T3: { model: 'opus', effort: 'high', timeoutMs: 180_000 },
-};
-
-/** An untiered request is a Changes question, which has always been the cheap
- * turn — it keeps the pool's spend exactly, so nothing about Changes moves. */
-function spendFor(tier: ReviewAssistTier | null): AssistSpend {
-  return tier ? TIER_SPEND[tier] : DEFAULT_SPEND;
-}
-
-/** The escalation hinge. A cheap tier is only worth buying if its answer can
- * admit it was too cheap; without this, an under-informed skim reads exactly
- * like a settled one and the reviewer never learns which is which. */
-const CONFIDENCE_DIRECTIVE = [
-  `End with a line "${REVIEW_ASSIST_CONFIDENCE_PREFIX} high" or "${REVIEW_ASSIST_CONFIDENCE_PREFIX} low".`,
-  'This rates the answer you just gave, at the depth you were asked for. It is not a wish list.',
-  'You are never given the whole repository, and the question above was written knowing that:',
-  'if the material in this message answers it, say high even though callers, the rest of the file, or the test suite were withheld.',
-  'Say low only when the question itself cannot be answered from what you were shown — the change is unintelligible without something absent, or answering would require asserting something about code not in this message —',
-  `and then add a line "${REVIEW_ASSIST_MISSING_PREFIX} <what would have to be read>".`,
-  'Low sends the block back to a human, so it must mean this question was priced too cheaply, not that more context would have been pleasant.',
-].join(' ');
-
 /** Keyed on exactly what the prompt reads. Only `compare_task_intent` puts the
  * task into its prompt, so folding intent into every key fragmented the cache:
  * an edited task description threw away a score that did not depend on it, and
  * a background-computed score missed the moment the reviewer's window derived
  * intent even slightly differently. */
-function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null = null): string {
+function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent): string {
   // Review state is deliberately excluded from both the key and the prompt.
   // Whether a human has already ticked "Reviewed" does not change what the code
   // does, and folding it in threw the answer away the instant a reviewer
@@ -214,13 +180,9 @@ function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision,
       : null,
   };
   const keyedDecision = { behavior: decision.behavior, changeType: decision.changeType, secondaryChangeTypes: decision.secondaryChangeTypes, hunks: decision.hunks, evidence: keyedEvidence };
-  // `tier` is only present for review-stack requests, and `JSON.stringify`
-  // omits an undefined value: a request without a tier hashes to exactly the
-  // string it hashed to before tiering existed, so no cached Changes answer is
-  // invalidated by this key gaining a field.
   const keyed = action === 'compare_task_intent'
-    ? { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, taskIntent, tier: tier ?? undefined }
-    : { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, tier: tier ?? undefined };
+    ? { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, taskIntent }
+    : { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision };
   return createHash('sha256').update(JSON.stringify(keyed)).digest('hex');
 }
 
@@ -238,11 +200,11 @@ function writeCached(database: WorkbenchDatabase, hash: string, answer: string):
  * they (or another window) already paid for the instant they open a hunk,
  * without turning this surface back into ambient AI spend for hunks nobody
  * has asked about yet. */
-export function lookupReviewAssist(database: WorkbenchDatabase, action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null = null): string | null {
-  return readCached(database, hashRequest(action, decision, taskIntent, tier)) ?? null;
+export function lookupReviewAssist(database: WorkbenchDatabase, action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent): string | null {
+  return readCached(database, hashRequest(action, decision, taskIntent)) ?? null;
 }
 
-function buildPrompt(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null = null): string {
+function buildPrompt(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent): string {
   const hunkText = decision.hunks.map((hunk) => `${hunk.filePath} (${hunk.location}):\n${hunk.lines.join('\n')}`).join('\n\n');
   const changeType = isReviewChangeType(decision.changeType) ? decision.changeType : 'behavior_edit';
   const secondary = decision.secondaryChangeTypes.filter(isReviewChangeType);
@@ -307,7 +269,6 @@ function buildPrompt(action: ReviewAssistAction, decision: ReviewAssistDecision,
   if (action === 'compare_task_intent') {
     parts.push(taskIntent ? `Task title: ${taskIntent.title}\nTask description: ${taskIntent.description}` : 'No task is linked to this review; say so and note that alignment cannot be judged.');
   }
-  if (tier) parts.push(TIER_DIRECTIVES[tier], CONFIDENCE_DIRECTIVE);
   return parts.join('\n\n');
 }
 
@@ -554,9 +515,8 @@ export async function requestReviewAssist(
   decision: ReviewAssistDecision,
   taskIntent: ReviewAssistTaskIntent,
   onDelta?: (text: string) => void,
-  tier: ReviewAssistTier | null = null,
 ): Promise<string> {
-  const hash = hashRequest(action, decision, taskIntent, tier);
+  const hash = hashRequest(action, decision, taskIntent);
   const cached = readCached(database, hash);
   if (cached) return cached;
   // Task and conversation scopes intentionally score the same diff at the
@@ -565,7 +525,7 @@ export async function requestReviewAssist(
   const existing = inFlightRequests.get(hash);
   if (existing) return existing;
   const request = (async () => {
-    const raw = await runTurn(buildPrompt(action, decision, taskIntent, tier), spendFor(tier), onDelta);
+    const raw = await runTurn(buildPrompt(action, decision, taskIntent), DEFAULT_SPEND, onDelta);
     const answer = withAnswerAudits(action, decision, raw);
     writeCached(database, hash, answer);
     return answer;

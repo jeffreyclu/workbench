@@ -55,7 +55,7 @@ describe('whole-file context', () => {
     const database = openDatabase(':memory:');
 
     const withFile = { ...decision, fileContext: [{ filePath: 'src/sync.ts', content: 'export function sync() { retry(3); }' }] };
-    await requestReviewAssist(database, 'explain', withFile, null, undefined, 'T1');
+    await requestReviewAssist(database, 'explain', withFile, null);
 
     const prompt = writes.join('');
     expect(prompt).toContain('export function sync() { retry(3); }');
@@ -63,7 +63,7 @@ describe('whole-file context', () => {
     // The panel reads the cache back without any file — it renders a decision,
     // not a checkout — so context must not be part of the key. Keyed, every
     // delegated answer would be invisible to the surface it was bought for.
-    expect(lookupReviewAssist(database, 'explain', decision, null, 'T1')).toContain('Answered with the file in hand.');
+    expect(lookupReviewAssist(database, 'explain', decision, null)).toContain('Answered with the file in hand.');
   });
 });
 
@@ -444,134 +444,5 @@ describe('reference-claim audit', () => {
     const { requestReviewAssist } = await import('./review-assist-ai.js');
 
     expect(await requestReviewAssist(openDatabase(':memory:'), 'score_risk', deletion, null)).toBe('SCORE: 55\nAll call sites are updated.');
-  });
-});
-
-describe('tiered depth', () => {
-  /** The prompt actually sent for the real turn. The first write is the pool's
-   * priming turn, which carries no question. */
-  async function promptFor(tier: 'T1' | 'T3' | null) {
-    vi.resetModules();
-    const writes: string[] = [];
-    vi.doMock('node:child_process', () => ({ spawn: mockStreamingWorker('An answer.', [], writes) }));
-    const { requestReviewAssist } = await import('./review-assist-ai.js');
-    await requestReviewAssist(openDatabase(':memory:'), 'explain', decision, null, undefined, tier);
-    return writes.find((write) => write.includes('Adds a retry to the sync client.')) ?? '';
-  }
-
-  it('asks a study block a harder question than a skim block, and asks both to report confidence', async () => {
-    const skim = await promptFor('T1');
-    const study = await promptFor('T3');
-
-    expect(skim).toContain('Depth: skim');
-    expect(study).toContain('Depth: study');
-    // The whole point of keying the tier: two tiers must be two questions. If
-    // these matched, the cache would hold two entries for one answer and the
-    // tier would be pure spend.
-    expect(skim).not.toBe(study);
-    for (const prompt of [skim, study]) expect(prompt).toContain('CONFIDENCE:');
-  });
-
-  it('leaves an untiered request byte-identical to the prompt Changes has always sent', async () => {
-    const untiered = await promptFor(null);
-
-    expect(untiered).toContain('Adds a retry to the sync client.');
-    expect(untiered).not.toContain('Depth:');
-    expect(untiered).not.toContain('CONFIDENCE:');
-    expect(untiered).not.toContain('MISSING:');
-  });
-});
-
-/** Answers every turn it is written, so it stands in for both a pooled session
- * (whose first write is the priming turn) and a dedicated deep-tier session
- * (whose first write is the real question). */
-function mockAnyTurnWorker(answer: string, deltas: string[] = [], firstWrites: string[] = []) {
-  return vi.fn(() => {
-    const emitter = new EventEmitter() as EventEmitter & {
-      stdout: EventEmitter & { setEncoding?: (encoding: string) => void };
-      stderr: EventEmitter;
-      stdin: EventEmitter & { write: (chunk: string) => void; end?: () => void };
-      kill: () => void;
-    };
-    emitter.stdout = Object.assign(new EventEmitter(), { setEncoding: () => {} });
-    emitter.stderr = new EventEmitter();
-    let seen = 0;
-    emitter.stdin = Object.assign(new EventEmitter(), {
-      write: (chunk: string) => {
-        if (seen++ === 0) firstWrites.push(chunk);
-        queueMicrotask(() => {
-          for (const text of deltas) {
-            emitter.stdout.emit('data', `${JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } })}\n`);
-          }
-          emitter.stdout.emit('data', `${JSON.stringify({ type: 'result', is_error: false, result: answer })}\n`);
-        });
-      },
-      end: () => {},
-    });
-    emitter.kill = () => {};
-    return emitter;
-  });
-}
-
-const spawnedArgs = (spawn: { mock: { calls: unknown[][] } }) =>
-  spawn.mock.calls.map((call) => (call[1] as string[]).join(' '));
-
-describe('tier spend', () => {
-  it('buys a deep tier its own model instead of serving it from the cheap warm pool', async () => {
-    vi.resetModules();
-    const firstWrites: string[] = [];
-    const spawn = mockAnyTurnWorker('Studied it.', [], firstWrites);
-    vi.doMock('node:child_process', () => ({ spawn }));
-    const { requestReviewAssist } = await import('./review-assist-ai.js');
-    const database = openDatabase(':memory:');
-
-    expect(await requestReviewAssist(database, 'explain', decision, null, undefined, 'T3')).toContain('Studied it.');
-
-    // The tier changes what is spent, not just what the prompt asks for: a
-    // pooled haiku answer under a T3 key is the failure this guards.
-    const args = spawnedArgs(spawn);
-    expect(args.some((argv) => argv.includes('--model opus') && argv.includes('--effort high'))).toBe(true);
-    // And it is not primed first — a session used once and retired would pay
-    // for a throwaway turn to save nothing.
-    expect(firstWrites.some((write) => write.includes('Depth: study'))).toBe(true);
-  });
-
-  it('gives the middle tier a middle spend', async () => {
-    vi.resetModules();
-    const spawn = mockAnyTurnWorker('Read it.');
-    vi.doMock('node:child_process', () => ({ spawn }));
-    const { requestReviewAssist } = await import('./review-assist-ai.js');
-    const database = openDatabase(':memory:');
-
-    await requestReviewAssist(database, 'explain', decision, null, undefined, 'T2');
-
-    expect(spawnedArgs(spawn).some((argv) => argv.includes('--model sonnet') && argv.includes('--effort medium'))).toBe(true);
-  });
-
-  it('still streams a deep tier, so the reviewer is not left on a spinner for the slowest turn', async () => {
-    vi.resetModules();
-    const spawn = mockAnyTurnWorker('Studied it.', ['Stud', 'ied it.']);
-    vi.doMock('node:child_process', () => ({ spawn }));
-    const { requestReviewAssist } = await import('./review-assist-ai.js');
-    const database = openDatabase(':memory:');
-
-    let streamed = '';
-    await requestReviewAssist(database, 'explain', decision, null, (text) => { streamed += text; }, 'T3');
-
-    expect(streamed).toBe('Studied it.');
-  });
-
-  it('leaves an untiered Changes question on the cheap turn it has always paid for', async () => {
-    vi.resetModules();
-    const spawn = mockAnyTurnWorker('Explained.');
-    vi.doMock('node:child_process', () => ({ spawn }));
-    const { requestReviewAssist } = await import('./review-assist-ai.js');
-    const database = openDatabase(':memory:');
-
-    await requestReviewAssist(database, 'explain', decision, null);
-
-    const args = spawnedArgs(spawn);
-    expect(args.length).toBeGreaterThan(0);
-    expect(args.every((argv) => argv.includes('--model haiku') && argv.includes('--effort low'))).toBe(true);
   });
 });

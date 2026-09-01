@@ -119,22 +119,6 @@ describe('WorkItemRepository', () => {
     expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-3')).toEqual([]);
   });
 
-  it('carries reviewed hunks across standalone review snapshots', () => {
-    const review = repository.createStandaloneReview({ pullRequestUrl: 'https://github.com/acme/widgets/pull/42' });
-    const diff = (revision: string, range: string): WorkspaceDiff => ({
-      workspacePath: '', branch: 'feature/review', revision, changedFiles: 1, additions: 1, deletions: 1,
-      publish: { branch: null, hasOrigin: false, ahead: 0, hasChanges: false, reason: 'Pull request diff.' },
-      files: [{ path: 'src/a.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, patch: `${range}\n-old\n+new`, isBinary: false }],
-    });
-    repository.captureStandaloneReviewDiffSnapshot(review.id, diff('rev-1', '@@ -1 +1 @@'));
-    repository.upsertDiffHunkReview({ reviewId: review.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1 +1 @@', contentHash: contentHashOfLines(['-old', '+new']), state: 'reviewed' });
-    repository.captureStandaloneReviewDiffSnapshot(review.id, diff('rev-2', '@@ -1 +10 @@'));
-
-    expect(repository.listDiffHunkReviews({ reviewId: review.id }, 'rev-2'))
-      .toEqual([expect.objectContaining({ revision: 'rev-1', filePath: 'src/a.ts', state: 'reviewed' })]);
-    expect(repository.listStandaloneReviewDiffSnapshots(review.id).map((snapshot) => snapshot.revision)).toEqual(['rev-2', 'rev-1']);
-  });
-
   it('keeps a verdict recorded before content was tracked with the revision it was given about', () => {
     const item = repository.create({ title: 'Legacy hunk review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     database.prepare(`INSERT INTO diff_hunk_reviews (id, work_item_id, revision, file_path, hunk_range, content_hash, state, note, updated_at)
@@ -147,74 +131,6 @@ describe('WorkItemRepository', () => {
     // But never carried forward: with no hash there is nothing to prove the
     // code it judged is the code now on screen.
     expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-2')).toEqual([]);
-  });
-
-  it('keeps block-level review state separate from hunk-level review state', () => {
-    const item = repository.create({ title: 'Block review', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    repository.upsertDiffHunkReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', hunkRange: '@@ -1,20 +1,30 @@', contentHash: 'hash-hunk', state: 'reviewed' });
-
-    const block = repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@ parseBody', contentHash: 'abc123', state: 'needs_changes', note: 'unhandled empty body' });
-    expect(block.state).toBe('needs_changes');
-
-    // Reviewing a block does not mark its hunk reviewed, and vice versa: the
-    // two granularities are deliberately not reconciled.
-    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-1')).toEqual([expect.objectContaining({ hunkRange: '@@ -1,20 +1,30 @@', state: 'reviewed' })]);
-    expect(repository.listDiffBlockReviews({ workItemId: item.id }, 'rev-1')).toEqual([expect.objectContaining({ blockRange: '@@ -1,8 +1,12 @@ parseBody', contentHash: 'abc123', state: 'needs_changes' })]);
-  });
-
-  it('records a rewritten block as a separate verdict from the one it replaced', () => {
-    const item = repository.create({ title: 'Rewritten block', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-before', state: 'reviewed' });
-    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-after', state: 'commented' });
-
-    const reviews = repository.listDiffBlockReviews({ workItemId: item.id }, 'rev-1');
-    expect(reviews).toHaveLength(2);
-    expect(reviews.map((review) => review.contentHash).sort()).toEqual(['hash-after', 'hash-before']);
-  });
-
-  /** A verdict answers a piece of code, not a revision. Rebasing or pushing a
-   * follow-up commit changes the revision of every block in the diff including
-   * the untouched ones, so a revision-scoped read threw the whole review away
-   * and asked the same questions again. */
-  it('carries a block verdict onto a later revision when the content is unchanged', () => {
-    const item = repository.create({ title: 'Carried verdict', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-x', state: 'reviewed', note: 'checked the empty case' });
-
-    expect(repository.listDiffBlockReviews({ workItemId: item.id }, 'rev-2'))
-      .toEqual([expect.objectContaining({ revision: 'rev-1', contentHash: 'hash-x', state: 'reviewed', note: 'checked the empty case' })]);
-  });
-
-  it('lets the answer given at this revision supersede the one before it', () => {
-    const item = repository.create({ title: 'Superseded verdict', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-x', state: 'needs_changes' });
-    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-2', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-x', state: 'reviewed' });
-
-    const reviews = repository.listDiffBlockReviews({ workItemId: item.id }, 'rev-2');
-    expect(reviews).toHaveLength(1);
-    expect(reviews[0]).toEqual(expect.objectContaining({ revision: 'rev-2', state: 'reviewed' }));
-  });
-
-  /** What the reviewer wrote outlives the state it was written under, the same
-   * way it already did across a state change within one revision. */
-  it('carries a note onto the later verdict about the same content', () => {
-    const item = repository.create({ title: 'Carried note', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-x', state: 'commented', note: 'why is this retried?' });
-    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-2', filePath: 'src/a.ts', blockRange: '@@ -1,8 +1,12 @@', contentHash: 'hash-x', state: 'reviewed' });
-
-    expect(repository.listDiffBlockReviews({ workItemId: item.id }, 'rev-2')[0])
-      .toEqual(expect.objectContaining({ revision: 'rev-2', state: 'reviewed', note: 'why is this retried?' }));
-  });
-
-  /** Two blocks that happen to hold the same lines were answered separately.
-   * Collapsing them by content would silently drop one of those answers. */
-  it('keeps both answers when one file repeats the same block content at two ranges', () => {
-    const item = repository.create({ title: 'Twin blocks', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -1,4 +1,4 @@', contentHash: 'twin', state: 'reviewed' });
-    repository.upsertDiffBlockReview({ workItemId: item.id }, { revision: 'rev-1', filePath: 'src/a.ts', blockRange: '@@ -40,4 +40,4 @@', contentHash: 'twin', state: 'needs_changes' });
-
-    const reviews = repository.listDiffBlockReviews({ workItemId: item.id }, 'rev-2');
-    expect(reviews).toHaveLength(2);
-    expect(reviews.map((review) => review.state).sort()).toEqual(['needs_changes', 'reviewed']);
   });
 
   it('upserts every hunk in one review decision through the batch boundary', () => {

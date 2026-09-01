@@ -1,18 +1,14 @@
 import type { StaleReferenceReport } from '../../shared/stale-reference-contract.js';
 import type { BrokerConnection, BrokerSearchResponse, BrokerSourceId, ResolvedSourceDraft } from '../../shared/contracts';
-import type { ReviewAssistTier } from '../../shared/contracts';
-import type { CreateStandaloneReviewInput, DiffBlockReview, DiffHunkReview, DiffHunkReviewState, GitHubPullRequestDiff, GitHubPullRequestFile, ReviewCommit, StandaloneReview, UpsertDiffBlockReviewInput, UpsertDiffHunkReviewsInput, WorkspaceDiff, WorkspaceDiffSnapshot, WorkspaceFileSource, WorkspaceRefs } from '../../shared/contracts';
+import type { DiffHunkReview, DiffHunkReviewState, GitHubPullRequestDiff, GitHubPullRequestFile, ReviewCommit, UpsertDiffHunkReviewsInput, WorkspaceDiff, WorkspaceDiffSnapshot, WorkspaceFileSource, WorkspaceRefs } from '../../shared/contracts';
 import { request } from './request';
 
 // A conversation with no linked task still has a real workspace (see
 // resolveSharedReplyWorkingDirectory server-side), so the diff surface is
 // scoped to either a task or a conversation rather than a task alone.
-// A standalone review is the third scope: it was created from a pull request
-// link or a repository and never needed a thread behind it.
-export type WorkspaceDiffScope = { workItemId: string } | { conversationId: string } | { reviewId: string };
+export type WorkspaceDiffScope = { workItemId: string } | { conversationId: string };
 const workspaceDiffBasePath = (scope: WorkspaceDiffScope) => {
   if ('workItemId' in scope) return `/api/work-items/${scope.workItemId}`;
-  if ('reviewId' in scope) return `/api/reviews/${scope.reviewId}`;
   return `/api/shared/conversations/${scope.conversationId}`;
 };
 
@@ -40,16 +36,9 @@ export const sourceClient = {
   getDiffHunkReviews: (scope: WorkspaceDiffScope, revision: string) => request<{ reviews: DiffHunkReview[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/hunk-reviews?revision=${encodeURIComponent(revision)}`),
   upsertDiffHunkReview: (scope: WorkspaceDiffScope, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string }) => request<{ review: DiffHunkReview }>(`${workspaceDiffBasePath(scope)}/workspace-diff/hunk-reviews`, { method: 'PUT', body: JSON.stringify(input) }),
   upsertDiffHunkReviews: (scope: WorkspaceDiffScope, input: UpsertDiffHunkReviewsInput) => request<{ reviews: DiffHunkReview[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/hunk-reviews/batch`, { method: 'PUT', body: JSON.stringify(input) }),
-  getDiffBlockReviews: (scope: WorkspaceDiffScope, revision: string) => request<{ reviews: DiffBlockReview[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/block-reviews?revision=${encodeURIComponent(revision)}`),
-  upsertDiffBlockReview: (scope: WorkspaceDiffScope, input: UpsertDiffBlockReviewInput) => request<{ review: DiffBlockReview }>(`${workspaceDiffBasePath(scope)}/workspace-diff/block-reviews`, { method: 'PUT', body: JSON.stringify(input) }),
   getStaleReferences: (id: string) => request<{ report: StaleReferenceReport }>(`/api/work-items/${id}/workspace-diff/stale-references`),
   getWorkItemWorkspaces: (id: string) => request<{ selectedPath: string | null; workspaces: Array<{ path: string; label: string; selected: boolean }> }>(`/api/work-items/${id}/workspaces`),
   selectWorkItemWorkspace: (id: string, workspacePath: string) => request<{ selectedPath: string; workspaces: Array<{ path: string; label: string; selected: boolean }> }>(`/api/work-items/${id}/workspaces/selection`, { method: 'PUT', body: JSON.stringify({ workspacePath }) }),
-  listStandaloneReviews: () => request<{ reviews: StandaloneReview[] }>('/api/reviews'),
-  createStandaloneReview: (input: CreateStandaloneReviewInput) => request<{ review: StandaloneReview }>('/api/reviews', { method: 'POST', body: JSON.stringify(input) }),
-  deleteStandaloneReview: (id: string) => request<{ deleted: boolean }>(`/api/reviews/${id}`, { method: 'DELETE' }),
-  listReviewRepositories: () => request<{ repositories: Array<{ path: string; label: string }> }>('/api/reviews/repositories'),
-  listReviewRepositoryRefs: (repositoryPath: string) => request<{ refs: WorkspaceRefs }>(`/api/reviews/repositories/refs?repositoryPath=${encodeURIComponent(repositoryPath)}`),
   getGitHubPullRequestDiff: (url: string, page = 1) => request<{ diff: GitHubPullRequestDiff }>(`/api/github/pull-request-diff?url=${encodeURIComponent(url)}&page=${page}`),
   getGitHubPullRequestCommits: (url: string) => request<{ commits: ReviewCommit[] }>(`/api/github/pull-request-commits?url=${encodeURIComponent(url)}`),
   getGitHubPullRequestCommitDiff: (url: string, sha: string) => request<{ commit: ReviewCommit; files: GitHubPullRequestFile[] }>(`/api/github/pull-request-commit-diff?url=${encodeURIComponent(url)}&sha=${encodeURIComponent(sha)}`),
@@ -59,7 +48,6 @@ export const sourceClient = {
     action: ReviewAssistActionName;
     decision: { behavior: string; state: string; hunks: Array<{ filePath: string; location: string; lines: string[] }> };
     taskIntent: { title: string; description: string } | null;
-    tier?: ReviewAssistTier | null;
   }) => request<{ answer: string }>('/api/review-assist', { method: 'POST', body: JSON.stringify(input) }),
   // Streams the answer as the model writes it. The reviewer sees the first
   // words about a second after clicking instead of waiting for the whole turn;
@@ -68,9 +56,6 @@ export const sourceClient = {
     action: ReviewAssistActionName;
     decision: { behavior: string; state: string; hunks: Array<{ filePath: string; location: string; lines: string[] }> };
     taskIntent: { title: string; description: string } | null;
-    /** Only the review stack sends this. Omitted, the request body is
-     * byte-identical to what it was before tiering existed. */
-    tier?: ReviewAssistTier | null;
   }, onDelta: (text: string) => void): Promise<string> => {
     const response = await fetch('/api/review-assist/stream', {
       method: 'POST',
@@ -116,7 +101,6 @@ export const sourceClient = {
     action: ReviewAssistActionName;
     decision: { behavior: string; state: string; hunks: Array<{ filePath: string; location: string; lines: string[] }> };
     taskIntent: { title: string; description: string } | null;
-    tier?: ReviewAssistTier | null;
   }) => request<{ answer: string | null }>('/api/review-assist/lookup', { method: 'POST', body: JSON.stringify(input) }),
   /** Replays a background scoring pass a pane may have opened in the middle
    * of. Live results arrive over the realtime socket; this only backfills what

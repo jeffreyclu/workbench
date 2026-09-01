@@ -18,7 +18,6 @@ import {
   runKindSchema,
   savedWorkItemFilterViewSchema,
   unblockWorkItemSchema,
-  upsertDiffBlockReviewSchema,
   upsertDiffHunkReviewsSchema,
   updateSavedWorkItemFilterSchema,
   updateWorkItemSchema,
@@ -97,8 +96,8 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
   });
   router.post('/api/review-assist', async (request, response, next) => {
     try {
-      const { action, decision, taskIntent, tier } = reviewAssistRequestSchema.parse(request.body);
-      response.json({ answer: await requestReviewAssist(database, action, decision, taskIntent, undefined, tier) });
+      const { action, decision, taskIntent } = reviewAssistRequestSchema.parse(request.body);
+      response.json({ answer: await requestReviewAssist(database, action, decision, taskIntent) });
     } catch (error) { next(error); }
   });
   // Streams the answer token by token over SSE. The full turn still takes a
@@ -118,7 +117,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       response.write(`data: ${JSON.stringify(event)}\n\n`);
     };
     try {
-      const answer = await requestReviewAssist(database, parsed.action, parsed.decision, parsed.taskIntent, (text) => send({ type: 'delta', text }), parsed.tier);
+      const answer = await requestReviewAssist(database, parsed.action, parsed.decision, parsed.taskIntent, (text) => send({ type: 'delta', text }));
       send({ type: 'done', answer });
     } catch (error) {
       // A failed turn must stay a visible failure the reviewer can retry, not
@@ -147,8 +146,8 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
   // Cache-only: never spawns a model turn. See /api/diff-confidence/lookup.
   router.post('/api/review-assist/lookup', (request, response, next) => {
     try {
-      const { action, decision, taskIntent, tier } = reviewAssistRequestSchema.parse(request.body);
-      response.json({ answer: lookupReviewAssist(database, action, decision, taskIntent, tier) });
+      const { action, decision, taskIntent } = reviewAssistRequestSchema.parse(request.body);
+      response.json({ answer: lookupReviewAssist(database, action, decision, taskIntent) });
     } catch (error) { next(error); }
   });
   const persistAttachments = (attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }>) => {
@@ -319,22 +318,6 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
       const input = upsertDiffHunkReviewsSchema.parse(request.body);
       response.json({ reviews: repository.upsertDiffHunkReviews({ workItemId: item.id }, input) });
-    } catch (error) { next(error); }
-  });
-  router.get('/api/work-items/:id/workspace-diff/block-reviews', (request, response, next) => {
-    try {
-      const item = repository.get(request.params.id);
-      if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const revision = z.string().trim().min(1).parse(request.query.revision);
-      response.json({ reviews: repository.listDiffBlockReviews({ workItemId: item.id }, revision) });
-    } catch (error) { next(error); }
-  });
-  router.put('/api/work-items/:id/workspace-diff/block-reviews', (request, response, next) => {
-    try {
-      const item = repository.get(request.params.id);
-      if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const input = upsertDiffBlockReviewSchema.parse(request.body);
-      response.json({ review: repository.upsertDiffBlockReview({ workItemId: item.id }, input) });
     } catch (error) { next(error); }
   });
   router.get('/api/work-items', (request, response) => {
