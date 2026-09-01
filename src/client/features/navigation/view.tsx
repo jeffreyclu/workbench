@@ -124,6 +124,7 @@ export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: Memo
                   className="global-search-result"
                   aria-selected={canOpen ? selectableIndex === activeResultIndex : undefined}
                   role={canOpen ? 'option' : undefined}
+                  tabIndex={canOpen ? -1 : undefined}
                   onClick={canOpen ? () => selectResult(result) : undefined}
                 >
                   <span className="global-search-result-meta">
