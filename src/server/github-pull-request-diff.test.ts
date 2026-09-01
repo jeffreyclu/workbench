@@ -50,9 +50,9 @@ describe('GitHub pull-request diffs', () => {
     const diff = await getGitHubPullRequestDiff('https://github.com/writer/workbench/pull/24', { token: 'secret', fetchForPolicy: () => fetchImpl as typeof fetch });
     expect(diff.files).toHaveLength(1);
     expect(diff.reviewDecision).toBeNull();
-    expect(diff.reviewDecisionError).toMatch(/Reconnect GitHub/);
+    expect(diff.reviewDecisionError).toMatch(/GitHub auth failed/);
     expect(diff.comments).toMatchObject({ available: false, total: null, byPath: {} });
-    expect(diff.comments.error).toMatch(/Reconnect GitHub/);
+    expect(diff.comments.error).toMatch(/GitHub auth failed/);
   });
 
   it('returns one page at a time and exposes a next page for large pull requests', async () => {
@@ -105,6 +105,28 @@ describe('GitHub pull-request diffs', () => {
 
   it('turns GitHub authorization failures into an actionable error', async () => {
     const fetchImpl = vi.fn(async () => new Response('', { status: 403 }));
-    await expect(getGitHubPullRequestDiff('https://github.com/writer/workbench/pull/24', { token: 'secret', fetchForPolicy: () => fetchImpl as typeof fetch })).rejects.toThrow('Reconnect GitHub in Sources');
+    await expect(getGitHubPullRequestDiff('https://github.com/writer/workbench/pull/24', { token: 'secret', fetchForPolicy: () => fetchImpl as typeof fetch })).rejects.toThrow('GitHub auth failed; reconnect in Sources.');
+  });
+
+  it('reports a 403 with exhausted rate-limit headers as a retryable rate-limit error', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-31T12:00:00Z'));
+    const fetchImpl = vi.fn(async () => new Response('', {
+      status: 403,
+      headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Date.parse('2026-08-31T12:02:00Z') / 1_000) },
+    }));
+    try {
+      await expect(getGitHubPullRequestDiff('https://github.com/writer/workbench/pull/24', { token: 'secret', fetchForPolicy: () => fetchImpl as typeof fetch })).rejects.toThrow('GitHub rate limit exhausted; try again in 2 minutes');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a 429 image response as a retryable rate-limit error', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).endsWith('/pulls/24')) return new Response(JSON.stringify({ html_url: 'https://github.com/writer/workbench/pull/24', title: 'Image', number: 24, base: { ref: 'main' }, head: { ref: 'feature/image', sha: 'c'.repeat(40) }, changed_files: 1, additions: 0, deletions: 0 }), { status: 200 });
+      return new Response('', { status: 429, headers: { 'retry-after': '90' } });
+    });
+    await expect(getGitHubPullRequestImage('https://github.com/writer/workbench/pull/24', 'assets/review.png', { token: 'secret', fetchForPolicy: () => fetchImpl as typeof fetch })).rejects.toThrow('GitHub rate limit exhausted; try again in 2 minutes');
   });
 });

@@ -78,13 +78,31 @@ function githubHeaders(token: string | undefined) {
   };
 }
 
+function githubRateLimitWaitMinutes(response: Response): number | null {
+  const retryAfterSeconds = Number(response.headers.get('retry-after'));
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) return Math.max(1, Math.ceil(retryAfterSeconds / 60));
+
+  const resetAtSeconds = Number(response.headers.get('x-ratelimit-reset'));
+  if (Number.isFinite(resetAtSeconds) && resetAtSeconds > 0) return Math.max(1, Math.ceil((resetAtSeconds * 1_000 - Date.now()) / 60_000));
+  return null;
+}
+
+function githubRequestError(response: Response, resource: string): Error {
+  const rateLimited = response.status === 429 || (response.status === 403 && (
+    response.headers.get('x-ratelimit-remaining') === '0' || response.headers.has('retry-after')
+  ));
+  if (rateLimited) {
+    const waitMinutes = githubRateLimitWaitMinutes(response) ?? 1;
+    return new Error(`GitHub rate limit exhausted; try again in ${waitMinutes} minutes`);
+  }
+  if (response.status === 401 || response.status === 403) return new Error('GitHub auth failed; reconnect in Sources.');
+  if (response.status === 404) return new Error(`GitHub ${resource} not found or not available to the connected account.`);
+  return new Error(`GitHub could not load this ${resource} (${response.status}).`);
+}
+
 async function getJson<T>(fetchImpl: typeof fetch, endpoint: string, token: string | undefined): Promise<T> {
   const response = await fetchImpl(endpoint, { headers: githubHeaders(token), signal: AbortSignal.timeout(20_000) });
-  if (!response.ok) {
-    if (response.status === 401 || response.status === 403) throw new Error('GitHub could not read this pull request. Reconnect GitHub in Sources.');
-    if (response.status === 404) throw new Error('GitHub pull request not found or not available to the connected account.');
-    throw new Error(`GitHub could not load this pull request (${response.status}).`);
-  }
+  if (!response.ok) throw githubRequestError(response, 'pull request');
   return response.json() as Promise<T>;
 }
 
@@ -275,8 +293,7 @@ export async function getGitHubPullRequestImage(
   });
   if (!response.ok) {
     if (response.status === 404) throw new Error('GitHub image file not found.');
-    if (response.status === 401 || response.status === 403) throw new Error('GitHub could not read this image. Reconnect GitHub in Sources.');
-    throw new Error(`GitHub could not load this image (${response.status}).`);
+    throw githubRequestError(response, 'image');
   }
   return { body: Buffer.from(await response.arrayBuffer()), contentType };
 }
