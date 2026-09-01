@@ -17,7 +17,7 @@ export type NavigationViewName = 'active' | 'workbench' | 'archive' | 'artifacts
 const GLOBAL_SEARCH_RESULT_LIMIT = 20;
 const GLOBAL_SEARCH_MAX_RESULTS = 100;
 
-export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: MemorySearchResult) => void }) {
+function useGlobalSearch(onSelectResult: (result: MemorySearchResult) => void) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [resultLimit, setResultLimit] = useState(GLOBAL_SEARCH_RESULT_LIMIT);
@@ -72,10 +72,23 @@ export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: Memo
       ? Math.min(current + 1, selectableResults.length - 1)
       : Math.max(current === -1 ? selectableResults.length - 1 : current - 1, 0));
   }
-  return <div className="global-search">
-    <button type="button" className="icon-button global-search-trigger" aria-label="Search everything" title="Search everything (⌘K)" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
-      <Search size={15} />
-    </button>
+  return {
+    query, setQuery, open, setOpen, resultLimit, setResultLimit, activeResultIndex, setActiveResultIndex,
+    debouncedQuery, inputRef, results, visibleResults, selectableResults, closeOverlay, selectResult, handleKeyDown,
+  };
+}
+
+type GlobalSearchState = ReturnType<typeof useGlobalSearch>;
+
+function GlobalSearchTrigger({ search }: { search: GlobalSearchState }) {
+  return <button type="button" className="icon-button global-search-trigger" aria-label="Search everything" title="Search everything (⌘K)" aria-haspopup="dialog" aria-expanded={search.open} onClick={() => search.setOpen(true)}>
+    <Search size={15} />
+  </button>;
+}
+
+function GlobalSearchPanel({ search }: { search: GlobalSearchState }) {
+  const { open, query, setQuery, activeResultIndex, setActiveResultIndex, debouncedQuery, inputRef, results, visibleResults, selectableResults, closeOverlay, selectResult, handleKeyDown, resultLimit, setResultLimit } = search;
+  return <>
     {open && createPortal(
       <div
         className="global-search-overlay"
@@ -147,6 +160,14 @@ export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: Memo
       </div>,
       document.body,
     )}
+  </>;
+}
+
+export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: MemorySearchResult) => void }) {
+  const search = useGlobalSearch(onSelectResult);
+  return <div className="global-search">
+    <GlobalSearchTrigger search={search} />
+    <GlobalSearchPanel search={search} />
   </div>;
 }
 
@@ -247,6 +268,7 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
   const activePulse = useValuePulse(counts?.active);
   const workbenchPulse = useValuePulse(counts?.workbench);
   const conversationPulse = useValuePulse(conversationCount);
+  const globalSearch = useGlobalSearch(onSelectGlobalSearchResult);
   return <aside id="primary-nav" className="sidebar">
     <div className="brand"><PromotionQueueStatus /><span>Workbench</span></div>
     <nav onClick={releasePointerFocus}>
@@ -255,7 +277,7 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
       <DiscoveryNav active={view === 'discovery'} onClick={onOpenDiscovery} />
       <button className={`nav-item mobile-conversation-nav ${view === 'context' ? 'active' : ''}`} onClick={onOpenConversations}><MessageCircle size={16} /> Conversations <span className={conversationPulse}>{conversationCount ?? '…'}</span></button>
       <div id="mobile-nav-more" className="mobile-nav-secondary" aria-label="More destinations">
-        <div className="mobile-global-search"><GlobalSearch onSelectResult={onSelectGlobalSearchResult} /></div>
+        <div className="mobile-global-search global-search"><GlobalSearchTrigger search={globalSearch} /></div>
         <ArtifactNav active={view === 'artifacts'} onClick={onOpenArtifacts} />
         <InsightsNav active={view === 'insights'} onClick={onOpenInsights} />
         <button className="nav-item" onClick={onOpenSources}><Cloud size={16} /> Sources</button>
@@ -263,7 +285,10 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
       {isCompactNav && <button className={`nav-item mobile-nav-more ${mobileNavOpen || ['artifacts', 'insights'].includes(view) ? 'active' : ''}`} aria-controls="mobile-nav-more" aria-expanded={mobileNavOpen} onClick={onToggleMore}><MoreHorizontal size={18} /> More</button>}
     </nav>
     <div className="sidebar-footer">
-      <GlobalSearch onSelectResult={onSelectGlobalSearchResult} />
+      <div className="global-search">
+        <GlobalSearchTrigger search={globalSearch} />
+      </div>
     </div>
+    <GlobalSearchPanel search={globalSearch} />
   </aside>;
 }

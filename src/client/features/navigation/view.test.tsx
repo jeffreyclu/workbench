@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GlobalSearch } from './view';
+import { GlobalSearch, NavigationView } from './view';
 
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -137,5 +137,51 @@ describe('GlobalSearch', () => {
 
     expect(await screen.findByText('Showing 40 results.')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenLastCalledWith(expect.stringContaining('limit=40'), expect.anything());
+  });
+});
+
+describe('NavigationView', () => {
+  function renderNav() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><NavigationView
+      view="active"
+      mobileNavOpen={false}
+      isCompactNav={false}
+      counts={{ active: 1, workbench: 2 }}
+      conversationCount={3}
+      onOpenActive={vi.fn()}
+      onOpenWorkbench={vi.fn()}
+      onOpenDiscovery={vi.fn()}
+      onOpenConversations={vi.fn()}
+      onOpenArtifacts={vi.fn()}
+      onOpenInsights={vi.fn()}
+      onOpenSources={vi.fn()}
+      onToggleMore={vi.fn()}
+      onSelectGlobalSearchResult={vi.fn()}
+    /></QueryClientProvider>);
+  }
+
+  it('mounts a single global-search overlay and close button despite two trigger placements', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      results: [{ source: 'activity', sourceId: '1', title: 'Fix mobile stack', snippet: 'Preserve the drawer.', createdAt: '2026-08-24T00:00:00.000Z', conversationId: null, workItemId: 'task-1', actor: null, score: 1 }],
+    }), { headers: { 'Content-Type': 'application/json' } })));
+    renderNav();
+
+    expect(screen.getAllByRole('button', { name: 'Search everything' })).toHaveLength(2);
+
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+
+    expect(screen.getAllByRole('dialog', { name: 'Search everything' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Close search' })).toHaveLength(1);
+    expect(document.querySelectorAll('.global-search-overlay')).toHaveLength(1);
+
+    const input = screen.getByRole('combobox', { name: 'Search everything' });
+    fireEvent.change(input, { target: { value: 'mobile' } });
+    const resultButton = await screen.findByText('Fix mobile stack');
+
+    fireEvent.keyDown(resultButton, { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog', { name: 'Search everything' })).not.toBeInTheDocument();
+    expect(document.querySelectorAll('.global-search-overlay')).toHaveLength(0);
   });
 });
