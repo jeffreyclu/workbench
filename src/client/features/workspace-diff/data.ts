@@ -6,6 +6,7 @@ import type { DiffHunkReviewState, UpsertDiffHunkReviewsInput } from '../../../s
 // entry just because their ids collide.
 export const workspaceDiffScopeKey = (scope: WorkspaceDiffScope) => {
   if ('workItemId' in scope) return `work-item:${scope.workItemId}`;
+  if ('reviewId' in scope) return `review:${scope.reviewId}`;
   return `conversation:${scope.conversationId}`;
 };
 
@@ -17,6 +18,7 @@ export const workspaceDiffQueryKeys = {
   refCommits: (scope: WorkspaceDiffScope, ref: string) => ['workspace-diff-ref-commits', workspaceDiffScopeKey(scope), ref] as const,
   commitDiff: (scope: WorkspaceDiffScope, commit: string) => ['workspace-diff-commit', workspaceDiffScopeKey(scope), commit] as const,
   status: (scope: WorkspaceDiffScope, revision: string) => ['workspace-diff-status', workspaceDiffScopeKey(scope), revision] as const,
+  fileSource: (scope: WorkspaceDiffScope, filePath: string, revision: string | null) => ['workspace-diff-file-source', workspaceDiffScopeKey(scope), filePath, revision] as const,
   hunkReviews: (scope: WorkspaceDiffScope, revision: string | undefined) => ['workspace-diff-hunk-reviews', workspaceDiffScopeKey(scope), revision] as const,
 };
 
@@ -28,6 +30,7 @@ export const workspaceDiffData = {
   getRefCommits: (scope: WorkspaceDiffScope, ref: string) => api.getWorkspaceRefCommits(scope, ref),
   getCommitDiff: (scope: WorkspaceDiffScope, commit: string) => api.getWorkspaceCommitDiff(scope, commit),
   getStatus: (scope: WorkspaceDiffScope, revision: string) => api.getWorkspaceDiffStatus(scope, revision),
+  getFileSource: (scope: WorkspaceDiffScope, filePath: string, revision: string | null) => api.getWorkspaceFileSource(scope, filePath, revision),
   getHunkReviews: (scope: WorkspaceDiffScope, revision: string) => api.getDiffHunkReviews(scope, revision),
   upsertHunkReview: (scope: WorkspaceDiffScope, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string }) => api.upsertDiffHunkReview(scope, input),
   upsertHunkReviews: (scope: WorkspaceDiffScope, input: UpsertDiffHunkReviewsInput) => api.upsertDiffHunkReviews(scope, input),

@@ -68,13 +68,6 @@ export interface ReviewDecision {
   secondaryChangeTypes: ReviewChangeType[];
   state: DiffHunkReviewState | null;
   note: string | null;
-  /** Present only when structurally identical edits from distinct files were
-   * collapsed into this decision. Every underlying hunk remains addressable
-   * and receives the verdict recorded for the group. */
-  repetition?: {
-    otherLocations: number;
-    files: Array<{ filePath: string; locations: string[]; additions: number; deletions: number }>;
-  };
 }
 
 interface DecisionCandidate {
@@ -213,49 +206,6 @@ function usesSymbol(lines: string[], symbols: string[]): boolean {
   return symbols.some((symbol) => new RegExp(`\\b${symbol.replace(/\$/g, '\\$')}\\b`).test(body));
 }
 
-const PATTERN_KEYWORDS = new Set([
-  'as', 'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'default', 'delete',
-  'do', 'else', 'export', 'extends', 'false', 'finally', 'for', 'from', 'function', 'if', 'implements',
-  'import', 'in', 'instanceof', 'interface', 'let', 'new', 'null', 'of', 'private', 'protected', 'public',
-  'return', 'static', 'super', 'switch', 'this', 'throw', 'true', 'try', 'type', 'typeof', 'undefined',
-  'var', 'void', 'while', 'with', 'yield',
-]);
-
-/** Canonical shape of an edit, not its vocabulary. AI-generated mechanical
- * sweeps commonly repeat the same delete/add sequence while substituting a
- * component or field name per file. First-seen token numbering preserves
- * relationships inside the edit (`thing` stays the same placeholder on both
- * sides) without requiring those local names to match between files. */
-function mechanicalEditPattern(candidate: DecisionCandidate): string | null {
-  if (candidate.importOnly) return null;
-  const changed = candidate.hunk.lines.filter((line) =>
-    (line.startsWith('+') && !line.startsWith('+++')) || (line.startsWith('-') && !line.startsWith('---')));
-  // A lone changed line is too common to be useful evidence of a mechanical
-  // sweep. Requiring a pair avoids grouping unrelated one-line toggles.
-  if (changed.length < 2) return null;
-  const identifiers = new Map<string, string>();
-  const literals = new Map<string, string>();
-  const token = (map: Map<string, string>, value: string, prefix: string) => {
-    const held = map.get(value);
-    if (held) return held;
-    const next = `${prefix}${map.size}`;
-    map.set(value, next);
-    return next;
-  };
-  const normalized = changed.map((line) => {
-    const direction = line[0];
-    const code = line.slice(1)
-      .replace(/(['"`])(?:\\.|(?!\1).)*\1/g, (value) => token(literals, value, 's'))
-      .replace(/\b\d+(?:\.\d+)?\b/g, (value) => token(literals, value, 'n'))
-      .replace(/[A-Za-z_$][\w$]*/g, (value) => PATTERN_KEYWORDS.has(value) ? value : token(identifiers, value, 'i'))
-      .replace(/\s+/g, ' ')
-      .trim();
-    return `${direction}${code}`;
-  });
-  const extension = candidate.hunk.filePath.match(/\.([^.\/]+)$/)?.[1]?.toLowerCase() ?? '';
-  return `${extension}\u0000${normalized.join('\n')}`;
-}
-
 function aggregateState(hunks: ReviewDecisionHunk[]): DiffHunkReviewState | null {
   const states = hunks.map((hunk) => hunk.state);
   if (states.includes(null)) return null;
@@ -380,22 +330,6 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
     const spansFiles = candidate.subject && (subjectFileCounts.get(candidate.subject)?.size ?? 0) > 1;
     return spansFiles ? `subject:${candidate.subject}` : `hunk:${candidate.hunk.id}`;
   });
-  const patternFileCounts = new Map<string, Set<string>>();
-  const patterns = candidates.map((candidate) => mechanicalEditPattern(candidate));
-  candidates.forEach((candidate, index) => {
-    const pattern = patterns[index];
-    if (!pattern) return;
-    const paths = patternFileCounts.get(pattern) ?? new Set<string>();
-    paths.add(candidate.hunk.filePath);
-    patternFileCounts.set(pattern, paths);
-  });
-  candidates.forEach((candidate, index) => {
-    const pattern = patterns[index];
-    if (!pattern || (patternFileCounts.get(pattern)?.size ?? 0) < 2) return;
-    // Existing same-symbol grouping carries stronger semantic evidence and
-    // remains authoritative when it already spans files.
-    if (!groupKeys[index].startsWith('subject:')) groupKeys[index] = `repeat:${contentHashOfLines([pattern])}`;
-  });
   // New imports travel with the code that needed them. Judging `import { x }`
   // on its own tells a reviewer nothing — the question is always what x is now
   // used for — and it cost a queue position and an AI answer per import block.
@@ -416,7 +350,7 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
     groups.set(key, [...(groups.get(key) ?? []), candidate]);
   });
 
-  return [...groups.entries()].map(([groupKey, group], index) => {
+  return [...groups.values()].map((group, index) => {
     const hunks = group.map((candidate) => candidate.hunk);
     // An import block carries no subject and no behavior worth naming, so a
     // group it merely accompanies is described by the code hunk instead.
@@ -427,30 +361,16 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
     const changeType = classifyChangeType(group.map((candidate) => ({
       filePath: candidate.hunk.filePath, fileStatus: candidate.fileStatus, lines: candidate.hunk.lines,
     })));
-    const repetition = groupKey.startsWith('repeat:') ? {
-      otherLocations: hunks.length - 1,
-      files: filePaths.map((filePath) => {
-        const fileHunks = hunks.filter((hunk) => hunk.filePath === filePath);
-        return {
-          filePath,
-          locations: fileHunks.map((hunk) => hunk.location),
-          additions: fileHunks.reduce((total, hunk) => total + hunk.additions, 0),
-          deletions: fileHunks.reduce((total, hunk) => total + hunk.deletions, 0),
-        };
-      }),
-    } : undefined;
     return {
       ordinal: index + 1,
       id: group.length > 1 ? `decision:${primary.subject}:${hunks.map((hunk) => hunk.id).sort().join('|')}` : hunks[0].id,
       subject: primary.subject,
-      behavior: repetition
-        ? `Repeats the same edit across ${hunks.length} locations in ${filePaths.length} files.`
-        : behaviorSummary(primary.subject, hunks, group.map((candidate) => candidate.fileStatus), riskSignals),
+      behavior: behaviorSummary(primary.subject, hunks, group.map((candidate) => candidate.fileStatus), riskSignals),
       hunks, filePaths,
       additions: hunks.reduce((total, hunk) => total + hunk.additions, 0),
       deletions: hunks.reduce((total, hunk) => total + hunk.deletions, 0),
       riskSignals, changeType: changeType.primary, secondaryChangeTypes: changeType.secondary,
-      state: aggregateState(hunks), note: aggregateNote(hunks), repetition,
+      state: aggregateState(hunks), note: aggregateNote(hunks),
     };
   });
 }

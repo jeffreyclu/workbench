@@ -7,6 +7,7 @@ import type { ReviewDecision, StaleReferenceReport } from './logic.js';
 import { aiRiskBand, parseAiRiskScore, reviewAssistDecisionPayload } from './logic.js';
 import type { AutoScoreResult } from './auto-score.js';
 import { ACTION_LABELS, EXPLAIN_ACTIONS, useCachedReviewAssistAnswers, type ReviewAssistAction, type ReviewAssistTaskIntent } from './review-assist.js';
+import type { ReviewAssistTier } from '../../../shared/contracts.js';
 
 export type { ReviewAssistAction, ReviewAssistTaskIntent };
 
@@ -20,7 +21,7 @@ export type { ReviewAssistAction, ReviewAssistTaskIntent };
  * lives on the block's gutter marker instead, so the panel only carries what
  * has to be asked for.
  */
-export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', decisions = [], staleReferences = null, children }: {
+export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', decisions = [], staleReferences = null, tier = null, children }: {
   decision: ReviewDecision;
   taskIntent: ReviewAssistTaskIntent;
   /** Result of the background pass that scores a diff once its agent comes to
@@ -37,6 +38,10 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
    * because it is the one finding that needs a server round trip: the panel is
    * complete without it and simply omits that check until it lands. */
   staleReferences?: StaleReferenceReport | null;
+  /** Set only by the review stack, which routes each block to a tier. It rides
+   * along on the assist request so the answer is cached against the depth it
+   * was asked at. Changes leaves it null and its requests are unchanged. */
+  tier?: ReviewAssistTier | null;
   children: ReactNode;
 }) {
   const decisionPayload = reviewAssistDecisionPayload(decision, decisions);
@@ -48,7 +53,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
   const assist = useMutation({
     mutationFn: (action: ReviewAssistAction) => {
       setStreamedAnswer('');
-      return sourceClient.streamReviewAssist({ action, decision: decisionPayload, taskIntent }, (text) => setStreamedAnswer((previous) => previous + text));
+      return sourceClient.streamReviewAssist({ action, decision: decisionPayload, taskIntent, tier }, (text) => setStreamedAnswer((previous) => previous + text));
     },
   });
 
@@ -56,7 +61,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
   // the time and warming that stopped with it would leave every first click
   // paying a cold start. This read shares that hook's query, so an answer
   // already warmed is on screen the moment the popover opens.
-  const cachedAssistAnswers = useCachedReviewAssistAnswers(decision, taskIntent, decisions);
+  const cachedAssistAnswers = useCachedReviewAssistAnswers(decision, taskIntent, decisions, tier);
   const cachedScore = cachedAssistAnswers.data?.score_risk ?? autoScore?.answer ?? undefined;
 
   // The freshest score wins: a just-finished rescore before the cache read that

@@ -1865,8 +1865,12 @@ const schemaMigrations: readonly Migration[] = [
     },
   },
   {
-    // Historical block-review schema. Retained because released migrations are
-    // forward-only and existing databases have already recorded this id.
+    // The review stack addresses a change at logic-block granularity, which
+    // `diff_hunk_reviews` cannot express: that table is keyed on a hunk range
+    // and already holds rows recorded against those ranges. Splitting them in
+    // place would orphan every existing verdict, so blocks get their own
+    // table. The content hash is part of the key, so a rewritten block asks
+    // its question again rather than inheriting an answer about other code.
     id: '068_diff_block_reviews',
     apply(database) {
       database.exec(`

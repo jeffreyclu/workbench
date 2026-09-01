@@ -20,6 +20,7 @@ import { createHealthRouter, createSystemRouter } from './routes/system-router.j
 import { createDiscoveryRouter } from './routes/discovery-router.js';
 import { createArtifactRouter } from './routes/artifact-router.js';
 import { createConversationRouter } from './routes/conversation-router.js';
+import { createReviewRouter } from './routes/review-router.js';
 import { createWorkItemRouter } from './routes/work-item-router.js';
 import { createQueueRouter } from './routes/queue-router.js';
 import { createSourceConnectionRouter } from './routes/source-connection-router.js';
@@ -66,6 +67,7 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
   app.use(createDiscoveryRouter(context));
   app.use(createArtifactRouter(context));
   app.use(createConversationRouter(context));
+  app.use(createReviewRouter(context));
   app.use(createWorkItemRouter(context));
   app.use(createQueueRouter(context));
   app.use(createSourceConnectionRouter(context));
