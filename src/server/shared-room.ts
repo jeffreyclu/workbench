@@ -229,6 +229,11 @@ function spawnCodexAppServer(cwd: string, accountProfile: string) {
   });
 }
 
+function codexFirstActivityTimeoutMs(): number {
+  const configured = Number.parseInt(process.env.WORKBENCH_CODEX_FIRST_ACTIVITY_TIMEOUT_MS ?? '', 10);
+  return Number.isFinite(configured) && configured > 0 ? configured : 60_000;
+}
+
 /** Completes the provider handshake before a pooled app-server can be claimed. */
 export function initializeCodexAppServer(child: ChildProcessWithoutNullStreams): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -322,11 +327,19 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
       pendingSteerRetries.clear();
     };
     let startupTimeout: ReturnType<typeof setTimeout> | null = null;
+    let firstActivityTimeout: ReturnType<typeof setTimeout> | null = null;
+    const clearFirstActivityTimeout = () => {
+      if (!firstActivityTimeout) return;
+      clearTimeout(firstActivityTimeout);
+      firstActivityTimeout = null;
+    };
+    const markProviderActivity = () => clearFirstActivityTimeout();
     const stop = () => { try { process.kill(child.pid ? -child.pid : child.pid!, 'SIGTERM'); } catch { child.kill('SIGTERM'); } };
     const fail = (error: Error) => {
       if (!settled) {
         settled = true;
         if (startupTimeout) clearTimeout(startupTimeout);
+        clearFirstActivityTimeout();
         rejectPendingSteers();
         stop();
         reject(error);
@@ -401,7 +414,17 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
           request(bootstrap.method, bootstrap.params);
         }
         else if (event.result?.thread?.id && !threadId) { threadId = event.result.thread.id; request('turn/start', codexTurnStartParams(threadId, cwd, prompt)); }
-        else if (event.result?.turn?.id && !turnId) { turnId = event.result.turn.id; if (startupTimeout) clearTimeout(startupTimeout); onReady(steer); }
+        else if (event.result?.turn?.id && !turnId) {
+          turnId = event.result.turn.id;
+          if (startupTimeout) clearTimeout(startupTimeout);
+          // A turn id proves only that app-server accepted the request. A
+          // resumed thread can acknowledge it and then emit nothing forever.
+          // Require actual model/tool activity before declaring startup healthy.
+          const activityTimeoutMs = codexFirstActivityTimeoutMs();
+          firstActivityTimeout = setTimeout(() => fail(new Error(`Codex turn produced no model or tool activity within ${Math.round(activityTimeoutMs / 1_000)} seconds.`)), activityTimeoutMs);
+          firstActivityTimeout.unref();
+          onReady(steer);
+        }
         if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
           const pending = pendingSteers.get(event.id)!;
           pendingSteers.delete(event.id);
@@ -415,6 +438,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
           continue;
         }
         if (event.method === 'item/agentMessage/delta' && typeof event.params?.delta === 'string') {
+          markProviderActivity();
           const itemId = typeof event.params?.itemId === 'string' ? event.params.itemId : null;
           if (itemId) {
             if (!itemText.has(itemId)) itemOrder.push(itemId);
@@ -437,6 +461,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         // decision that preceded it rather than an empty placeholder.
         const agentEvent = agentStreamEventForCodexAppServerItem(event.method ?? '', item);
         if (agentEvent) {
+          markProviderActivity();
           onEvent(agentEvent);
           // The debugger is an audit trail, not the only place the user gets
           // to see work in progress. Keep provider-recorded decisions and
@@ -451,6 +476,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         if (event.method === 'turn/completed') {
           settled = true;
           if (startupTimeout) clearTimeout(startupTimeout);
+          clearFirstActivityTimeout();
           rejectPendingSteers();
           const status = typeof event.params?.turn?.status === 'string' ? event.params.turn.status : null;
           const terminalWarning = status && status !== 'completed' ? `Codex ended the turn with ${status}.` : null;
@@ -497,6 +523,7 @@ export async function runSteerableCodex(prompt: string, cwd: string, signal: Abo
   let aggregate: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
   let peakContextTokens = 0;
   let result: Awaited<ReturnType<typeof runSteerableCodexSegment>>;
+  let noActivityRecoveryUsed = false;
   for (;;) {
     const before = aggregate;
     const segmentController = new AbortController();
@@ -512,6 +539,13 @@ export async function runSteerableCodex(prompt: string, cwd: string, signal: Abo
       }, segmentResume, accountProfile, mutating);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (!noActivityRecoveryUsed && /Codex turn produced no model or tool activity/i.test(message)) {
+        noActivityRecoveryUsed = true;
+        onProgress('● Codex stalled before producing output. Restarting this turn once in a fresh session…');
+        segmentPrompt = expiredThreadPrompt ?? prompt;
+        segmentResume = undefined;
+        continue;
+      }
       if (segmentResume && expiredThreadPrompt && isMissingCodexThreadError(message)) {
         onProgress('● Codex thread expired. Restarting this turn in a fresh session…');
         segmentPrompt = expiredThreadPrompt;

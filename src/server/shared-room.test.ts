@@ -10,11 +10,14 @@ import { EXTERNAL_ACTION_CONTRACT } from './agent-runner.js';
 import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
+const originalCodexFirstActivityTimeout = process.env.WORKBENCH_CODEX_FIRST_ACTIVITY_TIMEOUT_MS;
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
   resetPoolForTest();
   process.env.PATH = originalPath;
+  if (originalCodexFirstActivityTimeout === undefined) delete process.env.WORKBENCH_CODEX_FIRST_ACTIVITY_TIMEOUT_MS;
+  else process.env.WORKBENCH_CODEX_FIRST_ACTIVITY_TIMEOUT_MS = originalCodexFirstActivityTimeout;
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -507,6 +510,42 @@ describe('shared-room Codex warming', () => {
     expect(requests.some((request) => request.method === 'thread/resume' && request.params.threadId === 'expired-thread')).toBe(true);
     expect(requests.some((request) => request.method === 'thread/start')).toBe(true);
     expect(requests.find((request) => request.method === 'turn/start')?.params.input[0].text).toBe('Full recovery prompt.');
+  });
+
+  it('abandons a silent acknowledged turn and retries once on a fresh Codex thread', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-codex-silent-turn-'));
+    temporaryDirectories.push(directory);
+    const countFile = join(directory, 'count');
+    const log = join(directory, 'requests.log');
+    const fakeAppServer = [
+      '#!/bin/sh',
+      `count=0; if [ -f '${countFile}' ]; then read count < '${countFile}'; fi; count=$((count + 1)); printf '%s' "$count" > '${countFile}'`,
+      `IFS= read -r initialize; printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
+      `IFS= read -r bootstrap; printf '%s\n' "$bootstrap" >> '${log}'; printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread"}}}'`,
+      `IFS= read -r turn; printf '%s\n' "$turn" >> '${log}'; printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn"}}}'`,
+      'if [ "$count" -eq 1 ]; then while IFS= read -r request; do :; done; fi',
+      `printf '%s\n' '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"itemId":"message-1","delta":"Recovered on a fresh thread."}}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"id":"turn","status":"completed"}}}'`,
+      'while IFS= read -r request; do :; done',
+    ].join('\n');
+    writeFileSync(join(directory, 'codex'), fakeAppServer);
+    chmodSync(join(directory, 'codex'), 0o755);
+    process.env.PATH = directory;
+    process.env.WORKBENCH_CODEX_FIRST_ACTIVITY_TIMEOUT_MS = '50';
+
+    const progress: string[] = [];
+    const result = await runSteerableCodex(
+      'Incremental prompt.', directory, new AbortController().signal,
+      (body) => progress.push(body), () => undefined, () => undefined, () => undefined,
+      'stalled-thread', 'default', false, 'Full fresh prompt.',
+    );
+
+    expect(result.output).toBe('Recovered on a fresh thread.');
+    expect(progress).toContain('● Codex stalled before producing output. Restarting this turn once in a fresh session…');
+    const requests = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(requests.some((request) => request.method === 'thread/resume')).toBe(true);
+    expect(requests.some((request) => request.method === 'thread/start')).toBe(true);
+    expect(requests.filter((request) => request.method === 'turn/start').at(-1)?.params.input[0].text).toBe('Full fresh prompt.');
   });
 
   it('retries a rejected Codex interjection until the active turn accepts it', async () => {
