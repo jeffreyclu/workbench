@@ -82,12 +82,16 @@ describe('WorkbenchAdminService.startWorkItemExecution', () => {
     ]);
   });
 
-  it('leaves the conversation preference unset for an automatically routed task', async () => {
+  it('persists the automatically routed agent on the execution conversation', async () => {
     const task = repository.create({ title: 'Fix automatic task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     repository.setClassification(task.id, { kind: 'execute', agent: 'codex', complex: false, instructions: '' });
 
     const result = await admin.startWorkItemExecution(task.id, { executionProfile: null, force: false });
 
-    expect('conversation' in result && result.conversation.preferredDispatchTarget).toBeNull();
+    expect('conversation' in result && result.conversation.preferredDispatchTarget).toBe('codex');
+    expect(repository.listConversationsForWorkItem(task.id)[0]?.preferredDispatchTarget).toBe('codex');
+    expect(repository.listRuns(task.id)).toEqual([
+      expect.objectContaining({ agent: 'codex', requestedTarget: 'auto' }),
+    ]);
   });
 });
