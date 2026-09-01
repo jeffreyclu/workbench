@@ -297,6 +297,13 @@ export class WorkbenchAdminService {
     return item ? { item } : { status: 404, body: { error: 'Linear issue not found.' } } as ActionFailure;
   }
 
+  async updateLinearIssue(identifier: string, input: { title?: string; description?: string }) {
+    const issue = await this.linearProvider().updateIssue(identifier, input);
+    this.repository.upsertLinearItem(issue);
+    this.repository.addAuditEntry('external_action', 'linear', `Updated Linear issue ${identifier}`);
+    return { issue };
+  }
+
   sendAction(response: Response, result: unknown, status = 202) {
     return isActionFailure(result) ? response.status(result.status).json(result.body) : response.status(status).json(result);
   }
@@ -354,6 +361,7 @@ export class WorkbenchAdminService {
       syncLinearProvider: () => this.syncLinearProvider(),
       configureLinearProvider: (teamIds, projectIds) => this.configureLinearProvider(teamIds, projectIds),
       queueLinearWorkItem: (workItemId) => this.queueLinearWorkItem(workItemId),
+      updateLinearIssue: (identifier, input) => this.updateLinearIssue(identifier, input),
     };
   }
 }

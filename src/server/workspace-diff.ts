@@ -534,6 +534,17 @@ export async function listWorkspaceRefCommits(workspacePath: string, refId: stri
   return parseCommitLog(stdout);
 }
 
+/** The most recent commits on the checked-out history, newest first. The repo
+ * browser reads one commit against the one before it, so the list is a plain
+ * walk of HEAD rather than a branch-versus-base range. */
+export async function listWorkspaceCommits(workspacePath: string): Promise<ReviewCommit[]> {
+  const repositoryPath = resolveWorkspaceRepository(workspacePath);
+  const { stdout } = await git(repositoryPath, [
+    'log', `--max-count=${MAX_LISTED_COMMITS}`, `--format=%H${COMMIT_FIELD}%s${COMMIT_FIELD}%an${COMMIT_FIELD}%aI`, 'HEAD',
+  ]);
+  return parseCommitLog(stdout);
+}
+
 /** Review source ids are stored in a browser preference and arrive as opaque
  * strings; one resolver keeps both routers honest about what they accept. */
 export async function getWorkspaceRefDiff(workspacePath: string, refId: string): Promise<WorkspaceDiff> {

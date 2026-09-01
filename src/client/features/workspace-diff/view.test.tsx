@@ -797,31 +797,29 @@ describe('WorkspaceDiffView cross-file decisions', () => {
 });
 
 describe('WorkspaceDiffView repository browser', () => {
-  /** The branch and commit endpoints shipped with no caller, so the selected
-   * repository could be seen in the picker but never browsed. */
-  it('browses the selected repository by branch and then by one commit', async () => {
-    const branchFile: WorkspaceDiffFile = {
-      path: 'src/on-branch.ts', previousPath: null, status: 'modified', additions: 3, deletions: 1, isBinary: false,
-      patch: '@@ -1 +1 @@ branchChange\n-before\n+after',
+  /** One control, one comparison: a commit is always read against the one
+   * before it, so there is no branch selector and no comparison base. */
+  it('browses the selected repository through a single commit selector', async () => {
+    const newestFile: WorkspaceDiffFile = {
+      path: 'src/in-newest.ts', previousPath: null, status: 'modified', additions: 3, deletions: 1, isBinary: false,
+      patch: '@@ -1 +1 @@ newestChange\n-before\n+after',
     };
-    const commitFile: WorkspaceDiffFile = {
-      path: 'src/in-commit.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false,
-      patch: '@@ -1 +1 @@ commitChange\n-old\n+new',
+    const olderFile: WorkspaceDiffFile = {
+      path: 'src/in-older.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false,
+      patch: '@@ -1 +1 @@ olderChange\n-old\n+new',
     };
+    const newest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const older = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench', selected: true }] });
       if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
-      if (url.endsWith('/workspace-diff/refs')) return json({ refs: {
-        base: 'main',
-        branches: [{ name: 'feature/current', current: true, ahead: 2 }, { name: 'feature/other', current: false, ahead: 1 }],
-        worktrees: [{ path: '/tmp/workbench', branch: 'feature/current', current: true }],
-      } });
-      if (url.includes('/workspace-diff/ref/commits?')) return json({ commits: [
-        { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', shortSha: 'aaaaaaa', title: 'Rename the reader', author: 'Jeffrey', committedAt: null },
+      if (url.includes('/workspace-diff/ref/commits')) return json({ commits: [
+        { sha: newest, shortSha: 'aaaaaaa', title: 'Rename the reader', author: 'Jeffrey', committedAt: null },
+        { sha: older, shortSha: 'bbbbbbb', title: 'Add the reader', author: 'Jeffrey', committedAt: null },
       ] });
-      if (url.includes('/workspace-diff/ref?')) return json({ diff: workspaceDiff([branchFile], 'branch:feature/current:base..tip') });
-      if (url.includes('/workspace-diff/commit?')) return json({ diff: workspaceDiff([commitFile], 'commit:aaaaaaa') });
+      if (url.includes(`/workspace-diff/commit?commit=${newest}`)) return json({ diff: workspaceDiff([newestFile], `commit:${newest}`) });
+      if (url.includes(`/workspace-diff/commit?commit=${older}`)) return json({ diff: workspaceDiff([olderFile], `commit:${older}`) });
       if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([], 'clean') });
       if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
       throw new Error(`Unexpected request: ${url}`);
@@ -830,18 +828,20 @@ describe('WorkspaceDiffView repository browser', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Repository' }));
 
-    // Opens on the checked-out branch and reads what it adds on top of its base.
-    const branchPicker = await screen.findByRole('combobox', { name: 'Branch or worktree' });
-    await waitFor(() => expect(branchPicker).toHaveValue('branch:feature/current'));
-    expect(await screen.findByText('src/on-branch.ts')).toBeInTheDocument();
-
+    // Opens on the newest commit, read against the one before it.
     const commitPicker = await screen.findByRole('combobox', { name: 'Commit' });
-    expect(commitPicker).toHaveValue('');
-    expect(within(commitPicker).getByRole('option', { name: 'Whole branch vs main' })).toBeInTheDocument();
+    await waitFor(() => expect(commitPicker).toHaveValue(newest));
+    expect(await screen.findByText('src/in-newest.ts')).toBeInTheDocument();
 
-    fireEvent.change(commitPicker, { target: { value: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } });
+    // The second dropdown and its whole-branch comparison are gone.
+    expect(screen.queryByRole('combobox', { name: 'Branch or worktree' })).not.toBeInTheDocument();
+    expect(within(commitPicker).queryByRole('option', { name: /Whole branch/ })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([request]) => String(request).includes('/workspace-diff/refs'))).toBe(false);
+    expect(fetchMock.mock.calls.some(([request]) => String(request).includes('/workspace-diff/ref?'))).toBe(false);
 
-    expect(await screen.findByText('src/in-commit.ts')).toBeInTheDocument();
-    expect(screen.queryByText('src/on-branch.ts')).not.toBeInTheDocument();
+    fireEvent.change(commitPicker, { target: { value: older } });
+
+    expect(await screen.findByText('src/in-older.ts')).toBeInTheDocument();
+    expect(screen.queryByText('src/in-newest.ts')).not.toBeInTheDocument();
   });
 });

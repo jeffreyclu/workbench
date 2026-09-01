@@ -33,7 +33,7 @@ export const sourceClient = {
   getWorkspaceDiffSnapshots: (scope: WorkspaceDiffScope) => request<{ snapshots: WorkspaceDiffSnapshot[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/snapshots`),
   getWorkspaceRefs: (scope: WorkspaceDiffScope) => request<{ refs: WorkspaceRefs }>(`${workspaceDiffBasePath(scope)}/workspace-diff/refs`),
   getWorkspaceRefDiff: (scope: WorkspaceDiffScope, ref: string) => request<{ diff: WorkspaceDiff }>(`${workspaceDiffBasePath(scope)}/workspace-diff/ref?ref=${encodeURIComponent(ref)}`),
-  getWorkspaceRefCommits: (scope: WorkspaceDiffScope, ref: string) => request<{ commits: ReviewCommit[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/ref/commits?ref=${encodeURIComponent(ref)}`),
+  getWorkspaceRefCommits: (scope: WorkspaceDiffScope, ref: string | null) => request<{ commits: ReviewCommit[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/ref/commits${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`),
   getWorkspaceCommitDiff: (scope: WorkspaceDiffScope, commit: string) => request<{ diff: WorkspaceDiff }>(`${workspaceDiffBasePath(scope)}/workspace-diff/commit?commit=${encodeURIComponent(commit)}`),
   getWorkspaceFileSource: (scope: WorkspaceDiffScope, filePath: string, revision: string | null) => request<{ file: WorkspaceFileSource }>(`${workspaceDiffBasePath(scope)}/workspace-diff/file?path=${encodeURIComponent(filePath)}${revision ? `&revision=${encodeURIComponent(revision)}` : ''}`),
   getWorkspaceDiffStatus: (scope: WorkspaceDiffScope, revision: string) => request<{ changed: boolean }>(`${workspaceDiffBasePath(scope)}/workspace-diff/status?revision=${encodeURIComponent(revision)}`),

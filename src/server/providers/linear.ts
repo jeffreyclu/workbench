@@ -102,6 +102,21 @@ const issueSearchQuery = `
   }
 `;
 
+const issueUpdateMutation = `
+  mutation WorkbenchUpdateIssue($id: String!, $input: IssueUpdateInput!) {
+    issueUpdate(id: $id, input: $input) {
+      success
+      issue {
+        id identifier title description priority url dueDate updatedAt
+        state { type name }
+        project { id name }
+        labels { nodes { name } }
+        team { id name }
+      }
+    }
+  }
+`;
+
 const teamProjectsQuery = `
   query WorkbenchTeamProjects($teamId: String!) {
     team(id: $teamId) {
@@ -213,6 +228,12 @@ export class LinearProvider {
   async fetchIssue(identifier: string): Promise<ProviderWorkItem> {
     const data = await this.request<{ issue: LinearIssue }>(issueQuery, { id: identifier });
     return mapIssue(data.issue);
+  }
+
+  async updateIssue(identifier: string, input: { title?: string; description?: string }): Promise<ProviderWorkItem> {
+    const data = await this.request<{ issueUpdate: { success: boolean; issue: LinearIssue | null } }>(issueUpdateMutation, { id: identifier, input });
+    if (!data.issueUpdate.success || !data.issueUpdate.issue) throw new Error(`Linear did not update ${identifier}.`);
+    return mapIssue(data.issueUpdate.issue);
   }
 
   /**

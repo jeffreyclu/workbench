@@ -36,7 +36,7 @@ import { assessDiffBlocks, lookupDiffConfidenceBlocks } from '../diff-confidence
 import { lookupReviewAssist, requestReviewAssist } from '../review-assist-ai.js';
 import { ensureReviewAutoScore, reviewAutoScoreView } from '../review-auto-score.js';
 import { findStaleReferences } from '../stale-references.js';
-import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceRefCommits, listWorkspaceRefs, repositoryIdentity, snapshotsForRepository } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceCommits, listWorkspaceRefCommits, listWorkspaceRefs, repositoryIdentity, snapshotsForRepository } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
@@ -231,8 +231,9 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       const workingDirectory = taskWorkingDirectory(item.id);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
       const ref = typeof request.query.ref === 'string' ? request.query.ref : '';
-      if (!ref) return response.status(400).json({ error: 'Specify which branch to list commits for.' });
-      response.json({ commits: await listWorkspaceRefCommits(workingDirectory, ref) });
+      // No ref means the repo browser's own question: the commits on this
+      // checkout, each read against the one before it.
+      response.json({ commits: ref ? await listWorkspaceRefCommits(workingDirectory, ref) : await listWorkspaceCommits(workingDirectory) });
     } catch (error) { next(error); }
   });
   router.get('/api/work-items/:id/workspace-diff/commit', async (request, response, next) => {

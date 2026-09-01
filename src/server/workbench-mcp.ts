@@ -138,6 +138,7 @@ export interface WorkbenchAdminActions {
   syncLinearProvider(): Promise<unknown>;
   configureLinearProvider(teamIds: string[], projectIds: string[]): unknown;
   queueLinearWorkItem(workItemId: string): unknown;
+  updateLinearIssue(identifier: string, input: { title?: string; description?: string }): Promise<unknown>;
 }
 
 /** Turns a shared-action refusal into the MCP error the caller sees. */
@@ -792,6 +793,17 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     inputSchema: { workItemId: z.string().uuid() },
     annotations: mutationAnnotations(true),
   }, async ({ workItemId }) => runTool('queue_linear_work_item', () => unwrap(admin.queueLinearWorkItem(workItemId))));
+
+  server.registerTool('update_linear_issue', {
+    title: 'Update an existing Linear issue',
+    description: 'Updates the title and/or description of one existing Linear issue through Workbench-owned credentials. Use only when the supervisor-issued capability at the top of this turn explicitly authorizes that Linear mutation.',
+    inputSchema: {
+      identifier: z.string().trim().regex(/^[A-Za-z][A-Za-z0-9]*-\d+$/).max(100),
+      title: z.string().trim().min(1).max(500).optional(),
+      description: z.string().max(100_000).optional(),
+    },
+    annotations: mutationAnnotations(true),
+  }, async ({ identifier, title, description }) => runTool('update_linear_issue', () => admin.updateLinearIssue(identifier, { title, description })));
 
   server.registerTool('list_audit_log', {
     title: 'Read the Workbench audit log',

@@ -167,6 +167,12 @@ Jeffrey reviews specs to ensure the work is sound before implementation starts. 
 
 When Jeffrey asks for a change to a tech spec, treat it as a fresh write of the affected section, not an incremental patch on top of the old text. Re-derive the section from the current, full set of decisions made so far in the conversation, rather than editing the previous draft in place. This matters because tech specs accumulate decisions over a conversation (options get settled, scope gets reversed, like the client-side-to-server-side pagination flip), and patching old wording risks leaving stale reasoning, contradictions, or superseded options mixed in with the new decision. A full rewrite of the section forces the draft to reflect only the current, correct state of the discussion.
 
+### Keep Linear tickets outcome-level; put implementation in the tech spec
+
+*A Linear ticket should state the problem, goal, scope boundary, and human-readable completion outcome. Exact packages, CI stages, generator settings, schema defects, dependency exclusions, and repository-by-repository test mechanics belong in the linked tech spec.*
+
+Do not promote a researched implementation proposal into the ticket's acceptance criteria as though Jeffrey requested that exact design. Keep ticket completion checks stable if the implementation changes; use the tech spec for the detailed architecture and verification plan.
+
 ### Backend decisions are mine to make
 
 *Jeffrey is a frontend engineer and expects me to make backend architecture and convention calls myself rather than asking him to arbitrate them.*

@@ -118,8 +118,8 @@ export function useWorkspaceRefCommits(scope: WorkspaceDiffScope | null, ref: st
   const { workspacePath, isResolved } = useSelectedWorkspacePath(scope);
   return useQuery({
     queryKey: workspaceDiffQueryKeys.refCommits(scope ?? { workItemId: '' }, workspacePath, ref ?? ''),
-    queryFn: () => workspaceDiffData.getRefCommits(scope!, ref!),
-    enabled: Boolean(scope) && Boolean(ref) && isResolved,
+    queryFn: () => workspaceDiffData.getRefCommits(scope!, ref),
+    enabled: Boolean(scope) && isResolved,
     staleTime: 30_000,
   });
 }

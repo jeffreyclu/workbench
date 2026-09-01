@@ -3,7 +3,7 @@ import { existsSync, statSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { z } from 'zod';
 import { createStandaloneReviewSchema, upsertDiffBlockReviewSchema, upsertDiffHunkReviewsSchema, type StandaloneReview, type WorkspaceDiff } from '../../shared/contracts.js';
-import { getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceRefDiff, listWorkspaceRefCommits, listWorkspaceRefs } from '../workspace-diff.js';
+import { getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceRefDiff, listWorkspaceCommits, listWorkspaceRefCommits, listWorkspaceRefs } from '../workspace-diff.js';
 import { listCandidateWorkspaces } from '../workspace-candidates.js';
 import type { RouteContext } from '../route-context.js';
 
@@ -132,8 +132,9 @@ export function createReviewRouter({ repository }: RouteContext) {
       const directory = workingDirectory(request.params.id);
       if (!directory) return response.status(409).json({ error: 'This review has no repository to read commits from.' });
       const ref = typeof request.query.ref === 'string' ? request.query.ref : '';
-      if (!ref) return response.status(400).json({ error: 'Specify which branch to list commits for.' });
-      response.json({ commits: await listWorkspaceRefCommits(directory, ref) });
+      // No ref means the repo browser's own question: the commits on this
+      // checkout, each read against the one before it.
+      response.json({ commits: ref ? await listWorkspaceRefCommits(directory, ref) : await listWorkspaceCommits(directory) });
     } catch (error) { next(error); }
   });
 

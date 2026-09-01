@@ -47,4 +47,21 @@ describe('LinearProvider outbound transport', () => {
     const authProvider = new LinearProvider('linear-token', [], [], authFetch, sleep);
     await expect(authProvider.fetchTeams()).rejects.toThrow(/auth failure/i);
   });
+
+  it('updates an existing issue and returns the normalized saved issue', async () => {
+    const issue = {
+      id: 'issue-id', identifier: 'CON-226', title: 'Connector types', description: 'One contract.', priority: 3,
+      url: 'https://linear.app/writer/issue/CON-226/connector-types', dueDate: null, updatedAt: '2026-09-01T00:00:00.000Z',
+      state: { type: 'unstarted', name: 'Backlog' }, project: null, labels: { nodes: [] }, team: { id: 'team-id', name: 'Connectors' },
+    };
+    const policyFetch = vi.fn(async () => new Response(JSON.stringify({ data: { issueUpdate: { success: true, issue } } }), {
+      headers: { 'content-type': 'application/json' },
+    }));
+
+    await expect(new LinearProvider('linear-token', [], [], policyFetch).updateIssue('CON-226', { description: 'One contract.' }))
+      .resolves.toEqual(expect.objectContaining({ sourceIdentifier: 'CON-226', description: 'One contract.' }));
+    expect(JSON.parse(String(policyFetch.mock.calls[0][1]?.body))).toEqual(expect.objectContaining({
+      variables: { id: 'CON-226', input: { description: 'One contract.' } },
+    }));
+  });
 });

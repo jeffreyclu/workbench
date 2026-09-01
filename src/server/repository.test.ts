@@ -8,6 +8,7 @@ import { cancelSharedReply, deliverPendingSharedInterjections, dispatchNextShare
 import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
+import { HEARTBEAT_MS } from './scheduler.js';
 
 describe('WorkItemRepository', () => {
   let database: WorkbenchDatabase;
@@ -1764,6 +1765,30 @@ describe('WorkItemRepository', () => {
     expect(aborted).toBe(true);
     expect(repository.getRun(run.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
     expect(repository.getSharedMessageById(reply.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
+  });
+
+  it('aborts the owning provider when another runtime durably cancels its reply', async () => {
+    vi.useFakeTimers();
+    try {
+      const conversation = repository.createConversation('Cross-runtime cancellation');
+      const reply = repository.createSharedMessage('claude', 'Still working', 'running', conversation.id);
+      let aborted = false;
+      const streaming = runSharedBackgroundJob(repository, reply.id, (signal) => new Promise<string>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          aborted = true;
+          reject(new Error('canceled by another runtime'));
+        }, { once: true });
+      }));
+
+      repository.updateSharedMessage(reply.id, { status: 'canceled' });
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
+      await streaming;
+
+      expect(aborted).toBe(true);
+      expect(repository.getSharedMessageById(reply.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('cancels a legacy chat run that predates durable reply linkage', () => {

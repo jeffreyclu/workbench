@@ -354,3 +354,31 @@ are convenient to change.
 The reason is that a closed ticket key on an open PR makes the work untraceable: reviewers and
 Linear both attribute it to something already marked done. When a ticket key changes mid-flight,
 fix the existing commits too rather than only the new ones.
+
+## A frontend defect found while working on a defect-fix PR is in scope (2026-09-01)
+
+On the CON-221 branch I read the Figma consent screen, listed three ways the shipped
+`allow-connectors-modal.tsx` diverged from it, and called them "outside CON-221's scope". Jeffrey
+rejected that: "not true, this PR is for fixing FE defects like this one. fix it."
+
+The rule to carry forward: when a branch exists specifically to fix frontend defects on a surface,
+other genuine defects I find on that same surface belong in it, and I should fix them rather than
+file them as out-of-scope observations. This does not reverse the 2026-08-31 entry above — an
+enumerated list of review comments is still the whole scope of a "address these comments" edit, and
+I still must not tidy neighboring code or add unrequested tests. The distinction is between
+unrequested polish, which stays out, and a real user-visible defect on the surface the PR exists to
+repair, which goes in. When only part of such a fix is possible (for example a Figma-exported
+illustration I cannot obtain), ship the rest in full and name the exact blocker.
+
+## One selector, not a comparison builder (2026-09-01)
+
+When a Workbench review surface browses committed history, Jeffrey wants a **single commit selector**
+and nothing else. Each commit is shown against the one immediately before it. He rejected a repo
+browser that shipped two dropdowns — a branch/worktree picker plus a commit picker whose default was
+"whole branch vs base" — with "no one asked for it", because it turned reading a commit into
+configuring a comparison.
+
+The general rule this instance carries: do not invent a comparison base, a second axis, or an extra
+control the request did not ask for. Pick the obvious default (the previous commit, the newest
+commit) and expose one control. If a second dimension seems genuinely necessary, ask before building
+it rather than shipping it and explaining it afterwards.

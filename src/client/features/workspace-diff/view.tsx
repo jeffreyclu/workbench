@@ -23,7 +23,7 @@ import { DiffReviewChangeMap } from '../diff-review/change-map.js';
 import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js';
 import { useGitHubPullRequestDiff, useGitHubPullRequestFile } from '../github-diff/hooks.js';
 import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
-import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceCommitDiff, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots, useWorkspaceFileSource, useWorkspaceRefCommits, useWorkspaceRefDiff, useWorkspaceRefs, workspaceExplorerQueryKey } from './hooks.js';
+import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceCommitDiff, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots, useWorkspaceFileSource, useWorkspaceRefCommits, workspaceExplorerQueryKey } from './hooks.js';
 import { workspaceDiffScopeKeys } from './data.js';
 // Tier routing and the delegated sweep, reached across to the review stack.
 // These four are pure policy over a `ReviewDecision` — no block splitting, no
@@ -152,34 +152,25 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   ]), [pullRequestUrlCandidates, manualPullRequestUrl]);
   const [selectedPullRequestUrl, setSelectedPullRequestUrl] = useState<string | null>(null);
   const [reviewSource, setReviewSource] = useState<ReviewSourceKind>('workspace');
-  // The repo browser. Every other source here reads uncommitted or recorded
-  // state, so the selected repository's own branches, worktrees and commits
-  // were unreachable from the UI even though the endpoints answering them
-  // already existed. A ref id is `branch:<name>` or `worktree:<path>`, the
-  // same vocabulary the server resolves.
-  const [selectedRef, setSelectedRef] = useState<string | null>(null);
+  // The repo browser has one control: which commit is being read. A commit is
+  // always shown against the one before it, so there is no comparison base to
+  // pick and no second selector to keep in sync.
   const [selectedCommitSha, setSelectedCommitSha] = useState('');
   const isRepositorySource = reviewSource === 'repository';
-  const refsQuery = useWorkspaceRefs(isRepositorySource ? scope : null);
-  const refs = refsQuery.data?.refs ?? null;
-  const refCommitsQuery = useWorkspaceRefCommits(isRepositorySource ? scope : null, selectedRef);
-  const refDiffQuery = useWorkspaceRefDiff(isRepositorySource && !selectedCommitSha ? scope : null, selectedRef);
-  const commitDiffQuery = useWorkspaceCommitDiff(isRepositorySource && selectedCommitSha ? scope : null, selectedCommitSha || null);
-  // One commit, or the whole branch against its base. Both answer with the
-  // same WorkspaceDiff the working tree does, so they feed the one decision
-  // queue rather than a second review surface.
-  const repositoryQuery = selectedCommitSha ? commitDiffQuery : refDiffQuery;
+  const commitsQuery = useWorkspaceRefCommits(isRepositorySource ? scope : null, null);
+  const commits = commitsQuery.data?.commits ?? [];
+  const selectedCommit = commits.find((commit) => commit.sha === selectedCommitSha) ?? null;
+  // The commit diff answers with the same WorkspaceDiff the working tree does,
+  // so it feeds the one decision queue rather than a second review surface.
+  const repositoryQuery = useWorkspaceCommitDiff(isRepositorySource && selectedCommitSha ? scope : null, selectedCommitSha || null);
   const repositoryDiff = isRepositorySource ? repositoryQuery.data?.diff ?? null : null;
-  // Opening the browser lands on the checked-out branch, because that is the
-  // one the reviewer is already thinking about. The base branch is not in the
-  // list - it is what everything else is compared against.
+  // Opening the browser lands on the newest commit, because that is the change
+  // the reviewer is already thinking about.
+  const latestCommitSha = commits[0]?.sha ?? '';
   useEffect(() => {
-    if (!isRepositorySource || selectedRef || !refs) return;
-    const branch = refs.branches.find((candidate) => candidate.current) ?? refs.branches[0];
-    if (branch) return setSelectedRef(`branch:${branch.name}`);
-    const worktree = refs.worktrees.find((candidate) => !candidate.current) ?? null;
-    if (worktree) setSelectedRef(`worktree:${worktree.path}`);
-  }, [isRepositorySource, refs, selectedRef]);
+    if (!isRepositorySource || selectedCommitSha || !latestCommitSha) return;
+    setSelectedCommitSha(latestCommitSha);
+  }, [isRepositorySource, latestCommitSha, selectedCommitSha]);
   useEffect(() => {
     // Drop a selection whose pull request is no longer referenced here.
     setSelectedPullRequestUrl((current) => current && availablePullRequests.includes(current) ? current : null);
@@ -503,9 +494,8 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     setReviewSource('workspace');
     // Picking a repository means reading that repository's live changes, not
     // whichever recorded version the previous checkout fell back to - and not
-    // a branch or commit that only exists in the repository being left.
+    // a commit that only exists in the repository being left.
     setSelectedSnapshotId('');
-    setSelectedRef(null);
     setSelectedCommitSha('');
     if (value !== explorer.data?.selectedPath) selectWorkspace.mutate(value);
   };
@@ -561,8 +551,8 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     if (!diff && availablePullRequests.length === 0) return null;
   }
 
-  const refreshSource = () => void (isPullRequestSource ? pullRequestQuery.refetch() : isRepositorySource ? Promise.all([refsQuery.refetch(), repositoryQuery.refetch()]) : query.refetch());
-  const isRefreshing = isPullRequestSource ? pullRequestQuery.isFetching : isRepositorySource ? refsQuery.isFetching || repositoryQuery.isFetching : query.isFetching;
+  const refreshSource = () => void (isPullRequestSource ? pullRequestQuery.refetch() : isRepositorySource ? Promise.all([commitsQuery.refetch(), repositoryQuery.refetch()]) : query.refetch());
+  const isRefreshing = isPullRequestSource ? pullRequestQuery.isFetching : isRepositorySource ? commitsQuery.isFetching || repositoryQuery.isFetching : query.isFetching;
 
   return <section className="workspace-diff" aria-label={isPullRequestSource ? 'Pull request changes' : 'Current workspace changes'}>
     <header>
@@ -575,7 +565,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                 ? <span className="workspace-diff-pr-comments">{pullRequest.comments.total} review comment{pullRequest.comments.total === 1 ? '' : 's'}{pullRequest.comments.partial ? ' (partial)' : ''}</span>
                 : <span className="workspace-diff-pr-comments muted">Comments unavailable</span>}
             </p>}<p>Review behavior decisions in priority order for this pull-request revision. Decisions are recorded against its head commit, so new commits return their hunks to review.</p>{selectedPullRequestUrl && <small className="workspace-diff-provenance"><a href={selectedPullRequestUrl} target="_blank" rel="noreferrer">Open on GitHub <ExternalLink size={13} /></a></small>}</div>
-        : isRepositorySource ? <div><span className="workspace-diff-eyebrow"><GitBranch size={14} /> Repository</span><h2>{selectedCommitSha ? 'Commit' : selectedRef?.startsWith('worktree:') ? 'Worktree changes' : 'Branch changes'}</h2><div className="workspace-diff-record-metadata"><small>{displayedDiff?.branch ?? selectedRef?.replace(/^(branch|worktree):/, '') ?? 'No branch selected'}</small><span>{selectedCommitSha ? 'One commit from this repository, read on its own.' : refs?.base ? `Everything this ref adds on top of ${refs.base}.` : 'Everything this ref adds on top of its base.'}</span></div></div>
+        : isRepositorySource ? <div><span className="workspace-diff-eyebrow"><GitBranch size={14} /> Repository</span><h2>Commit</h2><div className="workspace-diff-record-metadata"><small>{selectedCommit ? `${selectedCommit.shortSha} · ${selectedCommit.title}` : displayedDiff?.branch ?? 'No commit selected'}</small><span>This commit, compared against the one before it.</span></div></div>
         : <div><span className="workspace-diff-eyebrow"><FileDiff size={14} /> {selectedSnapshot ? 'Recorded version' : 'Workspace review'}</span>{selectedSnapshot && <><h2>Workspace review record</h2><div className="workspace-diff-record-metadata"><small>{displayedDiff?.branch}</small><span>Captured {new Date(selectedSnapshot.capturedAt).toLocaleString()}. This record is preserved in the history.</span><small>{selectedSnapshot.originatingAgentRunId ? `Agent run ${selectedSnapshot.originatingAgentRunId}` : 'No originating agent run recorded'}{selectedSnapshot.commitHash ? ` · Commit ${selectedSnapshot.commitHash.slice(0, 12)}` : ' · No commit recorded'}</small></div></>}</div>}
       <div className="workspace-diff-actions">
         <div className="workspace-review-source" role="group" aria-label="Review source">
@@ -589,8 +579,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
             gating it there removed the only control that reaches another
             repository. */}
         {(conversationId || workItemId) && workspaces.length > 0 && <label className="workspace-repository-picker"><span>Workspace</span><select value={explorer.data?.selectedPath ?? ''} onChange={(event) => selectSource(event.target.value)} disabled={selectWorkspace.isPending}><option value="" disabled>Select workspace</option>{workspaces.map((workspace) => <option key={workspace.path} value={workspace.path}>{workspace.label}</option>)}</select></label>}
-        {isRepositorySource && <label className="workspace-repository-ref"><GitBranch size={13} /><span className="visually-hidden">Branch or worktree</span><select value={selectedRef ?? ''} onChange={(event) => { setSelectedRef(event.target.value || null); setSelectedCommitSha(''); setSelectedDecisionId(null); }} disabled={refsQuery.isPending}><option value="" disabled>{refsQuery.isPending ? 'Reading repository' : 'Select a branch or worktree'}</option>{(refs?.branches ?? []).map((branch) => <option key={`branch:${branch.name}`} value={`branch:${branch.name}`}>{branch.name}{branch.current ? ' · checked out' : ''}{branch.ahead > 0 ? ` · ${branch.ahead} ahead` : ''}</option>)}{(refs?.worktrees ?? []).filter((worktree) => !worktree.current).map((worktree) => <option key={`worktree:${worktree.path}`} value={`worktree:${worktree.path}`}>{worktree.branch ?? 'detached'} · worktree</option>)}</select></label>}
-        {isRepositorySource && selectedRef?.startsWith('branch:') && <label className="workspace-repository-commit"><GitCommitHorizontal size={13} /><span className="visually-hidden">Commit</span><select value={selectedCommitSha} onChange={(event) => { setSelectedCommitSha(event.target.value); setSelectedDecisionId(null); }} disabled={refCommitsQuery.isPending}><option value="">{refs?.base ? `Whole branch vs ${refs.base}` : 'Whole branch'}</option>{(refCommitsQuery.data?.commits ?? []).map((commit) => <option key={commit.sha} value={commit.sha}>{commit.shortSha} · {commit.title}</option>)}</select></label>}
+        {isRepositorySource && <label className="workspace-repository-commit"><GitCommitHorizontal size={13} /><span className="visually-hidden">Commit</span><select value={selectedCommitSha} onChange={(event) => { setSelectedCommitSha(event.target.value); setSelectedDecisionId(null); }} disabled={commitsQuery.isPending || commits.length === 0}><option value="" disabled>{commitsQuery.isPending ? 'Reading repository' : 'Select a commit'}</option>{commits.map((commit) => <option key={commit.sha} value={commit.sha}>{commit.shortSha} · {commit.title}</option>)}</select></label>}
         {reviewSource === 'history' && snapshots.length > 0 && <label className="workspace-diff-timeline"><History size={13} /><span className="visually-hidden">Workspace diff history</span><select value={selectedSnapshotId ?? selectedSnapshot?.id ?? ''} onChange={(event) => { setSelectedSnapshotId(event.target.value); setSelectedDecisionId(null); writeWorkspaceDiffSource(preferenceScope, `history:${event.target.value}`); }}><option value="">Latest recorded version</option>{snapshots.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{new Date(snapshot.capturedAt).toLocaleString()} · {snapshot.diff.changedFiles} files</option>)}</select></label>}
         {reviewSource === 'pull-request' && <div className="workspace-pr-source"><form onSubmit={submitPullRequestUrl}><label><span className="visually-hidden">Pull request URL</span><input aria-label="Pull request URL" value={pullRequestUrlDraft} onChange={(event) => setPullRequestUrlDraft(event.target.value)} placeholder="Paste GitHub PR URL" /></label><button type="submit">Review PR</button></form>{availablePullRequests.length > 0 && <label className="workspace-repository-picker"><span>PR</span><select aria-label="Pull request" value={selectedPullRequestUrl ?? ''} onChange={(event) => selectSource(event.target.value)}><option value="" disabled>Select pull request</option>{availablePullRequests.map((url) => <option key={url} value={url}>{pullRequestLabel(url)}</option>)}</select></label>}{pullRequestUrlError && <small role="alert">{pullRequestUrlError}</small>}</div>}
         {!isPullRequestSource && <button className="workspace-diff-handoff" type="button" onClick={() => setIsHandoffOpen(true)}><ClipboardCheck size={14} />Agentic handoff</button>}
@@ -616,13 +605,13 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
         ? <AgentRunReviewHandoffCard handoff={reviewHandoff} />
         : <div className="review-handoff-empty"><ClipboardCheck size={24} /><strong>No handoff recorded</strong><p>This review is not linked to a completed agent run with handoff evidence.</p></div>}
     </ModalDialog>}
-    {isRepositorySource && !selectedRef && !refsQuery.isError ? <p className="muted">{refsQuery.isPending ? 'Reading this repository.' : 'This repository has no branch or worktree to browse.'}</p>
-      : isRepositorySource && refsQuery.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not read this repository.</strong><p>{refsQuery.error.message}</p><button type="button" className="button secondary compact" onClick={() => void refsQuery.refetch()} disabled={refsQuery.isFetching}>Retry</button></section>
+    {isRepositorySource && !selectedCommitSha && !commitsQuery.isError ? <p className="muted">{commitsQuery.isPending ? 'Reading this repository.' : 'This repository has no commits to browse.'}</p>
+      : isRepositorySource && commitsQuery.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not read this repository.</strong><p>{commitsQuery.error.message}</p><button type="button" className="button secondary compact" onClick={() => void commitsQuery.refetch()} disabled={commitsQuery.isFetching}>Retry</button></section>
       : isRepositorySource && repositoryQuery.isPending ? <DiffSkeleton />
-      : isRepositorySource && repositoryQuery.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load this {selectedCommitSha ? 'commit' : 'branch'}.</strong><p>{repositoryQuery.error.message}</p><button type="button" className="button secondary compact" onClick={() => void repositoryQuery.refetch()} disabled={repositoryQuery.isFetching}>Retry</button></section>
+      : isRepositorySource && repositoryQuery.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load this commit.</strong><p>{repositoryQuery.error.message}</p><button type="button" className="button secondary compact" onClick={() => void repositoryQuery.refetch()} disabled={repositoryQuery.isFetching}>Retry</button></section>
       : isPullRequestSource && pullRequestQuery.isLoading ? <DiffSkeleton />
       : isPullRequestSource && pullRequestQuery.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load this pull-request diff.</strong><p>{pullRequestQuery.error.message}</p><button type="button" className="button secondary compact" onClick={() => void pullRequestQuery.refetch()} disabled={pullRequestQuery.isFetching}>Retry</button></section>
-        : !displayedDiff || displayedDiff.files.length === 0 ? <p className="muted">{isPullRequestSource ? selectedPullRequestUrl ? 'GitHub reports no changed files for this pull request.' : 'Paste a GitHub pull-request URL or choose one from this conversation.' : isRepositorySource ? selectedCommitSha ? 'This commit changes no files.' : 'This ref adds nothing on top of its base.' : 'No uncommitted changes to review.'}</p>
+        : !displayedDiff || displayedDiff.files.length === 0 ? <p className="muted">{isPullRequestSource ? selectedPullRequestUrl ? 'GitHub reports no changed files for this pull request.' : 'Paste a GitHub pull-request URL or choose one from this conversation.' : isRepositorySource ? 'This commit changes no files.' : 'No uncommitted changes to review.'}</p>
           : hunkReviews.isLoading ? <DiffSkeleton />
             : hunkReviews.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load review decisions.</strong><p>{hunkReviews.error.message}</p><button type="button" className="button secondary compact" onClick={() => void hunkReviews.refetch()} disabled={hunkReviews.isFetching}>Retry</button></section>
               : <div className="workspace-diff-layout diff-review-layout">

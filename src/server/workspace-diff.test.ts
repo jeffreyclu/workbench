@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { commitAndPushWorkspace, getWorkspaceBranchDiff, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceFileSource, getWorkspaceRefDiff, getWorkspaceWorktreeDiff, listWorkspaceRefCommits, listWorkspaceRefs, parseWorkspacePatch, parseWorktreeList, repositoryIdentity, resolveWorkspaceRepository, snapshotsForRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceBranchDiff, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceFileSource, getWorkspaceRefDiff, getWorkspaceWorktreeDiff, listWorkspaceCommits, listWorkspaceRefCommits, listWorkspaceRefs, parseWorkspacePatch, parseWorktreeList, repositoryIdentity, resolveWorkspaceRepository, snapshotsForRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -349,6 +349,22 @@ describe('branch and worktree review sources', () => {
     const diff = await getWorkspaceCommitDiff(workspace, commits[1].sha);
     expect(diff.files.map((file) => file.path)).toEqual(['first.ts']);
     expect(diff.revision).toBe(`commit:${commits[1].sha}`);
+  });
+
+  it('lists the checked-out history itself, so the repo browser needs no branch chosen first', async () => {
+    const workspace = repositoryWithBase();
+    writeFileSync(join(workspace, 'on-main.ts'), 'const onMain = 1;\n');
+    execFileSync('git', ['add', 'on-main.ts'], { cwd: workspace });
+    execFileSync('git', ['commit', '--quiet', '-m', 'work on main'], { cwd: workspace });
+
+    // The base branch is excluded from the ref list, so a ref-scoped read has
+    // nothing to say about a checkout that never left it.
+    const commits = await listWorkspaceCommits(workspace);
+    expect(commits[0].title).toBe('work on main');
+
+    // Each entry reads against the commit before it, never against a base.
+    const diff = await getWorkspaceCommitDiff(workspace, commits[0].sha);
+    expect(diff.files.map((file) => file.path)).toEqual(['on-main.ts']);
   });
 
   it('answers with no commits for sources that are uncommitted by definition', async () => {

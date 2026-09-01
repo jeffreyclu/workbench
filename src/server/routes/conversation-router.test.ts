@@ -15,6 +15,7 @@ const seams = vi.hoisted(() => ({
   getWorkspaceDiffRevision: vi.fn(),
   getWorkspaceCommitDiff: vi.fn(),
   getWorkspaceRefDiff: vi.fn(),
+  listWorkspaceCommits: vi.fn(),
   listWorkspaceRefCommits: vi.fn(),
   listWorkspaceRefs: vi.fn(),
   snapshotsForRepository: vi.fn(),
@@ -49,6 +50,7 @@ vi.mock('../workspace-diff.js', async (importOriginal) => ({
   getWorkspaceDiffRevision: seams.getWorkspaceDiffRevision,
   getWorkspaceCommitDiff: seams.getWorkspaceCommitDiff,
   getWorkspaceRefDiff: seams.getWorkspaceRefDiff,
+  listWorkspaceCommits: seams.listWorkspaceCommits,
   listWorkspaceRefCommits: seams.listWorkspaceRefCommits,
   listWorkspaceRefs: seams.listWorkspaceRefs,
   snapshotsForRepository: seams.snapshotsForRepository,
@@ -277,7 +279,10 @@ describe('conversation router', () => {
 
       seams.listWorkspaceRefCommits.mockResolvedValue([]);
       expect((await request(`/api/shared/conversations/${conversation.id}/workspace-diff/ref/commits?ref=feature`)).status).toBe(200);
-      expect((await request(`/api/shared/conversations/${conversation.id}/workspace-diff/ref/commits`)).status).toBe(400);
+      // No ref is the repo browser's own question: this checkout's own commits.
+      seams.listWorkspaceCommits.mockResolvedValue([]);
+      expect((await request(`/api/shared/conversations/${conversation.id}/workspace-diff/ref/commits`)).status).toBe(200);
+      expect(seams.listWorkspaceCommits).toHaveBeenCalledWith(workspace);
 
       seams.getWorkspaceCommitDiff.mockResolvedValue({ workspacePath: workspace, branch: 'main', revision: 'r', files: [], changedFiles: 0, additions: 0, deletions: 0, publish: { state: 'none' } });
       expect((await request(`/api/shared/conversations/${conversation.id}/workspace-diff/commit?commit=abc`)).status).toBe(200);

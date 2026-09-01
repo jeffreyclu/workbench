@@ -48,6 +48,7 @@ describe('Workbench MCP', () => {
       syncLinearProvider: record('syncLinearProvider'),
       configureLinearProvider: record('configureLinearProvider'),
       queueLinearWorkItem: record('queueLinearWorkItem'),
+      updateLinearIssue: record('updateLinearIssue'),
       ...overrides,
     } as WorkbenchAdminActions;
   }
@@ -118,6 +119,7 @@ describe('Workbench MCP', () => {
       'set_work_item_lifecycle',
       'unblock_work_item',
       'update_work_item',
+      'update_linear_issue',
     ]);
     expect(tools.tools.find((tool) => tool.name === 'list_results')?.annotations).toEqual(expect.objectContaining({ readOnlyHint: true }));
     expect(tools.tools.find((tool) => tool.name === 'create_work_item')?.annotations).toEqual(expect.objectContaining({ readOnlyHint: false, openWorldHint: false }));
@@ -357,6 +359,15 @@ describe('Workbench MCP', () => {
     expect(calls.at(-1)).toEqual({ method: 'publishArtifact', args: [{
       path: 'docs/reference/intro.md', title: 'All-hands introduction', conversationId: '00000000-0000-4000-8000-000000000001',
     }] });
+  });
+
+  it('routes an explicitly authorized Linear issue update through Workbench-owned credentials', async () => {
+    await callData('update_linear_issue', {
+      identifier: 'CON-226', title: 'Connector types', description: 'Use one published contract.',
+    });
+    expect(calls.at(-1)).toEqual({ method: 'updateLinearIssue', args: [
+      'CON-226', { title: 'Connector types', description: 'Use one published contract.' },
+    ] });
   });
 
   it('routes an explicitly authorized runtime promotion through the Workbench service', async () => {

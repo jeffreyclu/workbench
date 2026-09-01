@@ -8,7 +8,7 @@ import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
 import { resolveWorkingDirectory, runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, retrySharedSynthesis, runSharedBackgroundJob } from '../shared-room.js';
-import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceRefCommits, listWorkspaceRefs, repositoryIdentity, snapshotsForRepository } from '../workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceCommits, listWorkspaceRefCommits, listWorkspaceRefs, repositoryIdentity, snapshotsForRepository } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { parseFollowUpPlan } from '../app-exports.js';
 import { isRuntimeApproval } from '../runtime-promotion.js';
@@ -175,8 +175,9 @@ export function createConversationRouter({ repository, database, capabilities, a
       const workingDirectory = conversationWorkingDirectory(request.params.id);
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
       const ref = typeof request.query.ref === 'string' ? request.query.ref : '';
-      if (!ref) return response.status(400).json({ error: 'Specify which branch to list commits for.' });
-      response.json({ commits: await listWorkspaceRefCommits(workingDirectory, ref) });
+      // No ref means the repo browser's own question: the commits on this
+      // checkout, each read against the one before it.
+      response.json({ commits: ref ? await listWorkspaceRefCommits(workingDirectory, ref) : await listWorkspaceCommits(workingDirectory) });
     } catch (error) { next(error); }
   });
   router.get('/api/shared/conversations/:id/workspace-diff/commit', async (request, response, next) => {

@@ -1001,9 +1001,17 @@ export async function runSharedBackgroundJob(
     : repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS);
   if (!claimed) return;
   const controller = new AbortController();
+  let leaseOwnershipLost = false;
   const leaseHeartbeat = setInterval(() => {
-    try { repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS); }
-    catch (error) {
+    try {
+      // Cancellation can be handled by a different serving runtime during a
+      // gateway handoff. The durable status change makes this renewal fail;
+      // treat that as an ownership fence and stop the provider owned here.
+      if (!repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS)) {
+        leaseOwnershipLost = true;
+        controller.abort(new Error('Shared reply was canceled or ownership was lost.'));
+      }
+    } catch (error) {
       // One skipped heartbeat is safe inside a 45-second lease. A transient
       // writer clash must never escape a timer callback and crash every agent.
       if (!isTransientSqliteContention(error)) controller.abort(error);
@@ -1016,9 +1024,13 @@ export async function runSharedBackgroundJob(
     const body = await job(controller.signal, (partial) => updateLiveSharedBody(repository, messageId, partial));
     repository.updateSharedMessage(messageId, { body, status: 'completed' });
   } catch (error) {
-    repository.updateSharedMessage(messageId, controller.signal.aborted
-      ? { status: 'canceled' }
-      : { status: 'failed', error: error instanceof Error ? error.message : 'Background job failed.' });
+    // Once the durable lease is gone, this process is fenced out. The process
+    // that canceled or reclaimed the message owns its terminal state.
+    if (!leaseOwnershipLost) {
+      repository.updateSharedMessage(messageId, controller.signal.aborted
+        ? { status: 'canceled' }
+        : { status: 'failed', error: error instanceof Error ? error.message : 'Background job failed.' });
+    }
   } finally {
     clearInterval(leaseHeartbeat);
     activeReplies.delete(messageId);
@@ -1053,10 +1065,20 @@ export async function replyInSharedRoom(
     return;
   }
   const controller = new AbortController();
+  let leaseOwnershipLost = false;
   const leaseHeartbeat = setInterval(() => {
     try {
-      repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS);
-      if (runId) repository.renewRunLease(runId, OWNER_ID, LEASE_MS);
+      const messageLeaseRenewed = repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS);
+      const runLeaseRenewed = !runId || repository.renewRunLease(runId, OWNER_ID, LEASE_MS);
+      // In-memory cancel handles only work when the request reaches this
+      // process. Durable lease fencing is the cross-runtime kill signal.
+      if (!messageLeaseRenewed || !runLeaseRenewed) {
+        leaseOwnershipLost = true;
+        // A run can be canceled independently while this process still owns
+        // the chat reply. Set the matching durable chat state before stopping.
+        if (messageLeaseRenewed && !runLeaseRenewed) repository.updateSharedMessage(messageId, { status: 'canceled' });
+        controller.abort(new Error('Agent reply was canceled or ownership was lost.'));
+      }
     } catch (error) {
       if (!isTransientSqliteContention(error)) controller.abort(error);
     }
@@ -1296,8 +1318,12 @@ export async function replyInSharedRoom(
     }
   } catch (error) {
     if (controller.signal.aborted) {
-      repository.updateSharedMessage(messageId, { status: 'canceled' });
-      if (runId) repository.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString() });
+      // A failed renewal is an ownership fence. Never let the old process
+      // overwrite state owned by the canceling or replacement runtime.
+      if (!leaseOwnershipLost) {
+        repository.updateSharedMessage(messageId, { status: 'canceled' });
+        if (runId) repository.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString() });
+      }
       return;
     }
     const errorMessage = error instanceof Error ? error.message : 'Agent response failed.';
