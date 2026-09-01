@@ -1729,7 +1729,7 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
   .agent-console-title .conversation-origin { display: none; }
   .agent-console-header.has-conversation-actions { min-height: 0; }
   .agent-console-header.has-conversation-actions .agent-console-title { max-width: none; padding-top: 0; }
-  .agent-console-header h2 { flex: 1; width: auto; min-width: 0; margin: 0; overflow-x: auto; overflow-y: hidden; font-size: 16px; line-height: 1.15; text-overflow: clip; white-space: nowrap; -webkit-overflow-scrolling: touch; touch-action: pan-x; }
+  .agent-console-header h2 { flex: 1; width: auto; min-width: 0; margin: 0; overflow: hidden; font-size: 16px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
   /* The tray is one quiet surface: details, then a single action row, then
      its grab handle. The review switch remains independently available. */
   .conversation-window-actions { position: fixed; top: 64px; right: 12px; left: 12px; z-index: 7; display: flex; flex-wrap: nowrap; justify-content: safe center; width: auto; min-width: 0; max-width: none; gap: 4px; margin: 0; padding: 0; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; background: transparent; border: 0; border-radius: 0; box-shadow: none; transform: none; }

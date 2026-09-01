@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { commitAndPushWorkspace, getWorkspaceBranchDiff, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceFileSource, getWorkspaceRefDiff, getWorkspaceWorktreeDiff, listWorkspaceRefCommits, listWorkspaceRefs, parseWorkspacePatch, parseWorktreeList, resolveWorkspaceRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
+import { commitAndPushWorkspace, getWorkspaceBranchDiff, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceFileSource, getWorkspaceRefDiff, getWorkspaceWorktreeDiff, listWorkspaceRefCommits, listWorkspaceRefs, parseWorkspacePatch, parseWorktreeList, resolveWorkspaceRepository, snapshotsForRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -26,6 +26,25 @@ describe('workspace diff parsing', () => {
     const stalePath = join(workspace, 'src', 'client', 'features', 'diff', 'views');
     mkdirSync(join(workspace, 'src'), { recursive: true });
     expect(resolveWorkspaceRepository(stalePath)).toBe(workspace);
+  });
+
+  it('keeps only the records belonging to the selected repository, including its worktrees', async () => {
+    const selected = temporaryGitWorkspace();
+    const other = temporaryGitWorkspace();
+    writeFileSync(join(selected, 'seed.ts'), 'export {};\n');
+    execFileSync('git', ['add', '--all'], { cwd: selected });
+    execFileSync('git', ['commit', '--quiet', '-m', 'seed'], { cwd: selected });
+    const worktree = join(selected, 'worktrees', 'run');
+    execFileSync('git', ['worktree', 'add', '--quiet', '--detach', worktree], { cwd: selected });
+    const record = (workspacePath: string) => ({ id: workspacePath, diff: { workspacePath } });
+
+    const kept = await snapshotsForRepository(
+      [record(selected), record(worktree), record(other), record(join(selected, 'collected-worktree'))],
+      selected,
+    );
+
+    // A path that no longer resolves cannot be proven foreign, so it stays.
+    expect(kept.map((snapshot) => snapshot.id)).toEqual([selected, worktree, join(selected, 'collected-worktree')]);
   });
 
   it('creates editor deep links only for files in an available local checkout', () => {

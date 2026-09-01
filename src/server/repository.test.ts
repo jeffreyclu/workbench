@@ -824,6 +824,7 @@ describe('WorkItemRepository', () => {
     repository.createSharedMessage('jeffrey', 'Investigate this', 'completed', conversation.id);
     repository.createSharedMessage('codex', 'Here are the findings', 'completed', conversation.id);
     const queued = repository.createSharedMessage('codex', 'Queued follow-up', 'queued', conversation.id);
+    repository.createSharedMessage('system', 'Internal control-plane notice', 'completed', conversation.id);
 
     expect(repository.setConversationArchived(conversation.id, true)?.archivedAt).toEqual(expect.any(String));
     expect(repository.getSharedMessageById(queued.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
@@ -833,13 +834,37 @@ describe('WorkItemRepository', () => {
 
     const fork = repository.forkConversation(conversation.id)!;
     expect(fork).toEqual(expect.objectContaining({ workItemId: task.id, forkedFromConversationId: conversation.id, archivedAt: null }));
-    expect(repository.listSharedMessages(100, null, fork.id).messages.map((message) => message.body)).toEqual(['Investigate this', 'Here are the findings', 'Queued follow-up']);
+    expect(repository.listSharedMessages(100, null, fork.id).messages.map((message) => message.body)).toEqual(['Investigate this', 'Queued follow-up']);
     expect(repository.setConversationArchived(conversation.id, false)?.archivedAt).toBeNull();
+  });
+
+  it('forks only the last user message and its reply, dropping earlier turns', () => {
+    const conversation = repository.createConversation('Original thread', null);
+    repository.createSharedMessage('jeffrey', 'First question', 'completed', conversation.id);
+    repository.createSharedMessage('codex', 'First answer', 'completed', conversation.id);
+    repository.createSharedMessage('jeffrey', 'Second question', 'completed', conversation.id);
+    repository.createSharedMessage('codex', 'First parallel answer', 'completed', conversation.id);
+    repository.createSharedMessage('claude', 'Second answer', 'completed', conversation.id);
+    repository.createSharedMessage('system', 'Conversation metadata', 'completed', conversation.id);
+
+    const fork = repository.forkConversation(conversation.id)!;
+    expect(repository.listSharedMessages(100, null, fork.id).messages.map((message) => message.body)).toEqual(['Second question', 'Second answer']);
+  });
+
+  it('does not create a partial fork when the latest user message has no assistant reply', () => {
+    const conversation = repository.createConversation('Unanswered thread');
+    repository.createSharedMessage('jeffrey', 'Answered question', 'completed', conversation.id);
+    repository.createSharedMessage('codex', 'Answered response', 'completed', conversation.id);
+    repository.createSharedMessage('jeffrey', 'Still waiting', 'completed', conversation.id);
+
+    expect(() => repository.forkConversation(conversation.id)).toThrow('A conversation needs a user message and assistant reply before it can be forked.');
+    expect(repository.listConversations('all').some((item) => item.forkedFromConversationId === conversation.id)).toBe(false);
   });
 
   it('unlinks the source conversation from its task when it is forked', () => {
     const task = repository.create({ title: 'Forked task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const conversation = repository.createConversation('Original thread', task.id);
+    repository.createSharedMessage('jeffrey', 'Please fork this.', 'completed', conversation.id);
     repository.createSharedMessage('codex', 'Working on it.', 'completed', conversation.id);
 
     const fork = repository.forkConversation(conversation.id)!;
@@ -2365,7 +2390,7 @@ describe('WorkItemRepository', () => {
       repository.createSharedMessage('jeffrey', 'First message', 'completed', source.id);
       repository.createSharedMessage('claude', 'Second message', 'completed', source.id);
 
-      // forkConversation creates the fork row, copies every message, then
+      // forkConversation creates the fork row, copies the latest exchange, then
       // unlinks the source from its task — all inside one UnitOfWork
       // transaction. Forcing the message copy to throw proves none of that
       // survives: no orphaned fork row, and the source keeps its task link.

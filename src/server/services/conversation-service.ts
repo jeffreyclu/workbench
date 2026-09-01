@@ -17,7 +17,7 @@ export interface ConversationCollaborators {
 }
 
 /** Cross-domain conversation operations: task linking, run-history adoption,
- * archiving a task-backed thread, and forking a thread with its messages. */
+ * archiving a task-backed thread, and forking a thread from its latest exchange. */
 export class ConversationService {
   constructor(
     private readonly database: WorkbenchDatabase,
@@ -89,10 +89,15 @@ export class ConversationService {
   fork(id: string): SharedConversation | null {
     const source = this.collaborators.getConversation(id);
     if (!source) return null;
+    const messages = this.collaborators.listAllSharedMessages(source.id);
+    const userMessageIndex = messages.findLastIndex((message) => message.author === 'jeffrey');
+    const reply = messages.slice(userMessageIndex + 1).findLast((message) => message.author === 'codex' || message.author === 'claude');
+    if (userMessageIndex < 0 || !reply) throw new Error('A conversation needs a user message and assistant reply before it can be forked.');
+    const exchange = [messages[userMessageIndex]!, reply];
     return this.unitOfWork.transaction(() => {
       const fork = this.collaborators.createConversation(`${source.title} · fork`, source.workItemId);
       this.conversations.setForkedFrom(fork.id, source.id);
-      for (const message of this.collaborators.listAllSharedMessages(source.id)) {
+      for (const message of exchange) {
         this.collaborators.createSharedMessage(message.author, message.body, message.status === 'running' || message.status === 'queued' ? 'completed' : message.status, fork.id, message.attachments, 'none');
       }
       if (source.workItemId) this.setWorkItem(source.id, null);

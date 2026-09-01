@@ -151,6 +151,12 @@ export class WorkbenchAdminService {
     if (refused) return refused;
     if (this.repository.activeRunsForItem(item.id).length) return { status: 409, body: { error: 'This task already has an active agent run.' } } as ActionFailure;
     if (!options.force && this.repository.listRuns(item.id).length) return { status: 409, body: { error: 'This task has already been executed. Create a follow-up task for additional work.' } } as ActionFailure;
+    // Flip to in_progress before the classification await below, which can be
+    // a slow LLM call. A concurrent, unrelated realtime invalidation (e.g. a
+    // different run finishing) that lands during that wait would otherwise
+    // refetch this item's still-pre-dispatch status and visibly bounce it back
+    // to the attention stack until this request finally completes.
+    this.repository.update(item.id, { status: 'in_progress' }, false, { actor: 'system', source: 'workbench_admin' });
     const executionProfile = options.executionProfile;
     let classified = this.repository.getClassification(item.id);
     let classificationReason = classified?.source === 'manual' ? 'you picked this task type by hand' : 'reused the classification from the first routing pass';
@@ -188,10 +194,6 @@ export class WorkbenchAdminService {
       agentSource: explicitlyAssigned.length ? 'assigned' : 'balanced',
       requestedProfile: executionProfile,
     }));
-    // This must happen here, not inside executeAgentRun. That function runs in
-    // the background and may wait to claim a workspace, leaving an already
-    // dispatched task incorrectly displayed as ready.
-    this.repository.update(item.id, { status: 'in_progress' }, false, { actor: 'system', source: 'workbench_admin' });
     const sourceContext = await this.sourceContextFor(item);
     for (const run of runs) void executeAgentRun(this.repository, run, OWNER_ID, LEASE_MS, sourceContext);
     return { run: runs[0], runs, classification, conversation, activity };

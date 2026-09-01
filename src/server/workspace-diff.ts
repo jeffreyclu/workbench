@@ -167,6 +167,41 @@ function workspaceDiffRevision(...parts: string[]) {
   return createHash('sha256').update(parts.join('\0')).digest('hex');
 }
 
+/**
+ * Identity of the repository a checkout belongs to. Linked worktrees each own
+ * a `.git` file and therefore their own root path, yet they share one Git
+ * directory - so the common directory, not the path, decides whether two
+ * checkouts are the same repository.
+ */
+export async function repositoryIdentity(workspacePath: string): Promise<string | null> {
+  try {
+    return await gitOutput(resolveWorkspaceRepository(workspacePath), ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Keep only the records belonging to the selected checkout's repository. A
+ * conversation or task can be pointed at several repositories over its life,
+ * and another repository's history is not this one's: offering it makes the
+ * repository picker lie about what the review surface is showing. A recorded
+ * path that no longer resolves cannot be proven foreign, so its records are
+ * kept rather than silently dropped.
+ */
+export async function snapshotsForRepository<T extends { diff: { workspacePath: string } }>(snapshots: T[], workspacePath: string): Promise<T[]> {
+  const identity = await repositoryIdentity(workspacePath);
+  if (!identity) return snapshots;
+  const identities = new Map<string, string | null>();
+  for (const path of new Set(snapshots.map((snapshot) => snapshot.diff.workspacePath))) {
+    identities.set(path, existsSync(path) ? await repositoryIdentity(path) : null);
+  }
+  return snapshots.filter((snapshot) => {
+    const recorded = identities.get(snapshot.diff.workspacePath);
+    return recorded === null || recorded === identity;
+  });
+}
+
 export async function getWorkspaceDiff(workspacePath: string): Promise<WorkspaceDiff> {
   const repositoryPath = resolveWorkspaceRepository(workspacePath);
   let status: string;

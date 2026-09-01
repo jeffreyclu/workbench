@@ -747,3 +747,29 @@ describe('WorkspaceDiffView readings and settled changes', () => {
     await waitFor(() => expect(screen.getByText(/of 2 answered/)).toHaveTextContent('1 of 2 answered'));
   });
 });
+
+describe('WorkspaceDiffView cross-file decisions', () => {
+  it('renders every file a single decision spans, not just the first', async () => {
+    // Both files add the same identifier, so the subject grouping folds them
+    // into one cross-file decision. Reading only `filePaths[0]` used to render
+    // one diff under a header that counted all of them.
+    const files: WorkspaceDiffFile[] = ['src/alpha.ts', 'src/beta.ts', 'src/gamma.ts'].map((path) => ({
+      path, previousPath: null, status: 'added' as const, additions: 1, deletions: 0, isBinary: false,
+      patch: '@@ -0,0 +1 @@\n+export function sharedHelper() { return 1; }',
+    }));
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff(files, 'cross-file') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    expect(await screen.findByLabelText('Full diff for src/alpha.ts')).toBeInTheDocument();
+    expect(screen.getByLabelText('Full diff for src/beta.ts')).toBeInTheDocument();
+    expect(screen.getByLabelText('Full diff for src/gamma.ts')).toBeInTheDocument();
+    expect(await screen.findByLabelText(/1 decision across 3 files/)).toBeInTheDocument();
+  });
+});

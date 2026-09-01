@@ -181,6 +181,15 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
       setReviewSource('history');
     }
   }, [rememberedSelection?.source, snapshots]);
+  useEffect(() => {
+    // Records belong to the repository they were captured in, so the picker
+    // changes which ones exist. A record from the previous repository is not
+    // in this one's history: drop the stale choice instead of leaving History
+    // selected over a repository that has no records to show.
+    if (snapshotsQuery.isLoading) return;
+    if (selectedSnapshotId && !snapshots.some((snapshot) => snapshot.id === selectedSnapshotId)) setSelectedSnapshotId(null);
+    if (reviewSource === 'history' && snapshots.length === 0) setReviewSource('workspace');
+  }, [snapshots, selectedSnapshotId, reviewSource, snapshotsQuery.isLoading]);
   const pullRequestQuery = useGitHubPullRequestDiff(reviewSource === 'pull-request' ? selectedPullRequestUrl : null);
   const isPullRequestSource = reviewSource === 'pull-request';
   const pullRequest = pullRequestQuery.data?.pages[0]?.diff ?? null;
@@ -276,7 +285,15 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     staleTime: 60_000,
   });
   const selectedDecision = orderedDecisions.find((decision) => decision.id === selectedDecisionId) ?? orderedDecisions[0] ?? null;
-  const selectedFile = displayedDiff?.files.find((file) => file.path === selectedDecision?.filePaths[0]) ?? null;
+  // A decision groups hunks by subject, and a subject routinely spans several
+  // files. Resolving only `filePaths[0]` rendered one file and silently hid the
+  // rest of the same decision, so the header could read "1 decision across 4
+  // files" above a single file's diff. Every file the decision touches is shown.
+  const selectedFiles = useMemo(
+    () => (selectedDecision?.filePaths ?? []).map((path) => displayedDiff?.files.find((file) => file.path === path)).filter((file): file is WorkspaceDiffFile => Boolean(file)),
+    [displayedDiff?.files, selectedDecision?.filePaths],
+  );
+  const selectedFile = selectedFiles[0] ?? null;
   // The full size of the diff under review, always shown: how many files, how
   // many lines added, how many removed. It reports the numbers and leaves the
   // judgment of when to stop reading to the reviewer.
@@ -312,7 +329,8 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const popoverDecision = detailAnchor
     ? orderedDecisions.find((decision) => decision.id === detailAnchor.decisionId) ?? selectedDecision
     : null;
-  const fileHunks = useMemo(() => (selectedFile ? buildFileDiffHunks(selectedFile) : []), [selectedFile]);
+  const fileHunkGroups = useMemo(() => selectedFiles.map((file) => ({ file, hunks: buildFileDiffHunks(file) })), [selectedFiles]);
+  const fileHunks = fileHunkGroups[0]?.hunks ?? [];
   useEffect(() => {
     if (!displayedDiff?.revision || selectedDecisionId || !rememberedSelection) return;
     const rememberedDecisionId = rememberedSelection.decisions[displayedDiff.revision];
@@ -564,14 +582,19 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                   <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} commentCounts={isPullRequestSource ? commentCounts : undefined} delegating={delegation.pending} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">
-                    {selectedFile && (readingMode === 'file'
+                    {readingMode === 'file' && selectedFile
                       ? <div className="review-full-file-shell">
                           <button type="button" className="diff-review-reading-mode mode-file" title={READING_MODE_TITLE} onClick={toggleReadingMode}>Whole file</button>
                           {wholeFileReadable
                             ? <ReviewFullFilePane filePath={selectedFile.path} file={fileSourceQuery.data?.file ?? null} isLoading={fileSourceQuery.isLoading} error={fileSourceQuery.error ? 'This file could not be read.' : null} hunks={fileHunks} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} onSelect={selectDecision} />
                             : <p className="review-full-file-note">A pull request has no local copy of this file, so it cannot be read whole here.</p>}
                         </div>
-                      : <DiffReviewFileDiffPane filePath={selectedFile.path} editorUrl={selectedFile.editorUrl ?? null} hunks={fileHunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} handledBlocks={handledDecisions} readingMode={readingMode} modeTitle={READING_MODE_TITLE} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} onToggleReadingMode={toggleReadingMode} />)}
+                      : null}
+                    {/* Whole-file reading magnifies one file, so the decision's
+                        remaining files stay readable as diffs underneath it
+                        rather than disappearing with the mode switch. */}
+                    {(readingMode === 'file' ? fileHunkGroups.slice(1) : fileHunkGroups).map(({ file, hunks }) =>
+                      <DiffReviewFileDiffPane key={file.path} filePath={file.path} editorUrl={file.editorUrl ?? null} hunks={hunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} handledBlocks={handledDecisions} readingMode={readingMode === 'file' ? 'diff' : readingMode} modeTitle={READING_MODE_TITLE} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} onToggleReadingMode={toggleReadingMode} />)}
                     {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={<DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />} onClose={() => setDetailAnchor(null)}>
                       <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null}>
                         <DiffReviewActions key={popoverDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(popoverDecision, state)} onFix={onFixRequest ? () => requestFix(popoverDecision) : undefined} onSkip={() => skipDecision(popoverDecision)} />

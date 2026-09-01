@@ -1,5 +1,5 @@
 import type { WorkItemRepository } from './repository.js';
-import { getWorkspaceCommitDiff } from './workspace-diff.js';
+import { getWorkspaceCommitDiff, snapshotsForRepository } from './workspace-diff.js';
 
 type WorkspaceDiffScope = { workItemId: string } | { conversationId: string };
 
@@ -16,7 +16,10 @@ export async function captureRecordedWorkspaceDiffSnapshots(
   workspacePath: string,
   conversationIds: string[],
 ) {
-  if (repository.listWorkspaceDiffSnapshots(scope).some((snapshot) => snapshot.diff.changedFiles > 0)) return;
+  // Scoped to this checkout's repository: a record captured in a different
+  // repository must not suppress backfilling this one's timeline.
+  const recorded = await snapshotsForRepository(repository.listWorkspaceDiffSnapshots(scope), workspacePath);
+  if (recorded.some((snapshot) => snapshot.diff.changedFiles > 0)) return;
 
   const references = new Set<string>();
   for (const conversationId of conversationIds) {

@@ -160,4 +160,20 @@ describe('splitAgentResponse', () => {
 
     expect(container.textContent).toBe('Streaming in, then finishing right away.');
   });
+
+  it('typewrites the speech bubble from the start when completion animation is enabled', async () => {
+    const body = 'Streaming in, then finishing with a completed speech bubble.';
+    const { container, rerender } = render(<AgentMessageBody body="Streaming in" running typewriteOnCompletion />);
+    rerender(<AgentMessageBody body={body} running typewriteOnCompletion />);
+    rerender(<AgentMessageBody body={body} running={false} typewriteOnCompletion />);
+
+    expect(container.querySelector('.agent-markdown')).toHaveTextContent('');
+    expect(container.textContent).not.toContain(body);
+
+    await waitForFrame();
+    await waitForFrame();
+
+    expect(container.textContent).not.toBe('');
+    expect(container.textContent).not.toContain(body);
+  });
 });

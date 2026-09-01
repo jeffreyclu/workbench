@@ -1339,7 +1339,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                 {renderHeader(true)}
                 {message.status === 'running' && <p className="thinking">Live activity · {message.body ? 'receiving updates' : 'starting agent'}</p>}
                 {(message.body || liveInterjections.length > 0 || (isAgentMessage && message.status === 'running')) && (isAgentMessage || message.author === 'system'
-                  ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} interjections={liveInterjections} detailForSingle={message.status !== 'running'} typewriteOnCompletion={message.author === 'system' && message.body.startsWith('Synthesis:')} />
+                  ? <AgentMessageBody body={message.body} running={message.status === 'running'} conversationId={message.conversationId} interjections={liveInterjections} detailForSingle={message.status !== 'running'} typewriteOnCompletion={isAgentMessage || (message.author === 'system' && message.body.startsWith('Synthesis:'))} />
                   : <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: MarkdownCode, pre: MarkdownPre }}>{message.body}</ReactMarkdown></div>)}
                 {renderFooter()}
               </article>

@@ -1,5 +1,13 @@
 ## Workbench product decisions
 
+### Conversation forks start from only the latest exchange
+
+*Decision from Jeffrey, 2026-08-31.* Forking a conversation creates a standalone
+conversation with exactly two messages: Jeffrey's most recent message and the
+most recent Codex or Claude reply after it. Do not copy earlier messages, system
+messages, shared context, or conversation metadata into the fork. If the latest
+Jeffrey message has no assistant reply yet, do not create a partial fork.
+
 ### Workbench tracks tokens, never cost
 
 *Decision from Jeffrey, 2026-08-26.* Remove every cost metric, price table, estimate, provider-cost collector, API field, and UI surface from Workbench. Token counts are the only usage metric. Do not backfill, clear, or migrate historical database cost columns; released schema remains for compatibility, but application code must not read or write those fields.

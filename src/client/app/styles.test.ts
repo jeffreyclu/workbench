@@ -133,7 +133,7 @@ describe('conversation view controls', () => {
     expect(phoneRules).toContain('.agent-console:has(.agent-console-header:not(.is-mobile-header-collapsed)) > .mobile-review-toggle { top: 140px; }');
     expect(phoneRules).toContain('.agent-console-header.has-conversation-actions { min-height: 0; }');
     expect(phoneRules).toContain('.agent-console-header.has-conversation-actions .agent-console-title { max-width: none; padding-top: 0; }');
-    expect(phoneRules).toContain('.agent-console-header h2 { flex: 1; width: auto; min-width: 0; margin: 0; overflow-x: auto; overflow-y: hidden; font-size: 16px; line-height: 1.15; text-overflow: clip; white-space: nowrap; -webkit-overflow-scrolling: touch; touch-action: pan-x; }');
+    expect(phoneRules).toContain('.agent-console-header h2 { flex: 1; width: auto; min-width: 0; margin: 0; overflow: hidden; font-size: 16px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }');
     expect(phoneRules).toContain('.shared-message header .model-badge { flex: 1 1 auto; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden; text-overflow: clip; white-space: nowrap; scrollbar-width: none; -webkit-overflow-scrolling: touch; touch-action: pan-x; }');
   });
 

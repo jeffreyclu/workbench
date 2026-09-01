@@ -24,7 +24,7 @@ function completedTokenLength(text: string, revealLength: number): number {
 // Streamed bodies arrive in server-paced network chunks, not per-character; this reveals
 // the buffered text at a smooth per-character pace so it reads as a typewriter instead of
 // snapping in per chunk. Backlog-proportional speed keeps large chunks from lagging behind.
-function useTypewriter(text: string, active: boolean, startAtBeginning = false): string {
+function useTypewriter(text: string, active: boolean, startAtBeginning = false, characterByCharacter = false): string {
   const [revealed, setRevealed] = useState(() => active && startAtBeginning ? 0 : text.length);
   const textRef = useRef(text);
   const previousTextRef = useRef(text);
@@ -73,11 +73,14 @@ function useTypewriter(text: string, active: boolean, startAtBeginning = false):
   const preservedPrefixLength = text.startsWith(previousTextRef.current) && revealed >= previousTextRef.current.length
     ? previousTextRef.current.length
     : 0;
-  return text.slice(0, Math.max(completedTokenLength(text, revealed), preservedPrefixLength));
+  const visibleLength = characterByCharacter
+    ? revealed
+    : Math.max(completedTokenLength(text, revealed), preservedPrefixLength);
+  return text.slice(0, visibleLength);
 }
 
-function StreamingMarkdown({ content, streaming, startAtBeginning = false, renderMarkdown }: { content: string; streaming: boolean; startAtBeginning?: boolean; renderMarkdown: (content: string) => ReactElement }) {
-  const revealed = useTypewriter(content, streaming, startAtBeginning);
+function StreamingMarkdown({ content, streaming, startAtBeginning = false, characterByCharacter = false, renderMarkdown }: { content: string; streaming: boolean; startAtBeginning?: boolean; characterByCharacter?: boolean; renderMarkdown: (content: string) => ReactElement }) {
+  const revealed = useTypewriter(content, streaming, startAtBeginning, characterByCharacter);
   return renderMarkdown(revealed);
 }
 
@@ -203,7 +206,7 @@ export function AgentMessageBody({ body, running, conversationId, workItemId, in
     },
   }}>{content}</ReactMarkdown>;
 
-  if (!structured) return <div className="agent-markdown"><StreamingMarkdown content={visibleBody} streaming={shouldTypewriteCompletion} startAtBeginning={shouldTypewriteCompletion} renderMarkdown={renderMarkdown} /></div>;
+  if (!structured) return <div className="agent-markdown"><StreamingMarkdown content={visibleBody} streaming={shouldTypewriteCompletion} startAtBeginning={shouldTypewriteCompletion} characterByCharacter={shouldTypewriteCompletion} renderMarkdown={renderMarkdown} /></div>;
 
   const detailSections = sections.length === 1 && detailForSingle ? [{ title: 'Detail', body: visibleBody }] : sections;
   const lastIndex = detailSections.length - 1;
@@ -214,7 +217,7 @@ export function AgentMessageBody({ body, running, conversationId, workItemId, in
         return <section key={`${section.title}-${index}`} className="agent-response-section" role="region" aria-labelledby={headingId} style={{ '--section-index': index } as CSSProperties}>
           <div className="agent-response-section-heading"><h3 id={headingId}>{section.title}</h3></div>
           <div className={`agent-markdown${running && index === lastIndex ? ' streaming' : ''}`}>
-            <StreamingMarkdown content={section.body} streaming={(running && index === lastIndex) || shouldTypewriteCompletion} startAtBeginning={shouldTypewriteCompletion} renderMarkdown={renderMarkdown} />
+            <StreamingMarkdown content={section.body} streaming={(running && index === lastIndex) || shouldTypewriteCompletion} startAtBeginning={shouldTypewriteCompletion} characterByCharacter={shouldTypewriteCompletion} renderMarkdown={renderMarkdown} />
           </div>
         </section>;
       })}

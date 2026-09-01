@@ -730,6 +730,17 @@ last completed whitespace-delimited token; render the entire body immediately
 when the run finishes. This preserves the typewriter motion without broken
 prose or transient malformed Markdown.
 
+### Every live-activity-to-speech-bubble conversion starts a typewriter reveal
+
+*Decision from Jeffrey, 2026-08-31.* When an agent run finishes, replacing its
+live activity feed with the completed speech bubble must never display the
+persisted reply all at once. The completed bubble starts empty and reveals the
+reply character by character from the conversion boundary. This completion-only
+mode must not change the live stream's complete-token reveal behavior.
+This applies to every completed agent reply, not only synthesis/system messages;
+keep live-stream behavior and already-completed messages loaded from history
+unchanged.
+
 ### Growing stream paragraphs keep a stable React key
 
 *Confirmed 2026-08-29.* Live activity rows were keyed with both their stream
