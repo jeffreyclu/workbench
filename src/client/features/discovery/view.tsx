@@ -28,6 +28,7 @@ export function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (i
         {isScanning ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} {isScanning ? 'Scanning sources…' : 'Scan now'}
       </button>
     </header>
+    {scan.isError && <p className="error-message" role="alert">Could not start the discovery scan: {scan.error.message} <button className="button secondary compact" onClick={() => scan.mutate()}>Retry</button></p>}
     <div className="discovery-status">
       <strong>{inbox.data?.pendingCount ?? 0} to review</strong>
       <span>{lastRun?.completedAt ? `Last scan ${new Date(lastRun.completedAt).toLocaleString()}` : 'No completed scan yet'}</span>
