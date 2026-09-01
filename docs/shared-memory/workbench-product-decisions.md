@@ -7,6 +7,8 @@ belong inside Settings and must not appear as their own top-level navigation ite
 
 Every Workbench toast also produces a desktop notification when browser permission and the Settings
 preference allow it. This applies while Workbench is focused as well as while it is backgrounded.
+The live local runtime delivers the alert through macOS `osascript`, matching the system notification
+Jeffrey verified manually; the browser Notification API is a fallback, not the primary transport.
 
 ### Conversation forks start from only the latest exchange
 

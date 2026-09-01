@@ -8,6 +8,7 @@ import { OWNER_ID } from '../scheduler.js';
 import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMessage } from '../slack-notify.js';
 import { beginRuntimeRetirement } from '../runtime-retirement.js';
 import { activeAgentProcessCount } from '../agent-runner.js';
+import { sendMacDesktopNotification } from '../desktop-notifications.js';
 
 export function createHealthRouter({ repository, capabilities, buildId }: RouteContext) {
   const router = Router();
@@ -19,6 +20,16 @@ export function createHealthRouter({ repository, capabilities, buildId }: RouteC
 
 export function createSystemRouter({ repository }: RouteContext) {
   const router = Router();
+  router.post('/api/desktop-notifications', (request, response, next) => {
+    try {
+      const input = z.object({
+        title: z.string().trim().min(1).max(120),
+        body: z.string().max(2_000).default(''),
+      }).parse(request.body ?? {});
+      sendMacDesktopNotification(input.title, input.body);
+      response.status(204).end();
+    } catch (error) { next(error); }
+  });
   router.post('/api/runtime/retire', (_request, response) => {
     beginRuntimeRetirement();
     response.json({ retiring: true });

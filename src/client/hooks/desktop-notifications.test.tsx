@@ -32,6 +32,7 @@ beforeEach(() => {
   MockNotification.permission = 'default';
   MockNotification.instances = [];
   vi.stubGlobal('Notification', MockNotification);
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true })));
   window.focus = vi.fn();
   setHidden(true);
   setFocused(false);
@@ -62,13 +63,19 @@ describe('sendDesktopNotification', () => {
     setHidden(false);
     setFocused(true);
     sendDesktopNotification({ title: 'Run finished' });
-    expect(MockNotification.instances).toHaveLength(1);
+    expect(fetch).toHaveBeenCalledWith('/api/desktop-notifications', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ title: 'Run finished', body: '' }),
+    }));
+    expect(MockNotification.instances).toHaveLength(0);
   });
 
-  it('fires when granted and enabled, and routes clicks', () => {
+  it('falls back to the browser notification and routes clicks when native delivery fails', async () => {
     MockNotification.permission = 'granted';
+    vi.mocked(fetch).mockRejectedValueOnce(new Error('Native notification unavailable'));
     const onClick = vi.fn();
     sendDesktopNotification({ title: 'Run finished', body: 'Task X completed', onClick });
+    await vi.waitFor(() => expect(MockNotification.instances).toHaveLength(1));
     expect(MockNotification.instances).toHaveLength(1);
     expect(MockNotification.instances[0].title).toBe('Run finished');
     expect(MockNotification.instances[0].options?.body).toBe('Task X completed');

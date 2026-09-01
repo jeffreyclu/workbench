@@ -17,21 +17,35 @@ export interface DesktopNotificationOptions {
   onClick?: () => void;
 }
 
-/** Fires an OS notification when Jeffrey's preference and the browser's
- * permission grant allow it. Toasts call this unconditionally, including while
- * Workbench is focused, so every visible toast has a matching OS notification. */
-export function sendDesktopNotification({ title, body, onClick }: DesktopNotificationOptions): void {
-  if (!isDesktopNotificationSupported()) return;
-  if (!readDesktopNotificationsEnabled()) return;
-  if (Notification.permission !== 'granted') return;
+function showBrowserNotification({ title, body, onClick }: DesktopNotificationOptions): void {
   const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.href;
-  const notification = new Notification(title, { body, icon: favicon, tag: 'workbench' });
+  const notification = new Notification(title, { body, icon: favicon });
   if (onClick) {
     notification.onclick = () => {
       window.focus();
       onClick();
       notification.close();
     };
+  }
+}
+
+/** Fires an OS notification when Jeffrey's preference and the browser's
+ * permission grant allow it. The live local runtime uses macOS directly so an
+ * active browser tab cannot suppress the alert; the browser API remains the
+ * fallback for previews and non-local runtimes. */
+export function sendDesktopNotification({ title, body, onClick }: DesktopNotificationOptions): void {
+  if (!isDesktopNotificationSupported()) return;
+  if (!readDesktopNotificationsEnabled()) return;
+  if (Notification.permission !== 'granted') return;
+  const fallback = () => showBrowserNotification({ title, body, onClick });
+  try {
+    void fetch('/api/desktop-notifications', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title, body: body ?? '' }),
+    }).then((response) => { if (!response.ok) fallback(); }, fallback);
+  } catch {
+    fallback();
   }
 }
 
