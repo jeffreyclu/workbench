@@ -135,3 +135,43 @@ describe('DiscoveryInboxView undo', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/discovery/${candidateId}/restore`, expect.objectContaining({ method: 'POST' })));
   });
 });
+
+describe('DiscoveryInboxView restore', () => {
+  it('shows restoring only on the selected card and announces completion', async () => {
+    const secondCandidateId = '00000000-0000-4000-8000-000000000002';
+    const reviewedInbox: DiscoveryInbox = {
+      ...inbox,
+      candidates: [
+        { ...inbox.candidates[0], status: 'dismissed', title: 'First reviewed discovery' },
+        { ...inbox.candidates[0], id: secondCandidateId, status: 'snoozed', title: 'Second reviewed discovery' },
+      ],
+      pendingCount: 0,
+      reviewedCount: 2,
+    };
+    let completeRestore: (() => void) | undefined;
+    const restoreRequest = new Promise<Response>((resolve) => { completeRestore = () => resolve(new Response(JSON.stringify({ candidate: reviewedInbox.candidates[0] }), { headers: { 'Content-Type': 'application/json' } })); });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/discovery/${candidateId}/restore` && init?.method === 'POST') return restoreRequest;
+      if (url.startsWith('/api/discovery?view=pending')) return new Response(JSON.stringify(inbox), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/discovery?view=reviewed')) return new Response(JSON.stringify(reviewedInbox), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [], nextCursor: null, totalCount: 0, proposal: null }), { headers: { 'Content-Type': 'application/json' } });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DiscoveryInboxView onOpenTask={vi.fn()} onOpenStack={vi.fn()} /><Toaster /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('tab', { name: /reviewed/i }));
+    const firstCard = (await screen.findByText('First reviewed discovery')).closest<HTMLElement>('.discovery-card')!;
+    const secondCard = screen.getByText('Second reviewed discovery').closest<HTMLElement>('.discovery-card')!;
+    fireEvent.click(within(firstCard).getByRole('button', { name: 'Restore to inbox' }));
+
+    expect(within(firstCard).getByRole('button', { name: 'Restoring…' })).toBeDisabled();
+    expect(within(secondCard).getByRole('button', { name: 'Restore to inbox' })).toBeEnabled();
+
+    completeRestore!();
+    const notifications = await screen.findByRole('list', { name: 'Notifications' });
+    expect(notifications).toHaveAttribute('aria-live', 'polite');
+    expect(notifications).toHaveTextContent('Discovery restored to inbox.');
+  });
+});

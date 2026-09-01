@@ -5,6 +5,7 @@ import { toast, toastError } from '../../state/toast-store';
 import { discoveryData, discoveryQueryKeys } from './data';
 import { useDiscoveryInboxState } from './state';
 
+// b03c7866-da86-4a10-a5dd-c81ce12bcaa8 LEGACY-AFFECTING: Reviewed discovery cards now announce a successful restore through the shared toast system.
 const ACTION_VERBS: Record<'convert' | 'dismiss' | 'snooze', string> = { convert: 'add', dismiss: 'dismiss', snooze: 'snooze' };
 const ACTION_MESSAGES: Record<'convert' | 'dismiss' | 'snooze', string> = { convert: 'Added to stack.', dismiss: 'Discovery dismissed.', snooze: 'Snoozed until tomorrow.' };
 
@@ -51,7 +52,10 @@ export function useDiscoveryInbox() {
   });
   const restore = useMutation({
     mutationFn: discoveryData.restore,
-    onSuccess: () => invalidateDiscovery(queryClient, true),
+    onSuccess: () => {
+      invalidateDiscovery(queryClient, true);
+      toast.success('Discovery restored to inbox.');
+    },
     onError: (error) => toastError('Could not restore this discovery.', error),
   });
   const resolveMerge = useMutation({
