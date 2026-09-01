@@ -66,6 +66,7 @@ import { SourcesDialog } from '../source';
 import { createTaskStackViewModel } from '../../lib/stack-view-model';
 import { useRealtimeNotifications, type RealtimeNotification } from '../../hooks/realtime';
 import { useAttentionIndicator } from '../../hooks/attention-indicator';
+import { sendDesktopNotification } from '../../hooks/desktop-notifications';
 import { useTaskStackReorderAnimation } from '../queue/use-task-stack-reorder-animation';
 import { reorderTaskPages, reorderTasks, type TaskReorderTarget } from '../queue/task-reorder';
 
@@ -186,6 +187,11 @@ export function App() {
       } : {}),
     };
     toast[notification.tone](notification.message, options);
+    sendDesktopNotification({
+      title: notification.message,
+      body: notification.description,
+      onClick: notification.action ? () => navigate(parseRoute(notification.action!.route)) : undefined,
+    });
   }, [route, agentConversationId]);
   const realtimeConnectionState = useRealtimeNotifications(handleRealtimeNotification);
   const view = route.name === 'stack' ? route.stack : route.name === 'task' ? taskStack : route.name === 'conversations' ? 'context' : route.name;

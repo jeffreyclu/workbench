@@ -1,4 +1,4 @@
-import { Cloud, Command, MessageCircle, MoreHorizontal, Search, Wrench, X } from 'lucide-react';
+import { Bell, BellOff, Cloud, Command, MessageCircle, MoreHorizontal, Search, Wrench, X } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -11,6 +11,7 @@ import { api } from '../../data/api';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton';
 import { useValuePulse } from '../../hooks/use-value-pulse';
 import { useDebouncedValue } from '../conversation/hooks';
+import { useDesktopNotificationPreference } from '../../hooks/desktop-notifications';
 
 export type NavigationViewName = 'active' | 'workbench' | 'archive' | 'artifacts' | 'context' | 'discovery' | 'insights';
 
@@ -246,6 +247,26 @@ function GlobalSearchResultSkeleton() {
   </div>;
 }
 
+function DesktopNotificationToggle() {
+  const { supported, enabled, permission, setEnabled } = useDesktopNotificationPreference();
+  if (!supported) return null;
+  const blocked = permission === 'denied';
+  const label = blocked ? 'Desktop notifications blocked in browser settings' : enabled ? 'Disable desktop notifications' : 'Enable desktop notifications';
+  return (
+    <button
+      type="button"
+      className="nav-item desktop-notification-toggle"
+      disabled={blocked}
+      aria-pressed={enabled && !blocked}
+      aria-label={label}
+      title={label}
+      onClick={() => void setEnabled(!enabled)}
+    >
+      {enabled && !blocked ? <Bell size={16} /> : <BellOff size={16} />} Notifications
+    </button>
+  );
+}
+
 export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conversationCount, onOpenActive, onOpenWorkbench, onOpenDiscovery, onOpenConversations, onOpenArtifacts, onOpenInsights, onOpenSources, onToggleMore, onSelectGlobalSearchResult }: {
   view: NavigationViewName;
   mobileNavOpen: boolean;
@@ -282,6 +303,7 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
         <ArtifactNav active={view === 'artifacts'} onClick={onOpenArtifacts} />
         <InsightsNav active={view === 'insights'} onClick={onOpenInsights} />
         <button className="nav-item" onClick={onOpenSources}><Cloud size={16} /> Sources</button>
+        <DesktopNotificationToggle />
       </div>
       {isCompactNav && <button className={`nav-item mobile-nav-more ${mobileNavOpen || ['artifacts', 'insights'].includes(view) ? 'active' : ''}`} aria-controls="mobile-nav-more" aria-expanded={mobileNavOpen} onClick={onToggleMore}><MoreHorizontal size={18} /> More</button>}
     </nav>
