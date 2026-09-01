@@ -96,6 +96,29 @@ describe('GlobalSearch', () => {
     expect(screen.queryByText(/No matches for/)).not.toBeInTheDocument();
   });
 
+  it('traps Tab focus inside the modal and restores its trigger on close', () => {
+    renderSearch();
+    const trigger = screen.getByRole('button', { name: 'Search everything' });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const dialog = screen.getByRole('dialog', { name: 'Search everything' });
+    const input = screen.getByRole('combobox', { name: 'Search everything' });
+    const close = screen.getByRole('button', { name: 'Close search' });
+    expect(input).toHaveFocus();
+
+    close.focus();
+    fireEvent.keyDown(close, { key: 'Tab' });
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(input, { key: 'Tab', shiftKey: true });
+    expect(close).toHaveFocus();
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Search everything' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   it('shows that the cap was reached and fetches more ranked results on demand', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const limit = String(input).includes('limit=40') ? 40 : 20;
