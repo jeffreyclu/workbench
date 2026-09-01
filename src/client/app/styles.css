@@ -1628,8 +1628,9 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
   .queue-panel { min-height: 0; height: calc(100vh - var(--mobile-nav)); height: calc(100dvh - var(--mobile-nav) - env(safe-area-inset-bottom, 0px)); border: 0; }
   .discovery-workspace { height: calc(100dvh - var(--mobile-nav) - env(safe-area-inset-bottom, 0px)); padding: 0 14px 28px; }
   .discovery-header { min-height: 94px; }.discovery-header h2 { font-size: 20px; }.discovery-header p { display: none; }
-  .discovery-bulkbar { top: 94px; flex-wrap: wrap; }.discovery-bulkbar span { order: 3; flex-basis: 100%; }.discovery-merge { width: 100%; margin: 0; }.discovery-merge select { flex: 1; min-width: 0; }
+  .discovery-bulkbar { top: 94px; flex-wrap: wrap; }.discovery-bulkbar span { order: 3; flex-basis: 100%; }.discovery-bulkbar button { min-height: 44px; }.discovery-merge { width: 100%; margin: 0; }.discovery-merge select { flex: 1; min-width: 0; }
   .discovery-match { width: 100%; margin: 0; }
+  .discovery-actions .button, .discovery-editor .button, .discovery-match .button { min-height: 44px; }
   .morning-proposal { align-items: stretch; flex-direction: column; }.morning-proposal small { white-space: normal; }
   .queue-header { flex: 0 0 auto; min-height: 64px; padding: 12px 16px; }
   .queue-header h2 { font-size: 13px; }
