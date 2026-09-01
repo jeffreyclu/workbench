@@ -206,6 +206,29 @@ describe('Workbench MCP', () => {
     }
   });
 
+  it('does not feed generated replies from the current conversation back to an agent as evidence', async () => {
+    setEmbedder(deterministicTestEmbedder);
+    try {
+      const conversation = repository.createConversation('Package publishing details');
+      repository.createSharedMessage('jeffrey', 'The package is new and must publish from the backend repository.', 'completed', conversation.id);
+      repository.createSharedMessage('claude', 'The package already exists in the frontend repository.', 'completed', conversation.id);
+      const reply = repository.createSharedMessage('claude', '', 'running', conversation.id);
+
+      const recalled = await callData<{ results: Array<{ actor: string | null; body: string }> }>('recall_context', {
+        query: 'package repository publish',
+        scope: 'conversation',
+        conversationId: conversation.id,
+        messageId: reply.id,
+        limit: 8,
+      });
+
+      expect(recalled.results.some((result) => result.actor === 'jeffrey')).toBe(true);
+      expect(recalled.results.some((result) => result.actor === 'claude')).toBe(false);
+    } finally {
+      setEmbedder(null);
+    }
+  });
+
   it('creates and updates only local task state, then exposes the same canonical detail', async () => {
     const created = await callData<{ item: { id: string; source: string } }>('create_work_item', {
       title: 'Expose Workbench through MCP',

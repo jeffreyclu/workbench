@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, autocompactCeilingTokens, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -1004,18 +1004,37 @@ describe('classifyExecution', () => {
     expect(classifyExecution(assigned)).toEqual(expect.objectContaining({ kind: 'execute', agent: 'claude', complex: false }));
   });
 
+  it('answers status questions without resuming the linked task execution', () => {
+    expect(classifyMessageIntent('ok now what')).toBe('analysis');
+    expect(classifyMessageIntent('why is the fix stuck?')).toBe('analysis');
+    expect(classifyMessageIntent('can you fix it?')).toBe('execute');
+  });
+
   it('injects shared room context into execution prompts', () => {
     const run = { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun;
     expect(buildPrompt(item('Build it'), run, 'jeffrey: Prefer small React components.'))
       .toContain('Shared context available to every agent:\njeffrey: Prefer small React components.');
     expect(buildPrompt(item('Build it'), run)).toContain('no permission prompts or dialogs exist to approve');
+    expect(RUNNER_SYSTEM_CONTRACT).toContain('does not authorize resuming a prior plan');
+    expect(RUNNER_SYSTEM_CONTRACT).toContain('never trap a turn inside a foreground dev server');
   });
 
   it('makes durable recall frequent but non-mandatory for context-heavy task types', () => {
     expect(RUNNER_SYSTEM_CONTRACT).toContain('recall_context');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('research, analysis, strategy, and bug-fix');
-    expect(RUNNER_SYSTEM_CONTRACT).toContain('normally make one focused recall near the start');
+    expect(RUNNER_SYSTEM_CONTRACT).toContain('make at most one focused recall near the start');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('not a mandatory preflight');
+    expect(RUNNER_SYSTEM_CONTRACT).toContain('An assistant-authored statement is not corroboration for itself');
+  });
+
+  it('gives Claude a minimal shell and normal user tool paths', () => {
+    const env = agentEnvironmentForWorkspace('claude', 'default', '/Users/jeffrey.lu/dev/writer-monorepo');
+    expect(env.CLAUDE_CODE_SHELL).toBe('/bin/bash');
+    expect(env.PATH?.split(':')).toEqual(expect.arrayContaining([
+      join(homedir(), '.local', 'bin'),
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+    ]));
   });
 
   it('passes context handles to the agent without ambient retrieval payloads', () => {

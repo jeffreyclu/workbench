@@ -347,6 +347,10 @@ describe('compactConversationHistory', () => {
 
     const ambiguous = classificationForLinkedItem(repository, task, 'why?');
     expect(ambiguous.kind).toBe('research');
+
+    const executeTask = repository.create({ title: 'Build connector search', description: 'Implement server-side connector search.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    expect(classificationForLinkedItem(repository, executeTask).kind).toBe('execute');
+    expect(sharedTurnKindForMessage(repository, executeTask, 'ok now what')).toBe('analysis');
     database.close();
   });
 

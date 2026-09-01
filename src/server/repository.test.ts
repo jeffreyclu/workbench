@@ -1694,7 +1694,7 @@ describe('WorkItemRepository', () => {
     expect(interjectionSteeringPrompt('INTERJECTION!')).toContain('INTERJECTION!');
   });
 
-  it('keeps an interjection queued if the active reply ends before its acknowledgment returns', async () => {
+  it('does not redispatch an accepted interjection when the active reply finishes during acknowledgment', async () => {
     const conversation = repository.createConversation('Steer acknowledgment race');
     const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);
     const interjected = repository.createSharedMessage('jeffrey', 'Redirect this', 'queued', conversation.id, [], 'codex');
@@ -1703,8 +1703,23 @@ describe('WorkItemRepository', () => {
       return true;
     });
 
+    await expect(interjectQueuedSharedMessage(repository, interjected.id, async () => ({ granted: false, operation: null }))).resolves.toEqual([expect.objectContaining({ id: running.id })]);
+    expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'completed' }));
+    expect(repository.listAllSharedMessages(conversation.id)).toHaveLength(2);
+  });
+
+  it('releases a rejected interjection to one normal follow-up turn after the active reply ends', async () => {
+    const conversation = repository.createConversation('Rejected steering race');
+    const running = repository.createSharedMessage('claude', 'Still working', 'running', conversation.id);
+    const interjected = repository.createSharedMessage('jeffrey', 'Report now', 'queued', conversation.id, [], 'claude');
+    registerActiveReplySteering(running.id, async () => {
+      repository.updateSharedMessage(running.id, { status: 'completed' });
+      return false;
+    });
+
     await expect(interjectQueuedSharedMessage(repository, interjected.id, async () => ({ granted: false, operation: null }))).resolves.toEqual([]);
-    expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'queued' }));
+    expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'completed' }));
+    expect(repository.listAllSharedMessages(conversation.id).filter((message) => message.author === 'claude')).toHaveLength(2);
   });
 
   it('does not promote a message that is not queued', () => {

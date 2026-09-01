@@ -767,7 +767,7 @@ export class WorkItemRepository {
    * the request path (a poller keyed off a watermark) rather than doing it
    * here.
    */
-  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; projectKey?: string; conversationId?: string; workItemId?: string; sources?: string[] } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null }>> {
+  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; projectKey?: string; conversationId?: string; workItemId?: string; sources?: string[] } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null; actor: string | null }>> {
     if (query.trim().length < 2) return [];
     if (options.refresh !== false) {
       try {
@@ -794,6 +794,7 @@ export class WorkItemRepository {
       score: result.score,
       conversationId: result.conversationId,
       workItemId: result.workItemId,
+      actor: result.actor,
     })).filter((result) => !excludedBody || result.body.trim().replace(/\s+/g, ' ').toLocaleLowerCase() !== excludedBody);
   }
 
@@ -2239,6 +2240,14 @@ export class WorkItemRepository {
   /** Atomically promote exactly one queued jeffrey turn to running-dispatch, guarding against double dispatch. */
   claimQueuedTurn(id: string): boolean {
     return this.execution.claimQueuedTurn(id);
+  }
+
+  claimQueuedInterjection(id: string): boolean {
+    return this.execution.claimQueuedInterjection(id);
+  }
+
+  releaseClaimedInterjection(id: string): boolean {
+    return this.execution.releaseClaimedInterjection(id);
   }
 
   renewLeases(ownerId: string, leaseMs: number, adoptRunIds: readonly string[] = []): void {

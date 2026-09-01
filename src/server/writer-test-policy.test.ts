@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { blockedWorkbenchBranchCommand, blockedWorkbenchDependencyBootstrapCommand, blockedWriterTestSuiteCommand, bypassesWriterTestCommandGuard, isWorkbenchWorkspace, isWriterWorkspace } from './agent-runner.js';
+import { blockedPersistentForegroundCommand, blockedWorkbenchBranchCommand, blockedWorkbenchDependencyBootstrapCommand, blockedWriterTestSuiteCommand, bypassesWriterTestCommandGuard, isWorkbenchWorkspace, isWriterWorkspace } from './agent-runner.js';
 
 const guard = fileURLToPath(new URL('../../scripts/writer-agent-bin/test-command-guard.mjs', import.meta.url));
 const bin = (name: string) => fileURLToPath(new URL(`../../scripts/writer-agent-bin/${name}`, import.meta.url));
@@ -52,6 +52,18 @@ describe('Writer agent test command guard', () => {
     expect(blockedWorkbenchDependencyBootstrapCommand('npm install zod')).toBe(false);
     expect(blockedWorkbenchDependencyBootstrapCommand('npm install --save-dev vitest')).toBe(false);
     expect(blockedWorkbenchDependencyBootstrapCommand('npm run build')).toBe(false);
+  });
+
+  it('blocks foreground services that cannot return control to the agent turn', () => {
+    expect(blockedPersistentForegroundCommand('./scripts/worktree-start.sh')).toBe(true);
+    expect(blockedPersistentForegroundCommand('pnpm dev')).toBe(true);
+    expect(blockedPersistentForegroundCommand('npm run serve')).toBe(true);
+    expect(blockedPersistentForegroundCommand('tail -f /tmp/backend.log')).toBe(true);
+    expect(blockedPersistentForegroundCommand('while true; do curl localhost:3000; done')).toBe(true);
+    expect(blockedPersistentForegroundCommand('timeout 30s pnpm dev')).toBe(false);
+    expect(blockedPersistentForegroundCommand('pnpm dev >/tmp/app.log 2>&1 &')).toBe(false);
+    expect(blockedPersistentForegroundCommand('npm run build')).toBe(false);
+    expect(blockedPersistentForegroundCommand('./scripts/worktree-start.sh --help')).toBe(true);
   });
   it.each([
     ['npm', ['test']], ['npm', ['run', 'test']], ['npm', ['--prefix', 'frontend', 'test']], ['pnpm', ['--filter', 'frontend', 'test:unit']], ['pnpm', ['test', '--', 'use-manage-connectors-view-model']], ['yarn', ['test']],

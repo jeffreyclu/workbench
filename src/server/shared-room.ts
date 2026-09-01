@@ -26,6 +26,7 @@ const replyRunIds = new Map<string, string>();
  */
 type ActiveReplySteering = AgentInputSteering;
 const activeReplySteering = new Map<string, ActiveReplySteering>();
+const INTERJECTION_POLL_MS = 1_000;
 export const isSharedReplyActive = (id: string) => activeReplies.has(id);
 
 /** Associates a running reply with its provider's live input channel. */
@@ -1084,6 +1085,15 @@ export async function replyInSharedRoom(
     }
   }, HEARTBEAT_MS);
   leaseHeartbeat.unref();
+  let deliveringInterjections = false;
+  const interjectionPoll = setInterval(() => {
+    if (deliveringInterjections || controller.signal.aborted || !activeReplySteering.has(messageId)) return;
+    deliveringInterjections = true;
+    void deliverPendingSharedInterjections(repository, messageId)
+      .catch(() => { /* The next poll retries; teardown can close the repository. */ })
+      .finally(() => { deliveringInterjections = false; });
+  }, INTERJECTION_POLL_MS);
+  interjectionPoll.unref();
 
   activeReplies.set(messageId, controller);
   if (runId) {
@@ -1203,7 +1213,7 @@ export async function replyInSharedRoom(
         updateLiveSharedBody(repository, messageId, partial, runId);
       }, (steer) => {
         registerActiveReplySteering(messageId, steer);
-        void deliverPendingSharedInterjections(repository, messageId);
+        void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
       }, (event) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, [event])), (usage) => {
         persistNonTerminalAgentUpdate(() => {
           const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
@@ -1235,7 +1245,7 @@ export async function replyInSharedRoom(
       kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
     })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, agent === 'claude' ? (steer) => {
       registerActiveReplySteering(messageId, steer);
-      void deliverPendingSharedInterjections(repository, messageId);
+      void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
     } : undefined,
     linkedConversation?.claudeSessionId ?? undefined, true, false, undefined, claudeScopeRecoveryPrompt(freshPrompt, cwd));
     } catch (error) {
@@ -1262,7 +1272,7 @@ export async function replyInSharedRoom(
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
       })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
         registerActiveReplySteering(messageId, steer);
-        void deliverPendingSharedInterjections(repository, messageId);
+        void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
       }, undefined, false, false);
       }
     }
@@ -1334,6 +1344,7 @@ export async function replyInSharedRoom(
     if (runId) repository.updateRun(runId, { status: 'failed', error: errorMessage, completedAt: new Date().toISOString(), ...(terminalCheckpoint ? { output: terminalCheckpoint } : {}) });
   } finally {
     clearInterval(leaseHeartbeat);
+    clearInterval(interjectionPoll);
     activeReplies.delete(messageId);
     activeReplySteering.delete(messageId);
     replyRunIds.delete(messageId);
@@ -1389,33 +1400,43 @@ export async function interjectQueuedSharedMessage(
       : [message.dispatchTarget];
   const running = repository.listAllSharedMessages(message.conversationId)
     .filter((candidate) => candidate.status === 'running' && targets.includes(candidate.author));
+  const steerable = running.filter((reply) => activeReplySteering.has(reply.id));
+  // The request may have reached a different serving runtime. Leave the
+  // durable priority marker queued; the provider owner polls and claims it.
+  if (!steerable.length) return [];
+  if (!repository.claimQueuedInterjection(messageId)) return [];
+  const claimedMessage = repository.getSharedMessageById(messageId) ?? message;
   const thread = repository.listAllSharedMessages(message.conversationId);
   const messageIndex = thread.findIndex((candidate) => candidate.id === message.id);
   const precedingThread = messageIndex >= 0 ? thread.slice(0, messageIndex) : thread;
   const authorization = await classifyAuthorization({
-    currentMessage: message.body,
+    currentMessage: claimedMessage.body,
     precedingHumanMessage: [...precedingThread].reverse().find((candidate) => candidate.author === 'jeffrey')?.body,
     precedingAgentMessage: [...precedingThread].reverse().find((candidate) => candidate.author === 'codex' || candidate.author === 'claude')?.body,
   });
-  const interjectionPrompt = `${externalActionContractForAuthorization(authorization)}\n\n${message.body}`;
+  const interjectionPrompt = `${externalActionContractForAuthorization(authorization)}\n\n${claimedMessage.body}`;
   // Do not silently degrade into a second process. A provider that has not
   // exposed its live session yet remains queued and the UI can retry once the
   // active reply reaches the steering-ready point.
-  const attempted = await Promise.all(running.map(async (reply) => ({
+  const attempted = await Promise.all(steerable.map(async (reply) => ({
     reply,
     accepted: await activeReplySteering.get(reply.id)?.(interjectionPrompt),
   })));
-  // The request must be acknowledged while the same reply remains live. This
-  // closes the observed race where a canceled reply made the queued human
-  // message appear delivered even though no active turn could receive it.
+  // A successful provider write is the acknowledgment. The human message was
+  // atomically claimed before that write, so reply completion cannot race the
+  // normal dispatcher into starting the same instruction as a second turn.
   const steered = attempted
-    .filter(({ reply, accepted }) => accepted && activeReplySteering.has(reply.id) && repository.getSharedMessageById(reply.id)?.status === 'running')
+    .filter(({ accepted }) => accepted)
     .map(({ reply }) => reply);
   if (steered.length) {
     repository.updateSharedMessage(messageId, { status: 'completed', interjectionStreamOffset: humanizeRunOutputBlocks(steered[0].body).length });
     publishRealtimeEvent('shared');
   }
-  if (!steered.length) return [];
+  if (!steered.length) {
+    repository.releaseClaimedInterjection(messageId);
+    dispatchNextSharedTurn(repository, message.conversationId);
+    return [];
+  }
   return steered;
 }
 

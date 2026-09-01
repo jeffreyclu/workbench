@@ -129,6 +129,30 @@ export class ExecutionService {
     return true;
   }
 
+  /** Reserve a queued human turn for delivery into an already-running provider.
+   * The status transition is the fence: normal dispatch cannot start a second
+   * provider while the owning runtime is writing the interjection. */
+  claimQueuedInterjection(id: string): boolean {
+    return this.unitOfWork.transaction(() => {
+      const row = this.database.prepare(`SELECT conversation_id FROM shared_messages
+        WHERE id = ? AND author = 'jeffrey' AND status = 'queued'`).get(id) as { conversation_id: string } | undefined;
+      if (!row) return false;
+      const nextPriority = this.database.prepare(`SELECT COALESCE(MAX(queue_priority), 0) + 1 AS value
+        FROM shared_messages WHERE conversation_id = ? AND status = 'queued'`).get(row.conversation_id) as { value: number };
+      const changed = this.database.prepare(`UPDATE shared_messages
+        SET status = 'completed', queue_priority = ?
+        WHERE id = ? AND author = 'jeffrey' AND status = 'queued'`).run(nextPriority.value, id).changes;
+      return Number(changed) > 0;
+    });
+  }
+
+  /** Return an unaccepted interjection to normal dispatch. */
+  releaseClaimedInterjection(id: string): boolean {
+    const changed = this.database.prepare(`UPDATE shared_messages SET status = 'queued'
+      WHERE id = ? AND author = 'jeffrey' AND status = 'completed' AND queue_priority > 0`).run(id).changes;
+    return Number(changed) > 0;
+  }
+
   renewLeases(ownerId: string, leaseMs: number, adoptRunIds: readonly string[] = []): void {
     const now = new Date().toISOString();
     const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
