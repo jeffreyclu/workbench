@@ -53,6 +53,7 @@ export default defineConfig(({ mode }) => {
   const token = env.WORKBENCH_TOKEN?.trim() || null;
   const previewReadOnly = process.env.WORKBENCH_PREVIEW_READ_ONLY === '1';
   return {
+    cacheDir: process.env.WORKBENCH_VITE_CACHE_DIR?.trim() || undefined,
     plugins: [react(), authGatePlugin(token, env), previewReadOnlyPlugin(previewReadOnly)],
     server: {
       port: 5180,
