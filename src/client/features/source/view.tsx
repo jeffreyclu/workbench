@@ -85,8 +85,8 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
       // Figma and Atlassian authorize once through Workbench's loopback OAuth.
       // Both coding agents then consume the same Workbench-owned connection.
       if (provider === 'figma' || provider === 'atlassian') {
-        const { url } = await sourceData.startMcpOAuth(provider === 'atlassian' ? 'confluence' : provider);
-        return url;
+        const result = await sourceData.startMcpOAuth(provider === 'atlassian' ? 'confluence' : provider);
+        return 'connected' in result ? null : result.url;
       }
       const popup = window.open('about:blank', `workbench-${provider}-oauth`, 'popup,width=720,height=760');
       if (!popup) throw new Error('Popup blocked. Allow popups for Workbench and try again.');

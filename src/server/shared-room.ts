@@ -377,6 +377,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
       stop();
       fail(new Error('Agent run canceled.'));
     };
+    steer.cancel = cancel;
     signal.addEventListener('abort', cancel, { once: true });
     child.on('error', fail);
     child.stdout.on('error', transportError);
@@ -1332,6 +1333,12 @@ export function cancelSharedReply(repository: WorkItemRepository, messageId: str
   // otherwise the UI marks the reply canceled while this live controller keeps
   // accepting and persisting chunks until the provider eventually exits.
   if (runId) cancelAgentRun(repository, runId);
+  // Abort propagation is the normal path, but a provider can be wedged inside
+  // its own streaming-input loop. The steering channel owns the exact child
+  // process, so cancellation also invokes its direct stop handle.
+  const steering = activeReplySteering.get(messageId);
+  steering?.cancel?.();
+  activeReplySteering.delete(messageId);
   activeReplies.get(messageId)?.abort();
   repository.updateSharedMessage(messageId, { status: 'canceled' });
   const dispatched = dispatchNextSharedTurn(repository, message.conversationId);

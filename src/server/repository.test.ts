@@ -1734,6 +1734,18 @@ describe('WorkItemRepository', () => {
     expect(repository.listSharedMessages(100, null, conversation.id).messages.find((message) => message.id === reply.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
   });
 
+  it('directly stops the provider process when canceling a live reply', () => {
+    const conversation = repository.createConversation('Cancel wedged provider');
+    const reply = repository.createSharedMessage('claude', 'Still working', 'running', conversation.id);
+    const steer = Object.assign(async () => true, { cancel: vi.fn() });
+    registerActiveReplySteering(reply.id, steer);
+
+    cancelSharedReply(repository, reply.id);
+
+    expect(steer.cancel).toHaveBeenCalledOnce();
+    expect(repository.getSharedMessageById(reply.id)).toEqual(expect.objectContaining({ status: 'canceled' }));
+  });
+
   it('aborts the local stream as well as the durable run for a task-linked reply', async () => {
     const task = repository.create({ title: 'Stop the active reply', description: '', priority: 2, status: 'in_progress', projectName: 'Workbench', workspacePath: null, dueDate: null });
     const conversation = repository.getOrCreateWorkConversation(task.id, task.title);

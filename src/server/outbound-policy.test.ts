@@ -39,7 +39,41 @@ describe('outbound policy', () => {
     expect(assertApprovedMcpServer('slack', 'https://mcp.slack.com/mcp')).toBeInstanceOf(URL);
     expect(() => assertApprovedMcpServer('slack', 'https://mcp.slack.com.evil.test/mcp')).toThrow(OutboundPolicyError);
     expect(() => assertApprovedMcpServer('gmail', 'https://example.com/mcp')).toThrow('Gmail MCP server overrides are not approved');
-    await expect(createOutboundFetch('mcp-slack', { resolve: publicDns, transport: async () => response() })('https://mcp.slack.com/mcp/other')).rejects.toMatchObject({ code: 'OUTBOUND_URL_BLOCKED' });
+    expect(() => assertApprovedMcpServer('slack', 'https://mcp.slack.com/mcp/other')).toThrow(OutboundPolicyError);
+  });
+
+  it.each([
+    {
+      provider: 'figma' as const,
+      policy: 'mcp-figma' as const,
+      transport: 'https://mcp.figma.com/mcp',
+      discovery: ['https://mcp.figma.com/.well-known/oauth-protected-resource/mcp', 'https://api.figma.com/.well-known/oauth-authorization-server'],
+    },
+    {
+      provider: 'slack' as const,
+      policy: 'mcp-slack' as const,
+      transport: 'https://mcp.slack.com/mcp',
+      discovery: ['https://mcp.slack.com/.well-known/oauth-protected-resource/mcp', 'https://mcp-9827.slack.com/.well-known/oauth-protected-resource/mcp'],
+    },
+    {
+      provider: 'confluence' as const,
+      policy: 'mcp-atlassian' as const,
+      transport: 'https://mcp.atlassian.com/v1/mcp/authv2',
+      discovery: ['https://mcp.atlassian.com/.well-known/oauth-protected-resource/v1/mcp/authv2', 'https://auth.atlassian.com/.well-known/oauth-authorization-server'],
+    },
+  ])('allows $provider OAuth discovery without accepting discovery URLs as transport endpoints', async ({ provider, policy, transport, discovery }) => {
+    const seen: string[] = [];
+    const fetch = createOutboundFetch(policy, {
+      resolve: publicDns,
+      transport: async (input) => { seen.push(String(input)); return response('{}', { headers: { 'content-type': 'application/json' } }); },
+    });
+
+    for (const url of discovery) await fetch(url);
+
+    expect(seen).toEqual(discovery);
+    expect(assertApprovedMcpServer(provider, transport).href).toBe(transport);
+    expect(() => assertApprovedMcpServer(provider, discovery[0])).toThrow(OutboundPolicyError);
+    expect(() => assertApprovedMcpServer(provider, `${new URL(transport).origin}/other`)).toThrow(OutboundPolicyError);
   });
 
   it('validates redirect targets, limits redirect chains, and strips credentials across origins', async () => {

@@ -38,8 +38,15 @@ const rules: Record<OutboundPolicyName, HostRule[]> = {
   // Each MCP policy contains its fixed transport endpoint plus only the vendor
   // OAuth origins its SDK flow may discover, register against, or use for tokens.
   // Do not add arbitrary OAuth URLs from server metadata here.
-  'mcp-slack': [{ hostname: 'mcp.slack.com', path: '/mcp' }, { hostname: 'slack.com' }],
-  'mcp-figma': [{ hostname: 'mcp.figma.com', path: '/mcp' }, { hostname: 'www.figma.com' }, { hostname: 'api.figma.com' }],
+  // Slack redirects OAuth discovery from mcp.slack.com to a region-specific
+  // mcp-*.slack.com host. The configured transport endpoint is validated
+  // independently by assertApprovedMcpServer below.
+  'mcp-slack': [{ hostname: 'slack.com', subdomains: true }],
+  // Figma publishes protected-resource metadata beneath /.well-known on the
+  // MCP host before directing OAuth registration and token exchange to
+  // api.figma.com. The configured transport endpoint is still constrained to
+  // /mcp by assertApprovedMcpServer below.
+  'mcp-figma': [{ hostname: 'mcp.figma.com' }, { hostname: 'www.figma.com' }, { hostname: 'api.figma.com' }],
   'mcp-atlassian': [
     // No path restriction on mcp.atlassian.com: the SDK's OAuth discovery flow
     // fetches /.well-known/oauth-protected-resource/<mcp-path> and
@@ -226,6 +233,11 @@ export function assertApprovedMcpServer(provider: 'slack' | 'figma' | 'confluenc
   if (provider === 'gmail') throw new OutboundPolicyError('OUTBOUND_URL_BLOCKED', 'Gmail MCP server overrides are not approved. Use the Gmail source connection.');
   const url = new URL(value);
   const policy = provider === 'slack' ? 'mcp-slack' : provider === 'figma' ? 'mcp-figma' : 'mcp-atlassian';
-  if (!allowedUrl(policy, url)) throw new OutboundPolicyError('OUTBOUND_URL_BLOCKED', 'This MCP server URL is not approved for this provider.');
+  const canonicalTransport = provider === 'slack' ? { hostname: 'mcp.slack.com', pathname: '/mcp' }
+    : provider === 'figma' ? { hostname: 'mcp.figma.com', pathname: '/mcp' }
+      : { hostname: 'mcp.atlassian.com', pathname: '/v1/mcp/authv2' };
+  const isApprovedTransport = url.hostname === canonicalTransport.hostname
+    && url.pathname === canonicalTransport.pathname && !url.search && !url.hash;
+  if (!allowedUrl(policy, url) || !isApprovedTransport) throw new OutboundPolicyError('OUTBOUND_URL_BLOCKED', 'This MCP server URL is not approved for this provider.');
   return url;
 }

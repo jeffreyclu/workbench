@@ -329,3 +329,28 @@ re-fetches it, on what cadence, where the durable copy lives, how a version chan
 clients and caches, and what renders when every source fails. Treat retrieval and rendering as one
 mechanism with one owner; a type union at the boundary is an implementation detail of that
 mechanism, never a substitute for it.
+
+## Explain infra and setup in plain language, not dense technical prose (2026-09-01)
+
+Jeffrey repeatedly cuts off jargon-heavy explanations with "ELI5." It happened twice during the
+local `be.mcp-gateway` bring-up: an answer that led with rewrite ordering, catch-all proxy
+semantics, and env-var precedence got the same reply both times.
+
+What he wants is the mechanism in everyday words first — what talks to what, what was broken, what
+one change fixes it, and what he types to see it work. Names of config keys and file paths belong
+in the answer, but as the last step of a story he can already follow, not as its opening. This is
+about explanations in conversation, not about code or docs style; it applies most when he is
+unblocking a local environment and is not asking for a design review.
+
+## Branch, commits, and PR description must name the ticket the work actually belongs to (2026-09-01)
+
+Jeffrey reacted sharply when follow-up work carved out of CON-194 kept carrying `CON-194` in its
+branch name, commit subjects, and PR description after CON-194 was already closed. His rule: once
+work is split into its own ticket, every reference on the branch must point at the new ticket, not
+the finished parent. That means the branch name, the `[linear:XXX-000]` key in each commit subject,
+the PR title, and the ticket link inside the PR description body — all four, not just the ones that
+are convenient to change.
+
+The reason is that a closed ticket key on an open PR makes the work untraceable: reviewers and
+Linear both attribute it to something already marked done. When a ticket key changes mid-flight,
+fix the existing commits too rather than only the new ones.

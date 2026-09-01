@@ -17,7 +17,7 @@ import { describeExecutionRouting } from '../activity-log.js';
 import { contextForPrompt, listBrokerConnections, resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { scanSource } from '../source-scanner.js';
 import { LinearProvider } from '../providers/linear.js';
-import { startRemoteMcpOAuth } from '../remote-mcp.js';
+import { importSupportedMcpCredentials, startRemoteMcpOAuth, verifyRemoteMcpCredentials } from '../remote-mcp.js';
 import type { WorkItemRepository } from '../repository.js';
 import type { RuntimeCapabilities } from '../runtime-capabilities.js';
 import { LEASE_MS, OWNER_ID } from '../scheduler.js';
@@ -237,13 +237,29 @@ export class WorkbenchAdminService {
     return { configured: true };
   }
 
-  async authorizeSource(input: { provider: 'confluence' | 'slack' | 'figma' | 'grafana' | 'gmail'; serverUrl?: string }): Promise<ActionFailure | { url: string }> {
+  async authorizeSource(input: { provider: 'confluence' | 'slack' | 'figma' | 'grafana' | 'gmail'; serverUrl?: string }): Promise<ActionFailure | { url: string } | { connected: true }> {
     if (input.provider === 'grafana') return { status: 400, body: { error: 'Add the Grafana service-account token in Sources.' } };
     const defaultUrl = input.provider === 'confluence' ? 'https://mcp.atlassian.com/v1/mcp/authv2'
       : input.provider === 'slack' ? 'https://mcp.slack.com/mcp'
         : input.provider === 'figma' ? 'https://mcp.figma.com/mcp' : null;
     if (!input.serverUrl && !defaultUrl) return { status: 400, body: { error: 'serverUrl is required for Gmail authorization.' } };
-    return { url: await startRemoteMcpOAuth(input.provider, input.serverUrl ?? defaultUrl!, oauthCallbackBase()) };
+    const serverUrl = input.serverUrl ?? defaultUrl!;
+    const imported = importSupportedMcpCredentials(serverUrl);
+    if (imported) {
+      try {
+        const verified = await verifyRemoteMcpCredentials(input.provider, imported);
+        const previous = this.repository.getSourceSettings(input.provider);
+        const label = input.provider === 'confluence' ? 'Atlassian MCP · Workbench'
+          : input.provider === 'figma' ? 'Figma MCP · Workbench'
+            : input.provider === 'slack' ? 'Slack MCP · Workbench' : 'Google Workspace MCP · Workbench';
+        this.repository.setSourceConnection(input.provider, label, {
+          ...verified,
+          ...(input.provider === 'figma' && previous?.figmaRoots ? { figmaRoots: previous.figmaRoots } : {}),
+        } as unknown as Record<string, string>);
+        return { connected: true };
+      } catch { /* The supported client credential is stale; use the provider's own OAuth flow. */ }
+    }
+    return { url: await startRemoteMcpOAuth(input.provider, serverUrl, oauthCallbackBase()) };
   }
 
   disconnectSource(provider: z.infer<typeof sourceProviderSchema>, actor: 'codex' | 'claude' | 'jeffrey' = 'jeffrey') {

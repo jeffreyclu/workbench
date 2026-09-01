@@ -165,7 +165,10 @@ export function isWorkbenchWorkspace(cwd: string): boolean {
 
 export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountProfile: string, cwd: string): NodeJS.ProcessEnv {
   const env = agentAccountEnv(agent, accountProfile);
-  const guardPaths: string[] = [];
+  // Baseline command guards apply to every repository. Repository-specific
+  // guards add stricter policy without making ordinary agent behavior depend
+  // on where the provider process happened to start.
+  const guardPaths: string[] = [join(process.cwd(), 'scripts', 'agent-bin')];
   if (isWorkbenchWorkspace(cwd)) guardPaths.push(join(process.cwd(), 'scripts', 'workbench-agent-bin'));
   if (isWriterWorkspace(cwd)) guardPaths.push(join(process.cwd(), 'scripts', 'writer-agent-bin'));
   if (guardPaths.length) env.PATH = [...guardPaths, env.PATH].filter(Boolean).join(delimiter);
@@ -771,7 +774,9 @@ export function checkpointActivityDetail(peakContextTokens: number, profile: Exe
   return `Context checkpoint: this turn peaked at ${Math.round(peakContextTokens / 1000)}k tokens against a ${Math.round(autocompactCeilingTokens(profile) / 1000)}k ceiling. The next turn starts a fresh provider session instead of replaying this one.`;
 }
 
-export type AgentInputSteering = (body: string) => Promise<boolean>;
+export type AgentInputSteering = ((body: string) => Promise<boolean>) & {
+  cancel?: () => void;
+};
 
 /**
  * Keep Codex's Workbench MCP connection independent of the active account's
@@ -1434,6 +1439,7 @@ ${AGENT_EXECUTION_CONTRACT}`;
         resolve(!error && !stopping && !cancellationRequested && child.exitCode === null);
       });
     });
+    sendClaudeInput.cancel = cancel;
     steerAgentInput = sendClaudeInput;
     // Initial task input must be first; then a live interjection may append to
     // the same provider session.
