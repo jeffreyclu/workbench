@@ -63,10 +63,10 @@ import { InlineProjectEditor } from '../../components/project/project-field';
 import { useValuePulse } from '../../hooks/use-value-pulse';
 import { isWorkbenchProject, WORKBENCH_PROJECT_NAME } from '../../../shared/project-name';
 import { SourcesDialog } from '../source';
+import { SettingsDialog } from '../settings';
 import { createTaskStackViewModel } from '../../lib/stack-view-model';
 import { useRealtimeNotifications, type RealtimeNotification } from '../../hooks/realtime';
 import { useAttentionIndicator } from '../../hooks/attention-indicator';
-import { sendDesktopNotification } from '../../hooks/desktop-notifications';
 import { useTaskStackReorderAnimation } from '../queue/use-task-stack-reorder-animation';
 import { reorderTaskPages, reorderTasks, type TaskReorderTarget } from '../queue/task-reorder';
 
@@ -117,6 +117,7 @@ export function App() {
   const [showCreate, setShowCreate] = useState(false);
   const [createTaskReopenState, setCreateTaskReopenState] = useState<CreateTaskReopenState | null>(null);
   const [showSources, setShowSources] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showProposalDetail, setShowProposalDetail] = useState(false);
   const [taskSearch, setTaskSearch] = useState('');
   // A task URL names the task, never a stack, so a link keeps working after the
@@ -187,11 +188,6 @@ export function App() {
       } : {}),
     };
     toast[notification.tone](notification.message, options);
-    sendDesktopNotification({
-      title: notification.message,
-      body: notification.description,
-      onClick: notification.action ? () => navigate(parseRoute(notification.action!.route)) : undefined,
-    });
   }, [route, agentConversationId]);
   const realtimeConnectionState = useRealtimeNotifications(handleRealtimeNotification);
   const view = route.name === 'stack' ? route.stack : route.name === 'task' ? taskStack : route.name === 'conversations' ? 'context' : route.name;
@@ -573,6 +569,7 @@ export function App() {
         onOpenArtifacts={() => { navigate({ name: 'artifacts' }); setMobileNavOpen(false); }}
         onOpenInsights={() => { navigate({ name: 'insights' }); setMobileNavOpen(false); }}
         onOpenSources={() => { setShowSources(true); setMobileNavOpen(false); }}
+        onOpenSettings={() => { setShowSettings(true); setMobileNavOpen(false); }}
         onToggleMore={() => setMobileNavOpen((open) => !open)}
         onSelectGlobalSearchResult={(result) => {
           if (result.conversationId) openConversation(result.conversationId);
@@ -645,6 +642,7 @@ export function App() {
       {selectedId ? <TaskDetail key={selectedId} id={selectedId} onClose={() => navigate({ name: 'stack', stack: taskStack })} onCreated={revealCreatedTask} onRemoving={animateTaskExit} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : <section className="detail-empty"><Sparkles /><h2>Choose your next move</h2><p>Select an item or add something new.</p></section>}</>}
       {showCreate && <CreateTask onClose={() => setShowCreate(false)} onCreated={revealCreatedTask} onBackgroundError={(state) => { setCreateTaskReopenState(state); setShowCreate(true); }} initialState={createTaskReopenState} defaultProjectName={view === 'workbench' ? WORKBENCH_PROJECT_NAME : ''} />}
       {showSources && <SourcesDialog onClose={() => setShowSources(false)} />}
+      {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
     </div>
   );
 }

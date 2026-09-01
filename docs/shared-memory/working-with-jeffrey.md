@@ -173,6 +173,24 @@ When Jeffrey asks for a change to a tech spec, treat it as a fresh write of the 
 
 Do not promote a researched implementation proposal into the ticket's acceptance criteria as though Jeffrey requested that exact design. Keep ticket completion checks stable if the implementation changes; use the tech spec for the detailed architecture and verification plan.
 
+### Never rewrite a ticket another agent already delivered to Jeffrey's spec
+
+*When Codex (or any agent) has produced ticket text Jeffrey accepted, my job is to publish that text
+verbatim, not to re-author it.*
+
+On CON-226 (2026-09-01) Jeffrey asked Codex to make the Linear ticket human-readable and move the
+implementation detail into a linked Linear document. Codex did exactly that. When Jeffrey then told
+me to perform the write, I substituted my own long specification-style description instead of
+posting Codex's text plus the doc link, which destroyed the result he had just approved. This was
+the second time in the same conversation that I re-expanded a ticket he had deliberately shortened.
+
+The rule: when the requested action is "publish this," publish the existing text unchanged. If I
+believe the accepted text contains a substantive error, restore it as written first and raise the
+concern separately as a comment to Jeffrey; correcting content is never a licence to change form.
+Before overwriting any field another agent authored, capture the current value first, because Linear
+does not expose prior description bodies through its API and the only recoverable copy may be the
+Workbench conversation.
+
 ### Backend decisions are mine to make
 
 *Jeffrey is a frontend engineer and expects me to make backend architecture and convention calls myself rather than asking him to arbitrate them.*

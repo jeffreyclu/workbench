@@ -118,8 +118,8 @@ describe('Workbench MCP', () => {
       'set_figma_discovery_scope',
       'set_work_item_lifecycle',
       'unblock_work_item',
-      'update_work_item',
       'update_linear_issue',
+      'update_work_item',
     ]);
     expect(tools.tools.find((tool) => tool.name === 'list_results')?.annotations).toEqual(expect.objectContaining({ readOnlyHint: true }));
     expect(tools.tools.find((tool) => tool.name === 'create_work_item')?.annotations).toEqual(expect.objectContaining({ readOnlyHint: false, openWorldHint: false }));

@@ -300,7 +300,7 @@ export class WorkbenchAdminService {
   async updateLinearIssue(identifier: string, input: { title?: string; description?: string }) {
     const issue = await this.linearProvider().updateIssue(identifier, input);
     this.repository.upsertLinearItem(issue);
-    this.repository.addAuditEntry('external_action', 'linear', `Updated Linear issue ${identifier}`);
+    this.repository.addAuditEntry('api_mutation', 'linear', `Updated Linear issue ${identifier}`);
     return { issue };
   }
 

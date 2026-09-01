@@ -1,5 +1,13 @@
 ## Workbench product decisions
 
+### Notifications belong under Settings
+
+*Decision from Jeffrey, 2026-09-01.* Settings is a navigation destination. Notification preferences
+belong inside Settings and must not appear as their own top-level navigation item.
+
+Every Workbench toast also produces a desktop notification when browser permission and the Settings
+preference allow it. This applies while Workbench is focused as well as while it is backgrounded.
+
 ### Conversation forks start from only the latest exchange
 
 *Decision from Jeffrey, 2026-08-31.* Forking a conversation creates a standalone

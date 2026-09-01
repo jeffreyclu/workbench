@@ -7,6 +7,8 @@
  * it would break the existing tests that render App and SharedWorkspace directly.
  * Components import `toast` and call it; <Toaster /> in toast.tsx renders the stack.
  */
+import { sendDesktopNotification } from '../hooks/desktop-notifications';
+
 export type ToastTone = 'success' | 'error' | 'info';
 
 export interface Toast {
@@ -36,6 +38,9 @@ export interface ToastOptions {
 /** A burst of failures must never bury the UI, so the oldest toasts fall off the stack. */
 const MAX_VISIBLE = 4;
 const DEFAULT_DURATION: Record<ToastTone, number> = { success: 4_000, info: 5_000, error: 8_000 };
+/** Every toast gets a matching desktop notification, gated only by the user's
+ * preference and browser permission inside sendDesktopNotification. */
+const TOAST_TITLE: Record<ToastTone, string> = { success: 'Success', error: 'Error', info: 'Workbench' };
 /** Matches the `toast-out` CSS keyframe duration in styles.css. */
 const EXIT_DURATION = 180;
 
@@ -93,6 +98,8 @@ export function resumeToastTimers(): void {
 
 function push(tone: ToastTone, message: string, options: ToastOptions = {}): string {
   const duration = options.duration ?? DEFAULT_DURATION[tone];
+  // Send before deduplication so repeated toasts still produce repeated desktop notifications.
+  sendDesktopNotification({ title: TOAST_TITLE[tone], body: options.description ? `${message} — ${options.description}` : message, onClick: options.action });
   const existing = toasts.find((item) => item.tone === tone && item.message === message && item.description === options.description);
   if (existing) {
     // Keep its place in the stack; a repeat should restart the countdown, not reshuffle the list.

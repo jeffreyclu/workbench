@@ -184,10 +184,18 @@ describe('NavigationView', () => {
       onOpenArtifacts={vi.fn()}
       onOpenInsights={vi.fn()}
       onOpenSources={vi.fn()}
+      onOpenSettings={vi.fn()}
       onToggleMore={vi.fn()}
       onSelectGlobalSearchResult={vi.fn()}
     /></QueryClientProvider>);
   }
+
+  it('shows Settings instead of Notifications in primary navigation', () => {
+    renderNav();
+
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /notifications/i })).not.toBeInTheDocument();
+  });
 
   it('mounts a single global-search overlay and close button despite two trigger placements', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({

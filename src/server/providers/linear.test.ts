@@ -54,13 +54,13 @@ describe('LinearProvider outbound transport', () => {
       url: 'https://linear.app/writer/issue/CON-226/connector-types', dueDate: null, updatedAt: '2026-09-01T00:00:00.000Z',
       state: { type: 'unstarted', name: 'Backlog' }, project: null, labels: { nodes: [] }, team: { id: 'team-id', name: 'Connectors' },
     };
-    const policyFetch = vi.fn(async () => new Response(JSON.stringify({ data: { issueUpdate: { success: true, issue } } }), {
+    const policyFetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ data: { issueUpdate: { success: true, issue } } }), {
       headers: { 'content-type': 'application/json' },
     }));
 
     await expect(new LinearProvider('linear-token', [], [], policyFetch).updateIssue('CON-226', { description: 'One contract.' }))
       .resolves.toEqual(expect.objectContaining({ sourceIdentifier: 'CON-226', description: 'One contract.' }));
-    expect(JSON.parse(String(policyFetch.mock.calls[0][1]?.body))).toEqual(expect.objectContaining({
+    expect(JSON.parse(String(policyFetch.mock.calls[0]?.[1]?.body))).toEqual(expect.objectContaining({
       variables: { id: 'CON-226', input: { description: 'One contract.' } },
     }));
   });

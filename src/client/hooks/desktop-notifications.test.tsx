@@ -57,15 +57,15 @@ describe('sendDesktopNotification', () => {
     expect(MockNotification.instances).toHaveLength(0);
   });
 
-  it('does nothing while Workbench is the focused, visible tab', () => {
+  it('fires while Workbench is the focused, visible tab', () => {
     MockNotification.permission = 'granted';
     setHidden(false);
     setFocused(true);
     sendDesktopNotification({ title: 'Run finished' });
-    expect(MockNotification.instances).toHaveLength(0);
+    expect(MockNotification.instances).toHaveLength(1);
   });
 
-  it('fires when granted, enabled, and backgrounded, and routes clicks', () => {
+  it('fires when granted and enabled, and routes clicks', () => {
     MockNotification.permission = 'granted';
     const onClick = vi.fn();
     sendDesktopNotification({ title: 'Run finished', body: 'Task X completed', onClick });

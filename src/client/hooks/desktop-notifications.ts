@@ -11,27 +11,19 @@ function currentPermission(): DesktopNotificationPermission {
   return isDesktopNotificationSupported() ? Notification.permission : 'unsupported';
 }
 
-/** Backgrounded means the tab is hidden or the window isn't focused — tab-title
- * and favicon already cover the case where Workbench is visible but idle. */
-function isBackgrounded(): boolean {
-  return document.hidden || !document.hasFocus();
-}
-
 export interface DesktopNotificationOptions {
   title: string;
   body?: string;
   onClick?: () => void;
 }
 
-/** Fires an OS notification only when Jeffrey's preference, the browser's
- * permission grant, and the backgrounded check all allow it. No-ops otherwise
- * so callers can call this unconditionally on every realtime event. */
+/** Fires an OS notification when Jeffrey's preference and the browser's
+ * permission grant allow it. Toasts call this unconditionally, including while
+ * Workbench is focused, so every visible toast has a matching OS notification. */
 export function sendDesktopNotification({ title, body, onClick }: DesktopNotificationOptions): void {
   if (!isDesktopNotificationSupported()) return;
   if (!readDesktopNotificationsEnabled()) return;
   if (Notification.permission !== 'granted') return;
-  if (!isBackgrounded()) return;
-
   const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.href;
   const notification = new Notification(title, { body, icon: favicon, tag: 'workbench' });
   if (onClick) {
