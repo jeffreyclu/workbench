@@ -2113,7 +2113,10 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
   const database = new DatabaseSync(absolutePath);
   // A bounded wait handles normal writer handoffs between API and scheduler
   // connections without turning an actual lock leak into an indefinite stall.
-  database.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 1000;');
+  // The ceiling must outlast the longest routine write-lock holder, which is a
+  // promoting runtime applying migrations against this same file; at 1s those
+  // migrations starved every live writer for the length of the promotion.
+  database.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   applyMigrations(database);
   return database;
 }
