@@ -420,3 +420,24 @@ search.
 
 Reporting a false blocker is worse than a slow answer, because it pushes work back onto Jeffrey that the
 agent was fully capable of doing.
+
+## Personal writing tasks: draft it, don't stall on unverified details (2026-09-02)
+
+When Jeffrey asks for a personal artifact — an All Hands intro, a bio, a Slack post about himself —
+produce the finished text. Do not return a stub plus a list of facts he needs to supply, and do not
+refuse to use a detail because it was recorded as "unverified" in an earlier session. This has now
+drawn a correction twice: on 2026-08-25 for the Engineering & Product Design All Hands intro, and
+again on 2026-09-02 for the company-wide All Hands intro, where two agents in a row handed back
+"here's what I can verify" instead of the intro itself.
+
+The correct behavior is to write the whole thing using everything durable memory holds, drop a single
+bracketed placeholder for any fact that genuinely does not exist anywhere on disk, and note in one
+short line which details came from unverified memory so Jeffrey can correct them in seconds. A draft
+he edits is useful; a questionnaire is not. The accuracy concern is real but it is satisfied by
+flagging, not by withholding.
+
+Facts on file about Jeffrey for this purpose: frontend engineer on the Connectors team working on
+Writer Agent; based in South Orange, NJ; interested in fragrance; runs Claude and Codex against each
+other before trusting an answer. The company he joined Writer from is not recorded anywhere in
+`~/notes`, Workbench memory, or his home directory — that one is a real gap, not a verification
+scruple.

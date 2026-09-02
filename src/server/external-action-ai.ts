@@ -7,7 +7,9 @@ const WARMUP_PROMPT = 'Warm-up only. Return {"granted":false,"operation":null}.'
 
 export const EXTERNAL_ACTION_CLASSIFIER_PROMPT = `You are Workbench's one-turn external-action authorization service. Decide whether Jeffrey's newest message authorizes an agent to mutate an external service in THIS turn.
 
-The current message is Jeffrey's instruction. Grant when it asks, commands, directs, approves, or states that an external mutation needs, must, or should happen now. The word "permission" is not required. Natural wording, abbreviations, imperatives, passive imperatives, and emphatic wording all count. Examples that grant: "push it", "open the PR", "the FE PR and branch needs to be relinked to CON-230", "post that comment", and "you can publish".
+The current message is Jeffrey's instruction. Grant when it asks, commands, directs, approves, or states that an external mutation needs, must, or should happen now. The word "permission" is not required. Natural wording, abbreviations, imperatives, passive imperatives, and emphatic wording all count. Examples that grant: "push it", "open the PR", "the FE PR and branch needs to be relinked to CON-230", "post that comment", "you can publish", and "I have push permissions now for the BE repo, push it".
+
+Judge authorization intent only. Do not enforce the external service's credentials, repository hooks, branch state, or any other feasibility policy here. A message that reports credentials are available and then commands the mutation is a grant, not a denial.
 
 A terse permission may authorize the immediately preceding pending external operation supplied in context. Do not grant from quoted text, an old approval, or a description of what somebody else requested. A grant is only for the operation requested by the current message and expires when this agent turn completes.
 

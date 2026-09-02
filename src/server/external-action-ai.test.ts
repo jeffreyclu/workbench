@@ -35,5 +35,6 @@ it('classifies simultaneous messages in isolated single-use workers', async () =
 
 it('teaches the classifier that passive imperatives grant the named action', () => {
   expect(EXTERNAL_ACTION_CLASSIFIER_PROMPT).toContain('the FE PR and branch needs to be relinked to CON-230');
+  expect(EXTERNAL_ACTION_CLASSIFIER_PROMPT).toContain('I have push permissions now for the BE repo, push it');
   expect(EXTERNAL_ACTION_CLASSIFIER_PROMPT).toContain('The word "permission" is not required.');
 });

@@ -16,6 +16,8 @@ import { groundTurnWithHaiku } from './turn-grounding-ai.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
+import { projectKey } from '../shared/project-name.js';
 
 export { isTransientSqliteContention } from './sqlite-contention.js';
 
@@ -600,6 +602,11 @@ export type SharedReplyGrounding = {
   resolved: Promise<TurnGrounding>;
 };
 
+type SharedReplyMemory = {
+  query: string;
+  resolved: Promise<ReturnType<typeof selectDurableMemoryEvidence>>;
+};
+
 function connectionSearchQuery(message: string): string {
   return message.replace(/https?:\/\/\S+/g, ' ').replace(/\b(?:linear|search|find|look|show|check|issues?|tasks?|tickets?|for|in|on|the|a|an|me|please)\b/gi, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -864,6 +871,7 @@ export function buildSharedReplyPrompt(
   externalActionContract?: string,
   turnGrounding?: TurnGrounding,
   messageId?: string | null,
+  memoryContext = '',
 ): string {
   const roleContext = linked
     ? buildPrompt(linked.item, linked.run, sharedContext, externalActionContract)
@@ -885,6 +893,8 @@ Workbench context handles:
 
 ${turnGroundingForPrompt(grounding)}
 
+${memoryContext}
+
 ${connectionContext}
 
 Reference-only conversation transcript:
@@ -903,6 +913,7 @@ export function buildResumedSharedReplyPrompt(
   messageId: string | null,
   externalActionContract: string,
   turnGrounding: TurnGrounding,
+  memoryContext = '',
 ): string {
   return `${externalActionContract}
 
@@ -913,6 +924,8 @@ Workbench context handles:
 - Current reply message ID: ${messageId ?? 'none'}
 
 ${turnGroundingForPrompt(turnGrounding)}
+
+${memoryContext}
 
 ${connectionContext}
 
@@ -997,6 +1010,24 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   // terse continuations: "continue" must retain the execute/review kind of the
   // concrete request it resumes instead of silently degrading to analysis.
   const taskKind = queued.message.kind ?? sharedTurnKindForMessage(repository, linkedItem, fallbackGrounding.objective);
+  const memoryQuery = durableMemoryQuery(currentMessage, {
+    conversationTitle: conversation?.title,
+    taskTitle: linkedItem?.title,
+    projectName: linkedItem?.projectName,
+  });
+  const memory: SharedReplyMemory = {
+    query: memoryQuery,
+    resolved: shouldPrefetchDurableMemory(taskKind, currentMessage)
+      ? repository.searchActivityMemory(memoryQuery, 40, {
+        refresh: false,
+        projectKey: !isExplicitMemoryRequest(currentMessage) && linkedItem?.projectName ? projectKey(linkedItem.projectName) || undefined : undefined,
+        sources: [...DEFAULT_DURABLE_MEMORY_SOURCES],
+      }).then((candidates) => selectDurableMemoryEvidence(candidates, conversationId, 8)).catch((error) => {
+        console.error('[shared-room] automatic durable-memory retrieval failed; continuing without it', error);
+        return [];
+      })
+      : Promise.resolve([]),
+  };
   const resolvedAgents = resolveAgents(taskKind, queued.dispatchTarget);
   const agents = queued.dispatchTarget === 'auto'
     ? [repository.selectBalancedAgent(resolvedAgents[0])]
@@ -1019,7 +1050,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'
       ? repository.createRun(linkedItem.id, taskKind, queued.dispatchTarget, agent, fallbackGrounding.objective, conversationId, reply.id, 'manual', accountProfile)
       : null;
-    void replyInSharedRoom(repository, agent, reply.id, run?.id, grounding, authorization);
+    void replyInSharedRoom(repository, agent, reply.id, run?.id, grounding, authorization, undefined, memory);
   }
   return replies;
 }
@@ -1100,6 +1131,7 @@ export async function replyInSharedRoom(
   groundingSnapshot?: SharedReplyGrounding,
   authorizationSnapshot?: Promise<ExternalActionAuthorization>,
   _cacheCheckpoint?: string,
+  memorySnapshot?: SharedReplyMemory,
 ): Promise<void> {
   const target = repository.getSharedMessageById(messageId);
   if (!target) return;
@@ -1220,8 +1252,32 @@ export async function replyInSharedRoom(
         if (target.dispatchGroupId) repository.setSharedTurnGrounding(target.dispatchGroupId, target.conversationId, JSON.stringify(resolved));
         return resolved;
       }));
-    const [externalAuthorization, turnGrounding] = await Promise.all([externalAuthorizationPromise, groundingPromise]);
+    const automaticMemoryQuery = durableMemoryQuery(latestUserMessage, {
+      conversationTitle: linkedConversation?.title,
+      taskTitle: linkedItem?.title,
+      projectName: linkedItem?.projectName,
+    });
+    const memoryQuery = memorySnapshot?.query ?? automaticMemoryQuery;
+    const memoryPromise = memorySnapshot?.resolved ?? (shouldPrefetchDurableMemory(runKind, latestUserMessage)
+      ? repository.searchActivityMemory(memoryQuery, 40, {
+        refresh: false,
+        projectKey: !isExplicitMemoryRequest(latestUserMessage) && linkedItem?.projectName ? projectKey(linkedItem.projectName) || undefined : undefined,
+        sources: [...DEFAULT_DURABLE_MEMORY_SOURCES],
+      }).then((candidates) => selectDurableMemoryEvidence(candidates, target.conversationId, 8)).catch((error) => {
+        console.error('[shared-room] automatic durable-memory retrieval failed; continuing without it', error);
+        return [];
+      })
+      : Promise.resolve([]));
+    const [externalAuthorization, turnGrounding, memoryEvidence] = await Promise.all([externalAuthorizationPromise, groundingPromise, memoryPromise]);
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
+    const memoryContext = durableMemoryPrompt(memoryEvidence);
+    repository.updateSharedMessage(messageId, {
+      retrievedMemoryCount: memoryEvidence.length,
+      retrievedMemoryDetail: memoryEvidence.length ? {
+        query: memoryQuery,
+        items: memoryEvidence.map(({ source, title, body, createdAt }) => ({ source, title, body, createdAt })),
+      } : null,
+    });
     const freshPrompt = buildSharedReplyPrompt(
       agent,
       repository.getSharedContext(target.conversationId, { conversationId: target.conversationId }),
@@ -1232,20 +1288,21 @@ export async function replyInSharedRoom(
       externalActionContract,
       turnGrounding,
       messageId,
+      memoryContext,
     );
     const resumeProviderId = agent === 'codex'
       ? linkedConversation?.codexThreadId ?? null
       : linkedConversation?.claudeSessionId ?? null;
     const prompt = resumeProviderId
-      ? buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding)
+      ? buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext)
       : freshPrompt;
     if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'prompt', {
       promptChars: prompt.length,
       sharedContextChars: repository.getSharedContext(target.conversationId, { conversationId: target.conversationId }).length,
       connectionContextChars: connectionContext.length,
       conversationMessageCount: thread.length,
-      retrievedMemoryCount: 0,
-      retrievedMemoryChars: 0,
+      retrievedMemoryCount: memoryEvidence.length,
+      retrievedMemoryChars: memoryContext.length,
       authoritativeObjective: turnGrounding.objective,
       groundingSource: turnGrounding.source,
       groundingContinuation: turnGrounding.continuation,

@@ -22,6 +22,7 @@ import { LOGQL_PRESETS, type ConnectorLogsInput, type FailureSummaryInput, type 
 import { summarizeWorkItemChanges } from './activity-log.js';
 import { projectKey } from '../shared/project-name.js';
 import { sharedTurnKindForMessage } from './shared-room.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, selectDurableMemoryEvidence } from './memory-retrieval.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from './repository.js';
 import type { WorkItemRepository } from './repository.js';
 
@@ -270,29 +271,13 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     if (appliedScope === 'task' && !contextualItem) throw new ToolFailure('INVALID_ARGUMENT', 'task scope requires workItemId or a linked conversation.');
     if (appliedScope === 'project' && !inferredProjectName) throw new ToolFailure('INVALID_ARGUMENT', 'project scope requires projectName, workItemId, or a linked conversation with a project.');
 
-    const defaultSources = ['conversation', 'message', 'activity', 'run_instructions', 'run_output', 'run_error', 'work_item', 'doc'];
     const candidates = await repository.searchActivityMemory(query, Math.min(100, limit * 5), {
       projectKey: appliedScope === 'project' ? projectKey(inferredProjectName) || undefined : undefined,
       conversationId: appliedScope === 'conversation' ? conversationId : undefined,
       workItemId: appliedScope === 'task' ? contextualItem?.id : undefined,
-      sources: sources ?? defaultSources,
+      sources: sources ?? [...DEFAULT_DURABLE_MEMORY_SOURCES],
     });
-    const normalized = (value: string) => value.replace(/^(?:execute:|to (?:codex|claude)(?: and (?:codex|claude))?(?: · [^:]+)?):\s*/i, '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const seen = new Set<string>();
-    const results = candidates.filter((candidate) => {
-      // The live provider session already contains its conversation transcript.
-      // Reinjecting assistant replies from that same room created a feedback
-      // loop where a speculative answer was retrieved as if it independently
-      // verified itself. Keep Jeffrey's messages, but exclude generated prose
-      // from the current room's default recall corpus.
-      if (candidate.conversationId === conversationId
-        && (candidate.source === 'message' || candidate.source === 'run_output')
-        && (candidate.actor === 'codex' || candidate.actor === 'claude' || candidate.actor === 'system')) return false;
-      const key = `${normalized(candidate.title)}\n${normalized(candidate.body)}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).slice(0, limit);
+    const results = selectDurableMemoryEvidence(candidates, conversationId, limit);
     if (message) {
       repository.updateSharedMessage(message.id, {
         retrievedMemoryCount: results.length,

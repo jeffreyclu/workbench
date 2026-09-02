@@ -237,6 +237,7 @@ describe('compactConversationHistory', () => {
       'message-id',
       'Supervisor-issued external-action capability: Commit and push once.',
       grounding,
+      'Retrieved durable context: Jeffrey works at Writer.',
     );
 
     expect(prompt).toContain('Commit and push the finished fix.');
@@ -245,6 +246,7 @@ describe('compactConversationHistory', () => {
     expect(prompt.startsWith('Supervisor-issued external-action capability')).toBe(true);
     expect(prompt).toContain('Current reply message ID: message-id');
     expect(prompt).toContain('already present in this session');
+    expect(prompt).toContain('Retrieved durable context: Jeffrey works at Writer.');
     expect(prompt).not.toContain('Reference-only conversation transcript:');
   });
 
@@ -288,12 +290,12 @@ describe('compactConversationHistory', () => {
     database.close();
   });
 
-  it('exposes durable recall as an agent tool instead of ambient prompt injection', () => {
-    const prompt = buildSharedReplyPrompt('codex', 'Shared context.', '', [], undefined, 'conversation-id');
+  it('exposes durable recall and accepts provider-neutral prefetched evidence', () => {
+    const prompt = buildSharedReplyPrompt('codex', 'Shared context.', '', [], undefined, 'conversation-id', undefined, undefined, undefined, 'Retrieved durable context: Jeffrey works at Writer.');
 
     expect(prompt).toContain('Conversation ID: conversation-id');
     expect(prompt).toContain('recall_context');
-    expect(prompt).not.toContain('Retrieved memory (');
+    expect(prompt).toContain('Retrieved durable context: Jeffrey works at Writer.');
   });
 
   it('keeps an unlinked conversation in the Workbench workspace', () => {

@@ -578,13 +578,17 @@ fi`;
     expect(prompt.startsWith(EXTERNAL_ACTION_CONTRACT)).toBe(true);
     expect(prompt).toContain('Workspace isolation:');
     expect(prompt).toContain('Never create or update `docs/shared-memory*`');
+    expect(prompt).toContain('if it launches a forbidden full suite, use `git push --no-verify`');
   });
 
   it('puts a granted one-turn capability first in fresh and resumed work-item prompts', () => {
     const capability = 'Supervisor-issued external-action capability: Publish the approved artifact.';
     const run = { agent: 'claude', kind: 'execute', instructions: 'Publish it.' } as AgentRun;
-    expect(buildPrompt(item('Publish artifact'), run, '', capability).startsWith(capability)).toBe(true);
-    expect(buildResumedPrompt(item('Publish artifact'), run, capability).startsWith(capability)).toBe(true);
+    const memory = 'Retrieved durable context: this is historical evidence.';
+    expect(buildPrompt(item('Publish artifact'), run, '', capability, memory).startsWith(capability)).toBe(true);
+    expect(buildPrompt(item('Publish artifact'), run, '', capability, memory)).toContain(memory);
+    expect(buildResumedPrompt(item('Publish artifact'), run, capability, memory).startsWith(capability)).toBe(true);
+    expect(buildResumedPrompt(item('Publish artifact'), run, capability, memory)).toContain(memory);
   });
 
   it('uses one model judgment, including immediate pending-operation context, for external authorization', async () => {

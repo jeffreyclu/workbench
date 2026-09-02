@@ -3,7 +3,7 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type WorkItem } from '../shared/contracts.js';
-import { isWorkbenchProject } from '../shared/project-name.js';
+import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
 import { agentAccountEnv } from './agent-security.js';
@@ -17,6 +17,7 @@ import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-hand
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 
 const MAX_OUTPUT_BYTES = 1_000_000;
 /** How long a run may produce no stream event before its output gets a visible elapsed marker. */
@@ -66,7 +67,7 @@ For an approved artifact publication, use the Workbench MCP \`publish_artifact\`
 
 Workspace isolation: a task does not need a linked repository. The resolved working directory is execution context, not proof that the task belongs to that repository. Never create or update \`docs/shared-memory*\`, Workbench operating notes, or other Workbench-internal files in another project. Use Workbench's shared conversation and activity state for handoffs. Create or edit project files only when Jeffrey explicitly asks for work in that project.
 
-Writer test-suite safety: in every Writer repository, full-suite commands are forbidden. Never run \`npm test\`, \`pnpm test\`, \`yarn test\`, unscoped \`vitest\`/\`jest\`, or \`vitest run -- <test-name>\` because that discovers the repository suite. Run only an explicit, directly relevant test-file path (for example \`vitest run src/path/feature.test.ts\`). If that is insufficient, report the verification gap instead of broadening the command.
+Writer test-suite safety: in every Writer repository, full-suite commands are forbidden. Never run \`npm test\`, \`pnpm test\`, \`yarn test\`, unscoped \`vitest\`/\`jest\`, or \`vitest run -- <test-name>\` because that discovers the repository suite. Run only an explicit, directly relevant test-file path (for example \`vitest run src/path/feature.test.ts\`). This includes hooks: before a Writer push, inspect the pre-push hook; if it launches a forbidden full suite, use \`git push --no-verify\` under the existing one-turn push capability, report that the hook was skipped, and rely only on focused verification. \`--no-verify\` changes local verification behavior, not the authorized external destination, so it does not require a second capability. If focused verification is insufficient, report the gap instead of broadening the command.
 
 Emit brief progress updates before/after meaningful steps — what you're checking, why, what you learned, what's next — as concise decisions/summaries, not chain-of-thought.
 
@@ -403,7 +404,7 @@ function isDocumentWork(item: WorkItem): boolean {
   return /(?:\.md\b|\b(document|documentation|knowledge|memory|copy|prose|readme|claude\.md|agents\.md)\b)/.test(text);
 }
 
-export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', externalActionContract = EXTERNAL_ACTION_CONTRACT): string {
+export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', externalActionContract = EXTERNAL_ACTION_CONTRACT, memoryContext = ''): string {
   const readOnly = run.kind === 'analysis' || run.kind === 'research' || run.kind === 'review' || run.kind === 'strategy';
   const persona = run.kind === 'review'
     ? FRONTEND_REVIEWER_PERSONA
@@ -453,10 +454,12 @@ ${compactPromptSection(run.instructions || 'Use your judgment and return a conci
 Shared context available to every agent:
 ${compactPromptSection(sharedContext || 'No shared context yet.', 700)}
 
+${memoryContext}
+
 ${run.agent === 'claude' ? '' : RUNNER_SYSTEM_CONTRACT}`;
 }
 
-export function buildResumedPrompt(item: WorkItem, run: AgentRun, externalActionContract = EXTERNAL_ACTION_CONTRACT): string {
+export function buildResumedPrompt(item: WorkItem, run: AgentRun, externalActionContract = EXTERNAL_ACTION_CONTRACT, memoryContext = ''): string {
   return `${externalActionContract}
 
 Continue the existing task session. The prior task, source context, shared context, and earlier decisions are already available in this session.
@@ -475,7 +478,9 @@ ${compactPromptSection(run.instructions || 'Continue the requested work and repo
 Current attached files:
 ${item.attachments?.length
     ? item.attachments.map((file) => `- ${file.name} (${file.mimeType}, ${file.size} bytes): ${file.path}`).join('\n')
-    : 'None.'}`;
+    : 'None.'}
+
+${memoryContext}`;
 }
 
 /**
@@ -1887,6 +1892,17 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const externalAuthorizationPromise: Promise<ExternalActionAuthorization> = process.env.VITEST
       ? Promise.resolve({ granted: false, operation: null })
       : classifyExternalActionAuthorization({ currentMessage: run.instructions });
+    const memoryQuery = durableMemoryQuery(run.instructions, { taskTitle: item.title, projectName: item.projectName });
+    const memoryPromise = shouldPrefetchDurableMemory(run.kind, run.instructions)
+      ? repository.searchActivityMemory(memoryQuery, 40, {
+        refresh: false,
+        projectKey: !isExplicitMemoryRequest(run.instructions) && item.projectName ? projectKey(item.projectName) || undefined : undefined,
+        sources: [...DEFAULT_DURABLE_MEMORY_SOURCES],
+      }).then((candidates) => selectDurableMemoryEvidence(candidates, run.conversationId, 8)).catch((error) => {
+        console.error('[agent-runner] automatic durable-memory retrieval failed; continuing without it', error);
+        return [];
+      })
+      : Promise.resolve([]);
     // The resolved workspace is explicit in the CLI command and surfaced in
     // activity so a run's filesystem boundary is never implicit.
     repository.addActivity(item.id, 'system', 'progress', `Workspace resolved to ${cwd}.`);
@@ -1900,20 +1916,28 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const sharedContext = resumesSession
       ? ''
       : [repository.getSharedContext(undefined, { workItemId: item.id }), externalContext].filter(Boolean).join('\n\n');
-    const externalAuthorization = await externalAuthorizationPromise;
+    const [externalAuthorization, memoryEvidence] = await Promise.all([externalAuthorizationPromise, memoryPromise]);
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
+    const memoryContext = durableMemoryPrompt(memoryEvidence);
+    if (run.messageId) repository.updateSharedMessage(run.messageId, {
+      retrievedMemoryCount: memoryEvidence.length,
+      retrievedMemoryDetail: memoryEvidence.length ? {
+        query: memoryQuery,
+        items: memoryEvidence.map(({ source, title, body, createdAt }) => ({ source, title, body, createdAt })),
+      } : null,
+    });
     if (resumesSession) repository.addActivity(item.id, 'system', 'progress', 'Resuming Claude session with bounded continuation context.');
     const prompt = resumesSession
-      ? buildResumedPrompt(item, run, externalActionContract)
-      : buildPrompt(item, run, sharedContext, externalActionContract);
+      ? buildResumedPrompt(item, run, externalActionContract, memoryContext)
+      : buildPrompt(item, run, sharedContext, externalActionContract, memoryContext);
     repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, run.agent, 'prompt', {
       promptChars: prompt.length,
       taskChars: item.description.length,
       strategyChars: item.strategy?.length ?? 0,
       instructionChars: run.instructions.length,
       sharedContextChars: sharedContext.length,
-      retrievedMemoryCount: 0,
-      retrievedMemoryChars: 0,
+      retrievedMemoryCount: memoryEvidence.length,
+      retrievedMemoryChars: memoryContext.length,
     });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { executionProfile: 'routing' });
     const decision: { profile: ExecutionProfile; source: ExecutionProfileSource } = run.executionProfile
