@@ -140,6 +140,24 @@ describe('workspace diff parsing', () => {
     await expect(getWorkspaceDiff(workspace)).resolves.toEqual(expect.objectContaining({ changedFiles: 0 }));
   });
 
+  it('reports an untracked file at its repository-relative path', async () => {
+    const workspace = temporaryGitWorkspace();
+    writeFileSync(join(workspace, 'tracked.ts'), 'export {};\n');
+    execFileSync('git', ['add', 'tracked.ts'], { cwd: workspace });
+    execFileSync('git', ['commit', '--quiet', '-m', 'initial'], { cwd: workspace });
+    mkdirSync(join(workspace, 'docs'));
+    writeFileSync(join(workspace, 'docs', 'new-note.md'), '# note\n');
+
+    const diff = await getWorkspaceDiff(workspace);
+
+    // `git diff --no-index` names the file exactly as it was given it, so an
+    // absolute argument reports `Users/you/repo/docs/new-note.md` - a path that
+    // exists in no repository, breaking the file list, the editor link and the
+    // whole-file read for every new file.
+    expect(diff.files).toEqual([expect.objectContaining({ path: 'docs/new-note.md', status: 'added', additions: 1 })]);
+    expect(diff.files[0].editorUrl).toBe(`vscode://file/${join(workspace, 'docs/new-note.md')}`);
+  });
+
   it('rebuilds a reviewable snapshot from a recorded commit after the workspace is clean', async () => {
     const workspace = temporaryGitWorkspace();
     writeFileSync(join(workspace, 'file.ts'), 'export const version = 1;\n');

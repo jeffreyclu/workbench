@@ -814,6 +814,7 @@ describe('WorkspaceDiffView repository browser', () => {
       const url = String(input);
       if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench', selected: true }] });
       if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.includes('/workspace-diff/refs')) return json({ refs: { base: 'main', branches: [], worktrees: [] } });
       if (url.includes('/workspace-diff/ref/commits')) return json({ commits: [
         { sha: newest, shortSha: 'aaaaaaa', title: 'Rename the reader', author: 'Jeffrey', committedAt: null },
         { sha: older, shortSha: 'bbbbbbb', title: 'Add the reader', author: 'Jeffrey', committedAt: null },
@@ -833,15 +834,43 @@ describe('WorkspaceDiffView repository browser', () => {
     await waitFor(() => expect(commitPicker).toHaveValue(newest));
     expect(await screen.findByText('src/in-newest.ts')).toBeInTheDocument();
 
-    // The second dropdown and its whole-branch comparison are gone.
+    // The repo browser still has exactly one control. Branch review is its own
+    // source now, so it must not reappear as a second dropdown or a synthetic
+    // "whole branch" commit inside this one.
     expect(screen.queryByRole('combobox', { name: 'Branch or worktree' })).not.toBeInTheDocument();
     expect(within(commitPicker).queryByRole('option', { name: /Whole branch/ })).not.toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([request]) => String(request).includes('/workspace-diff/refs'))).toBe(false);
     expect(fetchMock.mock.calls.some(([request]) => String(request).includes('/workspace-diff/ref?'))).toBe(false);
 
     fireEvent.change(commitPicker, { target: { value: older } });
 
     expect(await screen.findByText('src/in-older.ts')).toBeInTheDocument();
     expect(screen.queryByText('src/in-newest.ts')).not.toBeInTheDocument();
+  });
+
+  /** The regression this exists for: a change split across two repositories,
+   * where the second one is already committed. Its working tree is clean and it
+   * has no records captured here, so Changes used to answer "no uncommitted
+   * changes" and the repository picker led nowhere. */
+  it('opens the checked-out branch when a selected repository has committed its work', async () => {
+    const committedFile: WorkspaceDiffFile = {
+      path: 'src/gateway/search.ts', previousPath: null, status: 'modified', additions: 4, deletions: 1, isBinary: false,
+      patch: '@@ -1 +1 @@ searchConnectors\n-before\n+after',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench', selected: true }] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.includes('/workspace-diff/refs')) return json({ refs: { base: 'main', branches: [{ name: 'jeffrey/connector-name-search', current: true, ahead: 3 }], worktrees: [] } });
+      if (url.includes('/workspace-diff/ref?')) return json({ diff: workspaceDiff([committedFile], 'branch-revision') });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([], 'clean') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    expect(await screen.findByText('src/gateway/search.ts')).toBeInTheDocument();
+    expect(screen.queryByText('No uncommitted changes to review.')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Branch' })).toHaveValue('jeffrey/connector-name-search'));
+    expect(fetchMock.mock.calls.some(([request]) => String(request).includes(`ref=${encodeURIComponent('branch:jeffrey/connector-name-search')}`))).toBe(true);
   });
 });

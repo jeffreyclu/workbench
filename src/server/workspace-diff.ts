@@ -258,14 +258,19 @@ export async function getWorkspaceDiff(workspacePath: string): Promise<Workspace
     // Git reports nested repositories and generated directories (notably
     // node_modules) as a single untracked directory entry. `git diff
     // --no-index` cannot produce a file patch for one; skip it rather than
-    // failing the entire Changes view. Regular untracked files use absolute
-    // paths so Git never reinterprets /dev/null below the workspace.
+    // failing the entire Changes view.
     const absolutePath = resolve(repositoryPath, path);
     try {
       if (!statSync(absolutePath).isFile()) return '';
     } catch { return ''; }
     try {
-      const { stdout } = await git(repositoryPath, ['diff', '--no-index', '--no-ext-diff', '--binary', '--no-color', '--', '/dev/null', absolutePath]);
+      // The path is passed relative to the repository root, never absolutely.
+      // `--no-index` names the file in the patch header exactly as it was
+      // given, so an absolute argument produces `+++ b/Users/you/repo/file`:
+      // every new file would then be listed, opened and recorded under a path
+      // that does not exist in the repository. `/dev/null` stays absolute and
+      // is still read as the empty side because Git special-cases it.
+      const { stdout } = await git(repositoryPath, ['diff', '--no-index', '--no-ext-diff', '--binary', '--no-color', '--', '/dev/null', relative(repositoryPath, absolutePath)]);
       return stdout;
     } catch (error) {
       // git diff --no-index uses exit code 1 when it finds a difference.
