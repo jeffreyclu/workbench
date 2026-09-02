@@ -46,6 +46,17 @@ describe('shared message layout', () => {
 });
 
 describe('conversation view controls', () => {
+  it('keeps desktop queue controls at WCAG AA minimum target sizes', () => {
+    const dragHandleRule = styles.match(/^\.drag-handle\s*\{[^}]*\}/m)?.[0] ?? '';
+    const queueCtaRule = styles.match(/^\.queue-item-cta\s*\{[^}]*\}/m)?.[0] ?? '';
+
+    expect(dragHandleRule).toMatch(/width: (?:2[4-9]|[3-9]\\d)px/);
+    expect(dragHandleRule).toMatch(/height: (?:2[4-9]|[3-9]\\d)px/);
+    expect(queueCtaRule).toContain('box-sizing: border-box');
+    expect(queueCtaRule).toContain('min-width: 24px');
+    expect(queueCtaRule).toContain('min-height: 24px');
+  });
+
   it('keeps an existing execution conversation openable while a task dispatch starts', () => {
     const rule = styles.match(/^\.detail-panel\.execution-starting button[^{]*\{[^}]*\}/m)?.[0] ?? '';
 

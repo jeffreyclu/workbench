@@ -879,7 +879,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 @media (max-width: 640px) { .provider-conflict { grid-template-columns: 1fr 1fr; } .provider-conflict > strong, .provider-conflict-actions { grid-column: 1 / -1; } .provider-conflict-actions button { flex: 1; } }
 .dependency-signal { display: inline-flex; align-items: center; gap: 4px; width: fit-content; max-width: 100%; color: #f0c05a; font: 9px 'DM Mono'; }
 .queue-item-ctas { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
-.queue-item-cta { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-raised); color: var(--text); font: 700 9px 'DM Mono'; letter-spacing: .03em; text-transform: uppercase; cursor: pointer; }
+/* 6f6d6d72-68d0-4e17-a7e6-56fa4cdc9d8d LEGACY-AFFECTING: queue-card CTAs now own a WCAG AA 24px minimum target without widening the compact card layout. */
+.queue-item-cta { display: inline-flex; align-items: center; box-sizing: border-box; min-width: 24px; min-height: 24px; gap: 4px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-raised); color: var(--text); font: 700 9px 'DM Mono'; letter-spacing: .03em; text-transform: uppercase; cursor: pointer; }
 .queue-item-cta:hover, .queue-item-cta:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
 .queue-item-cta:disabled { opacity: .6; cursor: default; }
 
