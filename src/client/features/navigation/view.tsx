@@ -1,4 +1,4 @@
-import { Cloud, Command, MessageCircle, MoreHorizontal, Search, Settings, Wrench, X } from 'lucide-react';
+import { CircleHelp, Cloud, Command, MessageCircle, MoreHorizontal, Search, Settings, Wrench, X } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -11,6 +11,7 @@ import { api } from '../../data/api';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton';
 import { useValuePulse } from '../../hooks/use-value-pulse';
 import { useDebouncedValue } from '../conversation/hooks';
+import { ModalDialog } from '../../components/dialogs/modal-dialog';
 
 export type NavigationViewName = 'active' | 'workbench' | 'archive' | 'artifacts' | 'context' | 'discovery' | 'insights';
 
@@ -80,6 +81,10 @@ function useGlobalSearch(onSelectResult: (result: MemorySearchResult) => void) {
 }
 
 type GlobalSearchState = ReturnType<typeof useGlobalSearch>;
+
+function isEditableTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName));
+}
 
 function GlobalSearchTrigger({ search }: { search: GlobalSearchState }) {
   return <button type="button" className="icon-button global-search-trigger" aria-label="Search everything" title="Search everything (⌘K)" aria-haspopup="dialog" aria-expanded={search.open} onClick={() => search.setOpen(true)}>
@@ -170,6 +175,33 @@ export function GlobalSearch({ onSelectResult }: { onSelectResult: (result: Memo
     <GlobalSearchTrigger search={search} />
     <GlobalSearchPanel search={search} />
   </div>;
+}
+
+function KeyboardHelpTrigger({ open, setOpen, className = 'icon-button keyboard-help-trigger' }: { open: boolean; setOpen: (open: boolean) => void; className?: string }) {
+  return <button type="button" className={className} aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
+    <CircleHelp size={16} />
+    <span>Keyboard shortcuts</span>
+  </button>;
+}
+
+function KeyboardHelpPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+  if (!open) return null;
+  return createPortal(
+    <ModalDialog className="keyboard-help-dialog" labelledBy="keyboard-help-title" describedBy="keyboard-help-description" onClose={onClose}>
+      <header className="keyboard-help-header">
+        <div><span className="eyebrow">Help</span><h2 id="keyboard-help-title">Keyboard shortcuts</h2></div>
+        <button type="button" className="icon-button" aria-label="Close keyboard shortcuts" onClick={onClose}><X size={15} /></button>
+      </header>
+      <p id="keyboard-help-description">Use these shortcuts when focus is not in a text field. Press Escape to close this help.</p>
+      <div className="keyboard-help-groups">
+        <section aria-labelledby="keyboard-help-global"><h3 id="keyboard-help-global">Global</h3><dl><div><dt><kbd>⌘ K</kbd> / <kbd>Ctrl K</kbd></dt><dd>Search everything</dd></div><div><dt><kbd>?</kbd></dt><dd>Open keyboard shortcuts</dd></div></dl></section>
+        <section aria-labelledby="keyboard-help-queue"><h3 id="keyboard-help-queue">Task queue</h3><dl><div><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move between queue items</dd></div><div><dt><kbd>Home</kbd> / <kbd>End</kbd></dt><dd>Jump to the first or last item</dd></div><div><dt><kbd>Enter</kbd></dt><dd>Open the focused task</dd></div><div><dt><kbd>Space</kbd></dt><dd>Select or clear the focused task</dd></div><div><dt><kbd>Escape</kbd></dt><dd>Clear the task selection</dd></div></dl></section>
+        <section aria-labelledby="keyboard-help-review"><h3 id="keyboard-help-review">Changes review</h3><dl><div><dt><kbd>J</kbd> / <kbd>K</kbd></dt><dd>Next or previous pending decision</dd></div><div><dt><kbd>[</kbd> / <kbd>]</kbd></dt><dd>Previous or next changed file</dd></div><div><dt><kbd>R</kbd></dt><dd>Mark the current decision reviewed</dd></div><div><dt><kbd>D</kbd></dt><dd>Change the diff reading mode</dd></div></dl></section>
+        <section aria-labelledby="keyboard-help-panes"><h3 id="keyboard-help-panes">Pane tabs</h3><dl><div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Move between tabs and open that pane</dd></div><div><dt><kbd>Home</kbd> / <kbd>End</kbd></dt><dd>Move to the first or last tab</dd></div><div><dt><kbd>Tab</kbd></dt><dd>Move into the selected pane or to the next control</dd></div></dl></section>
+      </div>
+    </ModalDialog>,
+    document.body,
+  );
 }
 
 export function PromotionQueueStatus() {
@@ -272,6 +304,16 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
   const workbenchPulse = useValuePulse(counts?.workbench);
   const conversationPulse = useValuePulse(conversationCount);
   const globalSearch = useGlobalSearch(onSelectGlobalSearchResult);
+  const [keyboardHelpOpen, setKeyboardHelpOpen] = useState(false);
+  useEffect(() => {
+    const handleKeyboardHelp = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.key !== '?' || event.metaKey || event.ctrlKey || event.altKey || isEditableTarget(event.target)) return;
+      event.preventDefault();
+      setKeyboardHelpOpen(true);
+    };
+    window.addEventListener('keydown', handleKeyboardHelp);
+    return () => window.removeEventListener('keydown', handleKeyboardHelp);
+  }, []);
   return <aside id="primary-nav" className="sidebar">
     <div className="brand"><PromotionQueueStatus /><span>Workbench</span></div>
     <nav onClick={releasePointerFocus}>
@@ -285,14 +327,17 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
         <InsightsNav active={view === 'insights'} onClick={onOpenInsights} />
         <button className="nav-item" onClick={onOpenSources}><Cloud size={16} /> Sources</button>
         <button className="nav-item" onClick={onOpenSettings}><Settings size={16} /> Settings</button>
+        <KeyboardHelpTrigger open={keyboardHelpOpen} setOpen={setKeyboardHelpOpen} className="nav-item keyboard-help-trigger" />
       </div>
       {isCompactNav && <button className={`nav-item mobile-nav-more ${mobileNavOpen || ['artifacts', 'insights'].includes(view) ? 'active' : ''}`} aria-controls="mobile-nav-more" aria-expanded={mobileNavOpen} onClick={onToggleMore}><MoreHorizontal size={18} /> More</button>}
     </nav>
-    <div className="sidebar-footer">
-      <div className="global-search">
-        <GlobalSearchTrigger search={globalSearch} />
+      <div className="sidebar-footer">
+        <div className="global-search">
+          <GlobalSearchTrigger search={globalSearch} />
+        </div>
+        <KeyboardHelpTrigger open={keyboardHelpOpen} setOpen={setKeyboardHelpOpen} />
       </div>
-    </div>
     <GlobalSearchPanel search={globalSearch} />
+    <KeyboardHelpPanel open={keyboardHelpOpen} onClose={() => setKeyboardHelpOpen(false)} />
   </aside>;
 }
