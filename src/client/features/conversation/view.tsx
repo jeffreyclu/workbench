@@ -223,6 +223,9 @@ function ConversationTaskPicker({ tasks, isLoading, isError, isPending, onRetry,
 }
 
 export function SharedWorkspace({ initialConversationId, initialStackOnly = false, onOpenTask, onSelectConversation, view, onViewChange }: { initialConversationId?: string | null; initialStackOnly?: boolean; onOpenTask?: (taskId: string) => void; onSelectConversation?: (conversationId: string | null) => void; view?: 'active' | 'archive'; onViewChange?: (view: 'active' | 'archive') => void }) {
+  // c6c9a112-2ab0-433f-afff-d1d3e0f87329 LEGACY-AFFECTING: The shared composer
+  // now retains failed sends and retries them in place for every existing
+  // conversation caller, including task comments and execution commands.
   const [isPhoneChrome, setIsPhoneChrome] = useState(() => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 820px) and (pointer: coarse)').matches);
   const queryClient = useQueryClient();
   const [body, setBody] = useState(() => initialConversationId ? readConversationDrafts()[initialConversationId] ?? '' : '');
@@ -690,6 +693,9 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     composerSelectionsRef.current.set(conversationId, composerSelectionFromConversation(selectionSource));
     setSelectionHydratedFor(conversationId);
   }, [conversationId, conversationDetail.data?.conversation, selectedConversation, selectionHydratedFor]);
+  // c6c9a112-2ab0-433f-afff-d1d3e0f87329 LEGACY-AFFECTING: A failed shared
+  // send leaves its draft in the mounted composer so retry never discards text
+  // or moves the editor's keyboard focus.
   const send = useMutation({
     mutationFn: async ({ intent }: { intent: 'interject' | 'queue' }) => {
       const attachments = await Promise.all(files.map(async (file) => ({
@@ -900,7 +906,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       toast.success('Conversation forked.');
       await queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
     },
-    onError: (error) => toastError('Could not fork the conversation.', error),
+    onError: (error) => toastError('Could not send the message.', error),
   });
   const cancelReply = useMutation({
     mutationFn: api.cancelSharedReply,
@@ -1133,6 +1139,13 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
 
   function submit(event: FormEvent) {
     event.preventDefault();
+    if ((body.trim() || files.length) && conversationId && !send.isPending && conversationReadyToSend) {
+      sentDraftRef.current = { conversationId, body };
+      send.mutate({ intent: 'queue' });
+    }
+  }
+
+  function retrySend() {
     if ((body.trim() || files.length) && conversationId && !send.isPending && conversationReadyToSend) {
       sentDraftRef.current = { conversationId, body };
       send.mutate({ intent: 'queue' });
@@ -1426,12 +1439,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
         {conversationDetail.isLoading ? <ConversationComposerSkeleton /> : conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <>{isPhoneChrome && mobileComposerOpen && <button type="button" className="mobile-composer-backdrop" aria-label="Dismiss composer" onClick={() => setMobileComposerOpen(false)} />}<form id="conversation-composer" className={`shared-composer${mobileComposerOpen ? ' mobile-composer-sheet' : ' is-mobile-composer-collapsed'}`} onSubmit={submit}>
           {isPhoneChrome && mobileComposerOpen && <button type="button" className="mobile-composer-handle" aria-label="Collapse composer" title="Collapse composer" onPointerDown={(event) => { mobileComposerDragStartY.current = event.clientY; }} onPointerUp={(event) => { if (mobileComposerDragStartY.current !== null && event.clientY - mobileComposerDragStartY.current >= 36) setMobileComposerOpen(false); mobileComposerDragStartY.current = null; }} onPointerCancel={() => { mobileComposerDragStartY.current = null; }} onClick={() => setMobileComposerOpen(false)}><span /></button>}
           {files.length > 0 && <div className="pending-files">{files.map((file) => <button type="button" key={`${file.name}-${file.size}`} onClick={() => setFiles((current) => current.filter((item) => item !== file))}><Paperclip size={11} /> {file.name} <X size={10} /></button>)}</div>}
-          <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} placeholder="Message Codex or Claude…" ariaLabel="Message Codex or Claude" onSubmit={() => {
-            if ((body.trim() || files.length) && conversationId && !send.isPending && conversationReadyToSend) {
-              sentDraftRef.current = { conversationId, body };
-              send.mutate({ intent: 'queue' });
-            }
-          }} disabled={send.isPending} />
+          <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} placeholder="Message Codex or Claude…" ariaLabel="Message Codex or Claude" onSubmit={retrySend} disabled={send.isPending} />
           <div className="composer-toolbar">
             <input ref={fileRef} className="visually-hidden" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
             <button type="button" className="composer-tool attach-button" onClick={() => fileRef.current?.click()} aria-label="Attach files" title="Attach files"><Paperclip size={14} /></button>
@@ -1445,7 +1453,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
             </select>
             <button className="icon-button primary composer-send" aria-label="Send message" title="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
           </div>
-          {send.error && <p className="error-message">{send.error.message}</p>}
+          {send.error && <div className="composer-send-error" role="alert"><span>Could not send: {send.error.message}</span><button type="button" className="button secondary compact" onMouseDown={(event) => event.preventDefault()} onClick={retrySend} disabled={send.isPending}>Retry</button></div>}
         </form></>}
         </div>
         {activePane === 'changes' && workspaceDiffScope && <div className="conversation-changes" aria-label="Conversation changes"><WorkspaceDiffView scope={workspaceDiffScope} activeWorkspacePaths={linkedWorkItem.data?.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : []) ?? []} reviewHandoff={linkedWorkItem.data?.runs.find((run) => run.reviewHandoff)?.reviewHandoff ?? null} taskIntent={linkedWorkItem.data?.item ? { title: linkedWorkItem.data.item.title, description: linkedWorkItem.data.item.description } : null} pullRequestUrlCandidates={githubCandidateUrls} onFixRequest={(prompt) => {

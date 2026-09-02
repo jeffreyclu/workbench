@@ -1937,6 +1937,52 @@ describe('shared room', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === '/api/shared/messages' && init?.method === 'POST' && JSON.parse(String(init.body)).executionKind === 'review')).toBe(true));
   });
 
+  it.each([
+    ['task comment', '00000000-0000-4000-8000-000000000047', undefined],
+    ['conversation message', null, undefined],
+    ['plan execution command', null, 'execute'],
+  ])('keeps failed %s text in the composer and retries without moving focus', async (_label, workItemId, executionKind) => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = `00000000-0000-4000-8000-00000000004${executionKind === 'review' ? '8' : workItemId ? '7' : '6'}`;
+    const conversation = { id: conversationId, title: `Failed ${_label}`, workItemId, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const draft = `Recover ${_label}`;
+    window.localStorage.setItem('workbench:conversation-drafts', JSON.stringify({ [conversationId]: draft }));
+    let attempts = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/shared/messages' && init?.method === 'POST') {
+        attempts += 1;
+        if (attempts === 1) return new Response(JSON.stringify({ error: 'Network unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({ message: { id: 'recovered-message', status: 'completed' }, replies: [] }), { status: 202, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (workItemId && url === `/api/work-items/${workItemId}`) return new Response(JSON.stringify({ item: { id: workItemId, archivedAt: null, status: 'ready' } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}`) return new Response(JSON.stringify({ conversation }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    const composer = await screen.findByLabelText('Message Codex or Claude');
+    composer.focus();
+    fireEvent.submit(composer.closest('form')!);
+
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    expect(composer).toHaveTextContent(draft);
+    expect(document.activeElement).toBe(composer);
+    fireEvent.mouseDown(retry);
+    fireEvent.click(retry);
+
+    await waitFor(() => expect(attempts).toBe(2));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull());
+    expect(composer).toHaveTextContent('');
+    expect(document.activeElement).toBe(composer);
+    const retries = fetchMock.mock.calls.filter(([input, init]) => String(input) === '/api/shared/messages' && init?.method === 'POST');
+    expect(JSON.parse(String(retries[1][1]?.body))).toMatchObject({ conversationId, body: draft, ...(executionKind ? { executionKind } : {}) });
+  });
+
   it('keeps retry available for each failed parallel agent reply', async () => {
     const conversationId = '00000000-0000-4000-8000-000000000033';
     const timestamp = '2026-01-01T00:00:00Z';
