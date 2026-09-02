@@ -11,9 +11,9 @@ import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext
 import { $convertFromMarkdownString, $convertToMarkdownString, TRANSFORMERS } from '@lexical/markdown';
 import { INSERT_ORDERED_LIST_COMMAND, INSERT_UNORDERED_LIST_COMMAND, $isListItemNode, ListNode, ListItemNode } from '@lexical/list';
 import { $createQuoteNode, $isQuoteNode, HeadingNode, QuoteNode } from '@lexical/rich-text';
-import { $isCodeNode, CodeNode } from '@lexical/code-core';
+import { $createCodeNode, $isCodeNode, CodeNode } from '@lexical/code-core';
 import { LinkNode } from '@lexical/link';
-import { $getRoot, $getSelection, $isRangeSelection, FORMAT_TEXT_COMMAND, KEY_ENTER_COMMAND, type EditorState, type LexicalNode, COMMAND_PRIORITY_HIGH } from 'lexical';
+import { $createTextNode, $getRoot, $getSelection, $isRangeSelection, FORMAT_TEXT_COMMAND, KEY_ENTER_COMMAND, PASTE_COMMAND, type EditorState, type LexicalNode, COMMAND_PRIORITY_HIGH } from 'lexical';
 import { Bold, Code2, Italic, List, ListOrdered, Quote } from 'lucide-react';
 
 type MarkdownComposerProps = {
@@ -48,6 +48,43 @@ function SubmitOnEnter({ onSubmit }: { onSubmit: () => void }) {
     onSubmit();
     return true;
   }, COMMAND_PRIORITY_HIGH), [editor, onSubmit]);
+  return null;
+}
+
+// An IDE's clipboard HTML wraps every source line in its own block element and
+// spells out indentation with runs of &nbsp;. Lexical's generic HTML importer
+// turns each of those per-line blocks into a separate paragraph and keeps the
+// literal non-breaking spaces, so a pasted function comes out as one blank-line-
+// separated "paragraph" per source line with mangled indentation. The
+// text/plain flavor of the same clipboard payload still has real newlines and
+// real spaces, so route anything that looks like an IDE/code paste through a
+// code block built from that plain text instead of the mangled HTML.
+const IDE_PASTE_HTML_PATTERN = /white-space:\s*pre|font-family:[^;"']*(mono|consolas|courier|menlo|monaco|cascadia|jetbrains|fira\s*code|sf\s*mono)|(?:&nbsp;){2,}|<pre[\s>]/i;
+
+function looksLikeIdePaste(html: string, text: string): boolean {
+  return text.includes('\n') && IDE_PASTE_HTML_PATTERN.test(html);
+}
+
+function CodePastePlugin() {
+  const [editor] = useLexicalComposerContext();
+  useEffect(() => editor.registerCommand(PASTE_COMMAND, (event) => {
+    const clipboardData = (event as ClipboardEvent | null)?.clipboardData;
+    if (!clipboardData) return false;
+    const html = clipboardData.getData('text/html');
+    const text = clipboardData.getData('text/plain');
+    if (!looksLikeIdePaste(html, text)) return false;
+    event.preventDefault();
+    editor.update(() => {
+      const selection = $getSelection();
+      if (!$isRangeSelection(selection)) return;
+      const codeNode = $createCodeNode();
+      // Non-breaking spaces are how HTML preserves indentation visually; a code
+      // block cares about real ones.
+      codeNode.append($createTextNode(text.replace(/\u00a0/g, ' ')));
+      selection.insertNodes([codeNode]);
+    });
+    return true;
+  }, COMMAND_PRIORITY_HIGH), [editor]);
   return null;
 }
 
@@ -130,6 +167,7 @@ function MarkdownEditor({ value, onChange, onSubmit, onFocus, onBlur, disabled, 
     <HistoryPlugin />
     <ListPlugin />
     <MarkdownShortcutPlugin transformers={TRANSFORMERS} />
+    <CodePastePlugin />
     <SyncMarkdownValue value={value} onChange={onChange} />
     <SyncEditorEditable disabled={Boolean(disabled)} />
     <FocusEditor autoFocus={autoFocus} />

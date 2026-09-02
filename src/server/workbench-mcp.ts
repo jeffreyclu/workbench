@@ -18,6 +18,7 @@ import {
   workItemReferenceTypeSchema,
 } from '../shared/contracts.js';
 import { isActionFailure } from './action-result.js';
+import { LOGQL_PRESETS, type ConnectorLogsInput, type FailureSummaryInput, type LogqlPreset, type RawTelemetryQueryInput } from './connector-telemetry.js';
 import { summarizeWorkItemChanges } from './activity-log.js';
 import { projectKey } from '../shared/project-name.js';
 import { sharedTurnKindForMessage } from './shared-room.js';
@@ -131,6 +132,9 @@ export interface WorkbenchAdminActions {
   listSourceConnections(): unknown;
   searchExternalSources(query: string, sources: z.infer<typeof searchSourcesSchema>['sources']): Promise<unknown>;
   resolveExternalSource(url: string): Promise<unknown>;
+  connectorFailureSummary(input: FailureSummaryInput): Promise<unknown>;
+  connectorLogs(input: ConnectorLogsInput): Promise<unknown>;
+  connectorObservabilityQuery(input: RawTelemetryQueryInput): Promise<unknown>;
   authorizeSource(input: { provider: 'confluence' | 'slack' | 'figma' | 'grafana' | 'gmail'; serverUrl?: string }): Promise<unknown>;
   setFigmaScope(roots: string[]): unknown;
   disconnectSource(provider: 'github' | 'slack' | 'figma' | 'confluence' | 'grafana' | 'gmail', actor: 'codex' | 'claude'): unknown;
@@ -770,6 +774,50 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     inputSchema: searchSourcesSchema.shape,
     annotations: externalReadOnlyAnnotations,
   }, async ({ query, sources }) => runTool('search_external_sources', () => admin.searchExternalSources(query, sources)));
+
+  server.registerTool('connector_failure_summary', {
+    title: 'Summarize connector failures in production',
+    description: 'Step 1 of the connector troubleshooting playbook: decides whether a reported connector problem is isolated or systemic, and which failure class it belongs to. Runs the six breakdowns from the gateway failure-taxonomy dashboard (result mix, failure reason, top failing connectors, not_authenticated vs invalid_credentials, OAuth token failures, upstream status codes) against Prometheus in one call. `connector` filters the `app` label, so pass the exact catalog id such as SALESFORCE or SF_DATA_CLOUD. If you do not know the cluster, list them with connector_observability_query using `count by (cluster) (mcp_gateway_tool_calls_total)`. Read-only.',
+    inputSchema: {
+      cluster: z.string().trim().min(1).max(200).describe('Cluster label, matched as a regex. Example: dev-deer.'),
+      connector: z.string().trim().max(200).nullable().default(null).describe('Optional `app` label regex, e.g. SALESFORCE.'),
+      windowMinutes: z.number().int().min(5).max(10_080).default(60),
+      start: z.string().trim().max(64).nullable().default(null).describe('RFC3339 start. Overrides windowMinutes.'),
+      end: z.string().trim().max(64).nullable().default(null).describe('RFC3339 end. Defaults to now.'),
+    },
+    annotations: externalReadOnlyAnnotations,
+  }, async (input) => runTool('connector_failure_summary', async () => unwrap(await admin.connectorFailureSummary(input))));
+
+  server.registerTool('connector_logs', {
+    title: 'Read connector tool-call logs',
+    description: 'Steps 2 and 3 of the connector troubleshooting playbook: pulls the actual gateway and Writer Agent log lines for one failure from Loki. Presets mirror the gateway team\'s build-logql.ts: wa-thread/backend-thread anchor a thread on skynet-backend, wa-all-tools and worker-tool list tool calls on skynet-worker, mcp-payload and mcp-execute show function name and arguments on mcp-gateway. Pass the thread id, action UUID, or org id as `filter`. Note that thread_id usually does not appear in mcp-gateway logs, so correlate those by action UUID plus time window. Query one preset at a time over a narrow window; wide ranges hit the Loki byte limit. Read-only.',
+    inputSchema: {
+      cluster: z.string().trim().min(1).max(200),
+      preset: z.enum(Object.keys(LOGQL_PRESETS) as [LogqlPreset, ...LogqlPreset[]]),
+      filter: z.string().trim().max(500).nullable().default(null).describe('Line filter: thread id, action UUID, org id, or tool name.'),
+      extra: z.string().trim().max(500).nullable().default(null).describe('Additional line filter ANDed after the preset filters.'),
+      windowMinutes: z.number().int().min(5).max(10_080).default(60),
+      start: z.string().trim().max(64).nullable().default(null),
+      end: z.string().trim().max(64).nullable().default(null),
+      limit: z.number().int().min(1).max(200).default(50),
+      direction: z.enum(['forward', 'backward']).default('backward'),
+    },
+    annotations: externalReadOnlyAnnotations,
+  }, async (input) => runTool('connector_logs', async () => unwrap(await admin.connectorLogs(input))));
+
+  server.registerTool('connector_observability_query', {
+    title: 'Run a raw connector telemetry query',
+    description: 'Escape hatch for the connector troubleshooting playbook when the two shaped tools do not cover the question: runs an arbitrary PromQL or LogQL query through the same Grafana connection. Use it to discover label values (`count by (cluster) (mcp_gateway_tool_calls_total)`), to check a metric the dashboard does not chart, or to run a hand-written LogQL stream selector. Read-only; it cannot write to Grafana or any upstream provider.',
+    inputSchema: {
+      kind: z.enum(['metrics', 'logs']),
+      expr: z.string().trim().min(1).max(4_000).describe('PromQL when kind=metrics, LogQL when kind=logs.'),
+      windowMinutes: z.number().int().min(5).max(10_080).default(60),
+      start: z.string().trim().max(64).nullable().default(null),
+      end: z.string().trim().max(64).nullable().default(null),
+      limit: z.number().int().min(1).max(200).default(50).describe('Log line cap; ignored for metrics.'),
+    },
+    annotations: externalReadOnlyAnnotations,
+  }, async (input) => runTool('connector_observability_query', async () => unwrap(await admin.connectorObservabilityQuery(input))));
 
   server.registerTool('resolve_external_source', {
     title: 'Resolve an external source URL',

@@ -23,6 +23,7 @@ import type { RuntimeCapabilities } from '../runtime-capabilities.js';
 import { LEASE_MS, OWNER_ID } from '../scheduler.js';
 import { cancelSharedReply, dispatchNextSharedTurn } from '../shared-room.js';
 import type { WorkbenchAdminActions } from '../workbench-mcp.js';
+import { TelemetryError, connectorFailureSummary, connectorLogs, connectorObservabilityQuery } from '../connector-telemetry.js';
 import { oauthCallbackBase } from '../app-exports.js';
 import type { ArtifactService } from './artifact-service.js';
 import { runDiscovery } from '../discovery.js';
@@ -308,6 +309,22 @@ export class WorkbenchAdminService {
     return isActionFailure(result) ? response.status(result.status).json(result.body) : response.status(status).json(result);
   }
 
+  /**
+   * Connector telemetry reads reuse the stored Grafana service-account token and the
+   * `grafana-api` outbound policy. A missing token or a Grafana-side error becomes an action
+   * failure so the agent sees the real reason instead of a generic internal error.
+   */
+  private async runConnectorTelemetry(run: (token: string, now: Date) => Promise<unknown>) {
+    const token = this.repository.getSourceSettings('grafana')?.token;
+    if (!token) return { status: 409, body: { error: 'Grafana is not connected. Add a Grafana service-account token in Sources.' } };
+    try {
+      return await run(token, new Date());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Grafana query failed.';
+      return { status: error instanceof TelemetryError ? 400 : 409, body: { error: message.slice(0, 500) } };
+    }
+  }
+
   mcpActions(): WorkbenchAdminActions {
     return {
       startWorkItemExecution: (workItemId, options) => this.startWorkItemExecution(workItemId, { ...options, force: true }),
@@ -354,6 +371,9 @@ export class WorkbenchAdminService {
       listSourceConnections: this.listSourceConnections,
       searchExternalSources: this.searchExternalSources,
       resolveExternalSource: this.resolveExternalSource,
+      connectorFailureSummary: (input) => this.runConnectorTelemetry((token, now) => connectorFailureSummary(input, token, now)),
+      connectorLogs: (input) => this.runConnectorTelemetry((token, now) => connectorLogs(input, token, now)),
+      connectorObservabilityQuery: (input) => this.runConnectorTelemetry((token, now) => connectorObservabilityQuery(input, token, now)),
       authorizeSource: (input) => this.authorizeSource(input),
       setFigmaScope: (roots) => this.setFigmaScope(roots),
       disconnectSource: (provider, actor) => this.disconnectSource(provider, actor),

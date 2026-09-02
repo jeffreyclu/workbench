@@ -404,3 +404,19 @@ The related rule, from the same review: do not widen a search to fields the user
 a `description ILIKE` predicate alongside the requested connector-name matching was unrequested scope
 that returns cards whose visible text has nothing to do with the term. Match what the card shows or
 is identified by, and nothing else.
+
+## "Tool unavailable" is not a blocker until deferred schemas have been loaded (2026-09-02)
+
+Jeffrey had to repeat an instruction three times because an agent reported the Workbench
+`publish_artifact` tool as "not available in this provider session" and stopped there. The tool was in
+fact present; it was only *deferred*, meaning its name was listed without a callable schema, and one
+`ToolSearch` call with `select:mcp__workbench__publish_artifact` made it usable immediately.
+
+The standing rule: before reporting that a capability is missing, attempt to load it. A tool name that
+appears in a deferred list is available, not absent. Only a real tool invocation that returns a concrete
+error counts as evidence of a blocker, and that error must be quoted. This is the same principle already
+recorded about `be.mcp-gateway` not being checked out locally: one closed door is not the end of the
+search.
+
+Reporting a false blocker is worse than a slow answer, because it pushes work back onto Jeffrey that the
+agent was fully capable of doing.
