@@ -239,6 +239,40 @@ describe('conversation router', () => {
       const idempotent = await request(`/api/shared/conversations/${conversation.id}/workspaces/selection`, 'PUT', { workspacePath: workspace });
       expect(idempotent.status).toBe(200);
     });
+
+    it('lets a repository picked during a running agent outrank that run\'s workspace', async () => {
+      const runWorkspace = mkdtempSync(join(tmpdir(), 'conversation-router-run-'));
+      try {
+        seams.listCandidateWorkspaces.mockReturnValue([workspace, runWorkspace]);
+        const item = await createWorkItem();
+        const conversation = await createConversation();
+        await request(`/api/shared/conversations/${conversation.id}/task`, 'PATCH', { workItemId: item.id });
+        database.prepare(`INSERT INTO agent_runs (id, work_item_id, kind, requested_target, agent, status, created_at, conversation_id, resolved_workspace)
+          VALUES ('run-1', ?, 'implement', 'claude', 'claude', 'running', '2026-09-02T13:38:00.000Z', ?, ?)`).run(item.id, conversation.id, runWorkspace);
+
+        // Before the reviewer picks anything, the live run's workspace is what
+        // the panel opens on.
+        const opened = await (await request(`/api/shared/conversations/${conversation.id}/workspaces`)).json() as { selectedPath: string };
+        expect(opened.selectedPath).toBe(runWorkspace);
+
+        const picked = await request(`/api/shared/conversations/${conversation.id}/workspaces/selection`, 'PUT', { workspacePath: workspace });
+        expect(picked.status).toBe(200);
+        expect((await picked.json() as { selectedPath: string }).selectedPath).toBe(workspace);
+
+        // The regression: the explorer used to snap straight back to the run's
+        // workspace here, leaving every diff answering from that repository.
+        const afterPick = await (await request(`/api/shared/conversations/${conversation.id}/workspaces`)).json() as { selectedPath: string };
+        expect(afterPick.selectedPath).toBe(workspace);
+
+        // Re-picking the run's own workspace has to be recorded rather than
+        // short-circuited, or it could never be selected back.
+        const backToRun = await request(`/api/shared/conversations/${conversation.id}/workspaces/selection`, 'PUT', { workspacePath: runWorkspace });
+        expect(backToRun.status).toBe(200);
+        expect(((await (await request(`/api/shared/conversations/${conversation.id}/workspaces`)).json()) as { selectedPath: string }).selectedPath).toBe(runWorkspace);
+      } finally {
+        rmSync(runWorkspace, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('workspace diff surfaces', () => {

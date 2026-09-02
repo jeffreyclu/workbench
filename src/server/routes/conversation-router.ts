@@ -40,10 +40,9 @@ export function createConversationRouter({ repository, database, capabilities, a
     const conversationRuns = linkedItem
       ? repository.listRuns(linkedItem.id).filter((run) => run.conversationId === conversationId && (run.status === 'queued' || run.status === 'running') && usableWorkspace(run.resolvedWorkspace))
       : [];
-    const activeRunWorkspace = conversationRuns
-      .filter((run) => run.status === 'queued' || run.status === 'running')
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.resolvedWorkspace ?? null;
-    const selected = database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversationId) as { workspace_path: string } | undefined;
+    const activeRun = [...conversationRuns].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
+    const activeRunWorkspace = activeRun?.resolvedWorkspace ?? null;
+    const selected = database.prepare('SELECT workspace_path, updated_at FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversationId) as { workspace_path: string; updated_at: string } | undefined;
     const candidates = listCandidateWorkspaces();
     // A linked task can predate its explicit workspace assignment. Reuse the
     // same repository resolver as agent dispatch so Changes is immediately
@@ -63,11 +62,18 @@ export function createConversationRouter({ repository, database, capabilities, a
     // keep an old worktree selected after the run exits.
     const savedPath = usableWorkspace(selected?.workspace_path);
     const savedPathIsUsable = Boolean(savedPath && candidates.includes(savedPath) && !isRunWorktree(savedPath));
-    // Only a live run outranks the reviewer. A linked task's own checkout is
-    // just the default opening repository; recomputing it here on every
-    // explorer refetch would silently undo the repository the reviewer picked
-    // and snap the picker back one render after each switch.
-    const selectedPath = activePath ?? (savedPathIsUsable ? savedPath : defaultPath);
+    // A live run opens the panel on its own worktree, but it does not own the
+    // picker. Ranking the run above the reviewer unconditionally made every
+    // selection inert for as long as an agent was running: the explorer snapped
+    // back to the run's worktree on the next refetch, so Changes kept answering
+    // from that repository no matter which one was picked. A repository chosen
+    // after the run started is the reviewer's deliberate override and wins;
+    // only a run that started after the last selection still outranks it, which
+    // is what keeps a detached worktree's uncommitted work from being hidden by
+    // a stale source-checkout choice. Both timestamps are ISO-8601, so string
+    // order is instant order.
+    const runOutranksSelection = Boolean(activeRun && (!selected || selected.updated_at < activeRun.createdAt));
+    const selectedPath = savedPathIsUsable && !runOutranksSelection ? savedPath : activePath ?? (savedPathIsUsable ? savedPath : defaultPath);
     // A stored choice may point to a garbage-collected run worktree. Repair
     // it server-side so every client converges on the usable checkout.
     if (selected && !savedPathIsUsable) {
@@ -122,7 +128,12 @@ export function createConversationRouter({ repository, database, capabilities, a
     // Selection writes are idempotent. Besides avoiding needless SQLite work,
     // this is a server-side circuit breaker for a regressed client that
     // accidentally replays the already-selected path after query invalidation.
-    if (explorer.selectedPath === workspacePath) return response.json(explorer);
+    // It only applies when the stored choice and the resolved selection already
+    // agree: re-picking the repository a running agent is currently pinning has
+    // to be recorded, because that write is what makes the choice outrank the
+    // run. Short-circuiting it would leave the picker permanently inert.
+    const storedSelection = database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(request.params.id) as { workspace_path: string } | undefined;
+    if (explorer.selectedPath === workspacePath && storedSelection?.workspace_path === workspacePath) return response.json(explorer);
     database.prepare(`INSERT INTO shared_conversation_workspace_selection (conversation_id, workspace_path, updated_at)
       VALUES (?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET workspace_path = excluded.workspace_path, updated_at = excluded.updated_at`)
       .run(request.params.id, workspacePath, new Date().toISOString());

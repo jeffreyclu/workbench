@@ -382,3 +382,25 @@ The general rule this instance carries: do not invent a comparison base, a secon
 control the request did not ask for. Pick the obvious default (the previous commit, the newest
 commit) and expose one control. If a second dimension seems genuinely necessary, ask before building
 it rather than shipping it and explaining it afterwards.
+
+## Feature-flagged backend changes: one entrypoint, no second evaluation (2026-09-02)
+
+When a backend change exists to serve a frontend feature that is already behind a rollout gate,
+Jeffrey's standing requirement is to "absolutely minimize blast radius and only have one single
+flagged entrypoint". The gate is evaluated once, on the client. The server must not evaluate the
+same gate a second time; it takes an explicit request parameter and honours it.
+
+This was learned the hard way on CON-218. The Connector Gateway `GET /profiles` handler evaluated
+the same `actionagentmanageconnectorsv2` Statsig gate the browser evaluates, to decide whether
+`query` should also match the connector's catalog name. One boolean evaluated in two services is two
+answers: the browser said on and deleted its client-side filter, while the gateway said off, because
+its Statsig client returns the supplied default whenever the SDK cannot initialise — which is every
+environment with no `STATSIG_API_KEY`, including local. Search then fell back to matching only the
+operator-chosen profile label and returned nothing. A server-side gate also changes behaviour for
+every other caller of a shared endpoint the moment it flips, whereas an explicit parameter confines
+the change to the one caller that sends it, by construction rather than by gate configuration.
+
+The related rule, from the same review: do not widen a search to fields the user cannot see. Adding
+a `description ILIKE` predicate alongside the requested connector-name matching was unrequested scope
+that returns cards whose visible text has nothing to do with the term. Match what the card shows or
+is identified by, and nothing else.

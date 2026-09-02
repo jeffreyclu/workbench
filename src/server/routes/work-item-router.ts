@@ -53,7 +53,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       catch { return null; } // The collector may remove a run worktree mid-request.
     };
     const isRunWorktree = (workspacePath: string | null) => Boolean(workspacePath?.includes('/.workbench/run-worktrees/'));
-    const selected = database.prepare('SELECT workspace_path FROM work_item_workspace_selection WHERE work_item_id = ?').get(workItemId) as { workspace_path: string } | undefined;
+    const selected = database.prepare('SELECT workspace_path, updated_at FROM work_item_workspace_selection WHERE work_item_id = ?').get(workItemId) as { workspace_path: string; updated_at: string } | undefined;
     const root = dirname(process.cwd());
     const candidates = readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
@@ -62,13 +62,19 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     const runWorkspaces = repository.listRuns(item.id)
       .filter((run) => (run.status === 'queued' || run.status === 'running') && usableWorkspace(run.resolvedWorkspace))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-    const activeRunWorkspace = runWorkspaces.find((run) => run.status === 'queued' || run.status === 'running')?.resolvedWorkspace ?? null;
-    const latestRunWorkspace = usableWorkspace(activeRunWorkspace) ?? usableWorkspace(runWorkspaces[0]?.resolvedWorkspace);
+    const activeRun = runWorkspaces.find((run) => run.status === 'queued' || run.status === 'running') ?? null;
+    const latestRunWorkspace = usableWorkspace(activeRun?.resolvedWorkspace) ?? usableWorkspace(runWorkspaces[0]?.resolvedWorkspace);
     const defaultPath = latestRunWorkspace ?? usableWorkspace(resolveWorkingDirectory(item));
     if (defaultPath && !candidates.includes(defaultPath)) candidates.unshift(defaultPath);
     const savedPath = usableWorkspace(selected?.workspace_path);
     const savedPathIsUsable = Boolean(savedPath && candidates.includes(savedPath) && !isRunWorktree(savedPath));
-    const selectedPath = latestRunWorkspace ?? (savedPathIsUsable ? savedPath : defaultPath);
+    // Same rule as the conversation explorer: a run's workspace is where this
+    // task opens, not what the reviewer is stuck with. A repository picked
+    // after the newest run started outranks it, and a run that has already
+    // finished never outranks a selection at all - leaving it in charge is what
+    // made the task's repository picker inert once any run had been dispatched.
+    const runOutranksSelection = Boolean(activeRun && (!selected || selected.updated_at < activeRun.createdAt));
+    const selectedPath = savedPathIsUsable && !runOutranksSelection ? savedPath : latestRunWorkspace ?? (savedPathIsUsable ? savedPath : defaultPath);
     // Persist recovery from a garbage-collected run worktree. Otherwise one
     // device can keep reintroducing a dead selection on every other device.
     if (selected && !savedPathIsUsable) {

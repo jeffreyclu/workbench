@@ -126,6 +126,36 @@ describe('work item router', () => {
     expect(seams.commitAndPushWorkspace).toHaveBeenCalledWith(workspace, 'feat: publish', 'revision-1');
   });
 
+  it('keeps a repository picked during a running agent selected, and re-pins only for a newer run', async () => {
+    const runWorkspace = mkdtempSync(join(tmpdir(), 'work-item-router-run-'));
+    // Always a candidate: the router lists the checkout's siblings, and this
+    // process runs inside one of them.
+    const pickedWorkspace = process.cwd();
+    try {
+      const item = await createItem();
+      const insertRun = database.prepare(`INSERT INTO agent_runs (id, work_item_id, kind, requested_target, agent, status, created_at, resolved_workspace)
+        VALUES (?, ?, 'implement', 'claude', 'claude', 'running', ?, ?)`);
+      insertRun.run('run-old', item.id, '2026-01-01T00:00:00.000Z', runWorkspace);
+
+      const opened = await (await request(`/api/work-items/${item.id}/workspaces`)).json() as { selectedPath: string };
+      expect(opened.selectedPath).toBe(runWorkspace);
+
+      expect((await request(`/api/work-items/${item.id}/workspaces/selection`, 'PUT', { workspacePath: pickedWorkspace })).status).toBe(200);
+      // The regression: the run's workspace used to win every recomputation, so
+      // the picker looked selected while every diff came from the run's repo.
+      const afterPick = await (await request(`/api/work-items/${item.id}/workspaces`)).json() as { selectedPath: string };
+      expect(afterPick.selectedPath).toBe(pickedWorkspace);
+
+      // A run dispatched after that choice is new information, so it opens the
+      // panel on its own workspace again.
+      insertRun.run('run-new', item.id, '2099-01-01T00:00:00.000Z', runWorkspace);
+      const afterNewerRun = await (await request(`/api/work-items/${item.id}/workspaces`)).json() as { selectedPath: string };
+      expect(afterNewerRun.selectedPath).toBe(runWorkspace);
+    } finally {
+      rmSync(runWorkspace, { recursive: true, force: true });
+    }
+  });
+
   it('rejects malformed commit requests and unknown work items before calling git', async () => {
     const item = await createItem();
     expect((await request(`/api/work-items/${item.id}/workspace-diff/commit-and-push`, 'POST', {})).status).toBe(400);
