@@ -12,7 +12,6 @@ import { createServer } from 'node:http';
 import { attachRealtimeServer, retireRealtimeClients } from './realtime.js';
 import { collectMemoryDocuments, indexPendingMemory } from './memory-index.js';
 import { shutdownActiveAgentProcesses } from './agent-runner.js';
-import { shutdownExternalActionClassifier, warmExternalActionClassifier } from './external-action-ai.js';
 import { shutdownTurnGroundingClassifier, warmTurnGroundingClassifier } from './turn-grounding-ai.js';
 import { configureRuntimeRetirement } from './runtime-retirement.js';
 
@@ -34,7 +33,6 @@ configureRuntimeRetirement(() => {
 warmDiffConfidenceModel();
 warmReviewAssist();
 warmTurnGroundingClassifier();
-warmExternalActionClassifier();
 
 // Keeps the vectorized memory index (memory-index.ts) warm so the very first
 // /api/activity-memory or /api/memory/search call after a restart does not
@@ -68,7 +66,6 @@ const shutdown = () => {
   // never displays ghost work for the lease-recovery grace period.
   repository.interruptOwnedWork(OWNER_ID, 'Workbench runtime promoted while this agent was running. Retry or continue the conversation.');
   shutdownActiveAgentProcesses();
-  shutdownExternalActionClassifier();
   shutdownTurnGroundingClassifier();
   shutdownDiffConfidenceModel();
   shutdownReviewAssist();

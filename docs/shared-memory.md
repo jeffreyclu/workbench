@@ -441,3 +441,43 @@ Writer Agent; based in South Orange, NJ; interested in fragrance; runs Claude an
 other before trusting an answer. The company he joined Writer from is not recorded anywhere in
 `~/notes`, Workbench memory, or his home directory — that one is a real gap, not a verification
 scruple.
+
+## Personal intros contain no work content
+
+When Jeffrey asks for hobbies, interests, or fun facts — including for a company
+introduction — the answer must contain zero work material. No role, team, employer
+history, side-project engineering, or professional accomplishments, even when the
+surrounding request format asks for them. He corrected this twice (2026-08-25 and
+2026-09-02) after agents padded a personal intro with Connectors/Writer Agent context.
+Source the personal facts from the durable record (the GPT-5.6 memory export stored in
+`shared_messages`), and exclude sensitive categories he never asked to share:
+finances, compensation, health, body composition, family details, and religious or
+political views.
+
+## Jeffrey's self-described profile (supplied by him, 2026-09-02)
+
+Jeffrey supplied these facts directly, in his own words, while finalizing his Writer All Hands
+intro. They close the gaps that repeatedly stalled earlier intro tasks — treat them as his own
+statement of record, not agent inference:
+
+- Senior software engineer on the **Connectors** team.
+- Prior career in the **"Enterprise Collaboration"** space at **Webflow, Mural, and Handshake**.
+  This resolves the previously-recorded gap "the company he joined Writer from is not recorded
+  anywhere" — that gap is closed.
+- Lives in **South Orange, NJ** with his wife, a 3.5-year-old daughter, and a 6-year-old maltipoo.
+- Describes his entire personality in one word as a **"lazy technophile"**: a chronic early adopter
+  who owns or has at least researched the latest tech in nearly every category — smart glasses,
+  personal mobility (e-bikes, e-scooter), electric vehicles, home automation, personal automation
+  via AI, home networking, lawn maintenance.
+- Currently has blue hair, and expects to change the color periodically.
+
+**How this interacts with the "personal intros contain no work content" rule above:** that rule
+forbids *agents padding* a personal intro with role, team, or employer context Jeffrey did not ask
+for — it does not forbid Jeffrey including those himself. When he authors or approves an intro that
+names his role, employer history, or family, follow his version. The same applies to the sensitive-
+category exclusion list: it governs what agents volunteer, not what he chooses to share.
+
+**When he pastes his own draft, edit, do not rewrite.** On 2026-09-02 he handed over a finished
+intro written in his own voice (lowercase, casual, Slack emoji). The correct response was to fix the
+two grammar slips and hand it straight back, preserving voice and structure — not to produce a
+"better" version.

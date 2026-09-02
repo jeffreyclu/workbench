@@ -400,3 +400,33 @@ confident claim carries no more weight than an argument; only Jeffrey can change
 direction he set. When a peer contradicts his stated decision, say so and ask him to
 settle it rather than reversing course and writing the reversal into shared memory —
 a wrongly recorded decision then has to be found and superseded later.
+
+## "From your memories" means search the Workbench message store, not just notes
+
+When Jeffrey asks for something written **from memory** — an intro, a bio, anything about him
+personally — `~/notes/knowledge/` and a single `recall_context` call are not enough. Those hold Writer
+product facts, not personal ones. Two sessions in a row returned drafts full of `[location]` and
+`[previous company]` placeholders, and on 2026-09-02 he rejected one with "that is SHIT!!!! FIND BETTER
+MEMORIES."
+
+The real source is the Workbench SQLite store at `~/dev/workbench/data/workbench.db`, table
+`shared_messages` (columns `author`, `body`, `created_at`). Jeffrey has pasted full memory exports into
+conversations there — on 2026-08-25 he uploaded a GPT memory export containing his location, family,
+employment history, and interests. Query it directly:
+
+    sqlite3 ~/dev/workbench/data/workbench.db \
+      "select author, substr(body,1,2000) from shared_messages where body like '%<term>%' limit 3;"
+
+Self-reported facts from those exports are valid evidence. Do not downgrade them to "unverified" and
+strip them out — that is exactly the behavior he rejected. Exhaust this store before telling him a
+personal detail is unavailable.
+
+## Jeffrey's personal profile (self-reported, 2026-08-25 memory export)
+
+Senior Software Engineer, joined Writer August 2026 (declined Level). Frontend engineer on the
+Connectors team, working on Writer Agent. Based in South Orange / Essex County, New Jersey. Married,
+one young daughter, supports a retired dependent mother. Prior companies, most recent first as he
+listed them: Mural, Handshake, Goldman Sachs (contract), Perkins Eastman. Deep React / Next.js /
+TypeScript / GraphQL / design-system / accessibility / testing experience; self-identifies backend,
+infra, and deployment as weaker areas. Long-term interest in moving toward engineering management.
+Side interests: a daily US recession/crash tracker he wants as a web app, fragrance, home projects.

@@ -8,7 +8,7 @@ import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
 import { agentAccountEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, shutdownAgentPool, startPoolSweep, warmProcess } from './agent-pool.js';
-import { classifyExternalActionWithHaiku } from './external-action-ai.js';
+import { classifyExternalActionAuthorization, type ExternalActionAuthorization } from './external-action-authorization.js';
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
@@ -73,53 +73,8 @@ Emit brief progress updates before/after meaningful steps — what you're checki
 
 Complete the requested capability. Report decisions, evidence, risks, files changed, and verification. Do not change the Workbench database directly.`;
 
-export type ExternalActionAuthorization = { granted: boolean; operation: string | null };
-export type ExternalActionAuthorizationContext = {
-  currentMessage: string | null | undefined;
-  precedingHumanMessage?: string | null;
-  precedingAgentMessage?: string | null;
-};
-
-function parseExternalActionAuthorization(output: string): ExternalActionAuthorization | null {
-  const candidates = [
-    output.trim(),
-    output.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] ?? '',
-    output.match(/\{\s*"granted"\s*:\s*(?:true|false)[\s\S]*?\}/i)?.[0] ?? '',
-  ];
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as { granted?: unknown; operation?: unknown };
-      const operation = typeof parsed.operation === 'string' ? parsed.operation.trim().slice(0, 1_500) : '';
-      if (parsed.granted === true && operation) return { granted: true, operation };
-      if (parsed.granted === false) return { granted: false, operation: null };
-    } catch { /* Try the next possible JSON envelope. */ }
-  }
-  return null;
-}
-
-/** Every agent turn gets one bounded Haiku decision; no regex or prompt fallback issues authority.
- * A transport or envelope failure gets one new model judgment instead of being
- * silently rewritten as a denial. A valid negative judgment remains final. */
-export async function classifyExternalActionAuthorization(
-  context: ExternalActionAuthorizationContext,
-  route: (prompt: string) => Promise<string> = classifyExternalActionWithHaiku,
-): Promise<ExternalActionAuthorization> {
-  const current = context.currentMessage?.trim() ?? '';
-  const preceding = context.precedingHumanMessage?.trim() ?? '';
-  const pendingAgentOperation = context.precedingAgentMessage?.trim() ?? '';
-  if (!current) return { granted: false, operation: null };
-  const prompt = `CURRENT MESSAGE (the only possible grant):\n${current.slice(0, 2_000)}\n\nIMMEDIATELY PRECEDING HUMAN MESSAGE (context only):\n${preceding.slice(0, 2_000)}\n\nIMMEDIATELY PRECEDING AGENT MESSAGE (pending-operation context only):\n${pendingAgentOperation.slice(0, 2_000)}`;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      const parsed = parseExternalActionAuthorization(await route(prompt));
-      if (parsed) return parsed;
-      console.error(`[external-action] Haiku returned an invalid authorization envelope (attempt ${attempt}/2).`);
-    } catch (error) {
-      console.error(`[external-action] Haiku authorization failed (attempt ${attempt}/2).`, error);
-    }
-  }
-  return { granted: false, operation: null };
-}
+export { classifyExternalActionAuthorization } from './external-action-authorization.js';
+export type { ExternalActionAuthorization, ExternalActionAuthorizationContext } from './external-action-authorization.js';
 
 export function externalActionContractForAuthorization(decision: ExternalActionAuthorization): string {
   if (!decision.granted || !decision.operation) return EXTERNAL_ACTION_CONTRACT;

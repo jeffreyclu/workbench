@@ -591,38 +591,34 @@ fi`;
     expect(buildResumedPrompt(item('Publish artifact'), run, capability, memory)).toContain(memory);
   });
 
-  it('uses one model judgment, including immediate pending-operation context, for external authorization', async () => {
+  it('uses only the newest command or its immediate pending-operation context for external authorization', async () => {
     const granted = await classifyExternalActionAuthorization({
       currentMessage: 'NOW YOU HAVE PERMISSION',
       precedingHumanMessage: 'Update GitHub PR #14337 with the Loom demo.',
-    }, async () => '{"granted":true,"operation":"Update GitHub PR #14337 with the Loom demo."}');
+    });
     expect(externalActionContractForAuthorization(granted)).toContain('Supervisor-issued external-action capability');
-    const denied = await classifyExternalActionAuthorization({ currentMessage: 'Sounds good.', precedingHumanMessage: 'Update GitHub PR #14337.' }, async () => '{"granted":false,"operation":null}');
+    const denied = await classifyExternalActionAuthorization({ currentMessage: 'Sounds good.', precedingHumanMessage: 'Update GitHub PR #14337.' });
     expect(externalActionContractForAuthorization(denied)).toBe(EXTERNAL_ACTION_CONTRACT);
   });
 
   it('treats a direct request to create a Linear card as the current-turn grant', async () => {
-    let classifierPrompt = '';
     const granted = await classifyExternalActionAuthorization({
       currentMessage: 'ok create a linear card to address',
       precedingHumanMessage: 'verify using slack/confluence',
-    }, async (prompt) => {
-      classifierPrompt = prompt;
-      return '{"granted":true,"operation":"Create the requested Linear card."}';
     });
 
-    expect(classifierPrompt).toContain('CURRENT MESSAGE (the only possible grant):\nok create a linear card to address');
-    expect(granted).toEqual({ granted: true, operation: 'Create the requested Linear card.' });
+    expect(granted).toEqual(expect.objectContaining({ granted: true }));
+    expect(granted.operation).toContain('Create the requested Linear ticket');
     expect(externalActionContractForAuthorization(granted)).toContain('Supervisor-issued external-action capability');
   });
 
-  it('retries an invalid authorization envelope instead of silently treating it as a denial', async () => {
-    const outputs = ['not json', '{"granted":true,"operation":"Publish the approved timesheet."}'];
-    const decision = await classifyExternalActionAuthorization(
-      { currentMessage: 'publish it' },
-      async () => outputs.shift() ?? '',
-    );
-    expect(decision).toEqual({ granted: true, operation: 'Publish the approved timesheet.' });
+  it('recognizes terse push authorization without a model or retry path', async () => {
+    const decision = await classifyExternalActionAuthorization({
+      currentMessage: 'ok push',
+      precedingAgentMessage: 'The backend branch is ready to push to origin.',
+    });
+    expect(decision.granted).toBe(true);
+    expect(decision.operation).toContain('Push Git commits');
   });
 
   it('sends both agents the same reasoning effort for a given tier', () => {
