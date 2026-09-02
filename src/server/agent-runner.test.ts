@@ -206,8 +206,10 @@ describe('classifyExecution', () => {
     const systemPromptIndex = args.indexOf('--append-system-prompt');
     expect(systemPromptIndex).toBeGreaterThan(-1);
     expect(args[systemPromptIndex + 1]).toBe(RUNNER_SYSTEM_CONTRACT);
-    expect(args[systemPromptIndex + 1]).toContain('Workbench brokers connected sources through its own source-search capability.');
-    expect(args[systemPromptIndex + 1]).toContain('A missing direct tool for Grafana');
+    expect(args[systemPromptIndex + 1]).toContain('Workbench MCP schemas may be deferred by the provider');
+    expect(args[systemPromptIndex + 1]).toContain('connector_failure_summary');
+    expect(args[systemPromptIndex + 1]).toContain('connector_logs');
+    expect(args[systemPromptIndex + 1]).toContain('connector_observability_query');
 
     const task = item('Fix the task card', 'This full description must not be replayed after session resume.');
     const claudePrompt = buildPrompt(task, { agent: 'claude', kind: 'execute', instructions: '' } as AgentRun);

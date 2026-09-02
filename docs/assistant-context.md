@@ -42,11 +42,13 @@ operations are callable through MCP, including the irreversible ones.
 - Plans and execution: `list_execution_plans`, `propose_execution_plan`,
   `resolve_execution_plan`, `list_results`, `execute_work_item`, `create_agent_run`,
   `cancel_agent_run`, `retry_agent_run`
-- Artifacts: `list_artifacts`
+- Artifacts: `list_artifacts`, `publish_artifact`
 - Local source configuration: `list_source_connections`, `set_figma_discovery_scope`,
   `configure_linear_provider`, `queue_linear_work_item`
-- External source access: `search_external_sources`, `resolve_external_source`. Both call external
-  providers only through Workbench-owned connections; provider credentials never reach an agent.
+- External source access: `search_external_sources`, `resolve_external_source`. Connector production
+  telemetry is available through `connector_failure_summary`, `connector_logs`, and
+  `connector_observability_query`. These tools call Grafana Prometheus and Loki only through
+  Workbench-owned connections; provider credentials never reach an agent.
 - Audit: `list_audit_log`
 
 Workbench writes its own routing decisions into the same activity log: the execution type

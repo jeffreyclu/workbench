@@ -125,7 +125,7 @@ export interface WorkbenchAdminActions {
   dispatchConversationTurn(conversationId: string, actor: 'codex' | 'claude', body: string, dispatchTo: 'none' | 'auto' | 'codex' | 'claude' | 'both', executionProfile: 'economy' | 'standard' | 'deep' | null): unknown;
   cancelSharedMessage(messageId: string): unknown;
   publishArtifact(input: { path: string; title?: string; workItemId?: string; conversationId?: string }): Promise<unknown>;
-  listArtifacts(view: 'published' | 'revoked' | 'all'): unknown;
+  listArtifacts(view: 'published' | 'revoked' | 'all' | 'favorites'): unknown;
   revokeArtifact(artifactId: string): Promise<unknown>;
   runDiscoveryScan(): Promise<unknown>;
   promoteRuntime(conversationId: string): unknown;
