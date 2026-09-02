@@ -23,6 +23,26 @@ class TestWebSocket {
 afterEach(() => { cleanup(); toast.clear(); TestWebSocket.instances = []; window.localStorage.clear(); window.history.replaceState(null, '', '/'); vi.unstubAllGlobals(); });
 
 describe('primary navigation', () => {
+  it('opens keyboard help from Settings or ? but not while typing', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ items: [], conversations: [], messages: [], active: 0, workbench: 0, archive: 0, proposal: null, nextCursor: null }), { headers: { 'Content-Type': 'application/json' } })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'View shortcuts' }));
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close keyboard shortcuts' }));
+    const taskSearch = screen.getByRole('textbox', { name: 'Search tasks' });
+    fireEvent.keyDown(taskSearch, { key: '?' });
+    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: '?' });
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
+  });
+
   it('keeps Search everything available on the task stack and refetches with the entered query', async () => {
     const requestedPaths: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

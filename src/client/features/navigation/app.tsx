@@ -63,7 +63,7 @@ import { InlineProjectEditor } from '../../components/project/project-field';
 import { useValuePulse } from '../../hooks/use-value-pulse';
 import { isWorkbenchProject, WORKBENCH_PROJECT_NAME } from '../../../shared/project-name';
 import { SourcesDialog } from '../source';
-import { SettingsDialog } from '../settings';
+import { KeyboardHelpDialog, SettingsDialog } from '../settings';
 import { createTaskStackViewModel } from '../../lib/stack-view-model';
 import { useRealtimeNotifications, type RealtimeNotification } from '../../hooks/realtime';
 import { useAttentionIndicator } from '../../hooks/attention-indicator';
@@ -81,6 +81,10 @@ type QueueReorderMutation = {
 };
 
 const PINNED_REMINDER_INTERVAL_MS = 30 * 60_000;
+
+function isEditableTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName));
+}
 
 function PulseCount({ value, as: Tag = 'strong' }: { value: number; as?: 'strong' | 'span' }) {
   const pulse = useValuePulse(value);
@@ -118,6 +122,7 @@ export function App() {
   const [createTaskReopenState, setCreateTaskReopenState] = useState<CreateTaskReopenState | null>(null);
   const [showSources, setShowSources] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [showProposalDetail, setShowProposalDetail] = useState(false);
   const [taskSearch, setTaskSearch] = useState('');
   // A task URL names the task, never a stack, so a link keeps working after the
@@ -132,6 +137,16 @@ export function App() {
   const [pendingTaskNavigation, setPendingTaskNavigation] = useState<string | null>(null);
   const [pendingPinnedNavigation, setPendingPinnedNavigation] = useState(false);
   const [pendingTaskReorder, setPendingTaskReorder] = useState<QueueReorderRequest | null>(null);
+  useEffect(() => {
+    const handleKeyboardHelp = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.key !== '?' || event.metaKey || event.ctrlKey || event.altKey || isEditableTarget(event.target)) return;
+      event.preventDefault();
+      setShowSettings(false);
+      setShowKeyboardHelp(true);
+    };
+    window.addEventListener('keydown', handleKeyboardHelp);
+    return () => window.removeEventListener('keydown', handleKeyboardHelp);
+  }, []);
   // A saved primary-surface task can be archived elsewhere between visits. It
   // must not turn clicking Workbench into navigation to the Archive filter.
   const primaryStackTask = useRef<{ taskId: string; stack: Extract<StackName, 'active' | 'workbench'> } | null>(null);
@@ -643,7 +658,8 @@ export function App() {
       {selectedId ? <TaskDetail key={selectedId} id={selectedId} onClose={() => navigate({ name: 'stack', stack: taskStack })} onCreated={revealCreatedTask} onRemoving={animateTaskExit} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : <section className="detail-empty"><Sparkles /><h2>Choose your next move</h2><p>Select an item or add something new.</p></section>}</>}
       {showCreate && <CreateTask onClose={() => setShowCreate(false)} onCreated={revealCreatedTask} onBackgroundError={(state) => { setCreateTaskReopenState(state); setShowCreate(true); }} initialState={createTaskReopenState} defaultProjectName={view === 'workbench' ? WORKBENCH_PROJECT_NAME : ''} />}
       {showSources && <SourcesDialog onClose={() => setShowSources(false)} />}
-      {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
+      {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} onOpenKeyboardShortcuts={() => { setShowSettings(false); setShowKeyboardHelp(true); }} />}
+      {showKeyboardHelp && <KeyboardHelpDialog onClose={() => setShowKeyboardHelp(false)} />}
     </div>
   );
 }

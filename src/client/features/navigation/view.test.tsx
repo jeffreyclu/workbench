@@ -221,31 +221,9 @@ describe('NavigationView', () => {
     expect(document.querySelectorAll('.global-search-overlay')).toHaveLength(0);
   });
 
-  it('opens discoverable keyboard help with ? and keeps it keyboard accessible', () => {
+  it('does not expose keyboard shortcuts as a navigation item', () => {
     renderNav();
-    const [footerTrigger] = screen.getAllByRole('button', { name: 'Keyboard shortcuts' });
-    expect(footerTrigger).toHaveAttribute('aria-haspopup', 'dialog');
-
-    fireEvent.keyDown(window, { key: '?' });
-
-    const dialog = screen.getByRole('dialog', { name: 'Keyboard shortcuts' });
-    const close = screen.getByRole('button', { name: 'Close keyboard shortcuts' });
-    expect(dialog).toHaveAttribute('aria-modal', 'true');
-    expect(screen.getByText('Search everything')).toBeInTheDocument();
-    expect(screen.getByText('Move between queue items')).toBeInTheDocument();
-    expect(screen.getByText('Next or previous pending decision')).toBeInTheDocument();
-    expect(screen.getByText('Move between tabs and open that pane')).toBeInTheDocument();
-    expect(close).toHaveFocus();
-
-    fireEvent.keyDown(close, { key: 'Tab' });
-    expect(close).toHaveFocus();
-    fireEvent.keyDown(dialog, { key: 'Escape' });
-    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument();
-  });
-
-  it('does not open keyboard help while typing in a text field', () => {
-    renderNav();
-    fireEvent.keyDown(document.body.appendChild(document.createElement('input')), { key: '?' });
+    expect(screen.queryByRole('button', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument();
   });
 });

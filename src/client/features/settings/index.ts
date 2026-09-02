@@ -1,1 +1,1 @@
-export { SettingsDialog } from './view';
+export { KeyboardHelpDialog, SettingsDialog } from './view';

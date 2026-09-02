@@ -69,9 +69,6 @@ nav { display: grid; gap: 3px; }
 .global-search { position: relative; }
 .global-search-trigger { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; color: #a5a49c; background: transparent; border: 1px solid #252522; border-radius: 7px; }
 .global-search-trigger:hover, .global-search-trigger:focus-visible { color: #dddcd5; background: #171714; }
-.keyboard-help-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 30px; color: #a5a49c; background: transparent; border: 1px solid #252522; border-radius: 7px; }
-.keyboard-help-trigger:hover, .keyboard-help-trigger:focus-visible { color: #dddcd5; background: #171714; }
-.keyboard-help-trigger > span { display: none; }
 .keyboard-help-dialog { width: min(720px, calc(100vw - 32px)); max-height: min(78dvh, 720px); overflow-y: auto; }
 .keyboard-help-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .keyboard-help-header h2 { margin: 3px 0 0; }
@@ -2051,8 +2048,6 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
   .sidebar:hover .sidebar-footer, .sidebar:focus-within .sidebar-footer { display: flex; padding-inline: 9px; }
   .sidebar:hover .sidebar-footer .global-search, .sidebar:hover .sidebar-footer .global-search-trigger,
   .sidebar:focus-within .sidebar-footer .global-search, .sidebar:focus-within .sidebar-footer .global-search-trigger { width: 100%; }
-  .sidebar:hover .sidebar-footer .keyboard-help-trigger, .sidebar:focus-within .sidebar-footer .keyboard-help-trigger { flex: 1; }
-  .sidebar:hover .sidebar-footer .keyboard-help-trigger > span, .sidebar:focus-within .sidebar-footer .keyboard-help-trigger > span { display: inline; }
 }
 @media (max-width: 560px) {
   .keyboard-help-groups { grid-template-columns: 1fr; }
