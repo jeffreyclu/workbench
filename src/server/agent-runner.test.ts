@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -1130,14 +1130,25 @@ fi`;
     expect(buildPrompt(item('Build it'), run)).toContain('no permission prompts or dialogs exist to approve');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('does not authorize resuming a prior plan');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('never trap a turn inside a foreground dev server');
+    expect(EXECUTION_FIDELITY_CONTRACT).toContain('compare the complete diff against its base');
+    expect(buildPrompt(item('Build it'), run)).toContain('Required execution discipline:');
+    expect(buildResumedPrompt(item('Build it'), run)).toContain('Required execution discipline:');
   });
 
-  it('makes durable recall frequent but non-mandatory for context-heavy task types', () => {
+  it('makes bounded durable retrieval mandatory for implementation and review runs', () => {
     expect(RUNNER_SYSTEM_CONTRACT).toContain('recall_context');
-    expect(RUNNER_SYSTEM_CONTRACT).toContain('research, analysis, strategy, and bug-fix');
+    expect(RUNNER_SYSTEM_CONTRACT).toContain('automatically retrieves bounded durable evidence');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('make at most one focused recall near the start');
-    expect(RUNNER_SYSTEM_CONTRACT).toContain('not a mandatory preflight');
+    expect(RUNNER_SYSTEM_CONTRACT).not.toContain('not a mandatory preflight');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('An assistant-authored statement is not corroboration for itself');
+  });
+
+  it('rejects uninvestigated requests for evidence as a harness violation', () => {
+    expect(hasPrematureEvidenceRequest('Tell me the specific failure and I will fix it.')).toBe(true);
+    expect(hasPrematureEvidenceRequest('Attach a screenshot of the error.')).toBe(true);
+    expect(hasPrematureEvidenceRequest('The database shows the exact failed run.')).toBe(false);
+    expect(hasUnverifiedCompletionClaim('Root fix is in and verified live on both assistants.')).toBe(true);
+    expect(hasUnverifiedCompletionClaim('Changed the harness; not verified end to end.')).toBe(false);
   });
 
   it('gives Claude a minimal shell and normal user tool paths', () => {

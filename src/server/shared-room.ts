@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -630,6 +630,73 @@ export function hasUntrackedContinuationClaim(output: string): boolean {
     || /\b(?:subagent|child\s+agent)\b[\s\S]{0,180}\b(?:still\s+running|in\s+progress|finish(?:es|ed)?|complete(?:s|d)?|report)\b/i.test(output);
 }
 
+const DIRECTIVE_STOPWORDS = new Set(['the', 'and', 'but', 'for', 'you', 'your', 'not', 'can', 'that', 'this', 'with', 'from', 'was', 'were', 'are', 'has', 'have', 'had', 'will', 'would', 'should', 'could', 'did', 'does', 'done', 'get', 'got', 'its', 'our', 'their', 'them', 'they', 'what', 'when', 'where', 'which', 'who', 'why', 'how', 'now', 'again', 'also', 'any', 'all', 'just', 'please', 'about', 'into', 'than', 'then', 'there', 'here', 'over', 'out', 'off', 'too']);
+
+/** Content words only, so a restated requirement still matches after rewording. */
+function directiveTokens(body: string): Set<string> {
+  return new Set(body.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/)
+    .filter((token) => token.length > 2 && !DIRECTIVE_STOPWORDS.has(token)));
+}
+
+/**
+ * Containment rather than Jaccard: Jeffrey usually repeats an instruction by
+ * adding detail to it, so the shorter statement is a subset of the longer one.
+ */
+function directiveContainment(a: Set<string>, b: Set<string>): number {
+  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+  if (!small.size) return 0;
+  let shared = 0;
+  for (const token of small) if (large.has(token)) shared += 1;
+  return shared / small.size;
+}
+
+export type RepeatedDirective = { directive: string; count: number };
+
+/**
+ * Cascading failure concentrates inside a single thread: Jeffrey restates a
+ * requirement earlier turns did not deliver, and each turn answers as if it
+ * were new. Every other guard in this file inspects one turn in isolation and
+ * therefore cannot see that shape at all.
+ */
+export function repeatedUserDirectives(messages: SharedMessage[], limit = 3): RepeatedDirective[] {
+  const groups: { tokens: Set<string>; latest: string; count: number }[] = [];
+  for (const message of messages) {
+    if (message.author !== 'jeffrey') continue;
+    const normalized = message.body.replace(/\s+/g, ' ').trim();
+    const tokens = directiveTokens(normalized);
+    // Short acknowledgements ("go", "ok, continue") carry no requirement to repeat.
+    if (tokens.size < 3) continue;
+    const match = groups.find((group) => directiveContainment(tokens, group.tokens) >= 0.6);
+    if (!match) {
+      groups.push({ tokens, latest: normalized, count: 1 });
+      continue;
+    }
+    match.count += 1;
+    match.latest = normalized;
+    // Keep the richest phrasing so a third, further-elaborated restatement still matches.
+    if (tokens.size > match.tokens.size) match.tokens = tokens;
+  }
+  return groups.filter((group) => group.count > 1)
+    .sort((left, right) => right.count - left.count)
+    .slice(0, limit)
+    .map((group) => ({ directive: compactKeyPoints(group.latest, 300), count: group.count }));
+}
+
+/**
+ * When a directive has already been repeated, the failure is the thread, not
+ * the current turn. Name it in the prompt so the agent treats the repetition as
+ * the defect report it is instead of starting another optimistic attempt.
+ */
+export function cascadeBreakerForPrompt(messages: SharedMessage[]): string {
+  const repeats = repeatedUserDirectives(messages);
+  if (!repeats.length) return '';
+  const listed = repeats.map((repeat) => `- Stated ${repeat.count} times: ${repeat.directive}`).join('\n');
+  return `CASCADE BREAKER — this thread has already failed to deliver a repeated instruction:
+${listed}
+
+Jeffrey repeating an instruction is a defect report, not emphasis. Before doing anything else, name which part of it previous turns dropped, and treat that part as the objective. Do not defend, re-explain, or extend the earlier attempt, and do not report the same completion again in different words. This turn must either deliver the repeated requirement and state the evidence that it holds, or state the exact blocker preventing it.`;
+}
+
 /**
  * A linked task's stored classification reflects intent at creation time, not
  * whatever Jeffrey is asking for in the current turn. When the current message
@@ -731,6 +798,34 @@ export function compactSharedBrief(sharedContext: string, budget = 700): string 
   return `Key points from shared brief:\n${summary}\n\n[… ${Math.max(0, sharedContext.length - summary.length).toLocaleString()} characters compacted; use recall_context for older detail when useful …]`;
 }
 
+const EXPLICIT_CONSTRAINT = /\b(?:must|need(?:s)? to|only|do not|don't|never|always|cannot|can't|supposed to|smallest|minimum|maximum|single|same(?:\s+[a-z0-9_-]+){0,3}\s+(?:flag|query|route|entrypoint)|all changes|not what|completely wrong|start (?:over|from scratch)|read (?:the )?(?:ticket|issue|history|conversation))\b/i;
+
+/**
+ * Long provider sessions compact away old turns. Preserve Jeffrey's explicit
+ * boundaries separately so the grounding supervisor and the executing agent
+ * both see them even when the ordinary transcript budget has rolled forward.
+ * Newest-first order makes later corrections visibly authoritative.
+ */
+export function conversationConstraintEvidence(messages: SharedMessage[], budget = 3_500): string {
+  const candidates = messages
+    .filter((message) => message.author === 'jeffrey' && EXPLICIT_CONSTRAINT.test(message.body))
+    .reverse();
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  let remaining = Math.max(0, budget);
+  for (const candidate of candidates) {
+    const normalized = candidate.body.replace(/\s+/g, ' ').trim();
+    const key = normalized.toLowerCase();
+    if (!normalized || seen.has(key)) continue;
+    seen.add(key);
+    const line = `- ${compactKeyPoints(normalized, Math.min(420, Math.max(0, remaining - 2)))}`;
+    if (line.length > remaining || line.length < 22) continue;
+    lines.push(line);
+    remaining -= line.length + 1;
+  }
+  return lines.join('\n');
+}
+
 function isContinuationTurn(message: string): boolean {
   const normalized = message
     .toLowerCase()
@@ -781,11 +876,13 @@ export function fallbackTurnGrounding(thread: SharedMessage[], priorGrounding?: 
 function turnGroundingInput(thread: SharedMessage[]): string {
   const latestHumanMessage = [...thread].reverse().find((message) => message.author === 'jeffrey');
   const latestHuman = latestHumanMessage?.body.replace(/\s+/g, ' ').trim().slice(0, 2_000) ?? '';
-  const priorHumans = thread.filter((message) => message.author === 'jeffrey' && message.id !== latestHumanMessage?.id).slice(-8)
-    .map((message) => `JEFFREY: ${message.body.replace(/\s+/g, ' ').trim().slice(0, 600)}`);
+  const priorHumans = thread.filter((message) => message.author === 'jeffrey' && message.id !== latestHumanMessage?.id).slice(-4)
+    .map((message) => `JEFFREY: ${message.body.replace(/\s+/g, ' ').trim().slice(0, 500)}`);
+  const constraints = conversationConstraintEvidence(thread);
   const precedingAgent = [...thread].reverse().find((message) => (message.author === 'claude' || message.author === 'codex') && (!latestHumanMessage || message.createdAt <= latestHumanMessage.createdAt));
   const agentReference = precedingAgent ? `\nMOST RECENT AGENT OUTCOME (reference-only):\n${precedingAgent.author.toUpperCase()}: ${precedingAgent.body.replace(/\s+/g, ' ').trim().slice(0, 700)}` : '';
-  return `PRIOR USER REQUESTS (reference-only; conflicting requests are superseded):\n${priorHumans.join('\n')}${agentReference}\n\nLATEST USER MESSAGE (highest authority; preserve its correction exactly):\n${latestHuman}`.slice(-7_000);
+  const constraintReference = constraints ? `\n\nEXPLICIT USER CONSTRAINTS FROM THE FULL CONVERSATION (newest first; reference-only; later corrections win):\n${constraints}` : '';
+  return `PRIOR USER REQUESTS (reference-only; conflicting requests are superseded):\n${priorHumans.join('\n')}${constraintReference}${agentReference}\n\nLATEST USER MESSAGE (highest authority; preserve its correction exactly):\n${latestHuman}`;
 }
 
 export function persistedTurnGrounding(raw: string | null | undefined): TurnGrounding | null {
@@ -883,6 +980,7 @@ This conversation is not linked to a project task, so its workspace is Workbench
 
 ${compactSharedBrief(sharedContext)}`;
   const grounding = turnGrounding ?? fallbackTurnGrounding(thread);
+  const cascadeBreaker = cascadeBreakerForPrompt(thread);
   return `${roleContext}
 
 Workbench context handles:
@@ -892,6 +990,10 @@ Workbench context handles:
 - Project: ${linked?.item.projectName ?? 'none'}
 
 ${turnGroundingForPrompt(grounding)}
+
+${cascadeBreaker}
+
+${EXECUTION_FIDELITY_CONTRACT}
 
 ${memoryContext}
 
@@ -914,6 +1016,7 @@ export function buildResumedSharedReplyPrompt(
   externalActionContract: string,
   turnGrounding: TurnGrounding,
   memoryContext = '',
+  cascadeBreaker = '',
 ): string {
   return `${externalActionContract}
 
@@ -924,6 +1027,10 @@ Workbench context handles:
 - Current reply message ID: ${messageId ?? 'none'}
 
 ${turnGroundingForPrompt(turnGrounding)}
+
+${cascadeBreaker}
+
+${EXECUTION_FIDELITY_CONTRACT}
 
 ${memoryContext}
 
@@ -1294,7 +1401,7 @@ export async function replyInSharedRoom(
       ? linkedConversation?.codexThreadId ?? null
       : linkedConversation?.claudeSessionId ?? null;
     const prompt = resumeProviderId
-      ? buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext)
+      ? buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread))
       : freshPrompt;
     if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'prompt', {
       promptChars: prompt.length,
@@ -1378,6 +1485,35 @@ export async function replyInSharedRoom(
         void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
       }, undefined, false, false);
       }
+    }
+    const turnEvents = () => repository.listAgentStreamEvents(target.conversationId).filter((event) => event.messageId === messageId);
+    const investigated = turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_read');
+    if (!investigated && hasPrematureEvidenceRequest(result.output)) {
+      const reason = 'Agent asked Jeffrey for evidence without inspecting the conversation, memory, repository, logs, or database first.';
+      if (isPairedReply) throw new Error(reason);
+      repository.updateSharedMessage(messageId, { body: `● ${reason} Recovering this tracked turn with an evidence-first pass…` });
+      const recoveryPrompt = `${freshPrompt}\n\nRecovery requirement: the previous response tried to hand evidence collection back to Jeffrey without using Workbench's available sources. Do the original task now. Inspect the existing conversation, durable context, repository, logs, and database as applicable before asking anything. Do not repeat the request for examples or details.`;
+      const recovered = await runCodexReply(recoveryPrompt, result.agent === 'codex' ? result.codexThreadId : undefined, freshPrompt);
+      if (hasPrematureEvidenceRequest(recovered.output)) throw new Error(reason);
+      result = { ...recovered, fallbackFrom: result.agent === 'claude' ? 'claude' : result.fallbackFrom, fallbackReason: reason };
+      repository.updateSharedMessage(messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
+      if (runId) repository.updateRun(runId, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
+    }
+    // A completion claim is the last point where a cascade can leave the harness
+    // and become Jeffrey's problem. Refuse to deliver one that this run did
+    // nothing to earn; an honestly reported gap passes untouched.
+    const executed = turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_write');
+    if (!executed && hasUnverifiedCompletionClaim(result.output)) {
+      const reason = 'Agent reported the work complete while this run executed no command and changed no file.';
+      if (isPairedReply) throw new Error(reason);
+      repository.updateSharedMessage(messageId, { body: `● ${reason} Recovering this tracked turn with a verification-first pass…` });
+      const recoveryPrompt = `${freshPrompt}\n\nRecovery requirement: the previous response reported this work finished, but the run executed no command and changed no file, so the claim was unverified. Do the task now against the real system and exercise the requested outcome end to end. If you cannot verify it in this run, state exactly what remains unverified instead of reporting completion.`;
+      const recovered = await runCodexReply(recoveryPrompt, result.agent === 'codex' ? result.codexThreadId : undefined, freshPrompt);
+      const recoveredExecuted = turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_write');
+      if (!recoveredExecuted && hasUnverifiedCompletionClaim(recovered.output)) throw new Error(reason);
+      result = { ...recovered, fallbackFrom: result.agent === 'claude' ? 'claude' : result.fallbackFrom, fallbackReason: reason };
+      repository.updateSharedMessage(messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
+      if (runId) repository.updateRun(runId, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
     }
     if (result.agent === 'codex') {
       const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile);

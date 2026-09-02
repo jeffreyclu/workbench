@@ -37,7 +37,10 @@ export function isExplicitMemoryRequest(message: string): boolean {
  */
 export function shouldPrefetchDurableMemory(kind: AgentRun['kind'], message: string): boolean {
   if (isExplicitMemoryRequest(message)) return true;
-  if (kind === 'research' || kind === 'strategy' || kind === 'bugfix') return true;
+  // Implementation and review turns are where an omitted standing constraint
+  // creates the most expensive rework. Retrieval is therefore part of their
+  // preflight, not an optional response to memory-flavoured wording.
+  if (kind === 'research' || kind === 'strategy' || kind === 'bugfix' || kind === 'execute' || kind === 'review') return true;
   return kind === 'analysis' && CONTEXT_DEPENDENT_ANALYSIS.test(message);
 }
 

@@ -405,6 +405,27 @@ a `description ILIKE` predicate alongside the requested connector-name matching 
 that returns cards whose visible text has nothing to do with the term. Match what the card shows or
 is identified by, and nothing else.
 
+**"One entrypoint" is literal, and stricter than it first sounds (2026-09-02).** A first attempt at
+CON-218 satisfied "no second flag evaluation" but still threaded an `unifiedCardList` field through
+the existing args type and branched on it in three places inside the existing model — extracting a
+helper, parameterising the search clause, and adding an `if` in the `orderBy` callback. Jeffrey
+rejected that outright. What he wants, in his own pseudocode, is:
+
+```
+// in the same route
+if (flag on)  -> do new shit
+if (flag off) -> do old shit
+```
+
+and "THAT IS IT, THAT'S THE ONLY CHANGE I WANT TO SEE IN EXISTING LOGIC. EVERYTHING ELSE NEEDS TO
+LIVE IN NEW LOGIC." Concretely: the branch goes at the outermost handler, the off-path stays
+byte-identical to `main`, and the whole new behaviour lives in a new module that no existing caller
+imports. Existing types, models, services, and orchestration are not modified, not parameterised, and
+not refactored "while we're here" — a diff against `main` that shows deletions in existing files has
+already failed the rule. Duplicating query-building code into the new module is the accepted cost;
+removing the feature must be deleting one directory and one `if`. The reshaped CON-218 commit is the
+reference: three new files plus a 29-line route branch, zero deletions.
+
 ## "Tool unavailable" is not a blocker until deferred schemas have been loaded (2026-09-02)
 
 Jeffrey had to repeat an instruction three times because an agent reported the Workbench

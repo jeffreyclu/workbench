@@ -235,6 +235,18 @@ summarize/compact long shared briefs and conversation history around durable
 decisions, blockers, evidence, and current requests; raw head/tail truncation
 alone loses the useful middle.
 
+Implementation and review turns now always run durable retrieval. Workbench also
+extracts explicit constraints from the full human conversation into a separate,
+newest-first ledger for both the turn-grounding supervisor and the executing
+agent. This closes the failure where long provider sessions retained general
+context but compacted away load-bearing boundaries such as “V2 folder only,”
+“reuse the existing Statsig flag,” or “one flagged entrypoint.” A response that
+asks Jeffrey for inspectable evidence without any recorded investigation is not
+accepted as a completed turn; Workbench automatically retries it with an
+evidence-first recovery instruction. The same execution-fidelity contract and
+terminal rejection run in the standalone task harness, so leaving the shared
+room cannot bypass these controls.
+
 ### Automate it; don't add a button **(always)**
 
 Jeffrey pushed back on a "Sync" button that required clicking to pull fresh data: "i don't want a

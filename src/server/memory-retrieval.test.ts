@@ -26,13 +26,14 @@ describe('durable memory prefetch', () => {
     expect(shouldPrefetchDurableMemory('execute', 'Write the intro from your memories.')).toBe(true);
   });
 
-  it('retrieves broadly for context-heavy work without taxing self-contained edits', () => {
+  it('retrieves for every implementation and review preflight plus context-heavy analysis', () => {
     expect(shouldPrefetchDurableMemory('research', 'Research approaches.')).toBe(true);
     expect(shouldPrefetchDurableMemory('strategy', 'Propose a strategy.')).toBe(true);
     expect(shouldPrefetchDurableMemory('bugfix', 'Fix the dropdown.')).toBe(true);
     expect(shouldPrefetchDurableMemory('analysis', 'Why did this regress again?')).toBe(true);
-    expect(shouldPrefetchDurableMemory('execute', 'Change the button label.')).toBe(false);
-    expect(shouldPrefetchDurableMemory('review', 'Review this diff.')).toBe(false);
+    expect(shouldPrefetchDurableMemory('execute', 'Change the button label.')).toBe(true);
+    expect(shouldPrefetchDurableMemory('review', 'Review this diff.')).toBe(true);
+    expect(shouldPrefetchDurableMemory('analysis', 'Explain this function.')).toBe(false);
   });
 
   it('expands personal memory queries so sparse requests can find profile facts', () => {

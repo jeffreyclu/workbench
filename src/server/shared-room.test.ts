@@ -6,8 +6,8 @@ import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
-import { EXTERNAL_ACTION_CONTRACT } from './agent-runner.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { EXTERNAL_ACTION_CONTRACT, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim } from './agent-runner.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, cascadeBreakerForPrompt, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
@@ -79,6 +79,61 @@ describe('compactConversationHistory', () => {
     expect(hasUntrackedContinuationClaim('The command completed with 18 passing checks.')).toBe(false);
   });
 
+  it('rejects attempts to hand inspectable evidence collection back to Jeffrey', () => {
+    expect(hasPrematureEvidenceRequest('Tell me the specific failure and I will fix it.')).toBe(true);
+    expect(hasPrematureEvidenceRequest('Point me at the file, command, or actual output.')).toBe(true);
+    expect(hasPrematureEvidenceRequest('Please attach a screenshot of the error.')).toBe(true);
+    expect(hasPrematureEvidenceRequest('I inspected the database; the missing credential is the only remaining blocker.')).toBe(false);
+  });
+
+  it('detects a restated requirement across turns even when the repeat adds detail', () => {
+    const thread = [
+      message(0, 'fix the workbench harness too.'),
+      message(1, 'Root fix is in and verified live on both assistants.'),
+      message(2, 'fix the workbench harness too to ensure that a concentrated example of cascading agent failure cannot happen'),
+    ];
+
+    const repeats = repeatedUserDirectives(thread);
+
+    expect(repeats).toHaveLength(1);
+    expect(repeats[0].count).toBe(2);
+    expect(cascadeBreakerForPrompt(thread)).toContain('CASCADE BREAKER');
+    expect(cascadeBreakerForPrompt(thread)).toContain('defect report');
+  });
+
+  it('stays silent for a thread with distinct requests and short acknowledgements', () => {
+    const thread = [
+      message(0, 'Analyse the profanity trend in the shared room database.'),
+      message(1, 'Trend confirmed across the sampled window.'),
+      message(2, 'go'),
+      message(4, 'Now migrate the artifact library to the new schema.'),
+    ];
+
+    expect(repeatedUserDirectives(thread)).toEqual([]);
+    expect(cascadeBreakerForPrompt(thread)).toBe('');
+  });
+
+  it('treats a completion claim as unverified unless the reply names its own gap', () => {
+    expect(hasUnverifiedCompletionClaim('Root fix is in and verified live on both assistants.')).toBe(true);
+    expect(hasUnverifiedCompletionClaim('Fixed the cascade in the shared-room harness.')).toBe(true);
+    expect(hasUnverifiedCompletionClaim('Changed the prompt builder; not verified end to end.')).toBe(false);
+    expect(hasUnverifiedCompletionClaim('Here is what the profanity trend shows across the window.')).toBe(false);
+  });
+
+  it('carries the cascade breaker into both the fresh and resumed provider prompts', () => {
+    const thread = [
+      message(0, 'fix the workbench harness too.'),
+      message(1, 'Done.'),
+      message(2, 'fix the workbench harness too to ensure cascading agent failure cannot happen'),
+    ];
+
+    const fresh = buildSharedReplyPrompt('claude', 'Shared context.', '', thread);
+    const resumed = buildResumedSharedReplyPrompt('', 'conversation', 'message', EXTERNAL_ACTION_CONTRACT, fallbackTurnGrounding(thread), '', cascadeBreakerForPrompt(thread));
+
+    expect(fresh).toContain('CASCADE BREAKER');
+    expect(resumed).toContain('CASCADE BREAKER');
+  });
+
   it('keeps the newest turns, compacts older turns, and respects its prompt budget', () => {
     const messages = Array.from({ length: 14 }, (_, index) => message(index, `turn-${index} ${'x'.repeat(2_000)}`));
     const history = compactConversationHistory(messages, 3_000);
@@ -103,6 +158,45 @@ describe('compactConversationHistory', () => {
     const compacted = compactKeyPoints(`Opening detail\n${'x'.repeat(2_000)}\nDecision: retrieve only relevant memories, up to 100.\n${'y'.repeat(2_000)}`, 250);
 
     expect(compacted).toContain('Decision: retrieve only relevant memories, up to 100.');
+  });
+
+  it('preserves explicit constraints from the full conversation newest first', () => {
+    const messages = Array.from({ length: 30 }, (_, index) => message(index, index % 2
+      ? `Agent reply ${index}`
+      : index === 0
+        ? 'All changes must stay inside the V2 folder.'
+        : index === 20
+          ? 'Use the same Statsig flag as the frontend.'
+          : index === 28
+            ? 'Only one flagged entrypoint. Start from scratch.'
+            : `User turn ${index}`));
+    const evidence = conversationConstraintEvidence(messages);
+
+    expect(evidence).toContain('All changes must stay inside the V2 folder.');
+    expect(evidence).toContain('Use the same Statsig flag as the frontend.');
+    expect(evidence).toContain('Only one flagged entrypoint. Start from scratch.');
+    expect(evidence.indexOf('Only one flagged entrypoint')).toBeLessThan(evidence.indexOf('All changes must stay'));
+  });
+
+  it('sends old full-conversation constraints to the grounding supervisor', async () => {
+    const messages = Array.from({ length: 30 }, (_, index) => message(index, index % 2
+      ? `Agent reply ${index}`
+      : index === 0
+        ? 'All implementation changes must stay inside connectors-v2.'
+        : index === 28
+          ? 'Fix the remaining pagination issue.'
+          : `User turn ${index}`));
+    let supervisorInput = '';
+
+    await resolveTurnGrounding(messages, async (input) => {
+      supervisorInput = input;
+      return JSON.stringify({ objective: 'Fix pagination.', acceptanceCriteria: [], exclusions: [], continuation: false });
+    });
+
+    expect(supervisorInput).toContain('EXPLICIT USER CONSTRAINTS FROM THE FULL CONVERSATION');
+    expect(supervisorInput).toContain('All implementation changes must stay inside connectors-v2.');
+    expect(supervisorInput).toContain('LATEST USER MESSAGE');
+    expect(supervisorInput).toContain('Fix the remaining pagination issue.');
   });
 
   it('resolves continue to the preceding concrete human objective without adopting agent narration', () => {
@@ -247,6 +341,8 @@ describe('compactConversationHistory', () => {
     expect(prompt).toContain('Current reply message ID: message-id');
     expect(prompt).toContain('already present in this session');
     expect(prompt).toContain('Retrieved durable context: Jeffrey works at Writer.');
+    expect(prompt).toContain('Required execution discipline:');
+    expect(prompt).toContain('compare the complete diff against its base');
     expect(prompt).not.toContain('Reference-only conversation transcript:');
   });
 
