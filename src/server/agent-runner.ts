@@ -259,7 +259,15 @@ export function blockedPersistentForegroundCommand(command: string): boolean {
     if (/(?:^|\s)(?:\.\/)?scripts\/worktree-start\.sh(?:\s|$)/i.test(value)) return true;
     if (/(?:^|\s)(?:tail\s+-f|while\s+(?:true|:)|watch\s+-n)(?:\s|$)/i.test(value)) return true;
     if (/(?:^|\s)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|serve|start)(?:\s|$)/i.test(value)) return true;
-    if (/(?:^|\s)(?:npx\s+)?(?:vite|next\s+dev|webpack(?:-dev-server)?)(?:\s|$)/i.test(value)) return true;
+    const vite = /(?:^|\s)(?:npx(?:\s+--[^\s]+)*\s+)?vite(?:\s+([^;&|]*))?$/i.exec(value);
+    if (vite) {
+      const args = (vite[1] ?? '').replace(/["']/g, ' ').trim().split(/\s+/).filter(Boolean);
+      // `vite` defaults to the persistent dev server, as do `dev`, `serve`,
+      // and `preview`. `vite build` is a finite verification command; it must
+      // remain executable unless the build itself explicitly enables watch.
+      if (!args.includes('build') && !args.some((argument) => /^(?:--help|-h|--version|-v)$/.test(argument))) return true;
+    }
+    if (/(?:^|\s)(?:next\s+dev|webpack(?:-dev-server)?)(?:\s|$)/i.test(value)) return true;
     return /(?:^|\s)(?:--watch|--watchAll)(?:\s|$)/.test(value);
   });
 }
