@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { commitAndPushWorkspace, getWorkspaceBranchDiff, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceFileSource, getWorkspaceRefDiff, getWorkspaceWorktreeDiff, listWorkspaceCommits, listWorkspaceRefCommits, listWorkspaceRefs, parseWorkspacePatch, parseWorktreeList, repositoryIdentity, resolveWorkspaceRepository, snapshotsForRepository, workspaceEditorUrl, workspaceStatuses } from './workspace-diff.js';
 
@@ -57,6 +57,31 @@ describe('workspace diff parsing', () => {
     );
 
     expect(kept.map((snapshot) => snapshot.id)).toEqual([selected, worktree, collected]);
+  });
+
+  /** Jeffrey works a ticket in a sibling worktree while the main clone holds
+   * different work. Both are separate entries in the repository picker and both
+   * share one Git common directory, so scoping records by repository alone put
+   * the main clone's changes on screen under the worktree's name. */
+  it('keeps a sibling worktree checkout separate from the clone it was created from', async () => {
+    const clone = temporaryGitWorkspace();
+    writeFileSync(join(clone, 'seed.ts'), 'export {};\n');
+    execFileSync('git', ['add', '--all'], { cwd: clone });
+    execFileSync('git', ['commit', '--quiet', '-m', 'seed'], { cwd: clone });
+    const sibling = `${clone}-ticket`;
+    temporaryDirectories.push(sibling);
+    execFileSync('git', ['worktree', 'add', '--quiet', '--detach', sibling], { cwd: clone });
+    const runWorktree = join(homedir(), '.workbench', 'run-worktrees', 'seed-abc', 'run-1');
+    const record = (workspacePath: string, repositoryIdentity: string | null = null) => ({ id: workspacePath, repositoryIdentity, diff: { workspacePath } });
+    const identity = await repositoryIdentity(clone);
+
+    const inSibling = await snapshotsForRepository([record(clone), record(sibling), record(runWorktree, identity)], sibling);
+    const inClone = await snapshotsForRepository([record(clone), record(sibling), record(runWorktree, identity)], clone);
+
+    // Each checkout owns what it captured; the ephemeral run worktree, whose
+    // directory is collected after the run, still belongs to the repository.
+    expect(inSibling.map((snapshot) => snapshot.id)).toEqual([sibling, runWorktree]);
+    expect(inClone.map((snapshot) => snapshot.id)).toEqual([clone, runWorktree]);
   });
 
   it('shows no other repository history for a directory Git cannot identify', async () => {

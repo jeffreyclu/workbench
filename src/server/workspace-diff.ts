@@ -211,6 +211,15 @@ export function repositoryIdentitySync(workspacePath: string): string | null {
  * a path is only re-read for legacy records that predate that. A record that
  * can be attributed to no repository is dropped - showing it in every
  * repository is the failure this exists to prevent.
+ *
+ * Sharing a repository is not enough on its own. Two long-lived checkouts of
+ * one repository - a main clone and the sibling worktree a ticket is built in
+ * - share a Git common directory but are separate entries in the repository
+ * picker, holding different branches and different work. Their records are
+ * scoped to the checkout that captured them, or picking either one shows the
+ * other one's changes under its name. A run worktree is the deliberate
+ * exception: it exists for a single run and is collected afterwards, so its
+ * records belong to the repository rather than to a directory that is gone.
  */
 export async function snapshotsForRepository<T extends { repositoryIdentity: string | null; diff: { workspacePath: string } }>(snapshots: T[], workspacePath: string): Promise<T[]> {
   const identity = await repositoryIdentity(workspacePath);
@@ -227,7 +236,17 @@ export async function snapshotsForRepository<T extends { repositoryIdentity: str
   // under a different repository's name in the picker. Such a checkout can
   // only own the records captured from that exact path.
   if (!identity) return snapshots.filter((snapshot) => attributedTo(snapshot) === null && snapshot.diff.workspacePath === workspacePath);
-  return snapshots.filter((snapshot) => attributedTo(snapshot) === identity);
+  const selectedCheckout = resolveWorkspaceRepository(workspacePath);
+  const capturedHere = (snapshot: T) => {
+    const path = resolve(snapshot.diff.workspacePath);
+    if (path.includes('/.workbench/run-worktrees/')) return true;
+    if (isWithinWorkspace(selectedCheckout, path)) return true;
+    // A checkout that is gone cannot be a competing entry in the repository
+    // picker, so it cannot be the leak this scoping exists to stop. Only the
+    // identity recorded at capture time can still place it.
+    return !existsSync(path);
+  };
+  return snapshots.filter((snapshot) => attributedTo(snapshot) === identity && capturedHere(snapshot));
 }
 
 export async function getWorkspaceDiff(workspacePath: string): Promise<WorkspaceDiff> {
