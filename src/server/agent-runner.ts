@@ -16,12 +16,12 @@ import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWo
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
+import { ProviderTurnLifecycle, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-lifecycle.js';
 
 const MAX_OUTPUT_BYTES = 1_000_000;
 /** How long a run may produce no stream event before its output gets a visible elapsed marker. */
 const QUIET_PROGRESS_MS = 8_000;
 const HEARTBEAT_TICK_MS = 4_000;
-const QUIET_STEERING_NUDGE_MS = 3 * 60_000;
 /**
  * Partial messages arrive a token at a time and every emit rewrites the whole
  * growing body in SQLite. Four writes a second still reads as live typing while
@@ -562,6 +562,33 @@ export class AgentTerminalWarningError extends Error {
   }
 }
 
+class AgentProviderStallError extends Error {
+  constructor(
+    readonly agent: AgentRun['agent'],
+    readonly reason: ProviderTurnTimeoutReason,
+    readonly sessionId: string | null,
+    readonly checkpoint: string,
+    readonly usage: AgentUsage,
+  ) {
+    super(`${agent} provider lifecycle timed out waiting for ${reason === 'first_activity' ? 'first meaningful activity' : 'continued activity'}.`);
+    this.name = 'AgentProviderStallError';
+  }
+}
+
+function providerStallError(value: unknown): AgentProviderStallError | null {
+  if (value instanceof AgentProviderStallError) return value;
+  // Provider failures cross promise/process boundaries and test bundles can
+  // duplicate module identities. Preserve the structured recovery contract
+  // without depending exclusively on one JavaScript prototype identity.
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Partial<AgentProviderStallError>;
+  return candidate.name === 'AgentProviderStallError'
+    && (candidate.reason === 'first_activity' || candidate.reason === 'idle_activity')
+    && typeof candidate.agent === 'string'
+    ? candidate as AgentProviderStallError
+    : null;
+}
+
 /**
  * Streamed progress is the record of what the turn actually did; the final
  * report is its summary. A failed turn is exactly when both are worth keeping,
@@ -833,7 +860,7 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
   if (agent === 'codex') {
     const model = modelOverride ?? modelFor(agent, profile);
     return {
-      command: 'codex',
+      command: process.env.CODEX_BIN?.trim() || 'codex',
       // The task workspace picks a working directory; it is not a filesystem boundary.
       // --ignore-user-config excludes every personal MCP server. Add back only
       // Workbench's loopback-local MCP surface so Codex does not try to curl
@@ -843,7 +870,7 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
   }
   const model = modelOverride ?? modelFor(agent, profile);
   return {
-    command: 'claude',
+    command: process.env.CLAUDE_BIN?.trim() || 'claude',
     // Claude treats --add-dir as an allowlist. Include the home directory so
     // a task-linked agent can access sibling repos and user documents.
     // One Workbench run must use one Claude context. Task subagents each create
@@ -1199,6 +1226,10 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     const canUseWarmPool = poolEligible;
     const claimed = canUseWarmPool ? claimWarmProcess(agent, cwd, command, args, accountProfile) : null;
     const child = claimed ?? spawnFresh();
+    // Attach at the spawn boundary. ENOENT can arrive before the rest of the
+    // stream lifecycle is wired; waiting for a later close event leaves the
+    // promise pending because a process that never spawned has nothing to close.
+    child.once('error', reject);
     const unregisterProcess = registerActiveAgentProcess(child);
     // Skip background replenishment under the test runner: it spawns a real
     // extra process, which pre-existing tests asserting exact spawn logs
@@ -1215,6 +1246,7 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     let stopping = false;
     let cancellationRequested = false;
     let terminationError: Error | null = null;
+    let providerLifecycle: ProviderTurnLifecycle | null = null;
     const stopProcessTree = () => {
       if (stopping) return;
       stopping = true;
@@ -1224,6 +1256,7 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     };
     const cancel = () => {
       cancellationRequested = true;
+      providerLifecycle?.terminal();
       stopProcessTree();
     };
     const reapResidualProcessTree = () => {
@@ -1269,7 +1302,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
     let peakContextTokens = 0;
     let providerCostUsd: number | null = null;
     const cacheHandoffRequested = false;
-    let steerAgentInput: AgentInputSteering | null = null;
     // One successful stream-json write corresponds to one terminal Claude
     // result. Keep stdin open until every accepted input has reached that
     // boundary; otherwise the initial result can close the process while an
@@ -1323,7 +1355,19 @@ ${AGENT_EXECUTION_CONTRACT}`;
     // in `progress`, so it cannot leak into the accumulated output or the report.
     const startedAt = Date.now();
     let lastEventAt = startedAt;
-    let lastNudgedEventAt = 0;
+    const lifecycleTimeouts = providerTurnTimeouts();
+    providerLifecycle = new ProviderTurnLifecycle({
+      ...lifecycleTimeouts,
+      onTimeout: (reason) => {
+        if (stopping || cancellationRequested || signal?.aborted || child.exitCode !== null) return;
+        const checkpoint = terminalExitCheckpoint(finalOutput, progress);
+        terminationError = new AgentProviderStallError(agent, reason, eventContext.sessionId ?? null, checkpoint, { ...reportedUsage });
+        progress += `${progress ? '\n\n' : ''}● ${agent === 'claude' ? 'Claude' : 'Codex'} stopped producing provider activity. Recovering the tracked turn…`;
+        flushProgress(true);
+        providerLifecycle?.terminal();
+        stopProcessTree();
+      },
+    });
     let lastFlushAt = 0;
     let pendingFlush: NodeJS.Timeout | null = null;
     const flushProgress = (force = false) => {
@@ -1351,11 +1395,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
     };
     const heartbeat = setInterval(() => {
       const quietFor = Date.now() - lastEventAt;
-      if (agent === 'claude' && quietFor >= QUIET_STEERING_NUDGE_MS && steerAgentInput && lastNudgedEventAt !== lastEventAt) {
-        lastNudgedEventAt = lastEventAt;
-        void steerAgentInput('Harness recovery: no provider event has arrived for three minutes. Do not start new work. If a command is still running, wait for it; otherwise finish the original request now and report the observed result or exact blocker. This grants no new external-action capability.');
-        onProgress?.(`${progress.slice(-MAX_OUTPUT_BYTES)}${progress ? '\n\n' : ''}● Recovering a silent provider turn…`);
-      }
       if (quietFor < QUIET_PROGRESS_MS) return;
       const elapsedSeconds = Math.round((Date.now() - startedAt) / 1_000);
       const elapsed = elapsedSeconds < 90 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
@@ -1369,7 +1408,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
       const lines = buffered.split('\n');
       buffered = lines.pop() ?? '';
       for (const line of lines.filter(Boolean)) {
-        lastEventAt = Date.now();
         const toolCommand = toolCommandFromAgentEvent(agent, line);
         // Ordinary test launchers are guarded by the PATH shim using the
         // Bash tool's real cwd. Only direct binary bypasses are decided here,
@@ -1395,6 +1433,11 @@ ${AGENT_EXECUTION_CONTRACT}`;
         terminalError ||= terminalAgentError(agent, line) ?? '';
         try { const usage = usageFromEvent(agent, JSON.parse(line)); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
         const event = readableAgentEvent(agent, line, eventContext);
+        const meaningfulActivity = Boolean(event.delta || event.progress || event.final || event.audit.length);
+        if (meaningfulActivity) {
+          lastEventAt = Date.now();
+          providerLifecycle?.activity();
+        }
         // A new text block starting mid-stream needs its own line — without
         // this, its first delta glues directly onto whatever progress line
         // (e.g. a tool-use marker) came right before it.
@@ -1437,10 +1480,17 @@ ${AGENT_EXECUTION_CONTRACT}`;
     });
     child.on('error', (error) => {
       terminationError = error;
+      providerLifecycle?.terminal();
+      unregisterProcess();
+      clearInterval(heartbeat);
+      if (pendingFlush) clearTimeout(pendingFlush);
+      signal?.removeEventListener('abort', cancel);
       stopProcessTree();
+      reject(error);
     });
     child.on('close', (code) => {
       unregisterProcess();
+      providerLifecycle?.terminal();
       clearInterval(heartbeat);
       if (pendingFlush) clearTimeout(pendingFlush);
       if (forceKillTimer) clearTimeout(forceKillTimer);
@@ -1475,6 +1525,7 @@ ${AGENT_EXECUTION_CONTRACT}`;
     // handlers above already account for via cancellationRequested/terminationError.
     child.stdin.on('error', () => {});
     if (agent !== 'claude') {
+      providerLifecycle.accepted();
       child.stdin.end(efficientPrompt);
       return;
     }
@@ -1490,11 +1541,13 @@ ${AGENT_EXECUTION_CONTRACT}`;
       });
     });
     sendClaudeInput.cancel = cancel;
-    steerAgentInput = sendClaudeInput;
     // Initial task input must be first; then a live interjection may append to
     // the same provider session.
     void sendClaudeInput(efficientPrompt).then((accepted) => {
-      if (accepted) onSteeringReady?.(sendClaudeInput);
+      if (accepted) {
+        providerLifecycle?.accepted();
+        onSteeringReady?.(sendClaudeInput);
+      }
     });
   });
 }
@@ -1555,6 +1608,7 @@ export async function runAgentCommandWithFallback(
     let segmentPrompt = prompt;
     let segmentResume = resumeSessionId;
     let result: AgentCommandResult;
+    let stallRecoveryUsed = false;
     for (;;) {
       const before = aggregate;
       const segmentController = new AbortController();
@@ -1568,6 +1622,28 @@ export async function runAgentCommandWithFallback(
           const aggregateUsage = addUsage(before, usage);
           onUsage?.(aggregateUsage, agent);
         }, onAudit, accountProfile, modelOverride, onSteeringReady, segmentResume, poolEligible && segmentPrompt === prompt, kind);
+      } catch (error) {
+        const stalled = providerStallError(error);
+        const stallMessage = error instanceof Error ? error.message : String(error);
+        const lifecycleTimeout = /provider lifecycle timed out waiting for (?:first meaningful activity|continued activity)/i.test(stallMessage);
+        if ((!stalled && !lifecycleTimeout) || stallRecoveryUsed || signal?.aborted) throw error;
+        stallRecoveryUsed = true;
+        aggregate = addUsage(aggregate, stalled?.usage ?? { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null });
+        onUsage?.(aggregate, primary);
+        const providerName = primary === 'claude' ? 'Claude' : 'Codex';
+        const stallReason = stalled?.reason ?? (/first meaningful activity/i.test(stallMessage) ? 'first_activity' : 'idle_activity');
+        if (stallReason === 'first_activity') {
+          onProgress?.(`● ${providerName} accepted the turn but produced no activity. Retrying once in a fresh session…`);
+          segmentPrompt = expiredSessionPrompt ?? prompt;
+          segmentResume = undefined;
+        } else {
+          onProgress?.(`● ${providerName} stopped producing activity. Resuming the same tracked session once…`);
+          const checkpoint = compactPromptSection(stalled?.checkpoint ?? (error instanceof AgentTerminalWarningError ? error.checkpoint : ''), 6_000);
+          segmentPrompt = `Harness lifecycle recovery: the previous provider process stopped emitting activity and was terminated. Continue the original request from the actual repository state. Do not repeat completed work. Inspect before editing, finish the task, and report observed results.${checkpoint ? `\n\nVisible checkpoint from the interrupted process:\n${checkpoint}` : ''}`;
+          segmentResume = stalled?.sessionId ?? undefined;
+          if (!segmentResume) segmentPrompt = `${expiredSessionPrompt ?? prompt}\n\n${segmentPrompt}`;
+        }
+        continue;
       } finally {
         signal?.removeEventListener('abort', cancelSegment);
       }

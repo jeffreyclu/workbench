@@ -10,14 +10,14 @@ import { EXTERNAL_ACTION_CONTRACT } from './agent-runner.js';
 import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
-const originalCodexFirstActivityTimeout = process.env.WORKBENCH_CODEX_FIRST_ACTIVITY_TIMEOUT_MS;
+const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
   resetPoolForTest();
   process.env.PATH = originalPath;
-  if (originalCodexFirstActivityTimeout === undefined) delete process.env.WORKBENCH_CODEX_FIRST_ACTIVITY_TIMEOUT_MS;
-  else process.env.WORKBENCH_CODEX_FIRST_ACTIVITY_TIMEOUT_MS = originalCodexFirstActivityTimeout;
+  if (originalProviderFirstActivityTimeout === undefined) delete process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
+  else process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS = originalProviderFirstActivityTimeout;
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -531,7 +531,7 @@ describe('shared-room Codex warming', () => {
     writeFileSync(join(directory, 'codex'), fakeAppServer);
     chmodSync(join(directory, 'codex'), 0o755);
     process.env.PATH = directory;
-    process.env.WORKBENCH_CODEX_FIRST_ACTIVITY_TIMEOUT_MS = '50';
+    process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS = '50';
 
     const progress: string[] = [];
     const result = await runSteerableCodex(
@@ -541,7 +541,7 @@ describe('shared-room Codex warming', () => {
     );
 
     expect(result.output).toBe('Recovered on a fresh thread.');
-    expect(progress).toContain('● Codex stalled before producing output. Restarting this turn once in a fresh session…');
+    expect(progress).toContain('● Codex accepted the turn but produced no activity. Retrying once in a fresh session…');
     const requests = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     expect(requests.some((request) => request.method === 'thread/resume')).toBe(true);
     expect(requests.some((request) => request.method === 'thread/start')).toBe(true);

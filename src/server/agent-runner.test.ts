@@ -20,10 +20,20 @@ vi.mock('./review-auto-score.js', () => ({
 }));
 
 const originalPath = process.env.PATH;
+const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
+const originalProviderIdleActivityTimeout = process.env.WORKBENCH_PROVIDER_IDLE_ACTIVITY_TIMEOUT_MS;
+const originalCodexBin = process.env.CODEX_BIN;
+const originalClaudeBin = process.env.CLAUDE_BIN;
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
   process.env.PATH = originalPath;
+  if (originalProviderFirstActivityTimeout === undefined) delete process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
+  else process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS = originalProviderFirstActivityTimeout;
+  if (originalProviderIdleActivityTimeout === undefined) delete process.env.WORKBENCH_PROVIDER_IDLE_ACTIVITY_TIMEOUT_MS;
+  else process.env.WORKBENCH_PROVIDER_IDLE_ACTIVITY_TIMEOUT_MS = originalProviderIdleActivityTimeout;
+  if (originalCodexBin === undefined) delete process.env.CODEX_BIN; else process.env.CODEX_BIN = originalCodexBin;
+  if (originalClaudeBin === undefined) delete process.env.CLAUDE_BIN; else process.env.CLAUDE_BIN = originalClaudeBin;
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -443,6 +453,58 @@ describe('classifyExecution', () => {
     rmSync(promptFile, { force: true });
   });
 
+  it('retries a Claude turn once when transport starts but the provider emits no meaningful activity', async () => {
+    const markerFile = join(tmpdir(), `workbench-silent-claude-${Date.now()}`);
+    const completed = JSON.stringify({ type: 'result', result: 'Completed after lifecycle recovery.' });
+    const initialized = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'silent-session' });
+    const body = `IFS= read -r prompt
+if [ ! -f '${markerFile}' ]; then
+  printf '%s' 'started' > '${markerFile}'
+  printf '%s\n' '${initialized}'
+  /bin/sleep 30
+else
+  printf '%s\n' '${completed}'
+fi`;
+    const fixture = fakeAgentDirectory('exit 1', body);
+    process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS = '500';
+    const progress: string[] = [];
+
+    const result = await runAgentCommandWithFallback('claude', fixture.directory, 'Complete the task.', (partial) => progress.push(partial));
+
+    expect(result.output).toBe('Completed after lifecycle recovery.');
+    expect(readFileSync(fixture.log, 'utf8').trim().split('\n')).toEqual(['claude', 'claude']);
+    expect(progress.some((entry) => entry.includes('Retrying once in a fresh session'))).toBe(true);
+    rmSync(markerFile, { force: true });
+  });
+
+  it('resumes the same Claude session once when an active turn later stops producing activity', async () => {
+    const markerFile = join(tmpdir(), `workbench-idle-claude-${Date.now()}`);
+    const argsFile = join(tmpdir(), `workbench-idle-claude-args-${Date.now()}`);
+    const initialized = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'tracked-claude-session' });
+    const progressEvent = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Implemented the first step.' }] } });
+    const completed = JSON.stringify({ type: 'result', result: 'Completed after resuming the tracked session.' });
+    const body = `IFS= read -r prompt
+printf '%s\n' "$*" >> '${argsFile}'
+if [ ! -f '${markerFile}' ]; then
+  printf '%s' 'started' > '${markerFile}'
+  printf '%s\n%s\n' '${initialized}' '${progressEvent}'
+  /bin/sleep 30
+else
+  printf '%s\n' '${completed}'
+fi`;
+    const fixture = fakeAgentDirectory('exit 1', body);
+    process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS = '500';
+    process.env.WORKBENCH_PROVIDER_IDLE_ACTIVITY_TIMEOUT_MS = '200';
+
+    const result = await runAgentCommandWithFallback('claude', fixture.directory, 'Complete the task.');
+
+    expect(result.output).toBe('Completed after resuming the tracked session.');
+    expect(readFileSync(fixture.log, 'utf8').trim().split('\n')).toEqual(['claude', 'claude']);
+    expect(readFileSync(argsFile, 'utf8')).toContain('--resume tracked-claude-session');
+    rmSync(markerFile, { force: true });
+    rmSync(argsFile, { force: true });
+  });
+
   it('builds a bounded cache continuation and preserves null-aware usage accounting', () => {
     expect(CACHE_HANDOFF_INSTRUCTION).toContain('do not start another tool');
     expect(hasCacheHandoff(`${CACHE_HANDOFF_MARKER} saved`)).toBe(true);
@@ -815,6 +877,7 @@ describe('classifyExecution', () => {
   it('terminates and settles when spawning the child emits an error', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-agent-missing-'));
     temporaryDirectories.push(directory);
+    process.env.CODEX_BIN = join(directory, 'missing-codex');
     process.env.PATH = directory;
 
     await expect(runAgentCommandWithFallback('codex', directory, 'Fail to spawn.')).rejects.toThrow(/ENOENT|spawn codex/);

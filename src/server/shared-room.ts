@@ -15,6 +15,7 @@ import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWo
 import { groundTurnWithHaiku } from './turn-grounding-ai.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
+import { ProviderTurnLifecycle, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-lifecycle.js';
 
 export { isTransientSqliteContention } from './sqlite-contention.js';
 
@@ -229,9 +230,16 @@ function spawnCodexAppServer(cwd: string, accountProfile: string) {
   });
 }
 
-function codexFirstActivityTimeoutMs(): number {
-  const configured = Number.parseInt(process.env.WORKBENCH_CODEX_FIRST_ACTIVITY_TIMEOUT_MS ?? '', 10);
-  return Number.isFinite(configured) && configured > 0 ? configured : 60_000;
+class CodexProviderStallError extends Error {
+  constructor(
+    readonly reason: ProviderTurnTimeoutReason,
+    readonly threadId: string | null,
+    readonly checkpoint: string,
+    readonly usage: AgentUsage,
+  ) {
+    super(`Codex provider lifecycle timed out waiting for ${reason === 'first_activity' ? 'first meaningful activity' : 'continued activity'}.`);
+    this.name = 'CodexProviderStallError';
+  }
 }
 
 /** Completes the provider handshake before a pooled app-server can be claimed. */
@@ -327,24 +335,22 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
       pendingSteerRetries.clear();
     };
     let startupTimeout: ReturnType<typeof setTimeout> | null = null;
-    let firstActivityTimeout: ReturnType<typeof setTimeout> | null = null;
-    const clearFirstActivityTimeout = () => {
-      if (!firstActivityTimeout) return;
-      clearTimeout(firstActivityTimeout);
-      firstActivityTimeout = null;
-    };
-    const markProviderActivity = () => clearFirstActivityTimeout();
+    let providerLifecycle: ProviderTurnLifecycle | null = null;
     const stop = () => { try { process.kill(child.pid ? -child.pid : child.pid!, 'SIGTERM'); } catch { child.kill('SIGTERM'); } };
     const fail = (error: Error) => {
       if (!settled) {
         settled = true;
         if (startupTimeout) clearTimeout(startupTimeout);
-        clearFirstActivityTimeout();
+        providerLifecycle?.terminal();
         rejectPendingSteers();
         stop();
         reject(error);
       }
     };
+    providerLifecycle = new ProviderTurnLifecycle({
+      ...providerTurnTimeouts(),
+      onTimeout: (reason) => fail(new CodexProviderStallError(reason, threadId || null, output.trim(), { ...usage })),
+    });
     const transportError = (error: Error) => fail(new Error(`Codex app-server transport failed: ${error.message}`));
     // `child.on('error')` does not receive errors emitted by the stdin Socket.
     // A provider that closes its pipe while a JSON-RPC request is being written
@@ -417,12 +423,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         else if (event.result?.turn?.id && !turnId) {
           turnId = event.result.turn.id;
           if (startupTimeout) clearTimeout(startupTimeout);
-          // A turn id proves only that app-server accepted the request. A
-          // resumed thread can acknowledge it and then emit nothing forever.
-          // Require actual model/tool activity before declaring startup healthy.
-          const activityTimeoutMs = codexFirstActivityTimeoutMs();
-          firstActivityTimeout = setTimeout(() => fail(new Error(`Codex turn produced no model or tool activity within ${Math.round(activityTimeoutMs / 1_000)} seconds.`)), activityTimeoutMs);
-          firstActivityTimeout.unref();
+          providerLifecycle?.accepted();
           onReady(steer);
         }
         if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
@@ -438,7 +439,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
           continue;
         }
         if (event.method === 'item/agentMessage/delta' && typeof event.params?.delta === 'string') {
-          markProviderActivity();
+          providerLifecycle?.activity();
           const itemId = typeof event.params?.itemId === 'string' ? event.params.itemId : null;
           if (itemId) {
             if (!itemText.has(itemId)) itemOrder.push(itemId);
@@ -461,7 +462,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         // decision that preceded it rather than an empty placeholder.
         const agentEvent = agentStreamEventForCodexAppServerItem(event.method ?? '', item);
         if (agentEvent) {
-          markProviderActivity();
+          providerLifecycle?.activity();
           onEvent(agentEvent);
           // The debugger is an audit trail, not the only place the user gets
           // to see work in progress. Keep provider-recorded decisions and
@@ -476,7 +477,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         if (event.method === 'turn/completed') {
           settled = true;
           if (startupTimeout) clearTimeout(startupTimeout);
-          clearFirstActivityTimeout();
+          providerLifecycle?.terminal();
           rejectPendingSteers();
           const status = typeof event.params?.turn?.status === 'string' ? event.params.turn.status : null;
           const terminalWarning = status && status !== 'completed' ? `Codex ended the turn with ${status}.` : null;
@@ -523,7 +524,7 @@ export async function runSteerableCodex(prompt: string, cwd: string, signal: Abo
   let aggregate: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
   let peakContextTokens = 0;
   let result: Awaited<ReturnType<typeof runSteerableCodexSegment>>;
-  let noActivityRecoveryUsed = false;
+  let lifecycleRecoveryUsed = false;
   for (;;) {
     const before = aggregate;
     const segmentController = new AbortController();
@@ -539,11 +540,20 @@ export async function runSteerableCodex(prompt: string, cwd: string, signal: Abo
       }, segmentResume, accountProfile, mutating);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (!noActivityRecoveryUsed && /Codex turn produced no model or tool activity/i.test(message)) {
-        noActivityRecoveryUsed = true;
-        onProgress('● Codex stalled before producing output. Restarting this turn once in a fresh session…');
-        segmentPrompt = expiredThreadPrompt ?? prompt;
-        segmentResume = undefined;
+      if (error instanceof CodexProviderStallError && !lifecycleRecoveryUsed && !signal.aborted) {
+        lifecycleRecoveryUsed = true;
+        aggregate = addUsage(aggregate, error.usage);
+        onUsage(aggregate);
+        if (error.reason === 'first_activity') {
+          onProgress('● Codex accepted the turn but produced no activity. Retrying once in a fresh session…');
+          segmentPrompt = expiredThreadPrompt ?? prompt;
+          segmentResume = undefined;
+        } else {
+          onProgress('● Codex stopped producing activity. Resuming the same tracked thread once…');
+          segmentPrompt = `Harness lifecycle recovery: the previous provider process stopped emitting activity and was terminated. Continue the original request from the actual repository state. Do not repeat completed work. Inspect before editing, finish the task, and report observed results.${error.checkpoint ? `\n\nVisible checkpoint from the interrupted process:\n${error.checkpoint.slice(-6_000)}` : ''}`;
+          segmentResume = error.threadId ?? undefined;
+          if (!segmentResume) segmentPrompt = `${expiredThreadPrompt ?? prompt}\n\n${segmentPrompt}`;
+        }
         continue;
       }
       if (segmentResume && expiredThreadPrompt && isMissingCodexThreadError(message)) {
