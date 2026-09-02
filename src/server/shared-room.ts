@@ -658,28 +658,22 @@ export type RepeatedDirective = { directive: string; count: number };
  * were new. Every other guard in this file inspects one turn in isolation and
  * therefore cannot see that shape at all.
  */
-export function repeatedUserDirectives(messages: SharedMessage[], limit = 3): RepeatedDirective[] {
-  const groups: { tokens: Set<string>; latest: string; count: number }[] = [];
-  for (const message of messages) {
-    if (message.author !== 'jeffrey') continue;
-    const normalized = message.body.replace(/\s+/g, ' ').trim();
-    const tokens = directiveTokens(normalized);
-    // Short acknowledgements ("go", "ok, continue") carry no requirement to repeat.
-    if (tokens.size < 3) continue;
-    const match = groups.find((group) => directiveContainment(tokens, group.tokens) >= 0.6);
-    if (!match) {
-      groups.push({ tokens, latest: normalized, count: 1 });
-      continue;
-    }
-    match.count += 1;
-    match.latest = normalized;
-    // Keep the richest phrasing so a third, further-elaborated restatement still matches.
-    if (tokens.size > match.tokens.size) match.tokens = tokens;
-  }
-  return groups.filter((group) => group.count > 1)
-    .sort((left, right) => right.count - left.count)
-    .slice(0, limit)
-    .map((group) => ({ directive: compactKeyPoints(group.latest, 300), count: group.count }));
+export function repeatedUserDirectives(messages: SharedMessage[]): RepeatedDirective[] {
+  const humanMessages = messages.filter((message) => message.author === 'jeffrey');
+  const latest = humanMessages.at(-1);
+  if (!latest) return [];
+  const normalized = latest.body.replace(/\s+/g, ' ').trim();
+  const latestTokens = directiveTokens(normalized);
+  // A cascade breaker is a current-turn intervention. Once Jeffrey moves on,
+  // an old repetition must not remain in every subsequent prompt.
+  if (latestTokens.size < 3) return [];
+  const priorMatches = humanMessages.slice(0, -1).filter((message) => {
+    const priorTokens = directiveTokens(message.body.replace(/\s+/g, ' ').trim());
+    return priorTokens.size >= 3 && directiveContainment(latestTokens, priorTokens) >= 0.6;
+  });
+  return priorMatches.length
+    ? [{ directive: compactKeyPoints(normalized, 300), count: priorMatches.length + 1 }]
+    : [];
 }
 
 /**
@@ -691,10 +685,10 @@ export function cascadeBreakerForPrompt(messages: SharedMessage[]): string {
   const repeats = repeatedUserDirectives(messages);
   if (!repeats.length) return '';
   const listed = repeats.map((repeat) => `- Stated ${repeat.count} times: ${repeat.directive}`).join('\n');
-  return `CASCADE BREAKER — this thread has already failed to deliver a repeated instruction:
+  return `CASCADE BREAKER — the newest instruction repeats an undelivered requirement:
 ${listed}
 
-Jeffrey repeating an instruction is a defect report, not emphasis. Before doing anything else, name which part of it previous turns dropped, and treat that part as the objective. Do not defend, re-explain, or extend the earlier attempt, and do not report the same completion again in different words. This turn must either deliver the repeated requirement and state the evidence that it holds, or state the exact blocker preventing it.`;
+Treat the repetition as a defect report. State what prior turns dropped, deliver that missing part now, and verify it. Do not ask for evidence already available in the thread or repeat an unverified completion claim. If blocked, name the exact blocker.`;
 }
 
 /**
@@ -824,7 +818,7 @@ const EXPLICIT_CONSTRAINT = /\b(?:must|need(?:s)? to|only|do not|don't|never|alw
  * both see them even when the ordinary transcript budget has rolled forward.
  * Newest-first order makes later corrections visibly authoritative.
  */
-export function conversationConstraintEvidence(messages: SharedMessage[], budget = 3_500): string {
+export function conversationConstraintEvidence(messages: SharedMessage[], budget = 900): string {
   const candidates = messages
     .filter((message) => message.author === 'jeffrey' && EXPLICIT_CONSTRAINT.test(message.body))
     .reverse();
@@ -855,7 +849,13 @@ function isContinuationTurn(message: string): boolean {
   // Corrections are context-dependent, but they are new authoritative input;
   // never erase them by treating them as a plain continuation.
   if (/\b(?:no|not|instead|except|but)\b/.test(normalized)) return false;
-  if (/^(?:continue|keep going|go ahead|proceed|do it|build it|build that|fix it|ship it|yes|yeah|yep)$/.test(normalized)) return true;
+  if (/^(?:continue|keep going|go|ok go|go ahead|proceed|do it|do this|do that|do both|build it|build that|fix it|ship it|apply it|apply both|yes|yeah|yep)$/.test(normalized)) return true;
+  // A correction may begin as a complaint or question and still end with the
+  // actual continuation command. The final imperative wins.
+  if (/(?:^|\s)(?:you\s+)?(?:just\s+)?do\s+(?:it|this|that)\b/.test(normalized)) return true;
+  // Colloquial removal commands are concrete new objectives, not vague uses of
+  // "that" which should inherit the preceding analysis question.
+  if (/^(?:(?:yes|yeah|yep|ok)\s+)?(?:nuke|kill|drop|toss|delete|remove|revert|undo|rip\s+out|tear\s+out|get\s+rid\s+of)\b/.test(normalized)) return false;
   if (/^(?:why .*(?:taking (?:so )?long|so slow|stuck|still not|doing nothing).*(?:build|fix|finish|continue|ship|do) (?:it|this|that)|hurry up|come on)/.test(normalized)
     && /\b(?:it|this|that|build|fix|finish|continue|done|long|slow|stuck)\b/.test(normalized)) return true;
   // A direct question is itself the current objective, even when it uses a
@@ -896,7 +896,9 @@ function turnGroundingInput(thread: SharedMessage[]): string {
   const latestHuman = latestHumanMessage?.body.replace(/\s+/g, ' ').trim().slice(0, 2_000) ?? '';
   const priorHumans = thread.filter((message) => message.author === 'jeffrey' && message.id !== latestHumanMessage?.id).slice(-4)
     .map((message) => `JEFFREY: ${message.body.replace(/\s+/g, ' ').trim().slice(0, 500)}`);
-  const constraints = conversationConstraintEvidence(thread);
+  const latestNeedsHistory = /\b(?:again|still|already|wrong|failed|failure|stop|instead|not what|start over|from scratch)\b/i.test(latestHuman)
+    || repeatedUserDirectives(thread).length > 0;
+  const constraints = latestNeedsHistory ? conversationConstraintEvidence(thread) : '';
   const precedingAgent = [...thread].reverse().find((message) => (message.author === 'claude' || message.author === 'codex') && (!latestHumanMessage || message.createdAt <= latestHumanMessage.createdAt));
   const agentReference = precedingAgent ? `\nMOST RECENT AGENT OUTCOME (reference-only):\n${precedingAgent.author.toUpperCase()}: ${precedingAgent.body.replace(/\s+/g, ' ').trim().slice(0, 700)}` : '';
   const constraintReference = constraints ? `\n\nEXPLICIT USER CONSTRAINTS FROM THE FULL CONVERSATION (newest first; reference-only; later corrections win):\n${constraints}` : '';
@@ -1047,8 +1049,6 @@ Workbench context handles:
 ${turnGroundingForPrompt(turnGrounding)}
 
 ${cascadeBreaker}
-
-${EXECUTION_FIDELITY_CONTRACT}
 
 ${memoryContext}
 

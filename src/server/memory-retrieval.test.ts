@@ -26,13 +26,15 @@ describe('durable memory prefetch', () => {
     expect(shouldPrefetchDurableMemory('execute', 'Write the intro from your memories.')).toBe(true);
   });
 
-  it('retrieves for every implementation and review preflight plus context-heavy analysis', () => {
+  it('retrieves for context-heavy work without charging self-contained implementation and review turns', () => {
     expect(shouldPrefetchDurableMemory('research', 'Research approaches.')).toBe(true);
     expect(shouldPrefetchDurableMemory('strategy', 'Propose a strategy.')).toBe(true);
     expect(shouldPrefetchDurableMemory('bugfix', 'Fix the dropdown.')).toBe(true);
     expect(shouldPrefetchDurableMemory('analysis', 'Why did this regress again?')).toBe(true);
-    expect(shouldPrefetchDurableMemory('execute', 'Change the button label.')).toBe(true);
-    expect(shouldPrefetchDurableMemory('review', 'Review this diff.')).toBe(true);
+    expect(shouldPrefetchDurableMemory('execute', 'Change the button label.')).toBe(false);
+    expect(shouldPrefetchDurableMemory('review', 'Review this diff.')).toBe(false);
+    expect(shouldPrefetchDurableMemory('execute', 'Fix this regression again.')).toBe(true);
+    expect(shouldPrefetchDurableMemory('review', 'Review why this failed again.')).toBe(true);
     expect(shouldPrefetchDurableMemory('analysis', 'Explain this function.')).toBe(false);
   });
 
@@ -58,5 +60,14 @@ describe('durable memory prefetch', () => {
     expect(prompt).toContain('Jeffrey is a senior frontend engineer at Writer.');
     expect(prompt).toContain("Jeffrey's newest statement wins");
     expect(prompt).toContain('Do not call recall_context again for the same question');
+  });
+
+  it('applies the default character budget to the complete injected memory block', () => {
+    const prompt = durableMemoryPrompt(Array.from({ length: 8 }, (_, index) => evidence({
+      title: `Memory ${index}`,
+      body: `${index} ${'x'.repeat(2_000)}`,
+    })));
+
+    expect(prompt.length).toBeLessThanOrEqual(4_000);
   });
 });

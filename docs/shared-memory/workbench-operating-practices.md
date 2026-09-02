@@ -235,17 +235,23 @@ summarize/compact long shared briefs and conversation history around durable
 decisions, blockers, evidence, and current requests; raw head/tail truncation
 alone loses the useful middle.
 
-Implementation and review turns now always run durable retrieval. Workbench also
-extracts explicit constraints from the full human conversation into a separate,
-newest-first ledger for both the turn-grounding supervisor and the executing
-agent. This closes the failure where long provider sessions retained general
-context but compacted away load-bearing boundaries such as “V2 folder only,”
-“reuse the existing Statsig flag,” or “one flagged entrypoint.” A response that
-asks Jeffrey for inspectable evidence without any recorded investigation is not
-accepted as a completed turn; Workbench automatically retries it with an
-evidence-first recovery instruction. The same execution-fidelity contract and
-terminal rejection run in the standalone task harness, so leaving the shared
-room cannot bypass these controls.
+Self-contained implementation and review turns do not run durable retrieval by
+default. Retrieval is automatic for research, strategy, bug-fix, explicit-memory,
+and historically dependent turns, and the complete injected memory block is
+capped at 4,000 characters. Full-conversation constraints are sent to the
+turn-grounding supervisor only when the newest message signals a correction or
+repeated failure, with a 900-character cap. The cascade breaker likewise appears
+only when the newest Jeffrey message repeats an earlier directive; it must not
+linger on unrelated future turns. Static execution-fidelity rules live in the
+provider's cold-start/system context and are not replayed into resumed turns.
+These prompt-cost boundaries are part of the failure-prevention design: do not
+trade cascading-agent protection for recurring fresh-input spend.
+
+A response that asks Jeffrey for inspectable evidence without any recorded
+investigation is not accepted as a completed turn; Workbench automatically
+retries it with an evidence-first recovery instruction. The same terminal
+rejection runs in the standalone task harness, so leaving the shared room cannot
+bypass these controls.
 
 ### Automate it; don't add a button **(always)**
 

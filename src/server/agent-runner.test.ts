@@ -244,9 +244,9 @@ describe('classifyExecution', () => {
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'private' } } }))).toEqual({ progress: '', final: null, audit: [] });
   });
 
-  it('narrows read-only task kinds to a read-only tool surface', () => {
-    expect(commandFor('codex', '/tmp/project', 'standard', undefined, undefined, 'research').args).toEqual(expect.arrayContaining(['--sandbox', 'read-only']));
-    expect(commandFor('claude', '/tmp/project', 'standard', undefined, undefined, 'review').args).toEqual(expect.arrayContaining(['--permission-mode', 'plan', '--disallowedTools', 'Task,Edit,Write,NotebookEdit']));
+  it('keeps every task kind tool-capable while routing read-only behavior through instructions', () => {
+    expect(commandFor('codex', '/tmp/project', 'standard', undefined, undefined, 'research').args).toEqual(expect.arrayContaining(['--sandbox', 'workspace-write']));
+    expect(commandFor('claude', '/tmp/project', 'standard', undefined, undefined, 'review').args).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--disallowedTools', 'Task']));
     expect(commandFor('codex', '/tmp/project', 'standard', undefined, undefined, 'execute').args).toEqual(expect.arrayContaining(['--sandbox', 'workspace-write']));
   });
 
@@ -1157,6 +1157,12 @@ Question or requested change: Replace this hook with the established memoized he
     expect(classifyMessageIntent('Fix this allocation pattern.')).toBe('execute');
   });
 
+  it('treats colloquial implementation corrections as execution commands', () => {
+    expect(classifyMessageIntent('yeah nuke that stupid fucking logic')).toBe('execute');
+    expect(classifyMessageIntent('why are you reiterating what i told you to do? just do it.')).toBe('execute');
+    expect(classifyMessageIntent('YOU DO IT')).toBe('execute');
+  });
+
   it('injects shared room context into execution prompts', () => {
     const run = { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun;
     expect(buildPrompt(item('Build it'), run, 'jeffrey: Prefer small React components.'))
@@ -1165,13 +1171,13 @@ Question or requested change: Replace this hook with the established memoized he
     expect(RUNNER_SYSTEM_CONTRACT).toContain('does not authorize resuming a prior plan');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('never trap a turn inside a foreground dev server');
     expect(EXECUTION_FIDELITY_CONTRACT).toContain('compare the complete diff against its base');
-    expect(buildPrompt(item('Build it'), run)).toContain('Required execution discipline:');
-    expect(buildResumedPrompt(item('Build it'), run)).toContain('Required execution discipline:');
+    expect(buildPrompt(item('Build it'), run).match(/Required execution discipline:/g)).toHaveLength(1);
+    expect(buildResumedPrompt(item('Build it'), run)).not.toContain('Required execution discipline:');
   });
 
-  it('makes bounded durable retrieval mandatory for implementation and review runs', () => {
+  it('keeps automatic durable retrieval bounded to historically dependent runs', () => {
     expect(RUNNER_SYSTEM_CONTRACT).toContain('recall_context');
-    expect(RUNNER_SYSTEM_CONTRACT).toContain('automatically retrieves bounded durable evidence');
+    expect(RUNNER_SYSTEM_CONTRACT).toContain('Self-contained implementation and review turns do not pay that prompt cost');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('make at most one focused recall near the start');
     expect(RUNNER_SYSTEM_CONTRACT).not.toContain('not a mandatory preflight');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('An assistant-authored statement is not corroboration for itself');

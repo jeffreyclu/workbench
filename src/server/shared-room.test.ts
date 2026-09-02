@@ -113,6 +113,18 @@ describe('compactConversationHistory', () => {
     expect(cascadeBreakerForPrompt(thread)).toBe('');
   });
 
+  it('does not replay an old cascade breaker after Jeffrey moves to a new request', () => {
+    const thread = [
+      message(0, 'fix the workbench harness too.'),
+      message(1, 'Done.'),
+      message(2, 'fix the workbench harness too to ensure cascading failures cannot happen'),
+      message(4, 'Now explain the token cost.'),
+    ];
+
+    expect(repeatedUserDirectives(thread)).toEqual([]);
+    expect(cascadeBreakerForPrompt(thread)).toBe('');
+  });
+
   it('recovers inside a live provider thread with the delta only, and rebuilds cold only without one', () => {
     const fresh = 'FULL ROOM PROMPT';
     const requirement = 'Recovery requirement: verify end to end.';
@@ -141,6 +153,8 @@ describe('compactConversationHistory', () => {
 
     expect(fresh).toContain('CASCADE BREAKER');
     expect(resumed).toContain('CASCADE BREAKER');
+    expect(fresh).toContain('Required execution discipline:');
+    expect(resumed).not.toContain('Required execution discipline:');
   });
 
   it('keeps the newest turns, compacts older turns, and respects its prompt budget', () => {
@@ -181,6 +195,7 @@ describe('compactConversationHistory', () => {
             : `User turn ${index}`));
     const evidence = conversationConstraintEvidence(messages);
 
+    expect(evidence.length).toBeLessThanOrEqual(900);
     expect(evidence).toContain('All changes must stay inside the V2 folder.');
     expect(evidence).toContain('Use the same Statsig flag as the frontend.');
     expect(evidence).toContain('Only one flagged entrypoint. Start from scratch.');
@@ -193,7 +208,7 @@ describe('compactConversationHistory', () => {
       : index === 0
         ? 'All implementation changes must stay inside connectors-v2.'
         : index === 28
-          ? 'Fix the remaining pagination issue.'
+          ? 'Fix the remaining pagination issue; this failed again.'
           : `User turn ${index}`));
     let supervisorInput = '';
 
@@ -205,7 +220,7 @@ describe('compactConversationHistory', () => {
     expect(supervisorInput).toContain('EXPLICIT USER CONSTRAINTS FROM THE FULL CONVERSATION');
     expect(supervisorInput).toContain('All implementation changes must stay inside connectors-v2.');
     expect(supervisorInput).toContain('LATEST USER MESSAGE');
-    expect(supervisorInput).toContain('Fix the remaining pagination issue.');
+    expect(supervisorInput).toContain('Fix the remaining pagination issue; this failed again.');
   });
 
   it('resolves continue to the preceding concrete human objective without adopting agent narration', () => {
@@ -240,6 +255,32 @@ describe('compactConversationHistory', () => {
     expect(grounding.objective).toContain('Why is this text so big');
     expect(grounding.objective).toContain("Clicking a hunk doesn't work");
     expect(grounding.objective).not.toContain('TAKING SO LONG');
+  });
+
+  it('keeps an explicit colloquial edit as the objective instead of inheriting the preceding question', () => {
+    const messages = [
+      message(0, 'Why does this modal have an open guard?'),
+      message(1, 'The guard was added by this branch.'),
+      message(2, 'yeah nuke that stupid fucking logic'),
+    ];
+    expect(fallbackTurnGrounding(messages)).toEqual(expect.objectContaining({
+      objective: 'yeah nuke that stupid fucking logic',
+      continuation: false,
+    }));
+
+    const correction = [...messages, message(3, 'I could not edit in analysis mode.'), message(4, 'why are you reiterating what i told you to do? just do it.')];
+    expect(fallbackTurnGrounding(correction)).toEqual(expect.objectContaining({
+      objective: expect.stringContaining('yeah nuke that stupid fucking logic'),
+      continuation: true,
+    }));
+
+    const prior = fallbackTurnGrounding([message(0, 'Implement both recovery mitigations.')]);
+    for (const command of ['ok go', 'do both', 'YOU FUCKING DO IT YOU STUPID FUCKING CUNT']) {
+      expect(fallbackTurnGrounding([message(0, command)], prior)).toEqual(expect.objectContaining({
+        objective: 'Implement both recovery mitigations.',
+        continuation: true,
+      }));
+    }
   });
 
   it('reuses a persisted objective instantly for a continuation without another model call', async () => {
@@ -350,8 +391,7 @@ describe('compactConversationHistory', () => {
     expect(prompt).toContain('Current reply message ID: message-id');
     expect(prompt).toContain('already present in this session');
     expect(prompt).toContain('Retrieved durable context: Jeffrey works at Writer.');
-    expect(prompt).toContain('Required execution discipline:');
-    expect(prompt).toContain('compare the complete diff against its base');
+    expect(prompt).not.toContain('Required execution discipline:');
     expect(prompt).not.toContain('Reference-only conversation transcript:');
   });
 
