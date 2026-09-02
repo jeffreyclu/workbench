@@ -16,7 +16,7 @@ import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWo
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
-import { ProviderTurnLifecycle, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-lifecycle.js';
+import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 
 const MAX_OUTPUT_BYTES = 1_000_000;
 /** How long a run may produce no stream event before its output gets a visible elapsed marker. */
@@ -587,6 +587,36 @@ function providerStallError(value: unknown): AgentProviderStallError | null {
     && typeof candidate.agent === 'string'
     ? candidate as AgentProviderStallError
     : null;
+}
+
+/**
+ * Claude's stream-json protocol normally follows a completed parent text block
+ * with a `result` event. In practice that terminal envelope can disappear when
+ * several live interjections are coalesced into one provider turn. A parent
+ * text-only assistant event is therefore a response-boundary candidate; a
+ * subsequent tool call, tool result, text delta, input, or terminal result
+ * cancels it before the short settle window can close the transport.
+ */
+function claudeResponseBoundary(line: string): { text: string | null; continues: boolean } {
+  try {
+    const event = JSON.parse(line) as Record<string, unknown>;
+    if (event.parent_tool_use_id) return { text: null, continues: false };
+    if (event.type === 'result') return { text: null, continues: true };
+    if (event.type === 'user') return { text: null, continues: true };
+    if (event.type === 'stream_event') {
+      const streamed = (event.event ?? {}) as Record<string, unknown>;
+      const delta = (streamed.delta ?? {}) as Record<string, unknown>;
+      return { text: null, continues: streamed.type === 'content_block_delta' && (delta.type === 'text_delta' || delta.type === 'input_json_delta') };
+    }
+    if (event.type !== 'assistant') return { text: null, continues: false };
+    const message = event.message as { content?: Array<Record<string, unknown>> } | undefined;
+    const content = message?.content ?? [];
+    if (content.some((part) => part.type === 'tool_use')) return { text: null, continues: true };
+    const text = content.flatMap((part) => part.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join('\n').trim();
+    return { text: text || null, continues: false };
+  } catch {
+    return { text: null, continues: false };
+  }
 }
 
 /**
@@ -1246,7 +1276,10 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     let stopping = false;
     let cancellationRequested = false;
     let terminationError: Error | null = null;
-    let providerLifecycle: ProviderTurnLifecycle | null = null;
+    let providerWatchdog: ProviderTurnWatchdog | null = null;
+    let responseSettleTimer: ReturnType<typeof setTimeout> | null = null;
+    let terminalShutdownTimer: ReturnType<typeof setTimeout> | null = null;
+    let quiescentCompletion = false;
     const stopProcessTree = () => {
       if (stopping) return;
       stopping = true;
@@ -1256,7 +1289,9 @@ async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, p
     };
     const cancel = () => {
       cancellationRequested = true;
-      providerLifecycle?.terminal();
+      providerWatchdog?.terminal();
+      if (responseSettleTimer) clearTimeout(responseSettleTimer);
+      if (terminalShutdownTimer) clearTimeout(terminalShutdownTimer);
       stopProcessTree();
     };
     const reapResidualProcessTree = () => {
@@ -1302,11 +1337,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
     let peakContextTokens = 0;
     let providerCostUsd: number | null = null;
     const cacheHandoffRequested = false;
-    // One successful stream-json write corresponds to one terminal Claude
-    // result. Keep stdin open until every accepted input has reached that
-    // boundary; otherwise the initial result can close the process while an
-    // already-accepted interjection is still waiting behind it.
-    let pendingClaudeInputs = 0;
     let lastReportedUsage = '';
     // See UsageSample: `--forward-subagent-text` can surface the same provider
     // response more than once. Account for one provider request, never its
@@ -1356,7 +1386,7 @@ ${AGENT_EXECUTION_CONTRACT}`;
     const startedAt = Date.now();
     let lastEventAt = startedAt;
     const lifecycleTimeouts = providerTurnTimeouts();
-    providerLifecycle = new ProviderTurnLifecycle({
+    providerWatchdog = new ProviderTurnWatchdog({
       ...lifecycleTimeouts,
       onTimeout: (reason) => {
         if (stopping || cancellationRequested || signal?.aborted || child.exitCode !== null) return;
@@ -1364,10 +1394,43 @@ ${AGENT_EXECUTION_CONTRACT}`;
         terminationError = new AgentProviderStallError(agent, reason, eventContext.sessionId ?? null, checkpoint, { ...reportedUsage });
         progress += `${progress ? '\n\n' : ''}● ${agent === 'claude' ? 'Claude' : 'Codex'} stopped producing provider activity. Recovering the tracked turn…`;
         flushProgress(true);
-        providerLifecycle?.terminal();
+        providerWatchdog?.terminal();
         stopProcessTree();
       },
     });
+
+    const closeCompletedProvider = (fallbackOutput?: string) => {
+      if (fallbackOutput?.trim()) setFinal(fallbackOutput.trim());
+      if (!finalOutput.trim()) return;
+      quiescentCompletion = true;
+      providerWatchdog?.completed();
+      if (responseSettleTimer) {
+        clearTimeout(responseSettleTimer);
+        responseSettleTimer = null;
+      }
+      if (child.stdin.writable && !child.stdin.writableEnded) child.stdin.end();
+      if (terminalShutdownTimer) clearTimeout(terminalShutdownTimer);
+      terminalShutdownTimer = setTimeout(() => {
+        if (child.exitCode === null) stopProcessTree();
+      }, 5_000);
+      terminalShutdownTimer.unref();
+    };
+
+    const scheduleClaudeResponseSettle = (text: string) => {
+      if (agent !== 'claude' || stopping || cancellationRequested) return;
+      if (responseSettleTimer) clearTimeout(responseSettleTimer);
+      responseSettleTimer = setTimeout(() => {
+        responseSettleTimer = null;
+        closeCompletedProvider(text);
+      }, claudeResponseSettleMs());
+      responseSettleTimer.unref();
+    };
+
+    const cancelClaudeResponseSettle = () => {
+      if (!responseSettleTimer) return;
+      clearTimeout(responseSettleTimer);
+      responseSettleTimer = null;
+    };
     let lastFlushAt = 0;
     let pendingFlush: NodeJS.Timeout | null = null;
     const flushProgress = (force = false) => {
@@ -1408,6 +1471,8 @@ ${AGENT_EXECUTION_CONTRACT}`;
       const lines = buffered.split('\n');
       buffered = lines.pop() ?? '';
       for (const line of lines.filter(Boolean)) {
+        const responseBoundary = agent === 'claude' ? claudeResponseBoundary(line) : { text: null, continues: false };
+        if (responseBoundary.continues) cancelClaudeResponseSettle();
         const toolCommand = toolCommandFromAgentEvent(agent, line);
         // Ordinary test launchers are guarded by the PATH shim using the
         // Bash tool's real cwd. Only direct binary bypasses are decided here,
@@ -1436,7 +1501,7 @@ ${AGENT_EXECUTION_CONTRACT}`;
         const meaningfulActivity = Boolean(event.delta || event.progress || event.final || event.audit.length);
         if (meaningfulActivity) {
           lastEventAt = Date.now();
-          providerLifecycle?.activity();
+          providerWatchdog?.activity();
         }
         // A new text block starting mid-stream needs its own line — without
         // this, its first delta glues directly onto whatever progress line
@@ -1455,20 +1520,9 @@ ${AGENT_EXECUTION_CONTRACT}`;
         }
         if (event.final) {
           setFinal(event.final);
-          // The terminal `result` event ends this turn. A completed shared message
-          // can no longer accept a steered interjection (see the `status === 'running'`
-          // filter in interjectQueuedSharedMessage), so keeping stdin open past this
-          // point only leaves the process waiting for input that will never arrive —
-          // the run would never reach `child.on('close')` and stay stuck "live" forever.
-          if (agent === 'claude') pendingClaudeInputs = Math.max(0, pendingClaudeInputs - 1);
-          if (agent === 'claude' && pendingClaudeInputs === 0 && child.stdin.writable) {
-            child.stdin.end();
-            const terminalShutdown = setTimeout(() => {
-              if (child.exitCode === null) stopProcessTree();
-            }, 5_000);
-            terminalShutdown.unref();
-          }
+          if (agent === 'claude') closeCompletedProvider();
         }
+        if (responseBoundary.text) scheduleClaudeResponseSettle(responseBoundary.text);
         if (event.audit.length) {
           onAudit?.(event.audit, agent);
         }
@@ -1480,20 +1534,24 @@ ${AGENT_EXECUTION_CONTRACT}`;
     });
     child.on('error', (error) => {
       terminationError = error;
-      providerLifecycle?.terminal();
+      providerWatchdog?.terminal();
       unregisterProcess();
       clearInterval(heartbeat);
       if (pendingFlush) clearTimeout(pendingFlush);
+      if (responseSettleTimer) clearTimeout(responseSettleTimer);
+      if (terminalShutdownTimer) clearTimeout(terminalShutdownTimer);
       signal?.removeEventListener('abort', cancel);
       stopProcessTree();
       reject(error);
     });
     child.on('close', (code) => {
       unregisterProcess();
-      providerLifecycle?.terminal();
+      providerWatchdog?.terminal();
       clearInterval(heartbeat);
       if (pendingFlush) clearTimeout(pendingFlush);
       if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (responseSettleTimer) clearTimeout(responseSettleTimer);
+      if (terminalShutdownTimer) clearTimeout(terminalShutdownTimer);
       if (!cancellationRequested && !signal?.aborted) reapResidualProcessTree();
       if (residualProcessReapTimer) residualProcessReapTimer.unref();
       signal?.removeEventListener('abort', cancel);
@@ -1511,7 +1569,7 @@ ${AGENT_EXECUTION_CONTRACT}`;
       if (progress) flushProgress(true);
       if (cancellationRequested || signal?.aborted) reject(new Error('Agent run canceled.'));
       else if (terminationError) reject(terminationError);
-      else if (code === 0 && (!terminalError || finalOutput.trim())) {
+      else if ((code === 0 || quiescentCompletion) && (!terminalError || finalOutput.trim())) {
         const output = finalOutput.trim() || progress.trim() || stdout.trim();
         const outputTokens = reportedUsage.outputTokens ?? (estimatedOutputTokens || null);
         resolveOutput({ output, usage: { inputTokens: reportedUsage.inputTokens, cacheCreationInputTokens: reportedUsage.cacheCreationInputTokens, cacheReadInputTokens: reportedUsage.cacheReadInputTokens, outputTokens }, sessionId: eventContext.sessionId ?? null, costUsd: providerCostUsd, peakContextTokens, cacheHandoffRequested, terminalWarning: terminalError || null });
@@ -1525,7 +1583,7 @@ ${AGENT_EXECUTION_CONTRACT}`;
     // handlers above already account for via cancellationRequested/terminationError.
     child.stdin.on('error', () => {});
     if (agent !== 'claude') {
-      providerLifecycle.accepted();
+      providerWatchdog.accepted();
       child.stdin.end(efficientPrompt);
       return;
     }
@@ -1534,9 +1592,11 @@ ${AGENT_EXECUTION_CONTRACT}`;
         resolve(false);
         return;
       }
-      pendingClaudeInputs += 1;
+      cancelClaudeResponseSettle();
+      providerWatchdog?.accepted();
       child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: body } })}\n`, (error) => {
-        if (error) pendingClaudeInputs = Math.max(0, pendingClaudeInputs - 1);
+        if (error && !terminationError) terminationError = error;
+        if (error) stopProcessTree();
         resolve(!error && !stopping && !cancellationRequested && child.exitCode === null);
       });
     });
@@ -1545,7 +1605,6 @@ ${AGENT_EXECUTION_CONTRACT}`;
     // the same provider session.
     void sendClaudeInput(efficientPrompt).then((accepted) => {
       if (accepted) {
-        providerLifecycle?.accepted();
         onSteeringReady?.(sendClaudeInput);
       }
     });

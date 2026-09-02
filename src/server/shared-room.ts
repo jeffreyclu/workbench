@@ -15,7 +15,7 @@ import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWo
 import { groundTurnWithHaiku } from './turn-grounding-ai.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
-import { ProviderTurnLifecycle, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-lifecycle.js';
+import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 
 export { isTransientSqliteContention } from './sqlite-contention.js';
 
@@ -335,19 +335,19 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
       pendingSteerRetries.clear();
     };
     let startupTimeout: ReturnType<typeof setTimeout> | null = null;
-    let providerLifecycle: ProviderTurnLifecycle | null = null;
+    let providerWatchdog: ProviderTurnWatchdog | null = null;
     const stop = () => { try { process.kill(child.pid ? -child.pid : child.pid!, 'SIGTERM'); } catch { child.kill('SIGTERM'); } };
     const fail = (error: Error) => {
       if (!settled) {
         settled = true;
         if (startupTimeout) clearTimeout(startupTimeout);
-        providerLifecycle?.terminal();
+        providerWatchdog?.terminal();
         rejectPendingSteers();
         stop();
         reject(error);
       }
     };
-    providerLifecycle = new ProviderTurnLifecycle({
+    providerWatchdog = new ProviderTurnWatchdog({
       ...providerTurnTimeouts(),
       onTimeout: (reason) => fail(new CodexProviderStallError(reason, threadId || null, output.trim(), { ...usage })),
     });
@@ -423,7 +423,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         else if (event.result?.turn?.id && !turnId) {
           turnId = event.result.turn.id;
           if (startupTimeout) clearTimeout(startupTimeout);
-          providerLifecycle?.accepted();
+          providerWatchdog?.accepted();
           onReady(steer);
         }
         if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
@@ -432,6 +432,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
           if (event.result?.turnId) {
             turnId = event.result.turnId;
             steerCount += 1;
+            providerWatchdog?.accepted();
             pending.resolve(true);
           } else {
             retrySteer(pending);
@@ -439,7 +440,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
           continue;
         }
         if (event.method === 'item/agentMessage/delta' && typeof event.params?.delta === 'string') {
-          providerLifecycle?.activity();
+          providerWatchdog?.activity();
           const itemId = typeof event.params?.itemId === 'string' ? event.params.itemId : null;
           if (itemId) {
             if (!itemText.has(itemId)) itemOrder.push(itemId);
@@ -462,7 +463,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         // decision that preceded it rather than an empty placeholder.
         const agentEvent = agentStreamEventForCodexAppServerItem(event.method ?? '', item);
         if (agentEvent) {
-          providerLifecycle?.activity();
+          providerWatchdog?.activity();
           onEvent(agentEvent);
           // The debugger is an audit trail, not the only place the user gets
           // to see work in progress. Keep provider-recorded decisions and
@@ -477,7 +478,8 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
         if (event.method === 'turn/completed') {
           settled = true;
           if (startupTimeout) clearTimeout(startupTimeout);
-          providerLifecycle?.terminal();
+          providerWatchdog?.completed();
+          providerWatchdog?.terminal();
           rejectPendingSteers();
           const status = typeof event.params?.turn?.status === 'string' ? event.params.turn.status : null;
           const terminalWarning = status && status !== 'completed' ? `Codex ended the turn with ${status}.` : null;

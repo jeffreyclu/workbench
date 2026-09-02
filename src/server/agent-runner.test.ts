@@ -22,6 +22,7 @@ vi.mock('./review-auto-score.js', () => ({
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
 const originalProviderIdleActivityTimeout = process.env.WORKBENCH_PROVIDER_IDLE_ACTIVITY_TIMEOUT_MS;
+const originalClaudeResponseSettle = process.env.WORKBENCH_CLAUDE_RESPONSE_SETTLE_MS;
 const originalCodexBin = process.env.CODEX_BIN;
 const originalClaudeBin = process.env.CLAUDE_BIN;
 const temporaryDirectories: string[] = [];
@@ -32,6 +33,8 @@ afterEach(() => {
   else process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS = originalProviderFirstActivityTimeout;
   if (originalProviderIdleActivityTimeout === undefined) delete process.env.WORKBENCH_PROVIDER_IDLE_ACTIVITY_TIMEOUT_MS;
   else process.env.WORKBENCH_PROVIDER_IDLE_ACTIVITY_TIMEOUT_MS = originalProviderIdleActivityTimeout;
+  if (originalClaudeResponseSettle === undefined) delete process.env.WORKBENCH_CLAUDE_RESPONSE_SETTLE_MS;
+  else process.env.WORKBENCH_CLAUDE_RESPONSE_SETTLE_MS = originalClaudeResponseSettle;
   if (originalCodexBin === undefined) delete process.env.CODEX_BIN; else process.env.CODEX_BIN = originalCodexBin;
   if (originalClaudeBin === undefined) delete process.env.CLAUDE_BIN; else process.env.CLAUDE_BIN = originalClaudeBin;
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
@@ -269,6 +272,40 @@ describe('classifyExecution', () => {
     await waitFor(() => steer !== null);
     await expect(steer!('Change direction now.')).resolves.toBe(true);
     await expect(resultPromise).resolves.toEqual(expect.objectContaining({ output: 'Applied the interjection.' }));
+  });
+
+  it('closes a reusable Claude process when one result covers coalesced inputs', async () => {
+    const { directory } = fakeAgentDirectory('exit 1', [
+      'IFS= read -r first',
+      'IFS= read -r second',
+      `printf '%s\\n' '{"type":"result","result":"Applied both inputs."}'`,
+      // Real Claude stream-json remains reusable here. The harness, not the
+      // provider, owns the terminal boundary and must close stdin.
+      'while IFS= read -r extra; do :; done',
+    ].join('\n'));
+    let steer: ((body: string) => Promise<boolean>) | null = null;
+    const resultPromise = runAgentCommandWithFallback(
+      'claude', directory, 'Start the task.', undefined, undefined, undefined, 'economy',
+      undefined, undefined, 'analysis', undefined, undefined,
+      (ready) => { steer = ready; }, undefined, false, false,
+    );
+
+    await waitFor(() => steer !== null);
+    await expect(steer!('Apply the correction.')).resolves.toBe(true);
+    await expect(resultPromise).resolves.toEqual(expect.objectContaining({ output: 'Applied both inputs.' }));
+  });
+
+  it('salvages a completed Claude response when the terminal result envelope is missing', async () => {
+    process.env.WORKBENCH_CLAUDE_RESPONSE_SETTLE_MS = '20';
+    const answer = 'Finished without a result envelope.';
+    const assistant = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: answer }] } });
+    const { directory } = fakeAgentDirectory('exit 1', [
+      'IFS= read -r first',
+      `printf '%s\\n' '${assistant}'`,
+      'while IFS= read -r extra; do :; done',
+    ].join('\n'));
+
+    await expect(runAgentCommandWithFallback('claude', directory, 'Finish it.')).resolves.toEqual(expect.objectContaining({ output: answer }));
   });
 
   it('does not append synthetic user turns after repeated Claude tool calls', async () => {
