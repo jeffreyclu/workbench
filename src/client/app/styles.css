@@ -1966,6 +1966,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 }
 
 .realtime-status-banner { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 61; display: flex; align-items: center; gap: 8px; padding: 8px 14px; color: #f0c05a; font-size: 11px; font-weight: 600; background: #211a0d; border: 1px solid #5c481c; border-radius: 999px; box-shadow: 0 12px 28px #000a; }
+.realtime-status-retry { color: inherit; font: inherit; font-weight: 700; text-decoration: underline; background: none; border: none; padding: 0; margin-left: 2px; cursor: pointer; }
+.realtime-status-retry:hover { opacity: 0.8; }
 .toast-viewport { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 60; display: flex; flex-direction: column; gap: 10px; width: 420px; max-width: calc(100vw - 28px); margin: 0; padding: 0; list-style: none; }
 .toast { display: flex; align-items: flex-start; gap: 11px; padding: 14px 15px; color: var(--soft); background: var(--panel-raised); border: 1.5px solid var(--line); border-radius: 10px; box-shadow: 0 16px 40px #000c, 0 0 0 1px #0006; animation: toast-in 180ms ease; }
 .toast-content { display: flex; flex: 1 1 auto; align-items: flex-start; gap: 11px; min-width: 0; padding: 0; color: inherit; text-align: left; background: transparent; border: 0; }

@@ -189,7 +189,7 @@ export function App() {
     };
     toast[notification.tone](notification.message, options);
   }, [route, agentConversationId]);
-  const realtimeConnectionState = useRealtimeNotifications(handleRealtimeNotification);
+  const { state: realtimeConnectionState, browserOffline: realtimeBrowserOffline, retryNow: retryRealtimeConnection } = useRealtimeNotifications(handleRealtimeNotification);
   const view = route.name === 'stack' ? route.stack : route.name === 'task' ? taskStack : route.name === 'conversations' ? 'context' : route.name;
   const { mobileNavOpen, setMobileNavOpen, isCompactNav, workItems: workItemCounts, conversations: totalConversationCount } = useNavigation();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
@@ -546,14 +546,15 @@ export function App() {
   return (
     <div className="app-shell">
       <Toaster />
-      {realtimeConnectionState === 'reconnecting' && (
+      {(realtimeBrowserOffline || realtimeConnectionState === 'reconnecting' || realtimeConnectionState === 'polling') && (
         <div className="realtime-status-banner" role="status">
-          <LoaderCircle className="spin" size={13} /> Reconnecting… showing cached data
-        </div>
-      )}
-      {realtimeConnectionState === 'polling' && (
-        <div className="realtime-status-banner" role="status">
-          <LoaderCircle className="spin" size={13} /> Live agent updates are polling over HTTPS
+          <LoaderCircle className="spin" size={13} />
+          {realtimeBrowserOffline
+            ? 'Offline — showing cached data'
+            : realtimeConnectionState === 'reconnecting'
+              ? 'Reconnecting… showing cached data'
+              : 'Live agent updates are polling over HTTPS'}
+          <button type="button" className="realtime-status-retry" onClick={() => retryRealtimeConnection()}>Retry now</button>
         </div>
       )}
       <NavigationView

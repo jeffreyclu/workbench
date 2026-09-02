@@ -2,7 +2,7 @@
 import { act, render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { invalidateRealtimeTopics, realtimeUrl, useRealtimeNotifications } from './realtime';
+import { invalidateRealtimeTopics, realtimeUrl, useRealtimeNotifications, type RealtimeConnection } from './realtime';
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
@@ -68,7 +68,7 @@ describe('realtime invalidation', () => {
     const client = new QueryClient();
     const states: string[] = [];
     const noop = () => {};
-    function RealtimeClient() { states.push(useRealtimeNotifications(noop)); return null; }
+    function RealtimeClient() { states.push(useRealtimeNotifications(noop).state); return null; }
 
     const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
     expect(states.at(-1)).toBe('connecting');
@@ -89,7 +89,7 @@ describe('realtime invalidation', () => {
     const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
     const states: string[] = [];
     const noop = () => {};
-    function RealtimeClient() { states.push(useRealtimeNotifications(noop)); return null; }
+    function RealtimeClient() { states.push(useRealtimeNotifications(noop).state); return null; }
 
     const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
     for (let attempt = 0; attempt <= 3; attempt += 1) {
@@ -112,6 +112,52 @@ describe('realtime invalidation', () => {
     const callsAfterRecovery = invalidateQueries.mock.calls.length;
     act(() => { vi.advanceTimersByTime(1_500); });
     expect(invalidateQueries.mock.calls.length).toBe(callsAfterRecovery);
+    rendered.unmount();
+  });
+
+  it('treats browser online/offline events as hints, not the authoritative connection state', () => {
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    const client = new QueryClient();
+    const snapshots: Array<{ state: string; browserOffline: boolean }> = [];
+    const noop = () => {};
+    function RealtimeClient() {
+      const { state, browserOffline } = useRealtimeNotifications(noop);
+      snapshots.push({ state, browserOffline });
+      return null;
+    }
+
+    const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
+    act(() => { MockWebSocket.instances[0].emit('open'); });
+    expect(snapshots.at(-1)).toEqual({ state: 'connected', browserOffline: false });
+
+    // The 'offline' hint surfaces immediately even though the socket hasn't closed yet.
+    act(() => { window.dispatchEvent(new Event('offline')); });
+    expect(snapshots.at(-1)).toEqual({ state: 'connected', browserOffline: true });
+
+    // 'online' clears the hint but does not itself claim the socket is connected.
+    act(() => { window.dispatchEvent(new Event('online')); });
+    expect(snapshots.at(-1)?.browserOffline).toBe(false);
+    rendered.unmount();
+  });
+
+  it('retryNow cancels backoff and makes an immediate reconnection attempt', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    const client = new QueryClient();
+    const box: { current: RealtimeConnection | null } = { current: null };
+    const noop = () => {};
+    function RealtimeClient() { box.current = useRealtimeNotifications(noop); return null; }
+
+    const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
+    act(() => { MockWebSocket.instances[0].emit('close'); });
+    expect(box.current?.state).toBe('reconnecting');
+
+    const socketsBeforeRetry = MockWebSocket.instances.length;
+    act(() => { box.current?.retryNow(); });
+    expect(MockWebSocket.instances).toHaveLength(socketsBeforeRetry + 1);
+
+    act(() => { MockWebSocket.instances.at(-1)?.emit('open'); });
+    expect(box.current?.state).toBe('connected');
     rendered.unmount();
   });
 });

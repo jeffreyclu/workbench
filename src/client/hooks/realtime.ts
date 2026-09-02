@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { ToastTone } from '../state/toast-store';
 
@@ -93,14 +93,41 @@ export function invalidateRealtimeTopics(queryClient: QueryClient, topics: reado
   }
 }
 
+export type RealtimeConnection = {
+  state: RealtimeConnectionState;
+  /** Browser online/offline event, used only as a UI hint to show the status strip sooner — never as the source of truth for `state`. */
+  browserOffline: boolean;
+  /** Cancels any pending backoff/poll wait and makes an immediate connection attempt. */
+  retryNow: () => void;
+};
+
 /**
  * Keeps cached server data fresh across Workbench tabs and clients. The socket
  * transports cache invalidations and server-authored user notifications. Records
  * still come from REST, so socket payloads never need to carry application data.
  */
-export function useRealtimeNotifications(onNotification: (notification: RealtimeNotification) => void): RealtimeConnectionState {
+export function useRealtimeNotifications(onNotification: (notification: RealtimeNotification) => void): RealtimeConnection {
   const queryClient = useQueryClient();
   const [connectionState, setConnectionState] = useState<RealtimeConnectionState>('connecting');
+  const [browserOffline, setBrowserOffline] = useState(() => typeof navigator !== 'undefined' && 'onLine' in navigator ? !navigator.onLine : false);
+  const retryRef = useRef<() => void>(() => {});
+
+  // Online/offline are hints only: they can nudge a retry sooner, but the
+  // actual connection state above always comes from the socket itself.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleOffline = () => setBrowserOffline(true);
+    const handleOnline = () => {
+      setBrowserOffline(false);
+      retryRef.current();
+    };
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+    return () => {
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof WebSocket === 'undefined') return;
@@ -111,6 +138,7 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
     let recoveryProbeTimer: number | null = null;
     let attempts = 0;
     let disposed = false;
+    let manualRetryRequested = false;
 
     const startHttpsFallback = () => {
       if (disposed || pollingTimer !== null) return;
@@ -154,6 +182,12 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
       });
       socket.addEventListener('close', () => {
         if (disposed) return;
+        if (manualRetryRequested) {
+          manualRetryRequested = false;
+          attempts = 0;
+          connect();
+          return;
+        }
         if (attempts >= MAX_WEBSOCKET_RECONNECT_ATTEMPTS) {
           startHttpsFallback();
           return;
@@ -165,9 +199,36 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
       });
     };
 
+    // Skips any pending backoff/poll wait and makes an immediate connection
+    // attempt — used by the "Retry now" action and by the browser 'online'
+    // hint. The resulting connection state still comes from the socket.
+    retryRef.current = () => {
+      if (disposed) return;
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (recoveryProbeTimer !== null) {
+        window.clearInterval(recoveryProbeTimer);
+        recoveryProbeTimer = null;
+      }
+      if (pollingTimer !== null) {
+        window.clearInterval(pollingTimer);
+        pollingTimer = null;
+      }
+      if (socket && socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
+        manualRetryRequested = true;
+        socket.close();
+      } else {
+        attempts = 0;
+        connect();
+      }
+    };
+
     connect();
     return () => {
       disposed = true;
+      retryRef.current = () => {};
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       if (pollingTimer !== null) window.clearInterval(pollingTimer);
       if (recoveryProbeTimer !== null) window.clearInterval(recoveryProbeTimer);
@@ -175,5 +236,7 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
     };
   }, [onNotification, queryClient]);
 
-  return connectionState;
+  const retryNow = useCallback(() => retryRef.current(), []);
+
+  return { state: connectionState, browserOffline, retryNow };
 }
