@@ -89,6 +89,30 @@ describe('artifact library', () => {
     expect(artifacts.listForWorkItem('task-1').map((artifact) => artifact.id)).toEqual(['artifact-1']);
   });
 
+  it('favorites and unfavorites an artifact, surfacing it in the favorites view and counts', () => {
+    const { artifacts } = library();
+    publish(artifacts, { id: 'artifact-1', hash: 'hash-a', version: 1, sourcePath: '/dev/workbench/notes/a.md' }, 'published');
+    publish(artifacts, { id: 'artifact-2', hash: 'hash-b', version: 1, sourcePath: '/dev/workbench/notes/b.md' }, 'published');
+
+    expect(artifacts.get('artifact-1')?.favoritedAt).toBeNull();
+    expect(artifacts.list('favorites')).toHaveLength(0);
+    expect(artifacts.counts().favorited).toBe(0);
+
+    const favorited = artifacts.setFavorited('artifact-1', true);
+    expect(favorited?.favoritedAt).not.toBeNull();
+    expect(artifacts.list('favorites').map((artifact) => artifact.id)).toEqual(['artifact-1']);
+    expect(artifacts.counts().favorited).toBe(1);
+
+    const unfavorited = artifacts.setFavorited('artifact-1', false);
+    expect(unfavorited?.favoritedAt).toBeNull();
+    expect(artifacts.list('favorites')).toHaveLength(0);
+  });
+
+  it('returns null when favoriting an artifact that does not exist', () => {
+    const { artifacts } = library();
+    expect(artifacts.setFavorited('missing', true)).toBeNull();
+  });
+
   it('collects coworker feedback and tracks what is still unresolved', () => {
     const { artifacts } = library();
     publish(artifacts, { id: 'artifact-1', hash: 'hash-a', version: 1 }, 'published');

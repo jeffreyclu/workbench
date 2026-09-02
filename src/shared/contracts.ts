@@ -1296,6 +1296,7 @@ export interface ArtifactSummary {
   conversationTitle: string | null;
   publishedAt: string;
   revokedAt: string | null;
+  favoritedAt: string | null;
   commentCount: number;
   openCommentCount: number;
 }
@@ -1322,7 +1323,8 @@ export const updateArtifactSchema = z.object({
   conversationId: z.string().uuid().nullable().optional(),
 });
 
-export const artifactLibraryViewSchema = z.enum(['published', 'revoked', 'all']).catch('published');
+export const artifactLibraryViewSchema = z.enum(['published', 'revoked', 'all', 'favorites']).catch('published');
+export const setArtifactFavoritedSchema = z.object({ favorited: z.boolean() });
 export interface SharedConversation { id: string; title: string; workItemId: string | null; pinned?: boolean; linkedProjectName?: string | null; forkedFromConversationId: string | null; archivedAt: string | null; sharedBrief?: string; preferredExecutionProfile?: AgentRun['executionProfile']; draftBody?: string; preferredAccountProfile?: string | null; preferredDispatchTarget?: 'both' | 'codex' | 'claude' | null; claudeSessionId?: string | null; codexThreadId?: string | null; state?: 'working' | 'needs_attention' | 'canceled' | 'waiting_approval' | 'promoting' | 'waiting_promotion' | 'finished' | null; isUnread?: boolean; linkedWorkItemPinned?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
 
 export const setConversationTaskSchema = z.object({ workItemId: z.string().uuid().nullable() });

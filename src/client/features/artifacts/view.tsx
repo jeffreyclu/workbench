@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowUpRight, Ban, Check, Copy, FileText, History, LoaderCircle, MessageSquare, RefreshCw } from 'lucide-react';
+import { ArrowUpRight, Ban, Check, Copy, FileText, History, LoaderCircle, MessageSquare, RefreshCw, Star } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../data/api';
 import { versionUrl } from './artifact-url';
@@ -10,7 +10,7 @@ import { ArtifactCardSkeleton, ArtifactDetailSkeleton } from '../../components/s
 import { Tabs } from '../../components/tabs/tabs';
 import type { ArtifactComment, ArtifactEvent, ArtifactSummary, ArtifactVersion } from '../../../shared/contracts';
 
-type LibraryView = 'published' | 'revoked' | 'all';
+type LibraryView = 'published' | 'revoked' | 'all' | 'favorites';
 
 const eventLabels: Record<ArtifactEvent['kind'], string> = {
   published: 'Published',
@@ -159,6 +159,11 @@ function ArtifactCard({ artifact, onOpenTask, onOpenConversation }: {
     onSuccess: async () => { setRevokePromptOpen(false); toast.success('Artifact revoked.'); await invalidate(); },
     onError: (error) => toastError('Could not revoke this artifact.', error),
   });
+  const favorite = useMutation({
+    mutationFn: (favorited: boolean) => api.setArtifactFavorited(artifact.id, favorited),
+    onSuccess: invalidate,
+    onError: (error) => toastError('Could not update favorite.', error),
+  });
   return (
     <article className={`artifact-card ${artifact.revokedAt ? 'revoked' : ''}`}>
       <header>
@@ -166,6 +171,16 @@ function ArtifactCard({ artifact, onOpenTask, onOpenConversation }: {
         <h3>{artifact.title}</h3>
         <em className="relationship-tag">v{artifact.version}</em>
         {artifact.revokedAt && <em className="relationship-tag warn">revoked</em>}
+        <button
+          className={`icon-button artifact-favorite-toggle ${artifact.favoritedAt ? 'icon-button-active' : ''}`}
+          disabled={favorite.isPending}
+          aria-pressed={Boolean(artifact.favoritedAt)}
+          aria-label={artifact.favoritedAt ? 'Unfavorite artifact' : 'Favorite artifact'}
+          title={artifact.favoritedAt ? 'Unfavorite' : 'Favorite'}
+          onClick={() => favorite.mutate(!artifact.favoritedAt)}
+        >
+          <Star size={14} fill={artifact.favoritedAt ? 'currentColor' : 'none'} />
+        </button>
       </header>
       <div className="artifact-meta">
         <time>{artifact.revokedAt ? `Revoked ${formatDate(artifact.revokedAt)}` : `Published ${formatDate(artifact.publishedAt)}`}</time>
@@ -218,6 +233,7 @@ export function ArtifactLibraryView({ onOpenTask, onOpenConversation }: {
       </header>
       <Tabs ariaLabel="Artifact view" className="discovery-tabs" selected={view} onSelect={setView} items={[
         { value: 'published', label: <>Live <span>{counts?.published ?? '…'}</span></> },
+        { value: 'favorites', label: <>Favorites <span>{counts?.favorited ?? '…'}</span></> },
         { value: 'revoked', label: <>Revoked <span>{counts?.revoked ?? '…'}</span></> },
         { value: 'all', label: 'All' },
       ]}>
@@ -226,9 +242,9 @@ export function ArtifactLibraryView({ onOpenTask, onOpenConversation }: {
         {library.isError && <div className="list-state error-message">Could not load the artifact library. <button className="button secondary compact" onClick={() => library.refetch()}>Retry</button></div>}
         {!library.isLoading && !library.data?.artifacts.length && (
           <div className="discovery-empty">
-            <FileText size={26} />
-            <h3>{view === 'revoked' ? 'Nothing revoked' : 'No shared artifacts yet'}</h3>
-            <p>{view === 'revoked' ? 'Revoked shares stay here with their history.' : 'Open an artifact link in an agent reply and choose Share to publish it.'}</p>
+            {view === 'favorites' ? <Star size={26} /> : <FileText size={26} />}
+            <h3>{view === 'revoked' ? 'Nothing revoked' : view === 'favorites' ? 'No favorites yet' : 'No shared artifacts yet'}</h3>
+            <p>{view === 'revoked' ? 'Revoked shares stay here with their history.' : view === 'favorites' ? 'Star an artifact to pin it here.' : 'Open an artifact link in an agent reply and choose Share to publish it.'}</p>
           </div>
         )}
         {library.data?.artifacts.map((artifact) => (

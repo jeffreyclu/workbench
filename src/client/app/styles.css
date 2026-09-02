@@ -1819,6 +1819,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .artifact-card > header { display: flex; align-items: center; gap: 8px; }
 .artifact-card > header h3 { min-width: 0; margin: 0; overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-card > header svg { flex: none; color: var(--muted); }
+.artifact-card > header .artifact-favorite-toggle { flex: none; width: 26px; height: 26px; margin-left: auto; }
+.artifact-card > header .artifact-favorite-toggle.icon-button-active svg { color: var(--acid); }
 .relationship-tag.warn { color: #f0c274; background: #2c2415; }
 .nav-count-alert { color: var(--acid) !important; }
 .artifact-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 7px; color: var(--muted); font: 10px 'DM Mono'; }

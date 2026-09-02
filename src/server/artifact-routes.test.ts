@@ -71,6 +71,32 @@ describe('artifact library API', () => {
     expect((await response.json() as { artifact: { workItemTitle: string } }).artifact.workItemTitle).toBe('Ship connectors V2');
   });
 
+  it('favorites and unfavorites an artifact, reflected in the favorites view and counts', async () => {
+    const favorited = await fetch(`${baseUrl}/api/artifacts/abc123/favorite`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ favorited: true }),
+    });
+    expect(favorited.status).toBe(200);
+    expect((await favorited.json() as { artifact: { favoritedAt: string | null } }).artifact.favoritedAt).not.toBeNull();
+
+    const favoritesView = await fetch(`${baseUrl}/api/artifacts?view=favorites`);
+    const favoritesBody = await favoritesView.json() as { artifacts: Array<{ id: string }>; counts: { favorited: number } };
+    expect(favoritesBody.artifacts).toMatchObject([{ id: 'abc123' }]);
+    expect(favoritesBody.counts.favorited).toBe(1);
+
+    const unfavorited = await fetch(`${baseUrl}/api/artifacts/abc123/favorite`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ favorited: false }),
+    });
+    expect(unfavorited.status).toBe(200);
+    expect((await unfavorited.json() as { artifact: { favoritedAt: string | null } }).artifact.favoritedAt).toBeNull();
+  });
+
+  it('404s favoriting an artifact that does not exist', async () => {
+    const response = await fetch(`${baseUrl}/api/artifacts/missing/favorite`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ favorited: true }),
+    });
+    expect(response.status).toBe(404);
+  });
+
   it('accepts coworker feedback and lets it be resolved', async () => {
     const posted = await fetch(`${baseUrl}/api/artifacts/abc123/comments`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ author: 'Ashley', body: 'Needs dates.', anchor: 'text:14:27' }),

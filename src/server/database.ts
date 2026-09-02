@@ -2061,6 +2061,18 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // Favoriting mirrors conversation pinning: a nullable timestamp rather than
+    // a boolean flag, so the favorites list can sort by when Jeffrey starred it.
+    id: '074_artifact_favorites',
+    apply(database) {
+      database.exec(`
+        ALTER TABLE published_artifacts ADD COLUMN favorited_at TEXT;
+        CREATE INDEX IF NOT EXISTS idx_published_artifacts_favorited
+          ON published_artifacts(favorited_at DESC) WHERE favorited_at IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

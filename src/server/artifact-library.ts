@@ -24,6 +24,7 @@ const summaryColumns = `
   published_artifacts.conversation_id AS conversation_id,
   published_artifacts.published_at AS published_at,
   published_artifacts.revoked_at AS revoked_at,
+  published_artifacts.favorited_at AS favorited_at,
   work_items.title AS work_item_title,
   shared_conversations.title AS conversation_title,
   (SELECT COUNT(*) FROM artifact_versions WHERE artifact_versions.artifact_id = published_artifacts.id) AS version_count,
@@ -59,6 +60,7 @@ function mapSummary(row: Row): ArtifactSummary {
     conversationTitle: optional(row.conversation_title),
     publishedAt: text(row.published_at),
     revokedAt: optional(row.revoked_at),
+    favoritedAt: optional(row.favorited_at),
     commentCount: Number(row.comment_count ?? 0),
     openCommentCount: Number(row.open_comment_count ?? 0),
   };
@@ -137,22 +139,33 @@ export interface PublicationPlan {
 export class ArtifactLibrary {
   constructor(private readonly database: WorkbenchDatabase) {}
 
-  list(view: 'published' | 'revoked' | 'all' = 'published'): ArtifactSummary[] {
-    const where = view === 'all' ? '' : view === 'revoked' ? 'WHERE published_artifacts.revoked_at IS NOT NULL' : 'WHERE published_artifacts.revoked_at IS NULL';
-    const rows = this.database.prepare(`SELECT ${summaryColumns} ${summaryFrom} ${where} ORDER BY published_artifacts.published_at DESC`).all() as Row[];
+  list(view: 'published' | 'revoked' | 'all' | 'favorites' = 'published'): ArtifactSummary[] {
+    const where = view === 'all' ? ''
+      : view === 'revoked' ? 'WHERE published_artifacts.revoked_at IS NOT NULL'
+      : view === 'favorites' ? 'WHERE published_artifacts.favorited_at IS NOT NULL'
+      : 'WHERE published_artifacts.revoked_at IS NULL';
+    const order = view === 'favorites' ? 'published_artifacts.favorited_at DESC' : 'published_artifacts.published_at DESC';
+    const rows = this.database.prepare(`SELECT ${summaryColumns} ${summaryFrom} ${where} ORDER BY ${order}`).all() as Row[];
     return rows.map(mapSummary);
   }
 
-  counts(): { published: number; revoked: number; openComments: number } {
+  counts(): { published: number; revoked: number; favorited: number; openComments: number } {
     const row = this.database.prepare(`
       SELECT
         (SELECT COUNT(*) FROM published_artifacts WHERE revoked_at IS NULL) AS published,
         (SELECT COUNT(*) FROM published_artifacts WHERE revoked_at IS NOT NULL) AS revoked,
+        (SELECT COUNT(*) FROM published_artifacts WHERE favorited_at IS NOT NULL) AS favorited,
         (SELECT COUNT(*) FROM artifact_comments
           JOIN published_artifacts ON published_artifacts.id = artifact_comments.artifact_id
           WHERE artifact_comments.resolved_at IS NULL) AS open_comments
     `).get() as Row;
-    return { published: Number(row.published ?? 0), revoked: Number(row.revoked ?? 0), openComments: Number(row.open_comments ?? 0) };
+    return { published: Number(row.published ?? 0), revoked: Number(row.revoked ?? 0), favorited: Number(row.favorited ?? 0), openComments: Number(row.open_comments ?? 0) };
+  }
+
+  setFavorited(id: string, favorited: boolean): ArtifactSummary | null {
+    if (!this.get(id)) return null;
+    this.database.prepare('UPDATE published_artifacts SET favorited_at = ? WHERE id = ?').run(favorited ? new Date().toISOString() : null, id);
+    return this.get(id);
   }
 
   get(id: string): ArtifactSummary | null {

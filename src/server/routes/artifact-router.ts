@@ -2,7 +2,7 @@ import { Router, type Response } from 'express';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, resolve } from 'node:path';
 import { ZodError, z } from 'zod';
-import { artifactLibraryViewSchema, createArtifactCommentSchema, updateArtifactSchema } from '../../shared/contracts.js';
+import { artifactLibraryViewSchema, createArtifactCommentSchema, setArtifactFavoritedSchema, updateArtifactSchema } from '../../shared/contracts.js';
 import { artifactContentHash, repairLegacyArtifactSnapshots } from '../artifact-publisher.js';
 import { artifactFeedbackConfig } from '../artifact-library.js';
 import { isArtifactAllowed } from '../artifact-access.js';
@@ -158,6 +158,15 @@ export function createArtifactRouter({ repository, artifacts, artifactService, a
       response.json({ artifact });
     } catch (error) { response.status(error instanceof ZodError ? 400 : 500).json({ error: error instanceof Error ? error.message : 'Could not update artifact.' }); }
   });
+  router.patch('/api/artifacts/:id/favorite', (request, response) => {
+    try {
+      const { favorited } = setArtifactFavoritedSchema.parse(request.body);
+      const artifact = artifacts.setFavorited(request.params.id, favorited);
+      if (!artifact) return response.status(404).json({ error: 'Published artifact not found.' });
+      response.json({ artifact });
+    } catch (error) { response.status(error instanceof ZodError ? 400 : 500).json({ error: error instanceof Error ? error.message : 'Could not update artifact.' }); }
+  });
+
   router.delete('/api/artifacts/:id', async (request, response) => {
     const result = await artifactService.revoke(request.params.id);
     if (isActionFailure(result)) return response.status(result.status).json(result.body);

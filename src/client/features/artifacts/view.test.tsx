@@ -30,6 +30,7 @@ const artifact = {
   conversationTitle: 'Rollout review',
   publishedAt: '2026-08-20T12:00:00.000Z',
   revokedAt: null,
+  favoritedAt: null,
   commentCount: 1,
   openCommentCount: 1,
 };
@@ -58,8 +59,9 @@ function stubApi(overrides: { artifacts?: unknown[] } = {}) {
     calls.push({ url, method: init?.method ?? 'GET' });
     const artifacts = overrides.artifacts ?? [artifact];
     const body = url.startsWith('/api/artifacts?')
-      ? { artifacts, counts: { published: artifacts.length, revoked: 0, openComments: 1 } }
+      ? { artifacts, counts: { published: artifacts.length, revoked: 0, favorited: 0, openComments: 1 } }
       : url === '/api/artifacts/abc123' ? detail
+      : url.endsWith('/favorite') ? { artifact: { ...artifact, favoritedAt: init?.body ? (JSON.parse(String(init.body)).favorited ? '2026-08-21T09:00:00.000Z' : null) : null } }
       : { artifact };
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }));
@@ -179,6 +181,16 @@ describe('artifact library', () => {
     await waitFor(() => expect(calls.some((call) => call.url === '/api/artifacts/abc123' && call.method === 'DELETE')).toBe(true));
   });
 
+  it('favorites an artifact from the library', async () => {
+    const calls = stubApi();
+    renderLibrary();
+
+    const toggle = await screen.findByRole('button', { name: 'Favorite artifact' });
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(calls.some((call) => call.url === '/api/artifacts/abc123/favorite' && call.method === 'PATCH')).toBe(true));
+  });
+
   it('offers a restore instead of a republish once an artifact is revoked', async () => {
     stubApi({ artifacts: [{ ...artifact, revokedAt: '2026-08-20T15:00:00.000Z' }] });
     renderLibrary();
@@ -209,5 +221,9 @@ describe('artifact library requests', () => {
     expect(revoked).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', revoked.id);
     await waitFor(() => expect(calls.some((call) => call.url === '/api/artifacts?view=revoked')).toBe(true));
+
+    const favorites = within(tablist).getByRole('tab', { name: /favorites/i });
+    fireEvent.click(favorites);
+    await waitFor(() => expect(calls.some((call) => call.url === '/api/artifacts?view=favorites')).toBe(true));
   });
 });
