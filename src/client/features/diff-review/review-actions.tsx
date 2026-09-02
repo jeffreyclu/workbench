@@ -1,8 +1,8 @@
 import { memo } from 'react';
-import { Check, SkipForward, Wrench } from 'lucide-react';
+import { Check, MessageSquareText, SkipForward } from 'lucide-react';
 import type { DiffHunkReviewState } from '../../../shared/contracts.js';
 
-/** The three ways out of a change: accept it, hand it to the agent to fix, or
+/** The three ways out of a change: accept it, hand it to the agent to discuss, or
  * leave it owed and read the next one. Fix and Skip are optional because they
  * need a surface that can receive them — a composer to write into, a queue to
  * advance. Where neither exists, this stays the single accept button it was. */
@@ -21,7 +21,7 @@ export const DiffReviewActions = memo(function DiffReviewActions({ saving, error
     {error && <p role="alert">Could not save this decision. {error}</p>}
     <div>
       <button type="button" className="review-approve" disabled={saving} onClick={() => onSave('reviewed')}><Check size={15} aria-hidden="true" />Reviewed</button>
-      {onFix && <button type="button" className="review-fix" disabled={saving} onClick={onFix} title="Send this change to the composer to ask for a fix"><Wrench size={15} aria-hidden="true" />Fix</button>}
+      {onFix && <button type="button" className="review-fix" disabled={saving} onClick={onFix} title="Send this change to the composer to ask a question or request a fix"><MessageSquareText size={15} aria-hidden="true" />Ask</button>}
       {onSkip && <button type="button" className="review-skip" onClick={onSkip} title="Leave this change unreviewed and read the next one"><SkipForward size={15} aria-hidden="true" />Skip</button>}
     </div>
     {saving && <span className="diff-review-saving" role="status">Saving decision…</span>}

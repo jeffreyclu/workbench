@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasExplicitImplementationDirective, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -698,6 +698,16 @@ Jeffrey repeating an instruction is a defect report, not emphasis. Before doing 
 }
 
 /**
+ * A live provider thread already holds the room prompt, so a recovery pass
+ * inside it costs the requirement delta rather than a cold rebuild. Only a turn
+ * with no thread to resume needs the full prompt; an expired thread falls back
+ * to it separately via runSteerableCodex's expiredThreadPrompt.
+ */
+export function recoveryPromptForThread(freshPrompt: string, requirement: string, resumeThreadId?: string | null): string {
+  return resumeThreadId ? requirement : `${freshPrompt}\n\n${requirement}`;
+}
+
+/**
  * A linked task's stored classification reflects intent at creation time, not
  * whatever Jeffrey is asking for in the current turn. When the current message
  * carries a clear deliverable signal (e.g. "now implement this" after a research
@@ -707,6 +717,14 @@ Jeffrey repeating an instruction is a defect report, not emphasis. Before doing 
 export function classificationForLinkedItem(repository: WorkItemRepository, item: WorkItem, currentMessage?: string) {
   const stored = repository.getClassification(item.id) ?? repository.setClassification(item.id, classifyExecution(item));
   const inferredKind = currentMessage ? classifyMessageIntent(currentMessage) : null;
+  // A one-word follow-up in an already read-only investigation keeps that
+  // investigation's persona. This is safe because neither kind can mutate.
+  if (stored.kind === 'research' && inferredKind === 'analysis' && currentMessage && /^\s*(?:why|how|what)\??\s*$/i.test(currentMessage)) return stored;
+  // Review is a durable read-only boundary. A keyword inside pasted code or a
+  // generated handoff cannot override it; only Jeffrey's explicit current-turn
+  // implementation directive can make this one turn write-enabled.
+  if (stored.kind === 'review' && inferredKind === 'analysis') return stored;
+  if (stored.kind === 'review' && inferredKind === 'execute' && currentMessage && !hasExplicitImplementationDirective(currentMessage)) return stored;
   if (!inferredKind || inferredKind === stored.kind) return stored;
   return { ...classificationForKind(item, inferredKind), reason: `keyword rules: this turn's request reads as ${inferredKind}, overriding the task's original ${stored.kind} classification` };
 }
@@ -1487,13 +1505,22 @@ export async function replyInSharedRoom(
       }
     }
     const turnEvents = () => repository.listAgentStreamEvents(target.conversationId).filter((event) => event.messageId === messageId);
+    // One recovery per turn, and never a cold rebuild. A live provider thread
+    // already holds the room prompt, so recovery sends only the requirement
+    // delta and keeps the full prompt as the expired-thread fallback.
+    let recoveryUsed = false;
+    const recoveryRun = async (requirement: string) => {
+      const resumeThreadId = result.agent === 'codex' ? result.codexThreadId : undefined;
+      const full = `${freshPrompt}\n\n${requirement}`;
+      recoveryUsed = true;
+      return runCodexReply(recoveryPromptForThread(freshPrompt, requirement, resumeThreadId), resumeThreadId, full);
+    };
     const investigated = turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_read');
     if (!investigated && hasPrematureEvidenceRequest(result.output)) {
       const reason = 'Agent asked Jeffrey for evidence without inspecting the conversation, memory, repository, logs, or database first.';
       if (isPairedReply) throw new Error(reason);
       repository.updateSharedMessage(messageId, { body: `● ${reason} Recovering this tracked turn with an evidence-first pass…` });
-      const recoveryPrompt = `${freshPrompt}\n\nRecovery requirement: the previous response tried to hand evidence collection back to Jeffrey without using Workbench's available sources. Do the original task now. Inspect the existing conversation, durable context, repository, logs, and database as applicable before asking anything. Do not repeat the request for examples or details.`;
-      const recovered = await runCodexReply(recoveryPrompt, result.agent === 'codex' ? result.codexThreadId : undefined, freshPrompt);
+      const recovered = await recoveryRun(`Recovery requirement: the previous response tried to hand evidence collection back to Jeffrey without using Workbench's available sources. Do the original task now. Inspect the existing conversation, durable context, repository, logs, and database as applicable before asking anything. Do not repeat the request for examples or details.`);
       if (hasPrematureEvidenceRequest(recovered.output)) throw new Error(reason);
       result = { ...recovered, fallbackFrom: result.agent === 'claude' ? 'claude' : result.fallbackFrom, fallbackReason: reason };
       repository.updateSharedMessage(messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
@@ -1505,10 +1532,9 @@ export async function replyInSharedRoom(
     const executed = turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_write');
     if (!executed && hasUnverifiedCompletionClaim(result.output)) {
       const reason = 'Agent reported the work complete while this run executed no command and changed no file.';
-      if (isPairedReply) throw new Error(reason);
+      if (isPairedReply || recoveryUsed) throw new Error(reason);
       repository.updateSharedMessage(messageId, { body: `● ${reason} Recovering this tracked turn with a verification-first pass…` });
-      const recoveryPrompt = `${freshPrompt}\n\nRecovery requirement: the previous response reported this work finished, but the run executed no command and changed no file, so the claim was unverified. Do the task now against the real system and exercise the requested outcome end to end. If you cannot verify it in this run, state exactly what remains unverified instead of reporting completion.`;
-      const recovered = await runCodexReply(recoveryPrompt, result.agent === 'codex' ? result.codexThreadId : undefined, freshPrompt);
+      const recovered = await recoveryRun(`Recovery requirement: the previous response reported this work finished, but the run executed no command and changed no file, so the claim was unverified. Do the task now against the real system and exercise the requested outcome end to end. If you cannot verify it in this run, state exactly what remains unverified instead of reporting completion.`);
       const recoveredExecuted = turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_write');
       if (!recoveredExecuted && hasUnverifiedCompletionClaim(recovered.output)) throw new Error(reason);
       result = { ...recovered, fallbackFrom: result.agent === 'claude' ? 'claude' : result.fallbackFrom, fallbackReason: reason };

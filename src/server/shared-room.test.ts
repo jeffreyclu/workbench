@@ -6,8 +6,8 @@ import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
-import { EXTERNAL_ACTION_CONTRACT, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim } from './agent-runner.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, cascadeBreakerForPrompt, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { EXTERNAL_ACTION_CONTRACT, classificationForKind, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim } from './agent-runner.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, cascadeBreakerForPrompt, recoveryPromptForThread, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
@@ -111,6 +111,15 @@ describe('compactConversationHistory', () => {
 
     expect(repeatedUserDirectives(thread)).toEqual([]);
     expect(cascadeBreakerForPrompt(thread)).toBe('');
+  });
+
+  it('recovers inside a live provider thread with the delta only, and rebuilds cold only without one', () => {
+    const fresh = 'FULL ROOM PROMPT';
+    const requirement = 'Recovery requirement: verify end to end.';
+    expect(recoveryPromptForThread(fresh, requirement, 'thread_123')).toBe(requirement);
+    expect(recoveryPromptForThread(fresh, requirement, 'thread_123')).not.toContain(fresh);
+    expect(recoveryPromptForThread(fresh, requirement, undefined)).toContain(fresh);
+    expect(recoveryPromptForThread(fresh, requirement, null)).toContain(requirement);
   });
 
   it('treats a completion claim as unverified unless the reply names its own gap', () => {
@@ -452,6 +461,12 @@ describe('compactConversationHistory', () => {
     const executeTask = repository.create({ title: 'Build connector search', description: 'Implement server-side connector search.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     expect(classificationForLinkedItem(repository, executeTask).kind).toBe('execute');
     expect(sharedTurnKindForMessage(repository, executeTask, 'ok now what')).toBe('analysis');
+
+    const reviewTask = repository.create({ title: 'Review connector PR', description: 'Review the code changes.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    repository.setClassification(reviewTask.id, classificationForKind(reviewTask, 'review'));
+    expect(sharedTurnKindForMessage(repository, reviewTask, 'This code calls fixHeaders(). Is it safe?')).toBe('review');
+    expect(sharedTurnKindForMessage(repository, reviewTask, 'Should we fix this allocation pattern?')).toBe('review');
+    expect(sharedTurnKindForMessage(repository, reviewTask, 'Fix this allocation pattern.')).toBe('execute');
     database.close();
   });
 

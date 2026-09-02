@@ -79,6 +79,8 @@ Execution integrity: this is one foreground, tracked run — no detached/backgro
 
 Turn boundaries: a status question such as "what now?", "what happened?", or "why is this stuck?" asks for an answer. It does not authorize resuming a prior plan, launching the next command, or making changes. Execute prior pending work only when Jeffrey explicitly says to continue, go, run, implement, or otherwise act.
 
+Review questions are read-only: asking whether code is correct, performant, safe, memoized, or should change authorizes inspection and an answer only. Never edit files, create a branch or worktree, run mutating commands, or apply a proposed fix unless Jeffrey explicitly commands that implementation in the current message.
+
 Persistent processes: never trap a turn inside a foreground dev server, file watcher, service monitor, or command documented to run until Ctrl+C. Use a repository's supported managed/detached launcher only when it returns after reporting readiness. If no tracked launcher exists, report that lifecycle gap instead of starting an unfinishable command or inventing an untracked background process.
 
 Before acting, name the relevant decision, handoff, or blocker from the shared brief you're continuing, and flag any conflict with the task or observed repo state.
@@ -915,7 +917,7 @@ export function commandFor(agent: AgentRun['agent'], cwd: string, profile: Execu
     // Coding runs (kind === 'execute') resume the conversation's prior Claude
     // session instead of starting cold, so implementation work keeps its live
     // context across turns; --autocompact stays unconditional either way.
-    args: ['-p', '--permission-mode', 'bypassPermissions', '--no-chrome', '--disallowedTools', readOnly ? 'Task,Edit,Write,NotebookEdit' : 'Task', '--append-system-prompt', RUNNER_SYSTEM_CONTRACT, '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, ...(resumeSessionId ? ['--resume', resumeSessionId] : []), '--disable-slash-commands', '--autocompact', autocompactCeilingFor(profile), '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
+    args: ['-p', '--permission-mode', readOnly ? 'plan' : 'bypassPermissions', '--no-chrome', '--disallowedTools', readOnly ? 'Task,Edit,Write,NotebookEdit' : 'Task', '--append-system-prompt', RUNNER_SYSTEM_CONTRACT, '--output-format', 'stream-json', '--input-format', 'stream-json', '--include-partial-messages', '--verbose', '--effort', effort, '--model', model, ...(resumeSessionId ? ['--resume', resumeSessionId] : []), '--disable-slash-commands', '--autocompact', autocompactCeilingFor(profile), '--mcp-config', WORKBENCH_ONLY_MCP_CONFIG, '--strict-mcp-config', '--add-dir', cwd, homedir()],
   };
 }
 
@@ -2181,6 +2183,29 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
   };
 }
 
+/** A review task crosses into write-enabled execution only on an explicit
+ * current-turn implementation command. Merely pasting code, naming a fix, or
+ * asking whether something should change is not consent to mutate a checkout. */
+export function hasExplicitImplementationDirective(message: string): boolean {
+  const reviewHandoff = /^\s*(?:fix|review) decision\s+\d+\b/i.test(message)
+    && /\b(?:what to change|question or requested change):\s*/i.test(message);
+  const authored = (reviewHandoff
+    ? message.split(/\b(?:what to change|question or requested change):\s*/i).at(-1)
+    : message)?.trim() ?? '';
+  const normalized = authored.replace(/^\s*(?:(?:ok(?:ay)?|well|so|but|and|wait|hold on)[,.:;!?-]*\s+)*/i, '').trim();
+  if (!normalized) return false;
+  if (/\bread[ -]?only\b/i.test(normalized)
+    || /\b(?:do not|don't|dont|never)\s+(?:make|apply|write|edit|modify|change|fix|implement|commit|push)\b/i.test(normalized)) return false;
+  const isQuestion = /\?\s*$/.test(normalized)
+    || /^(?:who|what|when|where|why|how|is|are|am|was|were|do|does|did|should|has|have|had)\b/i.test(normalized);
+  if (isQuestion && !/^(?:can|could|will|would)\s+you\b/i.test(normalized)) return false;
+  const action = '(?:implement|build|fix|debug|refactor|edit|update|rewrite|remove|add|change|create|write|publish|deploy|install|configure|connect|move|rename|delete|archive|restore|enable|disable|convert|migrate|upgrade|replace|clean|automate|expose|make)';
+  return new RegExp(`^(?:please\\s+)?${action}\\b`, 'i').test(normalized)
+    || new RegExp(`^(?:can|could|will|would)\\s+you\\b[^?]*${action}\\b`, 'i').test(normalized)
+    || new RegExp(`\\b(?:i\\s+(?:want|need)\\s+you\\s+to|you\\s+(?:need|have)\\s+to|please|go\\s+ahead(?:\\s+and)?|now|then)\\s+${action}\\b`, 'i').test(normalized)
+    || new RegExp(`(?:^|[.!?]\\s+)${action}\\s+(?:it|this|that|the|decision|code|file|hook|function)\\b`, 'i').test(normalized);
+}
+
 /**
  * A task's kind is classified once at creation, but a linked conversation keeps
  * taking new requests. Re-infer intent from what Jeffrey actually asks in each
@@ -2191,19 +2216,39 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
 export function classifyMessageIntent(message: string): AgentRun['kind'] | null {
   const text = message.toLowerCase();
   if (!text.trim()) return null;
-  const normalized = text.replace(/^\s*(?:(?:ok(?:ay)?|well|so|but|and|wait|hold on)[,.:;!?-]*\s+)*/i, '').trim();
+  // The Changes view hands a decision to the composer with review context and
+  // leaves Jeffrey's actual instruction after this delimiter. Routing on the
+  // generated `Fix decision …` prefix made an ordinary question write-enabled.
+  // Classify the authored suffix while retaining that this is a review turn.
+  const reviewHandoff = /^\s*(?:fix|review) decision\s+\d+\b/i.test(message)
+    && /\b(?:what to change|question or requested change):\s*/i.test(message);
+  const authoredText = reviewHandoff
+    ? message.split(/\b(?:what to change|question or requested change):\s*/i).at(-1)?.trim() || ''
+    : message;
+  const authoredLower = authoredText.toLowerCase();
+  const normalized = authoredLower.replace(/^\s*(?:(?:ok(?:ay)?|well|so|but|and|wait|hold on)[,.:;!?-]*\s+)*/i, '').trim();
   const statusQuestion = /^(?:now\s+what|what\s+now|what\s+(?:happened|is happening|are you doing)|where\s+(?:are we|is this)|why\b[^?]*(?:stuck|stall(?:ed|ing)?|slow|taking|hanging|doing nothing))\b/.test(normalized);
-  const explicitActionQuestion = /^(?:can|could|will|would)\s+you\b/.test(normalized);
+  const explicitActionQuestion = /^(?:can|could|will|would)\s+you\b[^?]*(?:implement|build|fix|debug|refactor|edit|update|rewrite|remove|add|change|create|write|publish|deploy|install|configure|connect|move|rename|delete|archive|restore|enable|disable|convert|migrate|upgrade|replace|clean|automate|expose)\b/.test(normalized);
+  const explicitReadOnly = /\bread[ -]?only\b/.test(authoredLower)
+    || /\b(?:do not|don't|dont|never)\s+(?:make|apply|write|edit|modify|change|fix|implement|commit|push)\b/.test(authoredLower)
+    || /\bjust\s+(?:answer|explain|review|assess|analy[sz]e)\b/.test(authoredLower);
+  const question = /\?\s*$/.test(normalized)
+    || /^(?:who|what|when|where|why|how|is|are|am|was|were|do|does|did|should|would|could|can|will|has|have|had)\b/.test(normalized);
   const explicitCodeReview = /\bcode review\b/.test(text)
     || /\breview\b[^\n.!?]{0,80}\b(?:pr|pull request|diff|patch|code changes?|implementation)\b/.test(text)
     || /\b(?:pr|pull request|diff|patch)\b[^\n.!?]{0,40}\breview\b/.test(text);
-  const implementation = /\b(implement|build|code|fix|debug|refactor|test|edit|update|reduce|trim|rewrite|remove|add|change|create|write|publish|deploy|install|configure|connect|move|rename|delete|archive|restore|enable|disable|convert|migrate|upgrade|replace|clean|automate|expose)\b/.test(text);
-  const documentStrategy = /\b(spec|rfc|technical document|design doc|proposal|plan|strategy)\b/.test(text)
-    && /\b(plan|draft|write|create|produce|author|revise|define|spec|rfc|proposal|scope|design)\b/.test(text);
-  const research = /\b(research|investigate|explore|compare|evaluate)\b/.test(text);
-  const analysis = /\b(explain|summarize|describe|organize|discuss|assess)\b/.test(text);
-  // A question is an answer-only turn even when it mentions a prior "fix" or
-  // "build". Requests such as "can you fix it?" remain executable.
+  // `code` is a subject in "code review", not an implementation verb. Only an
+  // imperative use counts; the ordinary implementation verbs remain explicit.
+  const implementation = /\b(implement|build|fix|debug|refactor|test|edit|update|reduce|trim|rewrite|remove|add|change|create|write|publish|deploy|install|configure|connect|move|rename|delete|archive|restore|enable|disable|convert|migrate|upgrade|replace|clean|automate|expose)\b/.test(authoredLower)
+    || /^(?:please\s+)?code\s+(?:this|it|the\b)/.test(normalized);
+  const documentStrategy = /\b(spec|rfc|technical document|design doc|proposal|plan|strategy)\b/.test(authoredLower)
+    && /\b(plan|draft|write|create|produce|author|revise|define|spec|rfc|proposal|scope|design)\b/.test(authoredLower);
+  const research = /\b(research|investigate|explore|compare|evaluate)\b/.test(authoredLower);
+  const analysis = /\b(explain|summarize|describe|organize|discuss|assess|answer)\b/.test(authoredLower);
+  // A question is read-only even when it mentions a possible fix. The only
+  // exception is a direct request to the agent to perform a concrete action.
+  if (explicitReadOnly) return explicitCodeReview || reviewHandoff ? 'review' : 'analysis';
+  if (question && !explicitActionQuestion) return explicitCodeReview || reviewHandoff ? 'review' : 'analysis';
   if (statusQuestion && !explicitActionQuestion) return 'analysis';
   if (explicitCodeReview && !implementation) return 'review';
   if (documentStrategy && !implementation) return 'strategy';

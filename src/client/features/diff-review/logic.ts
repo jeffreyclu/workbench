@@ -53,9 +53,9 @@ export function nextPendingDecisionId(decisions: ReviewDecision[], currentId: st
  * from the location above, and the reviewer can still see what they sent. */
 const FIX_REQUEST_PATCH_LINES = 80;
 
-/** The text a Fix hands to the composer. It names the change, says where it
- * lives, and quotes the patch, so the reviewer only has to type what is wrong
- * with it — the part no other surface knows. */
+/** The text a review handoff sends to the composer. It supplies context without
+ * commanding a mutation: Jeffrey may ask a question or explicitly request a
+ * change, and the server routes only that authored suffix. */
 export function fixRequestPrompt(decision: ReviewDecision): string {
   const locations = decision.hunks.map((hunk) => `${hunk.filePath} ${hunk.location}`).join('\n');
   const patchLines = decision.hunks.flatMap((hunk) => [hunk.hunkRange, ...hunk.lines]);
@@ -63,7 +63,7 @@ export function fixRequestPrompt(decision: ReviewDecision): string {
   const omitted = patchLines.length - shown.length;
   const patch = [...shown, ...(omitted > 0 ? [`… ${omitted} more patch ${omitted === 1 ? 'line' : 'lines'} not quoted`] : [])].join('\n');
   const fence = '`'.repeat(3);
-  return [`Fix decision ${decision.ordinal} — ${decision.behavior}`, locations, `${fence}diff\n${patch}\n${fence}`, 'What to change: '].join('\n\n');
+  return [`Review decision ${decision.ordinal} — ${decision.behavior}`, locations, `${fence}diff\n${patch}\n${fence}`, 'Question or requested change: '].join('\n\n');
 }
 
 export function riskSignalLabel(signal: ReviewRiskSignal): string {

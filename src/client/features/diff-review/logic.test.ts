@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
 import type { ChangeMap, ChangeMapNode } from '../../../shared/change-map.js';
-import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, nextPendingDecisionId, orderReviewDecisions } from './logic.js';
+import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, fixRequestPrompt, nextPendingDecisionId, orderReviewDecisions } from './logic.js';
 
 /** The hash the decision builder derives for a hunk, so a fixture verdict is
  * recorded against the content actually on screen rather than a literal that
@@ -26,6 +26,15 @@ const authTestFile: WorkspaceDiffFile = {
 };
 
 describe('diff review queue logic', () => {
+  it('hands a decision to the composer without commanding the agent to edit it', () => {
+    const [decision] = buildReviewDecisions([authFile], []);
+    const prompt = fixRequestPrompt(decision);
+
+    expect(prompt).toContain('Review decision 1');
+    expect(prompt).toContain('Question or requested change: ');
+    expect(prompt).not.toContain('Fix decision');
+  });
+
   it('derives plain-English behavior and retains exact reviewable hunk content', () => {
     const [decision] = buildReviewDecisions([authFile], []);
 

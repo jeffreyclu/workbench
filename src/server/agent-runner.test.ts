@@ -218,6 +218,7 @@ describe('classifyExecution', () => {
     expect(codexPrompt).toContain(RUNNER_SYSTEM_CONTRACT);
     expect(claudePrompt).toContain('write-enabled for the resolved workspace');
     expect(buildPrompt(task, { agent: 'claude', kind: 'analysis', instructions: '' } as AgentRun)).toContain('read-only by task type');
+    expect(RUNNER_SYSTEM_CONTRACT).toContain('Review questions are read-only');
   });
 
   it('builds a bounded continuation prompt for an already-resumed Claude session', () => {
@@ -245,7 +246,7 @@ describe('classifyExecution', () => {
 
   it('narrows read-only task kinds to a read-only tool surface', () => {
     expect(commandFor('codex', '/tmp/project', 'standard', undefined, undefined, 'research').args).toEqual(expect.arrayContaining(['--sandbox', 'read-only']));
-    expect(commandFor('claude', '/tmp/project', 'standard', undefined, undefined, 'review').args).toEqual(expect.arrayContaining(['--disallowedTools', 'Task,Edit,Write,NotebookEdit']));
+    expect(commandFor('claude', '/tmp/project', 'standard', undefined, undefined, 'review').args).toEqual(expect.arrayContaining(['--permission-mode', 'plan', '--disallowedTools', 'Task,Edit,Write,NotebookEdit']));
     expect(commandFor('codex', '/tmp/project', 'standard', undefined, undefined, 'execute').args).toEqual(expect.arrayContaining(['--sandbox', 'workspace-write']));
   });
 
@@ -1121,6 +1122,39 @@ fi`;
     expect(classifyMessageIntent('ok now what')).toBe('analysis');
     expect(classifyMessageIntent('why is the fix stuck?')).toBe('analysis');
     expect(classifyMessageIntent('can you fix it?')).toBe('execute');
+  });
+
+  it('keeps questions from the code-review handoff read-only', () => {
+    expect(classifyMessageIntent(`Fix decision 25 — Adds the public remove scopes list flag config contract.
+
+src/scopeSelectionAllowlist.ts Lines 1–37
+
+\`\`\`diff
++const values = input.map(normalize).filter(Boolean);
+\`\`\`
+
+What to change: is this code performant? we got .map.filter going on`)).toBe('review');
+    expect(classifyMessageIntent(`Fix decision 6 — Adds control access checks.
+
+src/useProfileStepVisibility.ts Lines 1–67
+
+What to change: is this hook properly memoized inside? ie using useMemo and useCallback?`)).toBe('review');
+    expect(classifyMessageIntent(`Review decision 6 — Adds control access checks.
+
+src/useProfileStepVisibility.ts Lines 1–67
+
+Question or requested change: is this hook properly memoized inside?`)).toBe('review');
+    expect(classifyMessageIntent(`Review decision 6 — Adds control access checks.
+
+src/useProfileStepVisibility.ts Lines 1–67
+
+Question or requested change: Replace this hook with the established memoized helper.`)).toBe('execute');
+  });
+
+  it('honors an explicit read-only correction even when it names code and changes', () => {
+    expect(classifyMessageIntent('THIS IS A CODE REVIEW. DO NOT MAKE ANY CHANGES, JUST ANSWER MY QUESTIONS. THIS IS A READ ONLY SESSION')).toBe('review');
+    expect(classifyMessageIntent('Should we fix this allocation pattern?')).toBe('analysis');
+    expect(classifyMessageIntent('Fix this allocation pattern.')).toBe('execute');
   });
 
   it('injects shared room context into execution prompts', () => {
