@@ -108,9 +108,12 @@ export function createConversationRouter({ repository, database, capabilities, a
     response.json({ feedback: repository.getSessionFeedback(request.params.id) });
   });
 
-  const conversationWorkingDirectory = (conversationId: string) => {
+  const conversationWorkingDirectory = (conversationId: string, requestedWorkspace?: unknown) => {
     const explorer = conversationWorkspaces(conversationId);
-    return explorer?.selectedPath ?? null;
+    if (!explorer) return null;
+    if (typeof requestedWorkspace !== 'string' || !requestedWorkspace.trim()) return explorer.selectedPath;
+    const requestedPath = resolve(requestedWorkspace);
+    return explorer.workspaces.some((workspace) => workspace.path === requestedPath) ? requestedPath : null;
   };
 
   router.get('/api/shared/conversations/:id/workspaces', (request, response) => {
@@ -146,7 +149,7 @@ export function createConversationRouter({ repository, database, capabilities, a
 
   router.get('/api/shared/conversations/:id/workspace-diff', async (request, response, next) => {
     try {
-      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      const workingDirectory = conversationWorkingDirectory(request.params.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
       const [diff, commitHash, identity] = await Promise.all([getWorkspaceDiff(workingDirectory), getWorkspaceHeadCommit(workingDirectory), repositoryIdentity(workingDirectory)]);
       if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot({ conversationId: request.params.id }, diff, { originatingAgentRunId: repository.latestAgentRunForSnapshot({ conversationId: request.params.id })?.id ?? null, commitHash, repositoryIdentity: identity });
@@ -155,7 +158,7 @@ export function createConversationRouter({ repository, database, capabilities, a
   });
   router.get('/api/shared/conversations/:id/workspace-diff/snapshots', async (request, response, next) => {
     try {
-      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      const workingDirectory = conversationWorkingDirectory(request.params.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
       await captureRecordedWorkspaceDiffSnapshots(repository, { conversationId: request.params.id }, workingDirectory, [request.params.id]);
       response.json({ snapshots: await snapshotsForRepository(repository.listWorkspaceDiffSnapshots({ conversationId: request.params.id }), workingDirectory) });
@@ -166,14 +169,14 @@ export function createConversationRouter({ repository, database, capabilities, a
   // answer with the same WorkspaceDiff the working tree does.
   router.get('/api/shared/conversations/:id/workspace-diff/refs', async (request, response, next) => {
     try {
-      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      const workingDirectory = conversationWorkingDirectory(request.params.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
       response.json({ refs: await listWorkspaceRefs(workingDirectory) });
     } catch (error) { next(error); }
   });
   router.get('/api/shared/conversations/:id/workspace-diff/ref', async (request, response, next) => {
     try {
-      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      const workingDirectory = conversationWorkingDirectory(request.params.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
       const ref = typeof request.query.ref === 'string' ? request.query.ref : '';
       if (!ref) return response.status(400).json({ error: 'Specify which branch or worktree to review.' });
@@ -183,7 +186,7 @@ export function createConversationRouter({ repository, database, capabilities, a
 
   router.get('/api/shared/conversations/:id/workspace-diff/ref/commits', async (request, response, next) => {
     try {
-      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      const workingDirectory = conversationWorkingDirectory(request.params.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
       const ref = typeof request.query.ref === 'string' ? request.query.ref : '';
       // No ref means the repo browser's own question: the commits on this
@@ -193,7 +196,7 @@ export function createConversationRouter({ repository, database, capabilities, a
   });
   router.get('/api/shared/conversations/:id/workspace-diff/commit', async (request, response, next) => {
     try {
-      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      const workingDirectory = conversationWorkingDirectory(request.params.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
       const commit = z.string().trim().min(1).max(200).parse(request.query.commit);
       response.json({ diff: await getWorkspaceCommitDiff(workingDirectory, commit) });
@@ -202,7 +205,7 @@ export function createConversationRouter({ repository, database, capabilities, a
 
   router.get('/api/shared/conversations/:id/workspace-diff/status', async (request, response, next) => {
     try {
-      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      const workingDirectory = conversationWorkingDirectory(request.params.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
       const revision = await getWorkspaceDiffRevision(workingDirectory);
       response.json({ changed: revision !== request.query.revision });
@@ -211,7 +214,7 @@ export function createConversationRouter({ repository, database, capabilities, a
 
   router.get('/api/shared/conversations/:id/workspace-diff/file', async (request, response, next) => {
     try {
-      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      const workingDirectory = conversationWorkingDirectory(request.params.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
       const path = typeof request.query.path === 'string' ? request.query.path : '';
       const revision = typeof request.query.revision === 'string' && request.query.revision ? request.query.revision : null;
@@ -221,7 +224,7 @@ export function createConversationRouter({ repository, database, capabilities, a
 
   router.post('/api/shared/conversations/:id/workspace-diff/commit-and-push', async (request, response, next) => {
     try {
-      const workingDirectory = conversationWorkingDirectory(request.params.id);
+      const workingDirectory = conversationWorkingDirectory(request.params.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(404).json({ error: 'Conversation not found.' });
       const { revision, message } = z.object({ revision: z.string().trim().min(1), message: z.string().trim().min(1).optional() }).parse(request.body);
       const conversation = repository.getConversation(request.params.id)!;

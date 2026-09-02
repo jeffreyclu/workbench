@@ -1121,7 +1121,8 @@ describe('shared room', () => {
     const message = { id: 'standalone-message', conversationId, author: 'codex', body: 'Implemented the standalone change.', pinned: false, status: 'completed', error: '', createdAt: timestamp, attachments: [], model: null, executionProfile: null, dispatchTarget: 'none' };
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === `/api/shared/conversations/${conversationId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'conversation-diff', changedFiles: 1, additions: 1, deletions: 0, publish: { branch: 'conversation-diff', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/standalone.tsx', previousPath: null, status: 'added', additions: 1, deletions: 0, isBinary: false, patch: '@@ -0,0 +1 @@\n+standalone' }] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}/workspaces`) return new Response(JSON.stringify({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench', selected: true }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith(`/api/shared/conversations/${conversationId}/workspace-diff?`)) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'conversation-diff', changedFiles: 1, additions: 1, deletions: 0, publish: { branch: 'conversation-diff', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/standalone.tsx', previousPath: null, status: 'added', additions: 1, deletions: 0, isBinary: false, patch: '@@ -0,0 +1 @@\n+standalone' }] } }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [message] }), { headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
@@ -1132,10 +1133,10 @@ describe('shared room', () => {
 
     const changes = await screen.findByRole('button', { name: 'Changes' });
     await waitFor(() => expect(changes).toBeEnabled());
-    expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/shared/conversations/${conversationId}/workspace-diff`)).toBe(true);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith(`/api/shared/conversations/${conversationId}/workspace-diff?workspacePath=`))).toBe(true);
 
     fireEvent.click(changes);
-    expect(await screen.findByText('Workspace review')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'conversation-diff' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Review workspace decisions' })).toBeNull();
     expect(screen.queryByText('Review behavior decisions in priority order before publishing these workspace changes.')).toBeNull();
     expect(await screen.findAllByRole('button', { name: /src\/client\/standalone\.tsx/ })).not.toHaveLength(0);
@@ -1159,7 +1160,8 @@ describe('shared room', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === `/api/shared/conversations/${conversationId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'diff-in-chat', changedFiles: 1, additions: 2, deletions: 1, publish: { branch: 'diff-in-chat', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/App.tsx', previousPath: null, status: 'modified', additions: 2, deletions: 1, isBinary: false, patch: '@@ -1 +1,2 @@\n-old\n+new\n+next' }] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}/workspaces`) return new Response(JSON.stringify({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench', selected: true }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith(`/api/shared/conversations/${conversationId}/workspace-diff?`)) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'diff-in-chat', changedFiles: 1, additions: 2, deletions: 1, publish: { branch: 'diff-in-chat', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/App.tsx', previousPath: null, status: 'modified', additions: 2, deletions: 1, isBinary: false, patch: '@@ -1 +1,2 @@\n-old\n+new\n+next' }] } }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/github/pull-request-diff')) return new Response(JSON.stringify({ diff: { url: item.sourceUrl, repository: 'writer/workbench', number: 42, title: 'Conversation review', baseRef: 'main', headRef: 'diff-in-chat', changedFiles: 1, additions: 2, deletions: 1, files: [{ path: 'src/client/App.tsx', previousPath: null, status: 'modified', additions: 2, deletions: 1, isBinary: false, patch: '@@ -1 +1,2 @@\n-old\n+new\n+next' }] } }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [message] }), { headers: { 'Content-Type': 'application/json' } });
@@ -1176,16 +1178,12 @@ describe('shared room', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/github/pull-request-diff'))).toBe(true);
 
     fireEvent.click(changes);
-    expect(await screen.findByText('Workspace review')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'diff-in-chat' })).toBeTruthy();
     // The linked pull request is an explicit review source, so it opens on demand rather than by default.
     fireEvent.click(screen.getByRole('button', { name: 'GitHub PR' }));
     fireEvent.change(await screen.findByLabelText('Pull request'), { target: { value: item.sourceUrl } });
-    expect(await screen.findByRole('heading', { name: 'Conversation review' })).toBeTruthy();
-    // The queue chip and the diff block header. A lone decision has no relationships, so the change map contributes no node.
-    expect((await screen.findAllByRole('button', { name: /src\/client\/App\.tsx/ })).map((button) => button.getAttribute('aria-label'))).toEqual([
-      'Decision 1: Changes behavior in src/client/App.tsx. \u2014 Pending',
-      'Select the decision at Lines 1\u20132 in src/client/App.tsx',
-    ]);
+    expect(await screen.findByRole('heading', { name: 'diff-in-chat → main' })).toBeTruthy();
+    expect(await screen.findAllByText('src/client/App.tsx')).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'Changes' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('button', { name: 'Split' })).toBeNull();
     expect(screen.getByLabelText('Message Codex or Claude').closest('.conversation-review-layout')).toHaveClass('layout-changes');
@@ -1193,7 +1191,7 @@ describe('shared room', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Conversation' }));
     expect(await screen.findByText('The implementation is ready to review.')).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: 'Conversation review' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'diff-in-chat → main' })).toBeNull();
   });
 
   it('opens the linked task workspace diff in the conversation even without a pull request', async () => {
@@ -1212,7 +1210,8 @@ describe('shared room', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === `/api/shared/conversations/${conversationId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'feature/local-diff', changedFiles: 1, additions: 1, deletions: 1, publish: { branch: 'feature/local-diff', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/feature.tsx', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}/workspaces`) return new Response(JSON.stringify({ selectedPath: item.workspacePath, workspaces: [{ path: item.workspacePath, label: 'workbench', selected: true }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith(`/api/shared/conversations/${conversationId}/workspace-diff?`)) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'feature/local-diff', changedFiles: 1, additions: 1, deletions: 1, publish: { branch: 'feature/local-diff', hasOrigin: true, ahead: 0, hasChanges: true, reason: null }, files: [{ path: 'src/client/feature.tsx', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@\n-before\n+after' }] } }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
@@ -1223,12 +1222,12 @@ describe('shared room', () => {
 
     const changes = await screen.findByRole('button', { name: 'Changes' });
     await waitFor(() => expect(changes).toBeEnabled());
-    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/workspace-diff'))).toBe(true);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/workspace-diff?workspacePath='))).toBe(true);
 
     fireEvent.click(changes);
-    expect(await screen.findByText('Workspace review')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'feature/local-diff' })).toBeTruthy();
     expect(await screen.findAllByRole('button', { name: /src\/client\/feature\.tsx/ })).not.toHaveLength(0);
-    expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/shared/conversations/${conversationId}/workspace-diff`)).toBe(true);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith(`/api/shared/conversations/${conversationId}/workspace-diff?workspacePath=`))).toBe(true);
     expect(screen.queryByText('GitHub reports no changed files for this pull request.')).toBeNull();
   });
 
@@ -1248,7 +1247,8 @@ describe('shared room', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === `/api/shared/conversations/${conversationId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'clean', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'clean', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}/workspaces`) return new Response(JSON.stringify({ selectedPath: item.workspacePath, workspaces: [{ path: item.workspacePath, label: 'workbench', selected: true }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith(`/api/shared/conversations/${conversationId}/workspace-diff?`)) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'clean', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'clean', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
@@ -1258,11 +1258,11 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     const changes = await screen.findByRole('button', { name: 'Changes' });
-    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/shared/conversations/${conversationId}/workspace-diff`)).toBe(true));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith(`/api/shared/conversations/${conversationId}/workspace-diff?workspacePath=`))).toBe(true));
     expect(changes).not.toBeDisabled();
     expect(changes).toHaveAttribute('title', 'No changes to review');
     fireEvent.click(changes);
-    expect(await screen.findByLabelText('Current workspace changes')).toBeTruthy();
+    expect(await screen.findByText('No changes in this source.')).toBeTruthy();
   });
 
   it('keeps Changes enabled for a recorded workspace diff after commit and push', async () => {
@@ -1280,8 +1280,9 @@ describe('shared room', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [conversation], artifacts: [], linkedTasks: [], references: [], providerConflicts: [] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === `/api/shared/conversations/${conversationId}/workspace-diff`) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'main', revision: 'current-clean', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
-      if (url === `/api/shared/conversations/${conversationId}/workspace-diff/snapshots`) return new Response(JSON.stringify({ snapshots: [{ id: 'snapshot-1', capturedAt: timestamp, diff: { workspacePath: item.workspacePath, branch: 'main', revision: 'committed-change', changedFiles: 1, additions: 1, deletions: 0, publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [{ path: 'src/client/fixed.tsx', previousPath: null, status: 'added', additions: 1, deletions: 0, isBinary: false, patch: '@@ -0,0 +1 @@\n+fixed' }] } }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}/workspaces`) return new Response(JSON.stringify({ selectedPath: item.workspacePath, workspaces: [{ path: item.workspacePath, label: 'workbench', selected: true }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith(`/api/shared/conversations/${conversationId}/workspace-diff/snapshots?`)) return new Response(JSON.stringify({ snapshots: [{ id: 'snapshot-1', capturedAt: timestamp, diff: { workspacePath: item.workspacePath, branch: 'main', revision: 'committed-change', changedFiles: 1, additions: 1, deletions: 0, publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [{ path: 'src/client/fixed.tsx', previousPath: null, status: 'added', additions: 1, deletions: 0, isBinary: false, patch: '@@ -0,0 +1 @@\n+fixed' }] } }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith(`/api/shared/conversations/${conversationId}/workspace-diff?`)) return new Response(JSON.stringify({ diff: { workspacePath: item.workspacePath, branch: 'main', revision: 'current-clean', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
       if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
@@ -1293,9 +1294,9 @@ describe('shared room', () => {
     const changes = await screen.findByRole('button', { name: 'Changes' });
     await waitFor(() => expect(changes).toBeEnabled());
     fireEvent.click(changes);
-    // A clean checkout with a recorded version opens that version instead of an empty state.
-    expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeTruthy();
-    expect(screen.getByLabelText('Workspace diff history')).toHaveValue('snapshot-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'History' }));
+    expect(await screen.findByRole('heading', { name: 'main' })).toBeTruthy();
+    expect(screen.getByLabelText('Recorded version')).toHaveValue('snapshot-1');
     expect(screen.getByRole('option', { name: /1 files/ })).toBeTruthy();
   });
 

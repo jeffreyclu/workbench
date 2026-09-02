@@ -85,7 +85,13 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     }
     return { selectedPath, workspaces: candidates.map((path) => ({ path, label: path === defaultPath && latestRunWorkspace ? `${basename(resolveWorkingDirectory(item))} · agent worktree` : basename(path), selected: path === selectedPath })) };
   };
-  const taskWorkingDirectory = (workItemId: string) => taskWorkspaces(workItemId)?.selectedPath ?? null;
+  const taskWorkingDirectory = (workItemId: string, requestedWorkspace?: unknown) => {
+    const explorer = taskWorkspaces(workItemId);
+    if (!explorer) return null;
+    if (typeof requestedWorkspace !== 'string' || !requestedWorkspace.trim()) return explorer.selectedPath;
+    const requestedPath = resolve(requestedWorkspace);
+    return explorer.workspaces.some((workspace) => workspace.path === requestedPath) ? requestedPath : null;
+  };
   router.post('/api/diff-confidence', async (request, response, next) => {
     try {
       const { blocks } = diffConfidenceRequestSchema.parse(request.body);
@@ -186,7 +192,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     try {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const workingDirectory = taskWorkingDirectory(item.id);
+      const workingDirectory = taskWorkingDirectory(item.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
       const [diff, commitHash, identity] = await Promise.all([getWorkspaceDiff(workingDirectory), getWorkspaceHeadCommit(workingDirectory), repositoryIdentity(workingDirectory)]);
       if (diff.changedFiles > 0) repository.captureWorkspaceDiffSnapshot({ workItemId: item.id }, diff, { originatingAgentRunId: repository.latestAgentRunForSnapshot({ workItemId: item.id })?.id ?? null, commitHash, repositoryIdentity: identity });
@@ -197,7 +203,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     try {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const workingDirectory = taskWorkingDirectory(item.id) ?? resolveWorkingDirectory(item);
+      const workingDirectory = taskWorkingDirectory(item.id, request.query.workspacePath) ?? resolveWorkingDirectory(item);
       await captureRecordedWorkspaceDiffSnapshots(
         repository,
         { workItemId: item.id },
@@ -214,7 +220,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     try {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const workingDirectory = taskWorkingDirectory(item.id);
+      const workingDirectory = taskWorkingDirectory(item.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
       response.json({ refs: await listWorkspaceRefs(workingDirectory) });
     } catch (error) { next(error); }
@@ -223,7 +229,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     try {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const workingDirectory = taskWorkingDirectory(item.id);
+      const workingDirectory = taskWorkingDirectory(item.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
       const ref = typeof request.query.ref === 'string' ? request.query.ref : '';
       if (!ref) return response.status(400).json({ error: 'Specify which branch or worktree to review.' });
@@ -234,7 +240,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     try {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const workingDirectory = taskWorkingDirectory(item.id);
+      const workingDirectory = taskWorkingDirectory(item.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
       const ref = typeof request.query.ref === 'string' ? request.query.ref : '';
       // No ref means the repo browser's own question: the commits on this
@@ -246,7 +252,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     try {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const workingDirectory = taskWorkingDirectory(item.id);
+      const workingDirectory = taskWorkingDirectory(item.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
       const commit = z.string().trim().min(1).max(200).parse(request.query.commit);
       response.json({ diff: await getWorkspaceCommitDiff(workingDirectory, commit) });
@@ -260,7 +266,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     try {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const workingDirectory = taskWorkingDirectory(item.id);
+      const workingDirectory = taskWorkingDirectory(item.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
       response.json({ report: await findStaleReferences(workingDirectory) });
     } catch (error) { next(error); }
@@ -269,7 +275,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     try {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const workingDirectory = taskWorkingDirectory(item.id);
+      const workingDirectory = taskWorkingDirectory(item.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
       const revision = await getWorkspaceDiffRevision(workingDirectory);
       response.json({ changed: revision !== request.query.revision });
@@ -280,7 +286,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     try {
       const item = repository.get(request.params.id);
       if (!item) return response.status(404).json({ error: 'Work item not found.' });
-      const workingDirectory = taskWorkingDirectory(item.id);
+      const workingDirectory = taskWorkingDirectory(item.id, request.query.workspacePath);
       if (!workingDirectory) return response.status(409).json({ error: 'Select a repository in Repo Explorer before viewing changes.' });
       const path = typeof request.query.path === 'string' ? request.query.path : '';
       const revision = typeof request.query.revision === 'string' && request.query.revision ? request.query.revision : null;

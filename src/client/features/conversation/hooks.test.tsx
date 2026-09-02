@@ -11,14 +11,15 @@ describe('useConversationChangesAvailability', () => {
   it('distinguishes a diff fetch failure from a zero-change result and retries it', async () => {
     let diffAttempts = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith('/workspace-diff/snapshots')) return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url.endsWith('/workspace-diff')) {
+      const url = new URL(String(input), 'http://workbench.test');
+      if (url.pathname.endsWith('/workspaces')) return new Response(JSON.stringify({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench', selected: true }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname.endsWith('/workspace-diff/snapshots')) return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname.endsWith('/workspace-diff')) {
         diffAttempts += 1;
         if (diffAttempts === 1) throw new Error('Network unavailable');
         return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'review', revision: 'retry', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
       }
-      throw new Error(`Unexpected request: ${url}`);
+      throw new Error(`Unexpected request: ${url.pathname}${url.search}`);
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
@@ -34,12 +35,13 @@ describe('useConversationChangesAvailability', () => {
 
   it('enables Changes when any linked pull request has files to review', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith('/workspace-diff/snapshots')) return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
-      if (url.endsWith('/workspace-diff')) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'review', revision: 'empty', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
-      const pullRequest = new URL(url, 'http://localhost').searchParams.get('url')?.match(/pull\/(\d+)/)?.[1];
+      const url = new URL(String(input), 'http://workbench.test');
+      if (url.pathname.endsWith('/workspaces')) return new Response(JSON.stringify({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench', selected: true }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname.endsWith('/workspace-diff/snapshots')) return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname.endsWith('/workspace-diff')) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'review', revision: 'empty', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
+      const pullRequest = url.searchParams.get('url')?.match(/pull\/(\d+)/)?.[1];
       if (pullRequest) return new Response(JSON.stringify({ diff: { changedFiles: pullRequest === '43' ? 1 : 0 } }), { headers: { 'Content-Type': 'application/json' } });
-      throw new Error(`Unexpected request: ${url}`);
+      throw new Error(`Unexpected request: ${url.pathname}${url.search}`);
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;

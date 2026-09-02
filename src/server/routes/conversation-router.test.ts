@@ -294,6 +294,24 @@ describe('conversation router', () => {
       expect(seams.getWorkspaceDiff).toHaveBeenCalledWith(workspace);
     });
 
+    it('reads the workspace named by the request instead of the persisted picker state', async () => {
+      const otherWorkspace = mkdtempSync(join(tmpdir(), 'conversation-router-other-'));
+      try {
+        seams.listCandidateWorkspaces.mockReturnValue([workspace, otherWorkspace]);
+        const conversation = await createConversation();
+        await request(`/api/shared/conversations/${conversation.id}/workspaces/selection`, 'PUT', { workspacePath: workspace });
+
+        const response = await request(`/api/shared/conversations/${conversation.id}/workspace-diff?workspacePath=${encodeURIComponent(otherWorkspace)}`);
+
+        expect(response.status).toBe(200);
+        expect(seams.getWorkspaceDiff).toHaveBeenCalledWith(otherWorkspace);
+        const explorer = await (await request(`/api/shared/conversations/${conversation.id}/workspaces`)).json() as { selectedPath: string };
+        expect(explorer.selectedPath).toBe(workspace);
+      } finally {
+        rmSync(otherWorkspace, { recursive: true, force: true });
+      }
+    });
+
     it('resolves file source, refs, ref diff, commits, and status', async () => {
       seams.listCandidateWorkspaces.mockReturnValue([workspace]);
       const conversation = await createConversation();
