@@ -1193,7 +1193,7 @@ export class WorkItemRepository {
    * separate from the transcript: the next Codex or Claude process gets the
    * same bounded, durable record even after a restart or a task continuation.
    */
-  recordAgentHandoff(conversationId: string, messageId: string, author: 'codex' | 'claude' | 'system', body: string): void {
+  recordAgentHandoff(conversationId: string, messageId: string, author: 'codex' | 'claude' | 'palmyra' | 'system', body: string): void {
     const text = body.trim();
     if (!text) return;
     const conversation = this.listConversations('all').find((item) => item.id === conversationId);
@@ -1968,7 +1968,7 @@ export class WorkItemRepository {
     const row = this.database.prepare('SELECT assignees_json, agent_assignment_mode FROM work_items WHERE id = ?').get(id) as
       { assignees_json: string; agent_assignment_mode: string } | undefined;
     if (!row || row.agent_assignment_mode !== 'manual') return [];
-    return (JSON.parse(row.assignees_json) as Assignee[]).filter((assignee): assignee is AgentRun['agent'] => assignee === 'codex' || assignee === 'claude');
+    return (JSON.parse(row.assignees_json) as Assignee[]).filter((assignee): assignee is 'codex' | 'claude' => assignee === 'codex' || assignee === 'claude');
   }
 
   updateAutomaticAgentAssignees(id: string, agents: AgentRun['agent'][]): WorkItem | null {

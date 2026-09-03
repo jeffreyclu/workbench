@@ -165,7 +165,7 @@ export class RunRepository {
       GROUP BY agent
     `).all() as Array<{ agent: AgentRun['agent']; load: number }>;
     const load = { codex: 0, claude: 0 };
-    for (const row of rows) load[row.agent] = Number(row.load);
+    for (const row of rows) if (row.agent === 'codex' || row.agent === 'claude') load[row.agent] = Number(row.load);
     if (load.codex === 0 && load.claude === 0) return preferred;
     if (load.codex === load.claude) {
       const latest = this.database.prepare(`

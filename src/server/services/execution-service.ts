@@ -344,7 +344,7 @@ export class ExecutionService {
         CAST((julianday(completed_at) - julianday(started_at)) * 24 * 60 * 60 * 1000 AS INTEGER) as duration_ms
       FROM agent_runs WHERE status IN ('completed', 'failed', 'canceled') AND completed_at >= ?
     `).all(since) as Array<{
-      agent: 'codex' | 'claude';
+      agent: AgentRun['agent'];
       kind: AgentRun['kind'];
       status: 'completed' | 'failed' | 'canceled';
       attempt: number;
@@ -367,10 +367,10 @@ export class ExecutionService {
     const unlinkedReplyUsage = this.database.prepare(`
       SELECT author AS agent, model, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, estimated_cost_usd, cost_source, completed_at
       FROM shared_messages message
-      WHERE author IN ('codex', 'claude') AND status IN ('completed', 'failed', 'canceled') AND completed_at >= ?
+      WHERE author IN ('codex', 'claude', 'palmyra') AND status IN ('completed', 'failed', 'canceled') AND completed_at >= ?
         AND NOT EXISTS (SELECT 1 FROM agent_runs run WHERE run.message_id = message.id)
     `).all(since) as Array<{
-      agent: 'codex' | 'claude';
+      agent: AgentRun['agent'];
       model: string | null;
       input_tokens: number | null;
       cache_creation_input_tokens: number | null;
@@ -417,7 +417,7 @@ export class ExecutionService {
           SELECT COALESCE(agent.model, agent.author)
           FROM shared_messages agent
           WHERE agent.conversation_id = jeffrey.conversation_id
-            AND agent.author IN ('codex', 'claude')
+            AND agent.author IN ('codex', 'claude', 'palmyra')
             AND (agent.created_at < jeffrey.created_at OR (agent.created_at = jeffrey.created_at AND agent.rowid < jeffrey.rowid))
           ORDER BY agent.created_at DESC, agent.rowid DESC
           LIMIT 1
@@ -445,7 +445,7 @@ export class ExecutionService {
       }).filter((row) => row.count > 0).sort((left, right) => right.count - left.count || left.model.localeCompare(right.model)),
     };
 
-    const tokenUsageByModel = new Map<string, { provider: 'codex' | 'claude'; model: string | null; inputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number; outputTokens: number; estimatedCostUsd: number; runs: number }>();
+    const tokenUsageByModel = new Map<string, { provider: AgentRun['agent']; model: string | null; inputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number; outputTokens: number; estimatedCostUsd: number; runs: number }>();
     let incompleteTokenTelemetryRuns = 0;
     // Rows whose model has no published rate: reported as a gap rather than
     // folded into the total as zero dollars.
@@ -478,7 +478,7 @@ export class ExecutionService {
         tokenUsageByModel.set(key, bucket);
       }
     }
-    const fitBuckets = new Map<string, { kind: AgentRun['kind']; agent: 'codex' | 'claude'; completed: number; failed: number; canceled: number; durations: number[] }>();
+    const fitBuckets = new Map<string, { kind: AgentRun['kind']; agent: AgentRun['agent']; completed: number; failed: number; canceled: number; durations: number[] }>();
     for (const run of runs) {
       const key = `${run.kind}:${run.agent}`;
       const bucket = fitBuckets.get(key) ?? { kind: run.kind, agent: run.agent, completed: 0, failed: 0, canceled: 0, durations: [] };
@@ -490,9 +490,10 @@ export class ExecutionService {
     }
 
     type AgentBucket = { total: number; completed: number; failed: number; canceled: number; retried: number; fallback: number; durations: number[] };
-    const byAgent: Record<'codex' | 'claude', AgentBucket> = {
+    const byAgent: Record<AgentRun['agent'], AgentBucket> = {
       codex: { total: 0, completed: 0, failed: 0, canceled: 0, retried: 0, fallback: 0, durations: [] },
       claude: { total: 0, completed: 0, failed: 0, canceled: 0, retried: 0, fallback: 0, durations: [] },
+      palmyra: { total: 0, completed: 0, failed: 0, canceled: 0, retried: 0, fallback: 0, durations: [] },
     };
     for (const run of runs) {
       const bucket = byAgent[run.agent];
@@ -503,11 +504,11 @@ export class ExecutionService {
       if (run.duration_ms !== null) bucket.durations.push(run.duration_ms);
     }
     for (const event of retryEvents) {
-      const agent = /Retrying (codex|claude)\b/i.exec(event.body)?.[1]?.toLowerCase() as 'codex' | 'claude' | undefined;
+      const agent = /Retrying (codex|claude|palmyra)\b/i.exec(event.body)?.[1]?.toLowerCase() as AgentRun['agent'] | undefined;
       if (agent) byAgent[agent].retried += 1;
     }
     for (const event of handoffEvents) {
-      const agent = /continued with (codex|claude)\b/i.exec(event.body)?.[1]?.toLowerCase() as 'codex' | 'claude' | undefined;
+      const agent = /continued with (codex|claude|palmyra)\b/i.exec(event.body)?.[1]?.toLowerCase() as AgentRun['agent'] | undefined;
       if (agent) byAgent[agent].fallback += 1;
     }
     if (retryEvents.length === 0) for (const run of runs) if (run.attempt > 0) byAgent[run.agent].retried += 1;
@@ -555,7 +556,7 @@ export class ExecutionService {
         medianDurationMs: median(bucket.durations),
       })),
       byAgent: Object.entries(byAgent).map(([agent, bucket]) => ({
-        agent: agent as 'codex' | 'claude',
+        agent: agent as AgentRun['agent'],
         total: bucket.total,
         completed: bucket.completed,
         failed: bucket.failed,

@@ -1,17 +1,29 @@
 import { createOutboundFetch } from '../outbound-policy.js';
 
-/** Writer's hosted Palmyra inference API. Workbench uses it for the small,
- * latency-sensitive structured-JSON turns that would otherwise pay for a full
- * agent CLI subprocess. It is not an agent runtime: no tools, no session, one
- * request in and one string out. */
+/** Writer's hosted Palmyra inference API. Workbench owns the agent runtime and
+ * sends tool results back through this endpoint until Palmyra finishes. */
 const ENDPOINT = 'https://api.writer.com/v1/chat';
 const DEFAULT_MODEL = 'palmyra-x5';
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_TOKENS = 1_024;
 
+export interface PalmyraToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+
+export interface PalmyraTool {
+  type: 'function';
+  function: { name: string; description: string; parameters: Record<string, unknown> };
+}
+
 export interface PalmyraMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | null;
+  tool_calls?: PalmyraToolCall[];
+  tool_call_id?: string;
+  name?: string;
 }
 
 export interface PalmyraCompletionRequest {
@@ -21,10 +33,19 @@ export interface PalmyraCompletionRequest {
   temperature?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
+  tools?: PalmyraTool[];
+  toolChoice?: 'auto' | 'none';
 }
 
 interface PalmyraChatResponse {
-  choices?: Array<{ message?: { content?: string | null } }>;
+  choices?: Array<{ message?: { content?: string | null; tool_calls?: PalmyraToolCall[] } }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number };
+}
+
+export interface PalmyraChatResult {
+  content: string | null;
+  toolCalls: PalmyraToolCall[];
+  usage: { inputTokens: number | null; outputTokens: number | null };
 }
 
 const palmyraFetch = createOutboundFetch('palmyra-api');
@@ -44,7 +65,7 @@ export function isPalmyraConfigured(): boolean {
   return palmyraApiKey() !== null;
 }
 
-export async function completeWithPalmyra(request: PalmyraCompletionRequest, fetchImpl: typeof fetch = palmyraFetch): Promise<string> {
+export async function chatWithPalmyra(request: PalmyraCompletionRequest, fetchImpl: typeof fetch = palmyraFetch): Promise<PalmyraChatResult> {
   const key = palmyraApiKey();
   if (!key) throw new Error('Palmyra is not configured: set WRITER_API_KEY.');
   const response = await fetchImpl(ENDPOINT, {
@@ -56,6 +77,7 @@ export async function completeWithPalmyra(request: PalmyraCompletionRequest, fet
       max_tokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
       temperature: request.temperature ?? 0,
       stream: false,
+      ...(request.tools?.length ? { tools: request.tools, tool_choice: request.toolChoice ?? 'auto' } : {}),
     }),
     signal: request.signal
       ? AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS)])
@@ -66,7 +88,19 @@ export async function completeWithPalmyra(request: PalmyraCompletionRequest, fet
     throw new Error(`Palmyra request failed (${response.status}).${detail ? ` ${detail.slice(0, 200)}` : ''}`);
   }
   const payload = await response.json() as PalmyraChatResponse;
-  const content = payload.choices?.[0]?.message?.content?.trim();
+  const message = payload.choices?.[0]?.message;
+  const content = message?.content?.trim() || null;
+  const toolCalls = message?.tool_calls?.filter((call) => call?.id && call.type === 'function' && call.function?.name) ?? [];
+  if (!content && !toolCalls.length) throw new Error('Palmyra returned an empty completion.');
+  return {
+    content,
+    toolCalls,
+    usage: { inputTokens: payload.usage?.prompt_tokens ?? null, outputTokens: payload.usage?.completion_tokens ?? null },
+  };
+}
+
+export async function completeWithPalmyra(request: PalmyraCompletionRequest, fetchImpl: typeof fetch = palmyraFetch): Promise<string> {
+  const { content } = await chatWithPalmyra(request, fetchImpl);
   if (!content) throw new Error('Palmyra returned an empty completion.');
   return content;
 }

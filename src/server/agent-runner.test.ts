@@ -1090,6 +1090,7 @@ fi`;
   it('makes frontend-reviewer the only entry point for every review run', () => {
     expect(resolveAgents('review', 'claude')).toEqual(['claude']);
     expect(resolveAgents('review', 'both')).toEqual(['codex', 'claude']);
+    expect(resolveAgents('execute', 'palmyra')).toEqual(['palmyra']);
     expect(classifyExecution(item('Review a complex cross-team PR', 'x'.repeat(2_000))).kind).toBe('review');
   });
 

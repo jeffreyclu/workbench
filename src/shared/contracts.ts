@@ -890,7 +890,7 @@ export type UnblockWorkItemInput = z.infer<typeof unblockWorkItemSchema>;
 export const activitySchema = z.object({
   id: z.string(),
   workItemId: z.string(),
-  actor: z.enum(['jeffrey', 'codex', 'claude', 'system']),
+  actor: z.enum(['jeffrey', 'codex', 'claude', 'palmyra', 'system']),
   kind: z.string(),
   body: z.string(),
   createdAt: z.string(),
@@ -899,7 +899,7 @@ export const activitySchema = z.object({
 export type Activity = z.infer<typeof activitySchema>;
 
 export const createActivitySchema = z.object({
-  actor: z.enum(['jeffrey', 'codex', 'claude', 'system']),
+  actor: z.enum(['jeffrey', 'codex', 'claude', 'palmyra', 'system']),
   kind: z.enum(['note', 'progress', 'decision', 'blocker', 'handoff']),
   body: z.string().trim().min(1).max(50_000),
 });
@@ -979,7 +979,7 @@ export interface ExecutionPlan {
   resolvedAt: string | null;
 }
 
-export const agentTargetSchema = z.enum(['auto', 'codex', 'claude', 'both']);
+export const agentTargetSchema = z.enum(['auto', 'codex', 'claude', 'palmyra', 'both']);
 export const runStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'canceled']);
 export const executionProfileOverrideSchema = z.enum(['economy', 'standard', 'deep']).nullable().default(null);
 export const accountProfileSchema = z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9][a-zA-Z0-9 _-]*$/, 'Account profile must use letters, numbers, spaces, hyphens, or underscores.');
@@ -1035,8 +1035,8 @@ export interface AgentRun {
   workItemId: string;
   kind: z.infer<typeof runKindSchema>;
   requestedTarget: z.infer<typeof agentTargetSchema>;
-  requestedAgent: 'codex' | 'claude';
-  agent: 'codex' | 'claude';
+  requestedAgent: 'codex' | 'claude' | 'palmyra';
+  agent: 'codex' | 'claude' | 'palmyra';
   status: z.infer<typeof runStatusSchema>;
   instructions: string;
   output: string;
@@ -1058,7 +1058,7 @@ export interface AgentRun {
    * the recorded tokens. Null when the model has no known rate. */
   estimatedCostUsd: number | null;
   costSource: 'provider' | 'estimated' | null;
-  fallbackFrom: 'codex' | 'claude' | null;
+  fallbackFrom: 'codex' | 'claude' | 'palmyra' | null;
   fallbackReason: string | null;
   attempt: number;
   maxAttempts: number;
@@ -1439,7 +1439,7 @@ export interface CurseInsight {
 
 export interface RunInsightsAgentFit {
   kind: z.infer<typeof runKindSchema>;
-  agent: 'codex' | 'claude';
+  agent: AgentRun['agent'];
   completed: number;
   failed: number;
   canceled: number;
@@ -1448,7 +1448,7 @@ export interface RunInsightsAgentFit {
 }
 
 export interface RunInsightsTokenUsage {
-  provider: 'codex' | 'claude';
+  provider: AgentRun['agent'];
   model: string | null;
   /** Fresh, non-cached input tokens. */
   inputTokens: number;
@@ -1460,7 +1460,7 @@ export interface RunInsightsTokenUsage {
 }
 
 export interface RunInsightsByAgent {
-  agent: 'codex' | 'claude';
+  agent: AgentRun['agent'];
   total: number;
   completed: number;
   failed: number;

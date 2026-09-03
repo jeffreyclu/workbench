@@ -18,7 +18,7 @@ import { isTransientSqliteContention } from './sqlite-contention.js';
 import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { projectKey } from '../shared/project-name.js';
-import { completeWithPalmyra, palmyraModel } from './providers/palmyra.js';
+import { runPalmyraAgent } from './palmyra-agent.js';
 
 export { isTransientSqliteContention } from './sqlite-contention.js';
 
@@ -1107,16 +1107,6 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   if (!repository.claimQueuedTurn(queued.message.id)) return [];
   const conversation = repository.listConversations().find((item) => item.id === conversationId);
   const linkedItem = conversation?.workItemId ? repository.get(conversation.workItemId) : null;
-  if (queued.dispatchTarget === 'palmyra') {
-    const accountProfile = accountProfileForSharedReply(linkedItem, queued.message.accountProfile);
-    const reply = repository.createSharedMessage('palmyra', '', 'queued', conversationId, [], 'none', null, accountProfile, queued.message.id, queued.message.kind);
-    if (linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled' && linkedItem.status !== 'pinned') {
-      repository.update(linkedItem.id, { status: 'in_progress' }, false, { actor: 'jeffrey', source: 'shared_room' });
-      repository.addActivity(linkedItem.id, 'jeffrey', 'chat_started', `To Palmyra: ${queued.message.body.trim() || '(attachment-only message)'}`);
-    }
-    void replyWithPalmyra(repository, reply.id);
-    return [reply];
-  }
   const retrievalThread = threadForSharedReply(repository.listSharedMessages(100, null, conversationId).messages, queued.message.id);
   const priorGrounding = persistedTurnGrounding(repository.latestSharedTurnGrounding(conversationId, queued.message.id));
   const fallbackGrounding = fallbackTurnGrounding(retrievalThread, priorGrounding);
@@ -1136,7 +1126,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   // disagree or make the second agent time out behind the first.
   const currentMessage = latestHumanMessageForSharedReply(retrievalThread);
   const precedingHumanMessage = precedingHumanMessageForSharedReply(retrievalThread);
-  const precedingAgentMessage = [...retrievalThread].reverse().find((message) => message.author === 'claude' || message.author === 'codex')?.body ?? '';
+  const precedingAgentMessage = [...retrievalThread].reverse().find((message) => message.author === 'claude' || message.author === 'codex' || message.author === 'palmyra')?.body ?? '';
   const authorization = process.env.VITEST
     ? Promise.resolve<ExternalActionAuthorization>({ granted: false, operation: null })
     : classifyExternalActionAuthorization({ currentMessage, precedingHumanMessage, precedingAgentMessage });
@@ -1192,40 +1182,9 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
 }
 
 export async function replyWithPalmyra(repository: WorkItemRepository, messageId: string): Promise<void> {
-  const target = repository.getSharedMessageById(messageId);
-  if (!target || !repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS)) return;
-  const controller = new AbortController();
-  activeReplies.set(messageId, controller);
-  repository.updateSharedMessage(messageId, { status: 'running', model: palmyraModel(), executionProfile: null });
-  publishRealtimeEvent('shared');
-  try {
-    const thread = threadForSharedReply(repository.listSharedMessages(40, null, target.conversationId).messages, target.dispatchGroupId);
-    const messages = thread
-      .filter((message) => message.body.trim())
-      .map((message) => ({
-        role: message.author === 'jeffrey' ? 'user' as const : 'assistant' as const,
-        content: message.body,
-      }));
-    const output = await completeWithPalmyra({
-      messages: [
-        { role: 'system', content: 'You are Palmyra in Workbench. Answer the user directly and concisely. You have no tools and must not claim to inspect or change external systems or local files.' },
-        ...messages,
-      ],
-      maxTokens: 4_096,
-      signal: controller.signal,
-    });
-    if (controller.signal.aborted) throw controller.signal.reason;
-    repository.updateSharedMessage(messageId, { body: output, status: 'completed', model: palmyraModel() });
-  } catch (error) {
-    repository.updateSharedMessage(messageId, controller.signal.aborted
-      ? { status: 'canceled' }
-      : { status: 'failed', error: error instanceof Error ? error.message : String(error) });
-  } finally {
-    activeReplies.delete(messageId);
-    publishRealtimeEvent('shared', 'work-items');
-    dispatchNextSharedTurn(repository, target.conversationId);
-    settleLinkedTask(repository, target.conversationId, 'Palmyra finished responding; review the conversation.');
-  }
+  // palmyra-execution-parity LEGACY-AFFECTING: keep the old retry entrypoint,
+  // but use the shared provider lifecycle instead of a chat-only HTTP call.
+  return replyInSharedRoom(repository, 'palmyra', messageId);
 }
 
 function settleLinkedTask(repository: WorkItemRepository, conversationId: string, reason: string): void {
@@ -1383,7 +1342,7 @@ export async function replyInSharedRoom(
     const isPairedReply = Boolean(target.dispatchGroupId && thread.some((message) => message.dispatchGroupId === target.dispatchGroupId && (message.author === 'codex' || message.author === 'claude')));
     const latestUserMessage = latestHumanMessageForSharedReply(thread);
     const precedingUserMessage = precedingHumanMessageForSharedReply(thread);
-    const precedingAgentResponse = [...thread].reverse().find((message) => message.author === 'claude' || message.author === 'codex')?.body ?? '';
+    const precedingAgentResponse = [...thread].reverse().find((message) => message.author === 'claude' || message.author === 'codex' || message.author === 'palmyra')?.body ?? '';
     const recentSourceReferences = thread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body);
     const connectionContext = await connectionContextForPrompt(repository, [latestUserMessage, ...recentSourceReferences].join('\n'));
     const linkedRun = runId ? repository.getRun(runId) : null;
@@ -1412,7 +1371,7 @@ export async function replyInSharedRoom(
     // run; Claude deliberately gets no replenished sibling.
     if (!process.env.VITEST) {
       if (agent === 'codex') warmSharedRoomCodex(cwd, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE);
-      else warmAgentCommand(agent, cwd, profile, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, runKind);
+      else if (agent === 'claude') warmAgentCommand(agent, cwd, profile, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, runKind);
     }
     const externalAuthorizationPromise = authorizationSnapshot ?? classifyExternalActionAuthorization({
       currentMessage: latestUserMessage,
@@ -1465,7 +1424,7 @@ export async function replyInSharedRoom(
     );
     const resumeProviderId = agent === 'codex'
       ? linkedConversation?.codexThreadId ?? null
-      : linkedConversation?.claudeSessionId ?? null;
+      : agent === 'claude' ? linkedConversation?.claudeSessionId ?? null : null;
     const prompt = resumeProviderId
       ? buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread))
       : freshPrompt;
@@ -1502,7 +1461,23 @@ export async function replyInSharedRoom(
     try {
       result = agent === 'codex'
       ? await runCodexReply(guardedPrompt, linkedConversation?.codexThreadId, freshPrompt)
-      : await runAgentCommandWithFallback(agent, cwd, agent === 'claude' ? claudeScopeRecoveryPrompt(guardedPrompt, cwd) : guardedPrompt, (partial) => {
+      : agent === 'palmyra' ? await runPalmyraAgent({ cwd, prompt: guardedPrompt, signal: controller.signal, onProgress: (partial) => {
+        if (controller.signal.aborted) return;
+        updateLiveSharedBody(repository, messageId, partial, runId);
+      }, onUsage: (usage) => persistNonTerminalAgentUpdate(() => {
+        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
+        repository.updateSharedMessage(messageId, telemetry);
+        if (runId) { repository.updateRun(runId, telemetry); repository.addAgentRunDiagnostic(runId, messageId, 'palmyra', 'usage', telemetry); }
+      }), onAudit: (entries) => persistNonTerminalAgentUpdate(() => {
+        repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
+          kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+        })));
+        if (runId) for (const entry of entries) repository.addAgentRunDiagnostic(runId, messageId, 'palmyra', 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
+      }), onSteeringReady: (steer) => {
+        registerActiveReplySteering(messageId, steer);
+        void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
+      } })
+      : await runAgentCommandWithFallback(agent, cwd, claudeScopeRecoveryPrompt(guardedPrompt, cwd), (partial) => {
       if (controller.signal.aborted) return;
       updateLiveSharedBody(repository, messageId, partial, runId);
     }, controller.signal, (fallback, reason) => {
@@ -1760,7 +1735,7 @@ export async function deliverPendingSharedInterjections(
   classifyAuthorization: typeof classifyExternalActionAuthorization = classifyExternalActionAuthorization,
 ): Promise<void> {
   const reply = repository.getSharedMessageById(replyId);
-  if (!reply || reply.status !== 'running' || (reply.author !== 'codex' && reply.author !== 'claude')) return;
+  if (!reply || reply.status !== 'running' || (reply.author !== 'codex' && reply.author !== 'claude' && reply.author !== 'palmyra')) return;
   const pending = repository.listAllSharedMessages(reply.conversationId)
     .filter((message) => message.author === 'jeffrey' && message.status === 'queued' && (message.queuePriority ?? 0) > 0)
     .filter((message) => message.dispatchTarget === 'auto' || message.dispatchTarget === 'both' || message.dispatchTarget === reply.author)

@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import { contentHashOfLines } from '../shared/review-decisions.js';
 import { openDatabase } from './database.js';
+import { WorkItemRepository } from './repository.js';
 
 /**
  * The full migration roster, in application order. Listed explicitly rather than
@@ -88,6 +89,7 @@ const EXPECTED_MIGRATIONS = [
   '073_workspace_diff_snapshot_repository_uniqueness',
   '074_artifact_favorites',
   '075_shared_conversation_ai_provider',
+  '076_palmyra_agent_records',
 ];
 
 describe('openDatabase', () => {
@@ -763,6 +765,60 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(agent_run_diagnostics)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toEqual(expect.arrayContaining(['run_id', 'message_id', 'agent', 'kind', 'detail_json', 'created_at']));
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_agent_run_diagnostics_run_created'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('preserves diagnostics and allows Palmyra on upgrade from migration 075', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    const repository = new WorkItemRepository(current);
+    const task = repository.create({ title: 'Palmyra diagnostics migration', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'codex', 'codex', 'test');
+    repository.addAgentRunDiagnostic(run.id, null, 'codex', 'prompt', { chars: 1 });
+    const conversation = repository.createConversation('Palmyra migration', task.id);
+    const oldMessage = repository.createSharedMessage('codex', 'old handoff', 'completed', conversation.id);
+    const palmyraMessage = repository.createSharedMessage('palmyra', 'new handoff', 'completed', conversation.id);
+    repository.recordAgentHandoff(conversation.id, oldMessage.id, 'codex', 'old handoff');
+    current.exec(`
+      CREATE TABLE agent_run_diagnostics_old (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+        message_id TEXT REFERENCES shared_messages(id) ON DELETE SET NULL,
+        agent TEXT NOT NULL CHECK (agent IN ('codex', 'claude')),
+        kind TEXT NOT NULL CHECK (kind IN ('prompt', 'usage', 'tool')),
+        detail_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO agent_run_diagnostics_old SELECT * FROM agent_run_diagnostics;
+      DROP TABLE agent_run_diagnostics;
+      ALTER TABLE agent_run_diagnostics_old RENAME TO agent_run_diagnostics;
+      CREATE INDEX idx_agent_run_diagnostics_run_created ON agent_run_diagnostics(run_id, created_at ASC);
+
+      CREATE TABLE agent_handoffs_old (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES shared_conversations(id) ON DELETE CASCADE,
+        work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
+        message_id TEXT NOT NULL REFERENCES shared_messages(id) ON DELETE CASCADE,
+        author TEXT NOT NULL CHECK (author IN ('codex', 'claude', 'system')),
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(message_id)
+      );
+      INSERT INTO agent_handoffs_old SELECT * FROM agent_handoffs;
+      DROP TABLE agent_handoffs;
+      ALTER TABLE agent_handoffs_old RENAME TO agent_handoffs;
+      CREATE INDEX idx_agent_handoffs_scope ON agent_handoffs(conversation_id, work_item_id, created_at DESC);
+    `);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '076_palmyra_agent_records'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare('SELECT agent FROM agent_run_diagnostics WHERE run_id = ?').all(run.id)).toEqual([{ agent: 'codex' }]);
+    expect(() => upgraded.prepare(`INSERT INTO agent_run_diagnostics (id, run_id, message_id, agent, kind, detail_json, created_at) VALUES ('palmyra-diagnostic', ?, NULL, 'palmyra', 'tool', '{}', ?)`)
+      .run(run.id, new Date().toISOString())).not.toThrow();
+    expect(upgraded.prepare('SELECT author, body FROM agent_handoffs WHERE message_id = ?').get(oldMessage.id)).toEqual({ author: 'codex', body: 'old handoff' });
+    expect(() => new WorkItemRepository(upgraded).recordAgentHandoff(conversation.id, palmyraMessage.id, 'palmyra', 'new handoff')).not.toThrow();
     upgraded.close();
   });
 

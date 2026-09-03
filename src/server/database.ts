@@ -2086,6 +2086,48 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // palmyra-execution-parity LEGACY-AFFECTING: migrations 017 and 054
+    // constrained handoffs and diagnostics to CLI providers. Rebuild them
+    // forward-only so Palmyra keeps the same durable execution records.
+    id: '076_palmyra_agent_records',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE agent_run_diagnostics_next (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+          message_id TEXT REFERENCES shared_messages(id) ON DELETE SET NULL,
+          agent TEXT NOT NULL CHECK (agent IN ('codex', 'claude', 'palmyra')),
+          kind TEXT NOT NULL CHECK (kind IN ('prompt', 'usage', 'tool')),
+          detail_json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        INSERT INTO agent_run_diagnostics_next (id, run_id, message_id, agent, kind, detail_json, created_at)
+          SELECT id, run_id, message_id, agent, kind, detail_json, created_at FROM agent_run_diagnostics;
+        DROP TABLE agent_run_diagnostics;
+        ALTER TABLE agent_run_diagnostics_next RENAME TO agent_run_diagnostics;
+        CREATE INDEX idx_agent_run_diagnostics_run_created
+          ON agent_run_diagnostics(run_id, created_at ASC);
+
+        CREATE TABLE agent_handoffs_next (
+          id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL REFERENCES shared_conversations(id) ON DELETE CASCADE,
+          work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
+          message_id TEXT NOT NULL REFERENCES shared_messages(id) ON DELETE CASCADE,
+          author TEXT NOT NULL CHECK (author IN ('codex', 'claude', 'palmyra', 'system')),
+          body TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(message_id)
+        );
+        INSERT INTO agent_handoffs_next (id, conversation_id, work_item_id, message_id, author, body, created_at)
+          SELECT id, conversation_id, work_item_id, message_id, author, body, created_at FROM agent_handoffs;
+        DROP TABLE agent_handoffs;
+        ALTER TABLE agent_handoffs_next RENAME TO agent_handoffs;
+        CREATE INDEX idx_agent_handoffs_scope
+          ON agent_handoffs(conversation_id, work_item_id, created_at DESC);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

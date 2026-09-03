@@ -6,7 +6,7 @@ import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type WorkItem } from '../shared
 import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
-import { agentAccountEnv } from './agent-security.js';
+import { agentAccountEnv, agentSubprocessEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, shutdownAgentPool, startPoolSweep, warmProcess } from './agent-pool.js';
 import { classifyExternalActionAuthorization, type ExternalActionAuthorization } from './external-action-authorization.js';
 import { WorkItemRepository } from './repository.js';
@@ -18,6 +18,9 @@ import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
+import { palmyraModel } from './providers/palmyra.js';
+
+export type CliAgent = Exclude<AgentRun['agent'], 'palmyra'>;
 
 const MAX_OUTPUT_BYTES = 1_000_000;
 /** How long a run may produce no stream event before its output gets a visible elapsed marker. */
@@ -151,7 +154,10 @@ export function isWorkbenchWorkspace(cwd: string): boolean {
 }
 
 export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountProfile: string, cwd: string): NodeJS.ProcessEnv {
-  const env = agentAccountEnv(agent, accountProfile);
+  // palmyra-execution-parity LEGACY-AFFECTING: Palmyra executes tools inside
+  // Workbench, so it shares the guarded subprocess environment without a
+  // provider CLI credential directory.
+  const env = agent === 'palmyra' ? agentSubprocessEnv() : agentAccountEnv(agent, accountProfile);
   // Baseline command guards apply to every repository. Repository-specific
   // guards add stricter policy without making ordinary agent behavior depend
   // on where the provider process happened to start.
@@ -262,7 +268,7 @@ export function blockedPersistentForegroundCommand(command: string): boolean {
   });
 }
 
-function toolCommandFromAgentEvent(agent: AgentRun['agent'], line: string): string | null {
+function toolCommandFromAgentEvent(agent: CliAgent, line: string): string | null {
   try {
     const event = JSON.parse(line) as Record<string, unknown>;
     if (agent === 'codex') {
@@ -887,7 +893,7 @@ export const CODEX_WORKBENCH_MCP_ARGS = [
   '-c', 'mcp_servers.workbench.bearer_token_env_var=""',
 ] as const;
 
-export function commandFor(agent: AgentRun['agent'], cwd: string, profile: ExecutionProfile, modelOverride?: string, resumeSessionId?: string, _kind: AgentRun['kind'] = 'execute'): { command: string; args: string[] } {
+export function commandFor(agent: CliAgent, cwd: string, profile: ExecutionProfile, modelOverride?: string, resumeSessionId?: string, _kind: AgentRun['kind'] = 'execute'): { command: string; args: string[] } {
   const effort = effortFor(profile);
   if (agent === 'codex') {
     const model = modelOverride ?? modelFor(agent, profile);
@@ -941,6 +947,7 @@ const WORKBENCH_ONLY_MCP_CONFIG = JSON.stringify({
 });
 
 export function modelFor(agent: AgentRun['agent'], profile: ExecutionProfile): string {
+  if (agent === 'palmyra') return palmyraModel();
   return process.env[`WORKBENCH_${agent.toUpperCase()}_MODEL_${profile.toUpperCase()}`]?.trim()
     || process.env[`WORKBENCH_${agent.toUpperCase()}_MODEL`]?.trim()
     || (agent === 'codex'
@@ -954,7 +961,7 @@ export function modelFor(agent: AgentRun['agent'], profile: ExecutionProfile): s
  * but never gets a second speculative sibling while it is doing real work.
  */
 export function warmAgentCommand(
-  agent: AgentRun['agent'],
+  agent: CliAgent,
   cwd: string,
   profile: ExecutionProfile,
   accountProfile = DEFAULT_ACCOUNT_PROFILE,
@@ -1267,7 +1274,7 @@ function terminalAgentError(agent: AgentRun['agent'], line: string): string | nu
   return null;
 }
 
-async function runAgentCommandWithUsage(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void, onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void, accountProfile = DEFAULT_ACCOUNT_PROFILE, modelOverride?: string, onSteeringReady?: (steer: AgentInputSteering) => void, resumeSessionId?: string, poolEligible = false, kind: AgentRun['kind'] = 'analysis'): Promise<AgentCommandResult> {
+async function runAgentCommandWithUsage(agent: CliAgent, cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: CliAgent) => void, onAudit?: (entries: AgentAuditCandidate[], agent: CliAgent) => void, accountProfile = DEFAULT_ACCOUNT_PROFILE, modelOverride?: string, onSteeringReady?: (steer: AgentInputSteering) => void, resumeSessionId?: string, poolEligible = false, kind: AgentRun['kind'] = 'analysis'): Promise<AgentCommandResult> {
   const { command, args } = commandFor(agent, cwd, profile, modelOverride, resumeSessionId, kind);
   const spawnFresh = () => spawn(command, args, {
     cwd,
@@ -1646,7 +1653,7 @@ ${AGENT_EXECUTION_CONTRACT}`;
   });
 }
 
-export async function runAgentCommand(agent: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', kind: AgentRun['kind'] = 'analysis'): Promise<string> {
+export async function runAgentCommand(agent: CliAgent, cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', kind: AgentRun['kind'] = 'analysis'): Promise<string> {
   void kind;
   return (await runAgentCommandWithUsage(agent, cwd, prompt, onProgress, signal, profile)).output;
 }
@@ -1682,11 +1689,11 @@ Workbench execution facts (do not contradict these without quoting an actual too
 }
 
 export async function runAgentCommandWithFallback(
-  primary: AgentRun['agent'], cwd: string, prompt: string, onProgress?: (output: string) => void,
-  signal?: AbortSignal, onFallback?: (agent: AgentRun['agent'], reason: string) => void,
+  primary: CliAgent, cwd: string, prompt: string, onProgress?: (output: string) => void,
+  signal?: AbortSignal, onFallback?: (agent: CliAgent, reason: string) => void,
   profile: ExecutionProfile = 'economy',
-  onUsage?: (usage: AgentUsage, agent: AgentRun['agent']) => void,
-  onAudit?: (entries: AgentAuditCandidate[], agent: AgentRun['agent']) => void,
+  onUsage?: (usage: AgentUsage, agent: CliAgent) => void,
+  onAudit?: (entries: AgentAuditCandidate[], agent: CliAgent) => void,
   kind: AgentRun['kind'] = 'analysis',
   accountProfile = DEFAULT_ACCOUNT_PROFILE,
   modelOverride?: string,
@@ -1696,7 +1703,7 @@ export async function runAgentCommandWithFallback(
   allowFallback = true,
   initialUsage?: AgentUsage,
   expiredSessionPrompt?: string,
-): Promise<{ output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; sessionId?: string | null; costUsd?: number | null; peakContextTokens?: number }> {
+): Promise<{ output: string; agent: CliAgent; usage: AgentUsage; fallbackFrom: CliAgent | null; fallbackReason: string | null; sessionId?: string | null; costUsd?: number | null; peakContextTokens?: number }> {
   let aggregate: AgentUsage = initialUsage ?? { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
   try {
     let segmentPrompt = prompt;
@@ -1973,7 +1980,24 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // The model and effort tier are picked for Jeffrey, not by him. Record the
     // choice and its reason so the activity log explains what actually ran.
     repository.addActivity(item.id, 'system', 'model_selected', describeModelSelection({ agent: run.agent, kind: run.kind, model, profile, source: decision.source }));
-    let result = await runAgentCommandWithFallback(run.agent, cwd, run.agent === 'claude' ? claudeScopeRecoveryPrompt(prompt, cwd) : prompt, (partialOutput) => {
+    let result = run.agent === 'palmyra'
+      ? await (await import('./palmyra-agent.js')).runPalmyraAgent({ cwd, prompt, signal: controller.signal, onProgress: (partialOutput) => {
+        repository.updateRun(run.id, { output: partialOutput });
+        if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
+      }, onUsage: (usage) => {
+        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
+        repository.updateRun(run.id, telemetry);
+        if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
+        repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, 'palmyra', 'usage', telemetry);
+      }, onAudit: (entries) => {
+        for (const entry of entries) repository.addAuditEntry(entry.category, 'palmyra', entry.detail, item.id);
+        for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, 'palmyra', 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
+        for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
+        if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
+          kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+        })));
+      } })
+      : await runAgentCommandWithFallback(run.agent, cwd, run.agent === 'claude' ? claudeScopeRecoveryPrompt(prompt, cwd) : prompt, (partialOutput) => {
       repository.updateRun(run.id, { output: partialOutput });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
     }, controller.signal, (fallback, reason) => {
@@ -2159,7 +2183,7 @@ export function cancelAgentRun(repository: WorkItemRepository, id: string): Agen
 }
 
 export function resolveAgents(kind: AgentRun['kind'], target: AgentRun['requestedTarget']): AgentRun['agent'][] {
-  if (target === 'codex' || target === 'claude') return [target];
+  if (target === 'codex' || target === 'claude' || target === 'palmyra') return [target];
   if (target === 'both') return ['codex', 'claude'];
   if (kind === 'review') return ['codex'];
   return kind === 'execute' ? ['codex'] : ['claude'];
@@ -2198,7 +2222,7 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
   else if (/\b(research|investigate|explore|compare|evaluate)\b/.test(text)) { kind = 'research'; agent = 'claude'; reason = 'keyword rules: the task asks for investigation'; }
 
   if (kind === 'execute' && isDocumentWork(item)) agent = 'claude';
-  const assignedAgent = item.assignees.find((assignee): assignee is AgentRun['agent'] => assignee === 'codex' || assignee === 'claude');
+  const assignedAgent = item.assignees.find((assignee): assignee is CliAgent => assignee === 'codex' || assignee === 'claude');
   if (assignedAgent && kind !== 'review') agent = assignedAgent;
 
   if (complex && kind !== 'review') {
@@ -2306,7 +2330,7 @@ export function classifyMessageIntent(message: string): AgentRun['kind'] | null 
 export function classificationForKind(item: WorkItem, kind: AgentRun['kind']): ReturnType<typeof classifyExecution> {
   let agent: AgentRun['agent'] = kind === 'execute' || kind === 'review' ? 'codex' : 'claude';
   if (kind === 'execute' && isDocumentWork(item)) agent = 'claude';
-  const assignedAgent = item.assignees.find((assignee): assignee is AgentRun['agent'] => assignee === 'codex' || assignee === 'claude');
+  const assignedAgent = item.assignees.find((assignee): assignee is CliAgent => assignee === 'codex' || assignee === 'claude');
   if (assignedAgent && kind !== 'review') agent = assignedAgent;
   return {
     kind, agent, complex: false, reason: 'you picked this task type by hand',
@@ -2366,7 +2390,7 @@ SOURCE: ${item.sourceUrl ?? item.sourceIdentifier ?? item.source}`);
     }
     let agent: AgentRun['agent'] = resolvedKind === 'execute' || resolvedKind === 'review' ? 'codex' : 'claude';
     if (resolvedKind === 'execute' && isDocumentWork(item)) agent = 'claude';
-    const assignedAgent = item.assignees.find((assignee): assignee is AgentRun['agent'] => assignee === 'codex' || assignee === 'claude');
+    const assignedAgent = item.assignees.find((assignee): assignee is CliAgent => assignee === 'codex' || assignee === 'claude');
     if (assignedAgent && resolvedKind !== 'review') agent = assignedAgent;
     return {
       kind: resolvedKind, agent, complex: false, reason,
