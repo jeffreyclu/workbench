@@ -38,6 +38,7 @@ import { fileSourceRevision } from '../review-stack/review-full-file.js';
 import { ReviewFullFilePane } from '../review-stack/review-full-file-pane.js';
 import { readReviewStackReadingMode, readWorkspaceDiffSelection, writeReviewStackReadingMode, writeWorkspaceDiffDecision, writeWorkspaceDiffSource, type ReviewStackReadingMode } from '../../lib/preferences.js';
 import { useWorkspaceDiffKeyboardNavigation } from './use-keyboard-navigation.js';
+import { WorkspaceContextSwitcher } from './context-switcher.js';
 
 /** The parts of a diff this review surface reads, whichever source produced
  * it. A local workspace diff satisfies it directly; a pull request is adapted
@@ -544,6 +545,19 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     if (value !== explorer.data?.selectedPath) selectWorkspace.mutate(value);
   };
 
+  const selectWorkspaceContext = async (value: string) => {
+    if (!value) return;
+    writeWorkspaceDiffSource(preferenceScope, value);
+    setSelectedDecisionId(null);
+    hasChosenSource.current = true;
+    setSelectedPullRequestUrl(null);
+    setReviewSource('workspace');
+    setSelectedSnapshotId('');
+    setSelectedCommitSha('');
+    setSelectedBranchName('');
+    if (value !== explorer.data?.selectedPath) await selectWorkspace.mutateAsync(value);
+  };
+
   const selectRepositorySource = () => {
     hasChosenSource.current = true;
     setReviewSource('repository');
@@ -634,7 +648,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
             clean checkout opens on History and a linked PR opens on GitHub PR, so
             gating it there removed the only control that reaches another
             repository. */}
-        {(conversationId || workItemId) && workspaces.length > 0 && <label className="workspace-repository-picker"><span>Workspace</span><select value={explorer.data?.selectedPath ?? ''} onChange={(event) => selectSource(event.target.value)} disabled={selectWorkspace.isPending}><option value="" disabled>Select workspace</option>{workspaces.map((workspace) => <option key={workspace.path} value={workspace.path}>{workspace.label}</option>)}</select></label>}
+        {(conversationId || workItemId) && workspaces.length > 0 && <WorkspaceContextSwitcher selectedPath={explorer.data?.selectedPath ?? null} options={workspaces} onSelect={selectWorkspaceContext} />}
         {isBranchSource && <label className="workspace-repository-commit"><GitBranch size={13} /><span className="visually-hidden">Branch</span><select value={selectedBranchName} onChange={(event) => { setSelectedBranchName(event.target.value); setSelectedDecisionId(null); }} disabled={refsQuery.isPending || branches.length === 0}><option value="" disabled>{refsQuery.isPending ? 'Reading branches' : 'Select a branch'}</option>{branches.map((branch) => <option key={branch.name} value={branch.name}>{branch.name}{branch.ahead ? ` · ${branch.ahead} commit${branch.ahead === 1 ? '' : 's'}` : ''}</option>)}</select></label>}
         {isRepositorySource && <label className="workspace-repository-commit"><GitCommitHorizontal size={13} /><span className="visually-hidden">Commit</span><select value={selectedCommitSha} onChange={(event) => { setSelectedCommitSha(event.target.value); setSelectedDecisionId(null); }} disabled={commitsQuery.isPending || commits.length === 0}><option value="" disabled>{commitsQuery.isPending ? 'Reading repository' : 'Select a commit'}</option>{commits.map((commit) => <option key={commit.sha} value={commit.sha}>{commit.shortSha} · {commit.title}</option>)}</select></label>}
         {reviewSource === 'history' && snapshots.length > 0 && <label className="workspace-diff-timeline"><History size={13} /><span className="visually-hidden">Workspace diff history</span><select value={selectedSnapshotId ?? selectedSnapshot?.id ?? ''} onChange={(event) => { setSelectedSnapshotId(event.target.value); setSelectedDecisionId(null); writeWorkspaceDiffSource(preferenceScope, `history:${event.target.value}`); }}><option value="">Latest recorded version</option>{snapshots.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{new Date(snapshot.capturedAt).toLocaleString()} · {snapshot.diff.changedFiles} files</option>)}</select></label>}
