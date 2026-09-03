@@ -18,6 +18,7 @@ import { isTransientSqliteContention } from './sqlite-contention.js';
 import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { projectKey } from '../shared/project-name.js';
+import { completeWithPalmyra, palmyraModel } from './providers/palmyra.js';
 
 export { isTransientSqliteContention } from './sqlite-contention.js';
 
@@ -1095,8 +1096,8 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   // active provider turn and never enters this dispatcher.
   const busyAgents = new Set(
     repository.listAllSharedMessages(conversationId)
-      .filter((message) => message.status === 'running' && (message.author === 'codex' || message.author === 'claude'))
-      .map((message) => message.author as AgentRun['agent']),
+      .filter((message) => message.status === 'running' && (message.author === 'codex' || message.author === 'claude' || message.author === 'palmyra'))
+      .map((message) => message.author as 'codex' | 'claude' | 'palmyra'),
   );
   const queued = repository.nextQueuedSharedTurn(conversationId, busyAgents);
   if (!queued) return [];
@@ -1106,6 +1107,16 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   if (!repository.claimQueuedTurn(queued.message.id)) return [];
   const conversation = repository.listConversations().find((item) => item.id === conversationId);
   const linkedItem = conversation?.workItemId ? repository.get(conversation.workItemId) : null;
+  if (queued.dispatchTarget === 'palmyra') {
+    const accountProfile = accountProfileForSharedReply(linkedItem, queued.message.accountProfile);
+    const reply = repository.createSharedMessage('palmyra', '', 'queued', conversationId, [], 'none', null, accountProfile, queued.message.id, queued.message.kind);
+    if (linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled' && linkedItem.status !== 'pinned') {
+      repository.update(linkedItem.id, { status: 'in_progress' }, false, { actor: 'jeffrey', source: 'shared_room' });
+      repository.addActivity(linkedItem.id, 'jeffrey', 'chat_started', `To Palmyra: ${queued.message.body.trim() || '(attachment-only message)'}`);
+    }
+    void replyWithPalmyra(repository, reply.id);
+    return [reply];
+  }
   const retrievalThread = threadForSharedReply(repository.listSharedMessages(100, null, conversationId).messages, queued.message.id);
   const priorGrounding = persistedTurnGrounding(repository.latestSharedTurnGrounding(conversationId, queued.message.id));
   const fallbackGrounding = fallbackTurnGrounding(retrievalThread, priorGrounding);
@@ -1178,6 +1189,43 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     void replyInSharedRoom(repository, agent, reply.id, run?.id, grounding, authorization, undefined, memory);
   }
   return replies;
+}
+
+export async function replyWithPalmyra(repository: WorkItemRepository, messageId: string): Promise<void> {
+  const target = repository.getSharedMessageById(messageId);
+  if (!target || !repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS)) return;
+  const controller = new AbortController();
+  activeReplies.set(messageId, controller);
+  repository.updateSharedMessage(messageId, { status: 'running', model: palmyraModel(), executionProfile: null });
+  publishRealtimeEvent('shared');
+  try {
+    const thread = threadForSharedReply(repository.listSharedMessages(40, null, target.conversationId).messages, target.dispatchGroupId);
+    const messages = thread
+      .filter((message) => message.body.trim())
+      .map((message) => ({
+        role: message.author === 'jeffrey' ? 'user' as const : 'assistant' as const,
+        content: message.body,
+      }));
+    const output = await completeWithPalmyra({
+      messages: [
+        { role: 'system', content: 'You are Palmyra in Workbench. Answer the user directly and concisely. You have no tools and must not claim to inspect or change external systems or local files.' },
+        ...messages,
+      ],
+      maxTokens: 4_096,
+      signal: controller.signal,
+    });
+    if (controller.signal.aborted) throw controller.signal.reason;
+    repository.updateSharedMessage(messageId, { body: output, status: 'completed', model: palmyraModel() });
+  } catch (error) {
+    repository.updateSharedMessage(messageId, controller.signal.aborted
+      ? { status: 'canceled' }
+      : { status: 'failed', error: error instanceof Error ? error.message : String(error) });
+  } finally {
+    activeReplies.delete(messageId);
+    publishRealtimeEvent('shared', 'work-items');
+    dispatchNextSharedTurn(repository, target.conversationId);
+    settleLinkedTask(repository, target.conversationId, 'Palmyra finished responding; review the conversation.');
+  }
 }
 
 function settleLinkedTask(repository: WorkItemRepository, conversationId: string, reason: string): void {

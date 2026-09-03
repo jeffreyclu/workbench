@@ -41,6 +41,7 @@ import { MarkdownComposer } from '../../components/markdown/markdown-composer.js
 import { MarkdownCode, MarkdownPre } from '../../components/markdown/markdown-code.js';
 import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAGE, SELF_ASSIGNED_OWNER_MESSAGE } from '../../../shared/contracts';
 import type { AiProviderChoice } from '../../../shared/ai-providers';
+import { ComposerProviderSelect, type ComposerProvider } from '../../components/composer-provider-select';
 import { ComposerModelSelect } from '../../components/composer-model-select';
 import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SessionFeedbackRating, SharedConversation, SharedMessage, SharedMessagePage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
 import { api } from '../../data/api';
@@ -86,13 +87,17 @@ const CONVERSATION_ROW_GAP = 6;
 // header from being positioned over a card before ResizeObserver measures it.
 const CONVERSATION_CARD_ESTIMATE = 88;
 
-type ConversationDispatchTarget = 'both' | 'codex' | 'claude';
+type ConversationDispatchTarget = ComposerProvider;
 type ComposerSelection = {
   aiProvider: AiProviderChoice;
   executionProfile: Exclude<AgentRun['executionProfile'], 'routing'>;
   accountProfile: string;
   dispatchTarget: ConversationDispatchTarget;
 };
+
+function isProviderMessage(message: Pick<SharedMessage, 'author'>): boolean {
+  return message.author === 'codex' || message.author === 'claude' || message.author === 'palmyra';
+}
 
 const defaultComposerSelection = (): ComposerSelection => ({
   aiProvider: 'auto',
@@ -144,7 +149,7 @@ export function latestConversationExecutionKind(messages: SharedMessage[]): Agen
 
 export function latestConversationExecutionMessage(messages: SharedMessage[]): SharedMessage | null {
   return [...messages].reverse().find((message) =>
-    (message.author === 'codex' || message.author === 'claude') && message.kind,
+    isProviderMessage(message) && message.kind,
   ) ?? null;
 }
 
@@ -154,7 +159,7 @@ export function latestConversationExecutionMessage(messages: SharedMessage[]): S
  * dropdown classifies when no turn has been classified yet.
  */
 export function latestConversationAgentMessage(messages: SharedMessage[]): SharedMessage | null {
-  return [...messages].reverse().find((message) => message.author === 'codex' || message.author === 'claude') ?? null;
+  return [...messages].reverse().find(isProviderMessage) ?? null;
 }
 
 type ConversationTaskPickerProps = {
@@ -436,7 +441,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const fallbackConversationStates = useMemo(() => {
     const states = new Map<string, SharedConversation['state']>();
     for (const message of conversationActivity.data?.messages ?? []) {
-      if (message.author !== 'codex' && message.author !== 'claude') continue;
+      if (!isProviderMessage(message)) continue;
       states.set(message.conversationId, message.status === 'running' || message.status === 'queued' ? 'working'
         : message.status === 'failed' ? 'needs_attention'
           : message.status === 'canceled' ? 'canceled'
@@ -1158,9 +1163,9 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const promotionInFlight = conversationMessages.some((message) =>
     message.author === 'system' && message.status === 'running' && /approval received|promot/i.test(message.body));
   const agentWorkInFlight = conversationMessages.some((message) =>
-    (message.author === 'codex' || message.author === 'claude') && (message.status === 'queued' || message.status === 'running'));
+    isProviderMessage(message) && (message.status === 'queued' || message.status === 'running'));
   const latestCompletedAgentIndex = conversationMessages.reduce((latest, message, index) =>
-    (message.author === 'codex' || message.author === 'claude') && message.status === 'completed' ? index : latest, -1);
+    isProviderMessage(message) && message.status === 'completed' ? index : latest, -1);
   const latestPreviewApprovalRequestIndex = conversationMessages.reduce((latest, message, index) =>
     message.author === 'jeffrey' && /^\s*approve(?:\s+(?:the\s+)?)?(?:workbench\s+)?preview[.!]?\s*$/i.test(message.body) ? index : latest, -1);
   // A successful promotion can either be the worker's own completion or a
@@ -1288,7 +1293,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           {!conversationDetail.isLoading && messages.isLoading && <ConversationThreadSkeleton />}
           {messages.error && <div className="list-state compact-state error-message">Could not load shared messages: {messages.error.message} <button type="button" className="button secondary compact" onClick={() => messages.refetch()}>Retry</button></div>}
           {cacheSpendWarning && <div className="conversation-cache-warning" role="status"><AlertTriangle size={14} aria-hidden="true" /><span>{cacheSpendWarning}</span></div>}
-          {!messages.isLoading && !messages.error && !selectedConversationMissing && allConversationMessages.length === 0 && <div className="list-state compact-state">No messages yet. Ask Codex or Claude to get started.</div>}
+          {!messages.isLoading && !messages.error && !selectedConversationMissing && allConversationMessages.length === 0 && <div className="list-state compact-state">No messages yet. Choose a provider to get started.</div>}
           {hasEarlierMessages && (
             <button
               type="button"
@@ -1310,7 +1315,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           <div className="thread-virtualizer thread-live-flow">
           {conversationRenderRows.map((row) => {
             const renderMessage = (message: SharedMessage, inGroup: boolean) => {
-              const isAgentMessage = message.author === 'codex' || message.author === 'claude';
+              const isAgentMessage = isProviderMessage(message);
               if (isAgentMessage && message.status === 'running') streamedMessageIdsRef.current.add(message.id);
               const hasStreamedMessage = streamedMessageIdsRef.current.has(message.id);
               const isQueuedMessage = message.status === 'queued';
@@ -1372,7 +1377,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                   </div>
                 )}
                 {message.status === 'canceled' && <p className="muted">Response canceled.</p>}
-                {(message.author === 'codex' || message.author === 'claude') && (message.status === 'failed' || message.status === 'canceled') && <div className="message-actions"><button onClick={() => retryReply.mutate(message)} disabled={isRetrying} aria-live="polite">{isRetrying ? <><LoaderCircle className="spin" size={12} /> Retrying…</> : <><RefreshCw size={12} /> Retry / continue</>}</button></div>}
+                {isProviderMessage(message) && (message.status === 'failed' || message.status === 'canceled') && <div className="message-actions"><button onClick={() => retryReply.mutate(message)} disabled={isRetrying} aria-live="polite">{isRetrying ? <><LoaderCircle className="spin" size={12} /> Retrying…</> : <><RefreshCw size={12} /> Retry / continue</>}</button></div>}
                 {message.attachments.length > 0 && <div className="message-files">{message.attachments.map((file) => (
                   <a key={file.path} href={`/api/artifacts/raw?path=${encodeURIComponent(file.path)}&conversationId=${encodeURIComponent(message.conversationId)}`} target="_blank" rel="noreferrer" title={`${file.mimeType} · ${formatFileSize(file.size)}`}>
                     <Paperclip size={11} /> {file.name} <span className="message-file-meta">{formatFileSize(file.size)}</span>
@@ -1446,13 +1451,11 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
             <input ref={fileRef} className="visually-hidden" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
             <button type="button" className="composer-tool attach-button" onClick={() => fileRef.current?.click()} aria-label="Attach files" title="Attach files"><Paperclip size={14} /></button>
             <span className="composer-hint">Files, screenshots, or context</span>
-            <ComposerModelSelect className="model-target" executionProfile={composerSelection.executionProfile} aiProvider={composerSelection.aiProvider} accountProfile={composerSelection.accountProfile} onChange={(next) => updateComposerPreferences(next)} disabled={selectionHydratedFor !== conversationId} />
+            <ComposerModelSelect executionProfile={composerSelection.executionProfile} provider={composerSelection.dispatchTarget} accountProfile={composerSelection.accountProfile} onChange={(executionProfile) => updateComposerPreferences({ executionProfile })} disabled={selectionHydratedFor !== conversationId} />
             <select className="agent-target account-target" value={composerSelection.accountProfile} onChange={(event) => updateComposerPreferences({ accountProfile: event.target.value })} aria-label="Account profile" disabled={agentAccounts.isLoading || selectionHydratedFor !== conversationId}>
               {accountProfiles.map((account) => <option key={account.name} value={account.name}>{account.name === 'default' ? 'Default' : account.name}</option>)}
             </select>
-            <select className="agent-target dispatch-target" value={composerSelection.dispatchTarget} onChange={(event) => { const target = event.target.value as ConversationDispatchTarget; updateComposerPreferences({ dispatchTarget: target }); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond" disabled={selectionHydratedFor !== conversationId}>
-              <option value="codex">Codex</option><option value="claude">Claude</option><option value="both">Both</option>
-            </select>
+            <ComposerProviderSelect value={composerSelection.dispatchTarget} accountProfile={composerSelection.accountProfile} onChange={(target) => { updateComposerPreferences({ dispatchTarget: target, aiProvider: target === 'palmyra' ? 'palmyra' : target === 'claude' ? 'claude' : 'auto', ...(target === 'palmyra' ? { executionProfile: null } : {}) }); if (linkedWorkItemId && !linkedTaskIsSelfAssigned && target !== 'palmyra') updateConversationOwner.mutate(target); }} disabled={selectionHydratedFor !== conversationId} />
             <button className="icon-button primary composer-send" aria-label="Send message" title="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
           </div>
           {send.error && <div className="composer-send-error" role="alert"><span>Could not send: {send.error.message}</span><button type="button" className="button secondary compact" onMouseDown={(event) => event.preventDefault()} onClick={retrySend} disabled={send.isPending}>Retry</button></div>}

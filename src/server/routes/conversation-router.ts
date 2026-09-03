@@ -8,7 +8,7 @@ import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
 import { aiProviderChoiceSchema } from '../../shared/ai-providers.js';
 import { resolveWorkingDirectory, runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
-import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, retrySharedSynthesis, runSharedBackgroundJob } from '../shared-room.js';
+import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, replyWithPalmyra, retrySharedSynthesis, runSharedBackgroundJob } from '../shared-room.js';
 import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceCommits, listWorkspaceRefCommits, listWorkspaceRefs, repositoryIdentity, snapshotsForRepository } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { parseFollowUpPlan } from '../app-exports.js';
@@ -335,7 +335,7 @@ export function createConversationRouter({ repository, database, capabilities, a
     const preferences = z.object({
       executionProfile: z.enum(['economy', 'standard', 'deep']).nullable().optional(),
       accountProfile: z.string().trim().min(1).max(120).nullable().optional(),
-      dispatchTarget: z.enum(['both', 'codex', 'claude']).nullable().optional(),
+      dispatchTarget: z.enum(['both', 'codex', 'claude', 'palmyra']).nullable().optional(),
       aiProvider: aiProviderChoiceSchema.nullable().optional(),
     }).refine((value) => Object.values(value).some((entry) => entry !== undefined), 'Choose at least one preference.').parse(request.body);
     const conversation = repository.setConversationComposerPreferences(request.params.id, {
@@ -492,7 +492,7 @@ export function createConversationRouter({ repository, database, capabilities, a
   router.post('/api/shared/messages/:id/retry', async (request, response) => {
     const prior = repository.getSharedMessageById(request.params.id);
     if (!prior) return response.status(404).json({ error: 'Chat response not found.' });
-    if ((prior.author !== 'codex' && prior.author !== 'claude') || (prior.status !== 'failed' && prior.status !== 'canceled')) {
+    if ((prior.author !== 'codex' && prior.author !== 'claude' && prior.author !== 'palmyra') || (prior.status !== 'failed' && prior.status !== 'canceled')) {
       return response.status(409).json({ error: 'Only failed or canceled agent responses can be continued.' });
     }
     // A retry button owns exactly the response it is rendered on. A paired
@@ -525,7 +525,10 @@ export function createConversationRouter({ repository, database, capabilities, a
       if (!reply) return response.status(409).json({ error: 'This response is no longer retryable.' });
       replies.push(executionProfile !== target.executionProfile ? repository.updateSharedMessage(reply.id, { executionProfile }) ?? reply : reply);
     }
-    for (const reply of replies.filter((reply) => !repository.getRunByMessage(reply.id))) void replyInSharedRoom(repository, reply.author as 'codex' | 'claude', reply.id);
+    for (const reply of replies.filter((reply) => !repository.getRunByMessage(reply.id))) {
+      if (reply.author === 'palmyra') void replyWithPalmyra(repository, reply.id);
+      else void replyInSharedRoom(repository, reply.author as 'codex' | 'claude', reply.id);
+    }
     response.status(202).json({ reply: replies[0], replies, runs });
   });
 

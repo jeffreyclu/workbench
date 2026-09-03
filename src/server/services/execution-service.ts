@@ -86,7 +86,7 @@ export class ExecutionService {
     const changed = this.database.prepare(`UPDATE shared_messages
       SET status = 'running', error = '', completed_at = NULL, owner_id = NULL, lease_expires_at = NULL,
           attempt = attempt + 1, next_attempt_at = NULL
-      WHERE id = ? AND author IN ('codex', 'claude') AND status IN ('failed', 'canceled')`).run(id).changes;
+      WHERE id = ? AND author IN ('codex', 'claude', 'palmyra') AND status IN ('failed', 'canceled')`).run(id).changes;
     return changed ? this.collaborators.getSharedMessageById(id) : null;
   }
 
@@ -96,7 +96,7 @@ export class ExecutionService {
     const changed = this.database.prepare(`
       UPDATE shared_messages SET owner_id = ?, lease_expires_at = ?
       WHERE id = ?
-        AND (status = 'running' OR (status = 'queued' AND author IN ('codex', 'claude')))
+        AND (status = 'running' OR (status = 'queued' AND author IN ('codex', 'claude', 'palmyra')))
         AND (owner_id IS NULL OR lease_expires_at < ?)
     `).run(ownerId, leaseExpiresAt, id, now).changes;
     // A task-linked agent reply can be returned to the durable queue while its
@@ -186,11 +186,11 @@ export class ExecutionService {
       const now = new Date().toISOString();
       const runIds = (this.database.prepare(`SELECT id FROM agent_runs WHERE status = 'running' AND owner_id = ?`).all(ownerId) as Array<{ id: string }>).map(({ id }) => id);
       const messageIds = (this.database.prepare(`SELECT id FROM shared_messages
-        WHERE status = 'running' AND owner_id = ? AND author IN ('codex', 'claude')`).all(ownerId) as Array<{ id: string }>).map(({ id }) => id);
+        WHERE status = 'running' AND owner_id = ? AND author IN ('codex', 'claude', 'palmyra')`).all(ownerId) as Array<{ id: string }>).map(({ id }) => id);
       if (runIds.length) this.database.prepare(`UPDATE agent_runs SET status = 'failed', error = ?, completed_at = ?, owner_id = NULL, lease_expires_at = NULL
         WHERE status = 'running' AND owner_id = ?`).run(reason, now, ownerId);
       if (messageIds.length) this.database.prepare(`UPDATE shared_messages SET status = 'failed', error = ?, completed_at = ?, owner_id = NULL, lease_expires_at = NULL
-        WHERE status = 'running' AND owner_id = ? AND author IN ('codex', 'claude')`).run(reason, now, ownerId);
+        WHERE status = 'running' AND owner_id = ? AND author IN ('codex', 'claude', 'palmyra')`).run(reason, now, ownerId);
       return { runIds, messageIds };
     });
   }
@@ -254,7 +254,7 @@ export class ExecutionService {
       const now = new Date().toISOString();
       const cutoff = new Date(Date.now() - graceMs).toISOString();
       const orphaned = this.database.prepare(`SELECT id FROM shared_messages
-        WHERE status = 'queued' AND author IN ('codex', 'claude') AND created_at <= ?`).all(cutoff) as Array<{ id: string }>;
+        WHERE status = 'queued' AND author IN ('codex', 'claude', 'palmyra') AND created_at <= ?`).all(cutoff) as Array<{ id: string }>;
       for (const message of orphaned) {
         this.database.prepare(`UPDATE shared_messages SET status = 'canceled', error = 'Orphaned queued message auto-canceled: never claimed or dispatched.', completed_at = ? WHERE id = ?`).run(now, message.id);
       }

@@ -43,7 +43,7 @@ export class ConversationRepository {
         EXISTS (
           SELECT 1 FROM shared_messages
           WHERE shared_messages.conversation_id = shared_conversations.id
-            AND shared_messages.author IN ('codex', 'claude')
+            AND shared_messages.author IN ('codex', 'claude', 'palmyra')
             AND shared_messages.created_at > COALESCE(shared_conversations.last_read_at, '')
         ) AS is_unread,
         CASE WHEN (
@@ -75,7 +75,7 @@ export class ConversationRepository {
         SELECT shared_conversations.*,
         EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.status = 'running') AS is_active,
         EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.status IN ('queued', 'running')) AS is_working,
-        EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.author IN ('codex', 'claude') AND shared_messages.created_at > COALESCE(shared_conversations.last_read_at, '')) AS is_unread,
+        EXISTS (SELECT 1 FROM shared_messages WHERE shared_messages.conversation_id = shared_conversations.id AND shared_messages.author IN ('codex', 'claude', 'palmyra') AND shared_messages.created_at > COALESCE(shared_conversations.last_read_at, '')) AS is_unread,
         CASE WHEN (SELECT status FROM work_items WHERE work_items.id = shared_conversations.work_item_id) = 'pinned' THEN 1 ELSE 0 END AS linked_work_item_pinned,
         (SELECT project_name FROM work_items WHERE work_items.id = shared_conversations.work_item_id) AS linked_project_name
         FROM shared_conversations
@@ -125,7 +125,7 @@ export class ConversationRepository {
       WHERE archived_at IS NULL AND deleted_at IS NULL AND EXISTS (
         SELECT 1 FROM shared_messages
         WHERE shared_messages.conversation_id = shared_conversations.id
-          AND shared_messages.author IN ('codex', 'claude')
+          AND shared_messages.author IN ('codex', 'claude', 'palmyra')
           AND shared_messages.created_at > COALESCE(shared_conversations.last_read_at, '')
       )
     `).get() as { count: number }).count);

@@ -20,6 +20,7 @@ export interface PalmyraCompletionRequest {
   maxTokens?: number;
   temperature?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 interface PalmyraChatResponse {
@@ -56,7 +57,9 @@ export async function completeWithPalmyra(request: PalmyraCompletionRequest, fet
       temperature: request.temperature ?? 0,
       stream: false,
     }),
-    signal: AbortSignal.timeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    signal: request.signal
+      ? AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS)])
+      : AbortSignal.timeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS),
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => '');

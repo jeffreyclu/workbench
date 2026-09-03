@@ -469,7 +469,7 @@ export class WorkItemRepository {
     `).get(conversation.id));
     const latest = this.database.prepare(`
       SELECT status FROM shared_messages
-      WHERE conversation_id = ? AND author IN ('codex', 'claude')
+      WHERE conversation_id = ? AND author IN ('codex', 'claude', 'palmyra')
       ORDER BY created_at DESC, rowid DESC LIMIT 1
     `).get(conversation.id) as { status: SharedMessage['status'] } | undefined;
     if (hasLiveWork || conversation.isActive || latest?.status === 'running' || latest?.status === 'queued') return { ...conversation, state: 'working' };
@@ -853,13 +853,13 @@ export class WorkItemRepository {
     });
   }
 
-  nextQueuedSharedTurn(conversationId: string, busyAgents: ReadonlySet<AgentRun['agent']> = new Set()): { message: SharedMessage; dispatchTarget: 'auto' | 'codex' | 'claude' | 'both' } | null {
+  nextQueuedSharedTurn(conversationId: string, busyAgents: ReadonlySet<'codex' | 'claude' | 'palmyra'> = new Set()): { message: SharedMessage; dispatchTarget: 'auto' | 'codex' | 'claude' | 'palmyra' | 'both' } | null {
     const rows = this.database.prepare(`SELECT id, dispatch_target FROM shared_messages
       WHERE conversation_id = ? AND author = 'jeffrey' AND status = 'queued'
       ORDER BY queue_priority DESC, created_at ASC, rowid ASC`).all(conversationId) as Array<{ id: string; dispatch_target: string }>;
     for (const row of rows) {
-      if (!['auto', 'codex', 'claude', 'both'].includes(row.dispatch_target)) continue;
-      const dispatchTarget = row.dispatch_target as 'auto' | 'codex' | 'claude' | 'both';
+      if (!['auto', 'codex', 'claude', 'palmyra', 'both'].includes(row.dispatch_target)) continue;
+      const dispatchTarget = row.dispatch_target as 'auto' | 'codex' | 'claude' | 'palmyra' | 'both';
       const agents = dispatchTarget === 'both' ? ['codex', 'claude'] as const
         : dispatchTarget === 'auto' ? [this.selectBalancedAgent('codex')] : [dispatchTarget];
       if (agents.some((agent) => busyAgents.has(agent))) continue;

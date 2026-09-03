@@ -1450,6 +1450,14 @@ describe('WorkItemRepository', () => {
     expect(repository.nextQueuedSharedTurn(conversation.id)).toBeNull();
   });
 
+  it('queues Palmyra as a provider and serializes its replies', () => {
+    const conversation = repository.createConversation('Palmyra thread');
+    const message = repository.createSharedMessage('jeffrey', 'Answer with Palmyra', 'queued', conversation.id, [], 'palmyra');
+
+    expect(repository.nextQueuedSharedTurn(conversation.id)).toEqual({ message, dispatchTarget: 'palmyra' });
+    expect(repository.nextQueuedSharedTurn(conversation.id, new Set(['palmyra']))).toBeNull();
+  });
+
   it('synthesizes the exact dual-dispatch group after both replies reach terminal states', () => {
     const conversation = repository.createConversation('Dual synthesis');
     const firstRequest = repository.createSharedMessage('jeffrey', 'Earlier dual request', 'completed', conversation.id, [], 'both');

@@ -1169,7 +1169,7 @@ export const reorderQueueSchema = z.object({
   message: 'Provide exactly one neighboring item.',
 });
 
-export const sharedMessageAuthorSchema = z.enum(['jeffrey', 'codex', 'claude', 'system']);
+export const sharedMessageAuthorSchema = z.enum(['jeffrey', 'codex', 'claude', 'palmyra', 'system']);
 export const sharedMessageStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'canceled']);
 
 export interface SharedMessage {
@@ -1200,7 +1200,7 @@ export interface SharedMessage {
   costSource: 'provider' | 'estimated' | null;
   fallbackFrom: 'codex' | 'claude' | null;
   fallbackReason: string | null;
-  dispatchTarget: 'auto' | 'both' | 'codex' | 'claude' | 'none';
+  dispatchTarget: 'auto' | 'both' | 'codex' | 'claude' | 'palmyra' | 'none';
   /** The human turn that dispatched this reply; both-agent replies share it. */
   dispatchGroupId: string | null;
   attempt: number;
@@ -1337,7 +1337,7 @@ export const updateArtifactSchema = z.object({
 
 export const artifactLibraryViewSchema = z.enum(['published', 'revoked', 'all', 'favorites']).catch('published');
 export const setArtifactFavoritedSchema = z.object({ favorited: z.boolean() });
-export interface SharedConversation { id: string; title: string; workItemId: string | null; pinned?: boolean; linkedProjectName?: string | null; forkedFromConversationId: string | null; archivedAt: string | null; sharedBrief?: string; preferredExecutionProfile?: AgentRun['executionProfile']; draftBody?: string; preferredAccountProfile?: string | null; preferredDispatchTarget?: 'both' | 'codex' | 'claude' | null; preferredAiProvider?: AiProviderChoice | null; claudeSessionId?: string | null; codexThreadId?: string | null; state?: 'working' | 'needs_attention' | 'canceled' | 'waiting_approval' | 'promoting' | 'waiting_promotion' | 'finished' | null; isUnread?: boolean; linkedWorkItemPinned?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
+export interface SharedConversation { id: string; title: string; workItemId: string | null; pinned?: boolean; linkedProjectName?: string | null; forkedFromConversationId: string | null; archivedAt: string | null; sharedBrief?: string; preferredExecutionProfile?: AgentRun['executionProfile']; draftBody?: string; preferredAccountProfile?: string | null; preferredDispatchTarget?: 'both' | 'codex' | 'claude' | 'palmyra' | null; preferredAiProvider?: AiProviderChoice | null; claudeSessionId?: string | null; codexThreadId?: string | null; state?: 'working' | 'needs_attention' | 'canceled' | 'waiting_approval' | 'promoting' | 'waiting_promotion' | 'finished' | null; isUnread?: boolean; linkedWorkItemPinned?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
 
 export const setConversationTaskSchema = z.object({ workItemId: z.string().uuid().nullable() });
 export const setConversationPinnedSchema = z.object({ pinned: z.boolean() });
@@ -1347,7 +1347,7 @@ export const updateSharedConversationDraftSchema = z.object({ body: z.string().m
 export const createSharedMessageSchema = z.object({
   conversationId: z.string().uuid(),
   body: z.string().trim().max(50_000).default(''),
-  dispatchTo: z.enum(['auto', 'both', 'codex', 'claude', 'none']).default('auto'),
+  dispatchTo: z.enum(['auto', 'both', 'codex', 'claude', 'palmyra', 'none']).default('auto'),
   executionKind: runKindSchema.optional(),
   executionProfile: executionProfileOverrideSchema,
   // A room turn can be unlinked from a task, so it needs the same explicit

@@ -155,7 +155,7 @@ export class RunRepository {
         SELECT agent, 100 AS weight FROM agent_runs WHERE status IN ('queued', 'running')
         UNION ALL
         SELECT author AS agent, 100 AS weight FROM shared_messages
-        WHERE author IN ('codex', 'claude') AND status = 'running'
+        WHERE author IN ('codex', 'claude', 'palmyra') AND status = 'running'
         UNION ALL
         SELECT agent, 1 AS weight FROM (
           SELECT agent FROM agent_runs WHERE requested_target = 'auto' AND status = 'completed'
@@ -496,7 +496,7 @@ export class RunRepository {
     const row = this.database.prepare(`
       SELECT
         (SELECT COUNT(*) FROM agent_runs WHERE status IN ('queued', 'running')) AS runs,
-        (SELECT COUNT(*) FROM shared_messages WHERE status IN ('queued', 'running') AND author IN ('codex', 'claude')) AS messages
+        (SELECT COUNT(*) FROM shared_messages WHERE status IN ('queued', 'running') AND author IN ('codex', 'claude', 'palmyra')) AS messages
     `).get() as { runs: number; messages: number };
     return Number(row.runs) + Number(row.messages) > 0;
   }
@@ -540,7 +540,7 @@ export class RunRepository {
       SELECT
         (SELECT COUNT(*) FROM agent_runs WHERE status = 'running' AND owner_id = ?) AS runs,
         (SELECT COUNT(*) FROM shared_messages
-          WHERE status = 'running' AND owner_id = ? AND author IN ('codex', 'claude')) AS messages
+          WHERE status = 'running' AND owner_id = ? AND author IN ('codex', 'claude', 'palmyra')) AS messages
     `).get(ownerId, ownerId) as { runs: number; messages: number };
     return Number(row.runs) + Number(row.messages) > 0;
   }

@@ -1864,15 +1864,20 @@ describe('shared room', () => {
     expect((await screen.findByLabelText('Model choice') as HTMLSelectElement).value).toBe('deep');
   });
 
-  it('offers Palmyra in the composer model selector without a separate provider dropdown', async () => {
+  it('offers Palmyra as a Composer provider and never as a tier', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000091';
-    const conversation = { id: conversationId, title: 'Palmyra composer', workItemId: null, preferredExecutionProfile: 'deep', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    let conversation = { id: conversationId, title: 'Palmyra composer', workItemId: null, preferredExecutionProfile: 'deep' as string | null, preferredDispatchTarget: 'both', preferredAiProvider: 'auto', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
     const preferenceBodies: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith('/api/ai-provider/availability')) return new Response(JSON.stringify({ accountProfile: 'default', resolved: 'palmyra', palmyra: { available: true, reason: null, model: 'palmyra-x5' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      if (url.endsWith('/preferences') && init?.method === 'PATCH') { preferenceBodies.push(String(init.body)); return new Response(JSON.stringify({ conversation }), { status: 200, headers: { 'Content-Type': 'application/json' } }); }
+      if (url.startsWith('/api/ai/providers?')) return new Response(JSON.stringify({ accountProfile: 'default', resolved: 'palmyra', palmyra: { available: true, reason: null, model: 'palmyra-x5' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.endsWith('/preferences') && init?.method === 'PATCH') {
+        preferenceBodies.push(String(init.body));
+        const updates = JSON.parse(String(init.body));
+        conversation = { ...conversation, preferredExecutionProfile: updates.executionProfile ?? conversation.preferredExecutionProfile, preferredDispatchTarget: updates.dispatchTarget ?? conversation.preferredDispatchTarget, preferredAiProvider: updates.aiProvider ?? conversation.preferredAiProvider };
+        return new Response(JSON.stringify({ conversation }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url === `/api/shared/conversations/${conversationId}`) return new Response(JSON.stringify({ conversation }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -1881,14 +1886,17 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     const modelChoice = await screen.findByLabelText('Model choice') as HTMLSelectElement;
-    expect(Array.from(modelChoice.options).map((option) => option.value)).toEqual(['auto', 'economy', 'standard', 'deep', 'palmyra']);
-    await waitFor(() => expect(modelChoice.querySelector('option[value="palmyra"]')).not.toBeDisabled());
-    fireEvent.change(modelChoice, { target: { value: 'palmyra' } });
-    expect(modelChoice.value).toBe('palmyra');
-    await waitFor(() => expect(preferenceBodies.some((body) => body.includes('"aiProvider":"palmyra"'))).toBe(true));
-    // Palmyra is one option in the one model selector, never a second control.
-    expect(screen.queryByLabelText('AI provider for turn grounding')).toBeNull();
-    expect(screen.queryByLabelText('AI provider')).toBeNull();
+    expect(Array.from(modelChoice.options).map((option) => option.value)).toEqual(['auto', 'economy', 'standard', 'deep']);
+    expect(modelChoice.querySelector('option[value="palmyra"]')).toBeNull();
+
+    const provider = screen.getByLabelText('Provider') as HTMLSelectElement;
+    expect(Array.from(provider.options).map((option) => option.textContent)).toEqual(['OpenAI', 'Anthropic', 'Palmyra', 'OpenAI + Anthropic']);
+    await waitFor(() => expect(provider.querySelector('option[value="palmyra"]')).not.toBeDisabled());
+    fireEvent.change(provider, { target: { value: 'palmyra' } });
+    expect(provider.value).toBe('palmyra');
+    await waitFor(() => expect(preferenceBodies.some((body) => body.includes('"dispatchTarget":"palmyra"') && body.includes('"aiProvider":"palmyra"'))).toBe(true));
+    expect(screen.getByLabelText('Model choice')).toHaveValue('palmyra-x5');
+    expect(screen.getAllByRole('combobox')).toHaveLength(3);
   });
 
   it('keeps Both selected after switching away from and back to a conversation', async () => {
