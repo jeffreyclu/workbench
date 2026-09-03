@@ -1244,6 +1244,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .markdown-format-toolbar { display: flex; align-items: center; gap: 2px; padding: 5px 12px 6px; border-top: 1px solid #242421; }.markdown-format-toolbar button { display: grid; place-items: center; width: 26px; height: 26px; color: #898880; background: transparent; border: 0; border-radius: 5px; }.markdown-format-toolbar button:hover { color: #e2e1d9; background: #292925; }.markdown-format-toolbar span { width: 1px; height: 14px; margin: 0 4px; background: #34342f; }
 .composer-toolbar { display: flex; align-items: center; gap: 8px; min-height: 50px; padding: 8px 10px 9px 12px; border-top: 1px solid #2c2c28; }
 .composer-send-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 10px 9px 12px; color: #ffaaa0; font-size: 12px; }
+.composer-provider-limit { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 0 12px 10px; color: #b8b7ad; font-size: 11px; line-height: 1.35; }
+.composer-provider-limit svg { flex: 0 0 auto; margin-top: 1px; color: #d6ad58; }
 .composer-send-error span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-send-error button { flex: 0 0 auto; }
 .composer-tool { display: inline-flex; align-items: center; gap: 6px; padding: 7px 9px; color: #9a9991; background: transparent; border: 0; border-radius: 6px; font-size: 10px; }

@@ -13,7 +13,7 @@ export function ComposerModelSelect({ executionProfile, provider, onChange, acco
 }) {
   const selectId = useId();
   const availability = useAiProviderAvailability(provider === 'palmyra' ? 'palmyra' : 'auto', accountProfile);
-  const model = availability.data?.palmyra.model ?? 'Palmyra';
+  const model = availability.data?.palmyra?.model ?? 'Palmyra';
   return <>
     <label className="visually-hidden" htmlFor={selectId}>Model choice</label>
     {provider === 'palmyra'

@@ -328,7 +328,7 @@ describe('shared room', () => {
     fireEvent.click(screen.getByRole('button', { name: /conversations/i }));
     fireEvent.click(await within(screen.getByLabelText('Conversations')).findByRole('button', { name: /Workbench/ }));
     expect((await screen.findByRole('main')).className).toContain('shared-workspace');
-    expect(await screen.findByText('No messages yet. Ask Codex or Claude to get started.')).toBeTruthy();
+    expect(await screen.findByText('No messages yet. Choose a provider to get started.')).toBeTruthy();
   });
 
   it('renders an interjection inside the matching live agent stream', async () => {
@@ -1374,7 +1374,7 @@ describe('shared room', () => {
     // doesn't clobber the deliberate selection made below.
     await screen.findByRole('button', { name: 'Complete linked task' });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    const select = await screen.findByLabelText('Who should respond') as HTMLSelectElement;
+    const select = await screen.findByLabelText('Provider') as HTMLSelectElement;
     fireEvent.change(select, { target: { value: 'claude' } });
     fireEvent.change(select, { target: { value: 'both' } });
     await waitFor(() => expect(patchCount).toBe(2));
@@ -1635,7 +1635,7 @@ describe('shared room', () => {
 
     expect(await screen.findByRole('heading', { name: 'Conversation not found' })).toBeTruthy();
     expect(await screen.findByText(/This conversation could not be found/)).toBeTruthy();
-    expect(screen.queryByText('No messages yet. Ask Codex or Claude to get started.')).toBeNull();
+    expect(screen.queryByText('No messages yet. Choose a provider to get started.')).toBeNull();
   });
 
   it('clears a pending attachment when switching conversations', async () => {
@@ -1896,6 +1896,7 @@ describe('shared room', () => {
     expect(provider.value).toBe('palmyra');
     await waitFor(() => expect(preferenceBodies.some((body) => body.includes('"dispatchTarget":"palmyra"') && body.includes('"aiProvider":"palmyra"'))).toBe(true));
     expect(screen.getByLabelText('Model choice')).toHaveValue('palmyra-x5');
+    expect(screen.getByRole('status')).toHaveTextContent('Palmyra is chat-only in Workbench. X6 access changes the model, not file permissions. Choose OpenAI or Anthropic for code changes.');
     expect(screen.getAllByRole('combobox')).toHaveLength(3);
   });
 
@@ -1921,13 +1922,13 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={firstId} /></QueryClientProvider>);
 
-    const recipient = await screen.findByLabelText('Who should respond') as HTMLSelectElement;
+    const recipient = await screen.findByLabelText('Provider') as HTMLSelectElement;
     fireEvent.change(recipient, { target: { value: 'both' } });
     await waitFor(() => expect(recipient.value).toBe('both'));
     fireEvent.click(screen.getByRole('button', { name: /Other conversation/i }));
-    await waitFor(() => expect((screen.getByLabelText('Who should respond') as HTMLSelectElement).value).toBe('claude'));
+    await waitFor(() => expect((screen.getByLabelText('Provider') as HTMLSelectElement).value).toBe('claude'));
     fireEvent.click(screen.getByRole('button', { name: /Both recipients/i }));
-    await waitFor(() => expect((screen.getByLabelText('Who should respond') as HTMLSelectElement).value).toBe('both'));
+    await waitFor(() => expect((screen.getByLabelText('Provider') as HTMLSelectElement).value).toBe('both'));
   });
 
   it('restores the last recipient and model choice from conversation history', async () => {
@@ -1946,8 +1947,8 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
-    await screen.findByLabelText('Who should respond');
-    await waitFor(() => expect((screen.getByLabelText('Who should respond') as HTMLSelectElement).value).toBe('claude'));
+    await screen.findByLabelText('Provider');
+    await waitFor(() => expect((screen.getByLabelText('Provider') as HTMLSelectElement).value).toBe('claude'));
     expect((screen.getByLabelText('Account profile') as HTMLSelectElement).value).toBe('default');
     expect((screen.getByLabelText('Model choice') as HTMLSelectElement).value).toBe('deep');
   });
@@ -1965,7 +1966,7 @@ describe('shared room', () => {
 
     await screen.findByRole('heading', { name: 'New conversation' });
     expect(screen.getByRole('button', { name: 'Execution type: Execute' })).toBeInTheDocument();
-    await waitFor(() => expect((screen.getByLabelText('Who should respond') as HTMLSelectElement).value).toBe('both'));
+    await waitFor(() => expect((screen.getByLabelText('Provider') as HTMLSelectElement).value).toBe('both'));
     expect((screen.getByLabelText('Account profile') as HTMLSelectElement).value).toBe('default');
     expect((screen.getByLabelText('Model choice') as HTMLSelectElement).value).toBe('auto');
   });
