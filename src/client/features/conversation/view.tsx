@@ -40,6 +40,8 @@ import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from '../../components/markdown/markdown-composer.js';
 import { MarkdownCode, MarkdownPre } from '../../components/markdown/markdown-code.js';
 import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAGE, SELF_ASSIGNED_OWNER_MESSAGE } from '../../../shared/contracts';
+import type { AiProviderChoice } from '../../../shared/ai-providers';
+import { AiProviderSelect } from '../../components/ai-provider-select';
 import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SessionFeedbackRating, SharedConversation, SharedMessage, SharedMessagePage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
 import { api } from '../../data/api';
 import { ArtifactLibraryView } from '../artifacts/view';
@@ -86,21 +88,24 @@ const CONVERSATION_CARD_ESTIMATE = 88;
 
 type ConversationDispatchTarget = 'both' | 'codex' | 'claude';
 type ComposerSelection = {
+  aiProvider: AiProviderChoice;
   executionProfile: Exclude<AgentRun['executionProfile'], 'routing'>;
   accountProfile: string;
   dispatchTarget: ConversationDispatchTarget;
 };
 
 const defaultComposerSelection = (): ComposerSelection => ({
+  aiProvider: 'auto',
   executionProfile: null,
   accountProfile: DEFAULT_ACCOUNT_PROFILE,
   dispatchTarget: 'both',
 });
 
-export function composerSelectionFromConversation(conversation: Pick<SharedConversation, 'preferredExecutionProfile' | 'preferredAccountProfile' | 'preferredDispatchTarget'>): ComposerSelection {
+export function composerSelectionFromConversation(conversation: Pick<SharedConversation, 'preferredExecutionProfile' | 'preferredAccountProfile' | 'preferredDispatchTarget' | 'preferredAiProvider'>): ComposerSelection {
   return {
     executionProfile: conversation.preferredExecutionProfile ?? null,
     accountProfile: conversation.preferredAccountProfile ?? DEFAULT_ACCOUNT_PROFILE,
+    aiProvider: conversation.preferredAiProvider ?? 'auto',
     dispatchTarget: conversation.preferredDispatchTarget ?? 'both',
   };
 }
@@ -299,7 +304,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     setBody(nextBody);
     if (conversationId) writeConversationDraft(conversationId, nextBody);
   }
-  function openConversation(nextConversationId: string, source?: Pick<SharedConversation, 'preferredExecutionProfile' | 'preferredAccountProfile' | 'preferredDispatchTarget'>) {
+  function openConversation(nextConversationId: string, source?: Pick<SharedConversation, 'preferredExecutionProfile' | 'preferredAccountProfile' | 'preferredDispatchTarget' | 'preferredAiProvider'>) {
     // Preference mutations resolve asynchronously. Update the ref before the
     // state transition so an old window's response can never overwrite the
     // picker state for the conversation Jeffrey just opened.
@@ -1451,6 +1456,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
             <select className="agent-target dispatch-target" value={composerSelection.dispatchTarget} onChange={(event) => { const target = event.target.value as ConversationDispatchTarget; updateComposerPreferences({ dispatchTarget: target }); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond" disabled={selectionHydratedFor !== conversationId}>
               <option value="codex">Codex</option><option value="claude">Claude</option><option value="both">Both</option>
             </select>
+            <AiProviderSelect value={composerSelection.aiProvider} onChange={(next) => updateComposerPreferences({ aiProvider: next })} accountProfile={composerSelection.accountProfile} disabled={selectionHydratedFor !== conversationId} ariaLabel="AI provider for turn grounding" />
             <button className="icon-button primary composer-send" aria-label="Send message" title="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
           </div>
           {send.error && <div className="composer-send-error" role="alert"><span>Could not send: {send.error.message}</span><button type="button" className="button secondary compact" onMouseDown={(event) => event.preventDefault()} onClick={retrySend} disabled={send.isPending}>Retry</button></div>}

@@ -2,6 +2,9 @@ import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query';
 import { ArrowUpRight, LoaderCircle, Paperclip, Plus, Search, Sparkles, X } from 'lucide-react';
 import { type FormEvent, useRef, useState } from 'react';
 import type { AgentRun, BrokerSourceId, WorkItem } from '../../../shared/contracts';
+import { defaultAccountProfileForTask } from '../../../shared/contracts';
+import { AiProviderSelect } from '../ai-provider-select';
+import { useAiProvider } from '../../hooks/ai-provider';
 import { api } from '../../data/api';
 import { MarkdownComposer } from '../markdown/markdown-composer.js';
 import { ModalDialog } from './modal-dialog';
@@ -33,6 +36,11 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
   const [description, setDescription] = useState('');
   const [projectName, setProjectName] = useState(defaultProjectName);
   const [classificationKind, setClassificationKind] = useState<AgentRun['kind']>('execute');
+  const { provider: aiProvider, setProvider: setAiProvider } = useAiProvider();
+  // The draft turn runs under the account profile the new task will use, which
+  // is decided by its project — so a Workbench task and a Writer task can get
+  // different answers about whether Palmyra is reachable.
+  const draftAccountProfile = defaultAccountProfileForTask({ projectName: (defaultProjectName || projectName) || null, workspacePath: null });
   const [files, setFiles] = useState<File[]>([]);
   const [backgroundError, setBackgroundError] = useState(initialState?.error ?? '');
   const fileRef = useRef<HTMLInputElement>(null);
@@ -92,10 +100,12 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
     const prompt = aiPrompt;
     const pendingFiles = files;
     const currentClassificationKind = classificationKind;
+    const currentProvider = aiProvider;
+    const currentAccountProfile = draftAccountProfile;
     onClose();
     const toastId = toast.info('Writing your task…', { duration: 0 });
     try {
-      const { draft } = await api.generateTaskDraft(prompt);
+      const { draft } = await api.generateTaskDraft(prompt, currentProvider, currentAccountProfile);
       const attachments = await buildAttachments(pendingFiles);
       const { item } = await api.createWorkItem({
         title: draft.title,
@@ -215,6 +225,7 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
           <form onSubmit={(event) => { event.preventDefault(); void submitAiDraft(); }} className="ai-task-form">
             <label>Describe the task<MarkdownComposer conversationId="create-task-prompt" value={aiPrompt} onChange={(value) => { setAiPrompt(value); setBackgroundError(''); }} placeholder="Paste rough notes, links, constraints, or the outcome you want…" ariaLabel="Describe the task" autoFocus /></label>
             <p className="ai-draft-help">AI will turn this into one self-contained, executable task and add it to the stack.</p>
+            <label className="ai-provider-field">Model<AiProviderSelect value={aiProvider} onChange={setAiProvider} accountProfile={draftAccountProfile} ariaLabel="AI provider for the task draft" /></label>
             {attachmentField}
             {backgroundError && <p className="error-message">{backgroundError}</p>}
             <div className="dialog-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button className="button primary" disabled={aiPrompt.trim().length < 3}><Sparkles size={16} /> Create task</button></div>

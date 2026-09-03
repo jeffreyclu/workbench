@@ -9,6 +9,8 @@ import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMess
 import { beginRuntimeRetirement } from '../runtime-retirement.js';
 import { activeAgentProcessCount } from '../agent-runner.js';
 import { sendMacDesktopNotification } from '../desktop-notifications.js';
+import { aiProviderAvailability } from '../providers/provider-choice.js';
+import { parseAiProviderChoice } from '../../shared/ai-providers.js';
 
 export function createHealthRouter({ repository, capabilities, buildId }: RouteContext) {
   const router = Router();
@@ -20,6 +22,14 @@ export function createHealthRouter({ repository, capabilities, buildId }: RouteC
 
 export function createSystemRouter({ repository }: RouteContext) {
   const router = Router();
+  /** Backs every provider selector in the UI. Availability is decided here, on
+   * the machine that holds the key, so no surface has to guess whether its
+   * account profile can reach Palmyra. */
+  router.get('/api/ai/providers', (request, response) => {
+    const accountProfile = typeof request.query.accountProfile === 'string' ? request.query.accountProfile.trim() : '';
+    const choice = parseAiProviderChoice(request.query.provider);
+    response.json(aiProviderAvailability(choice, accountProfile || undefined));
+  });
   router.post('/api/desktop-notifications', (request, response, next) => {
     try {
       const input = z.object({

@@ -1,3 +1,4 @@
+import type { AiProviderChoice } from '../../shared/ai-providers';
 import type { Activity, AgentRun, BulkWorkItemAction, BulkWorkItemResult, ExecutionPlan, GeneratedTaskDraft, LinearProviderConfig, LinearSyncResult, LinearTeam, ProviderSyncConflictResolution, ProviderSyncField, SavedWorkItemFilter, SavedWorkItemFilterView, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemFilter, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../shared/contracts';
 import { request } from './request';
 
@@ -25,7 +26,7 @@ export const taskClient = {
   removeTaskLink: (id: string, linkedWorkItemId: string) => request<void>(`/api/work-items/${id}/linked-tasks/${linkedWorkItemId}`, { method: 'DELETE' }),
   addWorkItemReference: (id: string, input: { type: WorkItemReferenceType; url: string; title?: string }) => request<{ reference: WorkItemReference }>(`/api/work-items/${id}/references`, { method: 'POST', body: JSON.stringify(input) }),
   removeWorkItemReference: (id: string, referenceId: string) => request<void>(`/api/work-items/${id}/references/${referenceId}`, { method: 'DELETE' }),
-  generateTaskDraft: (prompt: string) => request<{ draft: GeneratedTaskDraft }>('/api/work-items/generate-draft', { method: 'POST', body: JSON.stringify({ prompt }) }),
+  generateTaskDraft: (prompt: string, provider?: AiProviderChoice, accountProfile?: string) => request<{ draft: GeneratedTaskDraft }>('/api/work-items/generate-draft', { method: 'POST', body: JSON.stringify({ prompt, provider, accountProfile }) }),
   updateWorkItem: (id: string, input: UpdateWorkItemInput) => request<{ item: WorkItem }>(`/api/work-items/${id}`, { method: 'PATCH', body: JSON.stringify(input) }),
   resolveProviderConflict: (id: string, field: ProviderSyncField, resolution: ProviderSyncConflictResolution) => request<{ item: WorkItem; providerConflicts: WorkItemDetail['providerConflicts'] }>(`/api/work-items/${id}/provider-conflicts/${field}/resolve`, { method: 'POST', body: JSON.stringify({ resolution }) }),
   unblockWorkItem: (id: string, reason: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/unblock`, { method: 'POST', body: JSON.stringify({ reason }) }),

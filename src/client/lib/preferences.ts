@@ -1,4 +1,5 @@
 import type { AgentRun } from '../../shared/contracts';
+import { AI_PROVIDER_STORAGE_KEY, parseAiProviderChoice, type AiProviderChoice } from '../../shared/ai-providers';
 
 /**
  * Per-conversation and per-task choices Jeffrey makes in the UI live in
@@ -57,6 +58,25 @@ export function clearLastOpenedItem(surface: LastOpenedSurface): void {
     // Storage can be disabled in a private browser context.
   }
 }
+/** One browser-local default shared by every provider selector outside a
+ * conversation, so choosing Palmyra in the review pane is the same choice the
+ * create-task dialog makes. */
+export function readAiProvider(): AiProviderChoice {
+  try {
+    return parseAiProviderChoice(window.localStorage.getItem(AI_PROVIDER_STORAGE_KEY));
+  } catch {
+    return 'auto';
+  }
+}
+
+export function writeAiProvider(choice: AiProviderChoice): void {
+  try {
+    window.localStorage.setItem(AI_PROVIDER_STORAGE_KEY, choice);
+  } catch {
+    // The choice still applies to this session even if it cannot be remembered.
+  }
+}
+
 export function readDesktopNotificationsEnabled(): boolean {
   try {
     return window.localStorage.getItem(desktopNotificationsEnabledStorageKey) !== 'false';

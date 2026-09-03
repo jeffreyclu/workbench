@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+import type { AiProviderChoice, ResolvedAiProvider } from '../shared/ai-providers.js';
+import { completeWithPalmyra } from './providers/palmyra.js';
+import { resolveAiProvider } from './providers/provider-choice.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
 import { changeTypeLabel, isReviewChangeType, type ReviewChangeType } from '../shared/change-type.js';
@@ -188,7 +191,7 @@ const CONFIDENCE_DIRECTIVE = [
  * an edited task description threw away a score that did not depend on it, and
  * a background-computed score missed the moment the reviewer's window derived
  * intent even slightly differently. */
-function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null = null): string {
+function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null = null, provider: ResolvedAiProvider = 'claude'): string {
   // Review state is deliberately excluded from both the key and the prompt.
   // Whether a human has already ticked "Reviewed" does not change what the code
   // does, and folding it in threw the answer away the instant a reviewer
@@ -218,9 +221,13 @@ function hashRequest(action: ReviewAssistAction, decision: ReviewAssistDecision,
   // omits an undefined value: a request without a tier hashes to exactly the
   // string it hashed to before tiering existed, so no cached Changes answer is
   // invalidated by this key gaining a field.
+  // `provider` is keyed for the same reason and omitted for Claude by the same
+  // trick: two models are two answers, but every answer cached before the
+  // provider selector existed is still a hit.
+  const keyedProvider = provider === 'claude' ? undefined : provider;
   const keyed = action === 'compare_task_intent'
-    ? { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, taskIntent, tier: tier ?? undefined }
-    : { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, tier: tier ?? undefined };
+    ? { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, taskIntent, tier: tier ?? undefined, provider: keyedProvider }
+    : { version: ASSIST_PROMPT_VERSION, action, decision: keyedDecision, tier: tier ?? undefined, provider: keyedProvider };
   return createHash('sha256').update(JSON.stringify(keyed)).digest('hex');
 }
 
@@ -238,8 +245,8 @@ function writeCached(database: WorkbenchDatabase, hash: string, answer: string):
  * they (or another window) already paid for the instant they open a hunk,
  * without turning this surface back into ambient AI spend for hunks nobody
  * has asked about yet. */
-export function lookupReviewAssist(database: WorkbenchDatabase, action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null = null): string | null {
-  return readCached(database, hashRequest(action, decision, taskIntent, tier)) ?? null;
+export function lookupReviewAssist(database: WorkbenchDatabase, action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null = null, provider: AiProviderChoice | null = null, accountProfile?: string): string | null {
+  return readCached(database, hashRequest(action, decision, taskIntent, tier, resolveAiProvider(provider, accountProfile))) ?? null;
 }
 
 function buildPrompt(action: ReviewAssistAction, decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null = null): string {
@@ -463,7 +470,30 @@ function dispatchTurn(worker: AssistWorker, prompt: string, timeoutMs: number, o
   });
 }
 
-async function runTurn(prompt: string, spend: AssistSpend, onDelta?: (text: string) => void): Promise<string> {
+/** An answer plus which model actually produced it, so a Palmyra request that
+ * fell back to Claude is never written under the Palmyra cache key. */
+type AssistAnswer = { answer: string; provider: ResolvedAiProvider };
+
+/** Palmyra answers the same prompt in one HTTP round trip. It does not stream,
+ * so `onDelta` stays silent and the reviewer gets the whole answer at once —
+ * the streaming route still delivers it in its `done` frame. */
+async function runPalmyraTurn(prompt: string, spend: AssistSpend, onDelta?: (text: string) => void): Promise<AssistAnswer> {
+  try {
+    const answer = (await completeWithPalmyra({
+      messages: [{ role: 'system', content: CHANGES_AGENT_SYSTEM_PROMPT }, { role: 'user', content: prompt }],
+      maxTokens: 2_048,
+      timeoutMs: spend.timeoutMs,
+    })).trim();
+    if (!answer) throw new Error('Palmyra returned no answer.');
+    onDelta?.(answer);
+    return { answer, provider: 'palmyra' };
+  } catch (error) {
+    console.warn(`[palmyra] review assist fell back to Claude: ${error instanceof Error ? error.message : String(error)}`);
+    return { answer: await runClaudeTurn(prompt, spend, onDelta), provider: 'claude' };
+  }
+}
+
+async function runClaudeTurn(prompt: string, spend: AssistSpend, onDelta?: (text: string) => void): Promise<string> {
   if (spend !== DEFAULT_SPEND) {
     // The pool is haiku. Handing a deep tier a pooled session would return a
     // skim under the expensive tier's cache key, which is worse than not
@@ -555,8 +585,11 @@ export async function requestReviewAssist(
   taskIntent: ReviewAssistTaskIntent,
   onDelta?: (text: string) => void,
   tier: ReviewAssistTier | null = null,
+  provider: AiProviderChoice | null = null,
+  accountProfile?: string,
 ): Promise<string> {
-  const hash = hashRequest(action, decision, taskIntent, tier);
+  const resolvedProvider = resolveAiProvider(provider, accountProfile);
+  const hash = hashRequest(action, decision, taskIntent, tier, resolvedProvider);
   const cached = readCached(database, hash);
   if (cached) return cached;
   // Task and conversation scopes intentionally score the same diff at the
@@ -565,9 +598,15 @@ export async function requestReviewAssist(
   const existing = inFlightRequests.get(hash);
   if (existing) return existing;
   const request = (async () => {
-    const raw = await runTurn(buildPrompt(action, decision, taskIntent, tier), spendFor(tier), onDelta);
-    const answer = withAnswerAudits(action, decision, raw);
-    writeCached(database, hash, answer);
+    const prompt = buildPrompt(action, decision, taskIntent, tier);
+    const spend = spendFor(tier);
+    const turn = resolvedProvider === 'palmyra'
+      ? await runPalmyraTurn(prompt, spend, onDelta)
+      : { answer: await runClaudeTurn(prompt, spend, onDelta), provider: 'claude' as const };
+    const answer = withAnswerAudits(action, decision, turn.answer);
+    // A fallback answer came from the other model; caching it under this key
+    // would serve it back the next time this provider is asked.
+    if (turn.provider === resolvedProvider) writeCached(database, hash, answer);
     return answer;
   })();
   inFlightRequests.set(hash, request);

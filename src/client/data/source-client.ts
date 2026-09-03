@@ -1,3 +1,4 @@
+import type { AiProviderChoice } from '../../shared/ai-providers';
 import type { StaleReferenceReport } from '../../shared/stale-reference-contract.js';
 import type { BrokerConnection, BrokerSearchResponse, BrokerSourceId, ResolvedSourceDraft } from '../../shared/contracts';
 import type { ReviewAssistTier } from '../../shared/contracts';
@@ -54,13 +55,14 @@ export const sourceClient = {
   getGitHubPullRequestCommits: (url: string) => request<{ commits: ReviewCommit[] }>(`/api/github/pull-request-commits?url=${encodeURIComponent(url)}`),
   getGitHubPullRequestCommitDiff: (url: string, sha: string) => request<{ commit: ReviewCommit; files: GitHubPullRequestFile[] }>(`/api/github/pull-request-commit-diff?url=${encodeURIComponent(url)}&sha=${encodeURIComponent(sha)}`),
   getGitHubPullRequestFile: (url: string, path: string, revision: string) => request<{ file: WorkspaceFileSource }>(`/api/github/pull-request-file?url=${encodeURIComponent(url)}&path=${encodeURIComponent(path)}&revision=${encodeURIComponent(revision)}`),
-  assessDiffBlocks: (blocks: Array<{ key: string; lines: string[] }>) => request<{ assessments: Record<string, { risk: number | null; reasoning: string }> }>('/api/diff-confidence', { method: 'POST', body: JSON.stringify({ blocks }) }),
-  lookupDiffConfidenceBlocks: (blocks: Array<{ key: string; lines: string[] }>) => request<{ assessments: Record<string, { risk: number | null; reasoning: string }> }>('/api/diff-confidence/lookup', { method: 'POST', body: JSON.stringify({ blocks }) }),
+  assessDiffBlocks: (blocks: Array<{ key: string; lines: string[] }>, provider?: AiProviderChoice) => request<{ assessments: Record<string, { risk: number | null; reasoning: string }> }>('/api/diff-confidence', { method: 'POST', body: JSON.stringify({ blocks, provider }) }),
+  lookupDiffConfidenceBlocks: (blocks: Array<{ key: string; lines: string[] }>, provider?: AiProviderChoice) => request<{ assessments: Record<string, { risk: number | null; reasoning: string }> }>('/api/diff-confidence/lookup', { method: 'POST', body: JSON.stringify({ blocks, provider }) }),
   requestReviewAssist: (input: {
     action: ReviewAssistActionName;
     decision: { behavior: string; state: string; hunks: Array<{ filePath: string; location: string; lines: string[] }> };
     taskIntent: { title: string; description: string } | null;
     tier?: ReviewAssistTier | null;
+    provider?: AiProviderChoice;
   }) => request<{ answer: string }>('/api/review-assist', { method: 'POST', body: JSON.stringify(input) }),
   // Streams the answer as the model writes it. The reviewer sees the first
   // words about a second after clicking instead of waiting for the whole turn;
@@ -72,6 +74,7 @@ export const sourceClient = {
     /** Only the review stack sends this. Omitted, the request body is
      * byte-identical to what it was before tiering existed. */
     tier?: ReviewAssistTier | null;
+    provider?: AiProviderChoice;
   }, onDelta: (text: string) => void): Promise<string> => {
     const response = await fetch('/api/review-assist/stream', {
       method: 'POST',
@@ -118,6 +121,7 @@ export const sourceClient = {
     decision: { behavior: string; state: string; hunks: Array<{ filePath: string; location: string; lines: string[] }> };
     taskIntent: { title: string; description: string } | null;
     tier?: ReviewAssistTier | null;
+    provider?: AiProviderChoice;
   }) => request<{ answer: string | null }>('/api/review-assist/lookup', { method: 'POST', body: JSON.stringify(input) }),
   /** Replays a background scoring pass a pane may have opened in the middle
    * of. Live results arrive over the realtime socket; this only backfills what

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { REVIEW_CHANGE_TYPES } from './change-type.js';
 import { projectKey } from './project-name.js';
+import { aiProviderChoiceSchema, type AiProviderChoice } from './ai-providers.js';
 
 export const workItemStatusSchema = z.enum([
   'backlog',
@@ -139,6 +140,15 @@ export type AgentAssignee = Exclude<Assignee, 'jeffrey'>;
 
 export const DEFAULT_ACCOUNT_PROFILE = 'default';
 export const PERSONAL_ACCOUNT_PROFILE = 'personal';
+
+/** Every AI request carries the surface's provider selection and the account
+ * profile it runs under. Both are optional so a browser tab left open across a
+ * runtime upgrade still posts the old body shape and gets the previous
+ * behavior — `auto` on the work profile. */
+export const aiProviderRequestFields = {
+  provider: aiProviderChoiceSchema.nullish(),
+  accountProfile: z.string().trim().min(1).max(120).nullish(),
+};
 
 /**
  * Workbench and Pluto are Jeffrey's personal projects. Every other project
@@ -294,7 +304,7 @@ export const createWorkItemSchema = z.object({
   })).max(10).default([]),
 });
 
-export const generateTaskDraftSchema = z.object({ prompt: z.string().trim().min(3).max(50_000) });
+export const generateTaskDraftSchema = z.object({ prompt: z.string().trim().min(3).max(50_000), ...aiProviderRequestFields });
 export interface GeneratedTaskDraft { title: string; description: string; projectName: string | null; workspacePath: string | null; }
 
 export const resolveSourceUrlSchema = z.object({ url: z.string().url().max(4_000) });
@@ -307,6 +317,7 @@ export const diffConfidenceRequestSchema = z.object({
     key: z.string().min(1).max(2_000),
     lines: z.array(z.string().max(4_000)).min(1).max(200),
   })).min(1).max(120),
+  ...aiProviderRequestFields,
 });
 
 /** A reviewer-initiated question about one review-queue decision. Each action
@@ -368,6 +379,7 @@ export const REVIEW_ASSIST_CONFIDENCE_PREFIX = 'CONFIDENCE:';
 export const REVIEW_ASSIST_MISSING_PREFIX = 'MISSING:';
 
 export const reviewAssistRequestSchema = z.object({
+  ...aiProviderRequestFields,
   action: z.enum(['explain', 'what_could_break', 'compare_task_intent', 'score_risk']),
   decision: z.object({
     behavior: z.string().min(1).max(2_000),
@@ -1325,7 +1337,7 @@ export const updateArtifactSchema = z.object({
 
 export const artifactLibraryViewSchema = z.enum(['published', 'revoked', 'all', 'favorites']).catch('published');
 export const setArtifactFavoritedSchema = z.object({ favorited: z.boolean() });
-export interface SharedConversation { id: string; title: string; workItemId: string | null; pinned?: boolean; linkedProjectName?: string | null; forkedFromConversationId: string | null; archivedAt: string | null; sharedBrief?: string; preferredExecutionProfile?: AgentRun['executionProfile']; draftBody?: string; preferredAccountProfile?: string | null; preferredDispatchTarget?: 'both' | 'codex' | 'claude' | null; claudeSessionId?: string | null; codexThreadId?: string | null; state?: 'working' | 'needs_attention' | 'canceled' | 'waiting_approval' | 'promoting' | 'waiting_promotion' | 'finished' | null; isUnread?: boolean; linkedWorkItemPinned?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
+export interface SharedConversation { id: string; title: string; workItemId: string | null; pinned?: boolean; linkedProjectName?: string | null; forkedFromConversationId: string | null; archivedAt: string | null; sharedBrief?: string; preferredExecutionProfile?: AgentRun['executionProfile']; draftBody?: string; preferredAccountProfile?: string | null; preferredDispatchTarget?: 'both' | 'codex' | 'claude' | null; preferredAiProvider?: AiProviderChoice | null; claudeSessionId?: string | null; codexThreadId?: string | null; state?: 'working' | 'needs_attention' | 'canceled' | 'waiting_approval' | 'promoting' | 'waiting_promotion' | 'finished' | null; isUnread?: boolean; linkedWorkItemPinned?: boolean; createdAt: string; updatedAt: string; isActive?: boolean; }
 
 export const setConversationTaskSchema = z.object({ workItemId: z.string().uuid().nullable() });
 export const setConversationPinnedSchema = z.object({ pinned: z.boolean() });

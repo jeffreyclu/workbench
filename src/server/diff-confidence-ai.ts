@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
 import { publishRealtimeDiffConfidence } from './realtime.js';
+import type { AiProviderChoice, ResolvedAiProvider } from '../shared/ai-providers.js';
+import { completeWithPalmyra } from './providers/palmyra.js';
+import { resolveAiProvider } from './providers/provider-choice.js';
 
 export type DiffConfidenceBlock = { key: string; lines: string[] };
 export type DiffConfidenceAssessment = { risk: number | null; reasoning: string };
@@ -17,8 +20,13 @@ const SYSTEM_PROMPT = `Return only minified JSON: [{"key":"...","risk":0,"reason
  * written its result to the database. */
 const inFlight = new Map<string, Promise<DiffConfidenceAssessment>>();
 
-function hashBlock(block: DiffConfidenceBlock): string {
-  return createHash('sha256').update(JSON.stringify(block.lines)).digest('hex');
+/** The provider is part of the key because two models are two answers: a
+ * reviewer who switches the selector must see that model's score, not the one
+ * the other model already cached. Claude keys omit it, so every score written
+ * before the selector existed is still a hit. */
+function hashBlock(block: DiffConfidenceBlock, provider: ResolvedAiProvider = 'claude'): string {
+  const keyed = provider === 'claude' ? block.lines : { lines: block.lines, provider };
+  return createHash('sha256').update(JSON.stringify(keyed)).digest('hex');
 }
 
 function readCached(database: WorkbenchDatabase, hash: string): DiffConfidenceAssessment | undefined {
@@ -36,10 +44,11 @@ function writeCached(database: WorkbenchDatabase, hash: string, assessment: Diff
  * scored this exact block (in this window, another window, or before a
  * restart) see the score immediately on opening the hunk, without spending a
  * new AI turn on blocks nobody has asked to score. */
-export function lookupDiffConfidenceBlocks(database: WorkbenchDatabase, blocks: DiffConfidenceBlock[]): Record<string, DiffConfidenceAssessment> {
+export function lookupDiffConfidenceBlocks(database: WorkbenchDatabase, blocks: DiffConfidenceBlock[], provider: AiProviderChoice | null = null, accountProfile?: string): Record<string, DiffConfidenceAssessment> {
+  const resolved = resolveAiProvider(provider, accountProfile);
   const result: Record<string, DiffConfidenceAssessment> = {};
   for (const block of blocks) {
-    const cached = readCached(database, hashBlock(block)) ?? trivialAssessment(block);
+    const cached = readCached(database, hashBlock(block, resolved)) ?? trivialAssessment(block);
     if (cached) result[block.key] = cached;
   }
   return result;
@@ -287,6 +296,33 @@ function runAssessment(blocks: DiffConfidenceBlock[]): Promise<Record<string, Di
   });
 }
 
+/** A batch's scores plus whether they may be written under the key they were
+ * requested with. */
+type BatchAssessment = { assessments: Record<string, DiffConfidenceAssessment>; cacheable: boolean };
+
+/** One HTTP round trip against the same system prompt the resident scorer
+ * uses, so a switched selector scores the identical question. A failed Palmyra
+ * turn falls back to the Claude pool: an unscored block is worse for the
+ * reviewer than a score from the other model. */
+async function assessWithPalmyra(blocks: DiffConfidenceBlock[]): Promise<BatchAssessment> {
+  try {
+    const content = await completeWithPalmyra({
+      messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: `Blocks:\n${JSON.stringify(blocks)}` }],
+      maxTokens: 700,
+      timeoutMs: 20_000,
+    });
+    const assessments = parseDiffConfidenceAssessment(content, blocks.map((block) => block.key));
+    publishRealtimeDiffConfidence(assessments);
+    return { assessments, cacheable: true };
+  } catch (error) {
+    console.warn(`[palmyra] diff confidence fell back to the Claude scorer: ${error instanceof Error ? error.message : String(error)}`);
+    // Deliberately not cacheable: this answer came from Claude, and storing it
+    // under the Palmyra key would replay another model's score the next time
+    // Palmyra is asked the same question.
+    return { assessments: await runAssessment(blocks), cacheable: false };
+  }
+}
+
 function trivialAssessment(block: DiffConfidenceBlock): DiffConfidenceAssessment | null {
   const changed = block.lines.filter((line) => line.startsWith('+') || line.startsWith('-'))
     .map((line) => line.slice(1).trim());
@@ -306,8 +342,9 @@ function unavailableAssessment(): DiffConfidenceAssessment {
  * to the database individually so future requests — from any conversation
  * window, or after a restart — can reuse it regardless of what else is
  * batched alongside it. */
-export function assessDiffBlocks(database: WorkbenchDatabase, blocks: DiffConfidenceBlock[]): Promise<Record<string, DiffConfidenceAssessment>> {
-  const hashes = new Map(blocks.map((block) => [block.key, hashBlock(block)] as const));
+export function assessDiffBlocks(database: WorkbenchDatabase, blocks: DiffConfidenceBlock[], provider: AiProviderChoice | null = null, accountProfile?: string): Promise<Record<string, DiffConfidenceAssessment>> {
+  const resolved = resolveAiProvider(provider, accountProfile);
+  const hashes = new Map(blocks.map((block) => [block.key, hashBlock(block, resolved)] as const));
   const entries = new Map<string, Promise<DiffConfidenceAssessment>>();
   const uncached: DiffConfidenceBlock[] = [];
   for (const block of blocks) {
@@ -322,12 +359,14 @@ export function assessDiffBlocks(database: WorkbenchDatabase, blocks: DiffConfid
   if (uncached.length > 0) {
     for (let index = 0; index < uncached.length; index += 3) {
       const chunk = uncached.slice(index, index + 3);
-      const batch = runAssessment(chunk);
+      const batch: Promise<BatchAssessment> = resolved === 'palmyra'
+        ? assessWithPalmyra(chunk)
+        : runAssessment(chunk).then((assessments) => ({ assessments, cacheable: true }));
       for (const block of chunk) {
         const hash = hashes.get(block.key)!;
         const single = batch.then((result) => {
-          const assessment = result[block.key];
-          writeCached(database, hash, assessment);
+          const assessment = result.assessments[block.key];
+          if (result.cacheable) writeCached(database, hash, assessment);
           return assessment;
         });
         inFlight.set(hash, single);

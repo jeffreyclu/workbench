@@ -1,4 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import type { AiProviderChoice } from '../shared/ai-providers.js';
+import { completeWithPalmyra } from './providers/palmyra.js';
+import { resolveAiProvider } from './providers/provider-choice.js';
 
 const IDLE_SHUTDOWN_MS = 5 * 60_000;
 const CLASSIFIER_TIMEOUT_MS = 8_000;
@@ -103,8 +106,7 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
   return classifier;
 }
 
-/** One tiny, tool-free model call shared by every agent answering the same user turn. */
-export function groundTurnWithHaiku(prompt: string, timeoutMs = CLASSIFIER_TIMEOUT_MS): Promise<string> {
+function groundWithClaude(prompt: string, timeoutMs: number): Promise<string> {
   ensureWorker();
   return new Promise((resolve, reject) => {
     const pending: Pending = { prompt, resolve, reject, timer: null, timeoutMs };
@@ -113,9 +115,27 @@ export function groundTurnWithHaiku(prompt: string, timeoutMs = CLASSIFIER_TIMEO
   });
 }
 
+/** One tiny, tool-free model call shared by every agent answering the same user
+ * turn. The conversation's provider selector decides who answers it; Palmyra is
+ * one HTTP round trip against the same system prompt, and a failed Palmyra turn
+ * falls back to the resident Haiku classifier rather than losing the grounding,
+ * because the caller's only alternative is an ungrounded turn. */
+export function groundTurn(prompt: string, timeoutMs = CLASSIFIER_TIMEOUT_MS, provider: AiProviderChoice | null = null, accountProfile?: string): Promise<string> {
+  if (resolveAiProvider(provider, accountProfile) !== 'palmyra') return groundWithClaude(prompt, timeoutMs);
+  return completeWithPalmyra({
+    messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: prompt }],
+    maxTokens: 800,
+    timeoutMs,
+  }).catch((error: unknown) => {
+    console.warn(`[palmyra] turn grounding fell back to the Claude classifier: ${error instanceof Error ? error.message : String(error)}`);
+    return groundWithClaude(prompt, timeoutMs);
+  });
+}
+
 /** Pay the one-time CLI/model handshake during server startup, off the request path. */
 export function warmTurnGroundingClassifier(): void {
-  void groundTurnWithHaiku('Warm-up only. Return {"objective":"ready","acceptanceCriteria":[],"exclusions":[],"continuation":false}.', WARMUP_TIMEOUT_MS).catch(() => {
+  if (resolveAiProvider('auto') === 'palmyra') return;
+  void groundTurn('Warm-up only. Return {"objective":"ready","acceptanceCriteria":[],"exclusions":[],"continuation":false}.', WARMUP_TIMEOUT_MS).catch(() => {
     // Best effort. A real turn retains its human-only fallback.
   });
 }

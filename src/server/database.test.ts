@@ -86,6 +86,8 @@ const EXPECTED_MIGRATIONS = [
   '071_diff_hunk_review_hash_backfill',
   '072_workspace_diff_snapshot_repository',
   '073_workspace_diff_snapshot_repository_uniqueness',
+  '074_artifact_favorites',
+  '075_shared_conversation_ai_provider',
 ];
 
 describe('openDatabase', () => {
@@ -331,6 +333,23 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toEqual(expect.arrayContaining(['preferred_execution_profile', 'preferred_account_profile', 'preferred_dispatch_target']));
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '044_shared_conversation_composer_preferences'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds the conversation AI provider preference when upgrading from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    // A database that has already recorded through 074 skips any change made
+    // only to the base schema, so the column has to arrive by migration.
+    current.exec('ALTER TABLE shared_conversations DROP COLUMN preferred_ai_provider;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '075_shared_conversation_ai_provider'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['preferred_ai_provider', 'preferred_account_profile', 'preferred_dispatch_target']));
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '075_shared_conversation_ai_provider'").get()).toBeTruthy();
     upgraded.close();
   });
 

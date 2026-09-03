@@ -5,6 +5,8 @@ import type { ReviewDecision } from './logic.js';
 import { reviewAssistDecisionPayload } from './logic.js';
 import type { AutoScoreResult } from './auto-score.js';
 import type { ReviewAssistTier } from '../../../shared/contracts.js';
+import type { AiProviderChoice } from '../../../shared/ai-providers.js';
+import { useAiProvider } from '../../hooks/ai-provider.js';
 
 export type ReviewAssistAction = ReviewAssistActionName;
 export type ReviewAssistTaskIntent = { title: string; description: string } | null;
@@ -28,10 +30,11 @@ export const EXPLAIN_ACTIONS = ASSIST_ACTIONS.filter((action) => action !== 'sco
 
 export type CachedAssistAnswers = Partial<Record<ReviewAssistAction, string>>;
 
-function cacheKey(decisionId: string, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null) {
-  // Tier is part of the key for the same reason it is part of the server's
-  // cache hash: a T1 skim and a T3 study are different answers.
-  return ['review-assist-cache', decisionId, taskIntent?.title, taskIntent?.description, tier];
+function cacheKey(decisionId: string, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null, provider: AiProviderChoice) {
+  // Tier and provider are part of the key for the same reason they are part of
+  // the server's cache hash: a T1 skim and a T3 study are different answers,
+  // and so are two models.
+  return ['review-assist-cache', decisionId, taskIntent?.title, taskIntent?.description, tier, provider];
 }
 
 /** Cache-only reads: a reviewer (or another window) who already asked this
@@ -42,8 +45,9 @@ export function useCachedReviewAssistAnswers(decision: ReviewDecision | null, ta
   // cache key. Reading with a different sibling set than the background scorer
   // wrote with would miss every cached answer, so both pass the whole review.
   const decisionPayload = decision ? reviewAssistDecisionPayload(decision, siblings) : null;
+  const { provider } = useAiProvider();
   return useQuery({
-    queryKey: cacheKey(decision?.id ?? '', taskIntent, tier),
+    queryKey: cacheKey(decision?.id ?? '', taskIntent, tier, provider),
     enabled: Boolean(decisionPayload),
     // A cache lookup is cheap and is automatically repeated when the decision
     // or diff changes. Retrying a deterministic 4xx four times only hammers the
@@ -51,7 +55,7 @@ export function useCachedReviewAssistAnswers(decision: ReviewDecision | null, ta
     retry: false,
     queryFn: async () => {
       if (!decisionPayload) return {} as CachedAssistAnswers;
-      const results = await Promise.all(ASSIST_ACTIONS.map((action) => sourceClient.lookupReviewAssist({ action, decision: decisionPayload, taskIntent, tier }).then((response) => [action, response.answer] as const)));
+      const results = await Promise.all(ASSIST_ACTIONS.map((action) => sourceClient.lookupReviewAssist({ action, decision: decisionPayload, taskIntent, tier, provider }).then((response) => [action, response.answer] as const)));
       return Object.fromEntries(results.filter(([, answer]) => answer !== null)) as CachedAssistAnswers;
     },
   });
@@ -68,6 +72,7 @@ export function useCachedReviewAssistAnswers(decision: ReviewDecision | null, ta
  */
 export function useReviewAssistPrefetch(decision: ReviewDecision | null, taskIntent: ReviewAssistTaskIntent, autoScore: AutoScoreResult | undefined, siblings: ReviewDecision[] = []): void {
   const queryClient = useQueryClient();
+  const { provider } = useAiProvider();
   // Subscribing to the cache read rather than peeking at it: the popover that
   // used to own this query is closed most of the time, so nothing else would
   // populate the cache and every dwell would re-ask a question the server has
@@ -99,7 +104,7 @@ export function useReviewAssistPrefetch(decision: ReviewDecision | null, taskInt
       // shortest answer and the number a reviewer scans for.
       void wanted.reduce((chain, action) => chain.then(async () => {
         if (cancelled) return;
-        await sourceClient.streamReviewAssist({ action, decision: payload, taskIntent: intent }, () => {});
+        await sourceClient.streamReviewAssist({ action, decision: payload, taskIntent: intent, provider }, () => {});
         if (!cancelled) await queryClient.invalidateQueries({ queryKey: ['review-assist-cache', decisionId] });
       }), Promise.resolve())
         // A failed prefetch stays silent: the reviewer never asked for it, and
@@ -107,5 +112,5 @@ export function useReviewAssistPrefetch(decision: ReviewDecision | null, taskInt
         .catch(() => {});
     }, PREFETCH_DWELL_MS);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [prefetchKey, decisionId, hasScore, hasExplanation, cached.isPending, queryClient]);
+  }, [prefetchKey, decisionId, hasScore, hasExplanation, cached.isPending, queryClient, provider]);
 }

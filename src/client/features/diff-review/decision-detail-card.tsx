@@ -7,6 +7,8 @@ import type { ReviewDecision, StaleReferenceReport } from './logic.js';
 import { aiRiskBand, parseAiRiskScore, reviewAssistDecisionPayload } from './logic.js';
 import type { AutoScoreResult } from './auto-score.js';
 import { ACTION_LABELS, EXPLAIN_ACTIONS, useCachedReviewAssistAnswers, type ReviewAssistAction, type ReviewAssistTaskIntent } from './review-assist.js';
+import { AiProviderSelect } from '../../components/ai-provider-select.js';
+import { useAiProvider } from '../../hooks/ai-provider.js';
 import type { ReviewAssistTier } from '../../../shared/contracts.js';
 
 export type { ReviewAssistAction, ReviewAssistTaskIntent };
@@ -50,10 +52,11 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
   // flight is readable as it arrives; the mutation still owns the final,
   // persisted answer and the error state.
   const [streamedAnswer, setStreamedAnswer] = useState('');
+  const { provider, setProvider } = useAiProvider();
   const assist = useMutation({
     mutationFn: (action: ReviewAssistAction) => {
       setStreamedAnswer('');
-      return sourceClient.streamReviewAssist({ action, decision: decisionPayload, taskIntent, tier }, (text) => setStreamedAnswer((previous) => previous + text));
+      return sourceClient.streamReviewAssist({ action, decision: decisionPayload, taskIntent, tier, provider }, (text) => setStreamedAnswer((previous) => previous + text));
     },
   });
 
@@ -125,7 +128,14 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
       </div>
     </section>
     <section className="diff-review-ai-assist" aria-labelledby="diff-review-ai-assist-title">
-      <h4 id="diff-review-ai-assist-title">AI assist</h4>
+      {/* One selector for the whole review surface: the score above and the
+        * answers below are the same AI spend, and splitting the choice in two
+        * would let a reviewer read a Palmyra score beside a Claude
+        * explanation. */}
+      <div className="diff-review-ai-assist-head">
+        <h4 id="diff-review-ai-assist-title">AI assist</h4>
+        <AiProviderSelect value={provider} onChange={setProvider} disabled={assist.isPending} ariaLabel="AI provider for review assist" />
+      </div>
       <div className="diff-review-ai-assist-actions">
         {EXPLAIN_ACTIONS.map((action) => {
           const hasCachedAnswer = Boolean(cachedAssistAnswers.data?.[action]);

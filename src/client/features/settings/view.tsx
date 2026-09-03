@@ -1,6 +1,8 @@
 import { Bell, BellOff, CircleHelp, X } from 'lucide-react';
 import { ModalDialog } from '../../components/dialogs/modal-dialog';
 import { useDesktopNotificationPreference } from '../../hooks/desktop-notifications';
+import { AiProviderSelect } from '../../components/ai-provider-select';
+import { useAiProvider } from '../../hooks/ai-provider';
 
 function DesktopNotificationSetting() {
   const { supported, enabled, permission, setEnabled } = useDesktopNotificationPreference();
@@ -22,6 +24,21 @@ function DesktopNotificationSetting() {
         >
           {enabled && !blocked ? <Bell size={13} /> : <BellOff size={13} />} {status}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/** The same choice the create-task dialog and the review pane make, in the one
+ * place Jeffrey can see it without opening a surface that spends a turn. A
+ * conversation overrides it from its own composer. */
+function AiProviderSetting() {
+  const { provider, setProvider } = useAiProvider();
+  return (
+    <div className="connection-card">
+      <div className="connection-summary">
+        <span><strong>AI provider</strong><small>Which model answers task drafts, diff risk scores, and review assist. Auto prefers Palmyra wherever it is reachable.</small></span>
+        <AiProviderSelect value={provider} onChange={setProvider} ariaLabel="Default AI provider" />
       </div>
     </div>
   );
@@ -54,6 +71,7 @@ export function SettingsDialog({ onClose, onOpenKeyboardShortcuts }: { onClose: 
       </div>
       <p className="dialog-description">Preferences for how Workbench behaves on this device.</p>
       <div className="connection-list">
+        <AiProviderSetting />
         <DesktopNotificationSetting />
         <div className="connection-card">
           <div className="connection-summary">

@@ -1,3 +1,4 @@
+import type { AiProviderChoice } from '../../shared/ai-providers';
 import type { AgentRun, AgentStreamEvent, ConversationPage, ExecutionPlan, RetrievedMemoryDetail, SessionFeedback, SessionFeedbackRating, SharedConversation, SharedMessage, SharedMessagePage, SharedSearchResponse } from '../../shared/contracts';
 import { request } from './request';
 
@@ -23,7 +24,7 @@ export const conversationClient = {
   createSharedConversation: (title = 'New conversation') => request<{ conversation: SharedConversation }>('/api/shared/conversations', { method: 'POST', body: JSON.stringify({ title }) }),
   archiveSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/archive`, { method: 'POST' }),
   restoreSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/restore`, { method: 'POST' }),
-  updateSharedConversationPreferences: (id: string, preferences: Partial<{ executionProfile: AgentRun['executionProfile']; accountProfile: string | null; dispatchTarget: 'both' | 'codex' | 'claude' | null }>) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/preferences`, { method: 'PATCH', body: JSON.stringify(preferences) }),
+  updateSharedConversationPreferences: (id: string, preferences: Partial<{ executionProfile: AgentRun['executionProfile']; accountProfile: string | null; dispatchTarget: 'both' | 'codex' | 'claude' | null; aiProvider: AiProviderChoice | null }>) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/preferences`, { method: 'PATCH', body: JSON.stringify(preferences) }),
   updateSharedConversationBrief: (id: string, brief: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/brief`, { method: 'PATCH', body: JSON.stringify({ brief }) }),
   updateSharedConversationDraft: (id: string, body: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/draft`, { method: 'PATCH', body: JSON.stringify({ body }) }),
   setSharedConversationTask: (id: string, workItemId: string | null) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/task`, { method: 'PATCH', body: JSON.stringify({ workItemId }) }),

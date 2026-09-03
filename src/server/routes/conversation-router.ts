@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { createSessionFeedbackSchema, createSharedConversationSchema, createSharedMessageSchema, setConversationPinnedSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema, upsertDiffBlockReviewSchema, upsertDiffHunkReviewsSchema } from '../../shared/contracts.js';
 import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
+import { aiProviderChoiceSchema } from '../../shared/ai-providers.js';
 import { resolveWorkingDirectory, runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, retrySharedSynthesis, runSharedBackgroundJob } from '../shared-room.js';
@@ -335,11 +336,13 @@ export function createConversationRouter({ repository, database, capabilities, a
       executionProfile: z.enum(['economy', 'standard', 'deep']).nullable().optional(),
       accountProfile: z.string().trim().min(1).max(120).nullable().optional(),
       dispatchTarget: z.enum(['both', 'codex', 'claude']).nullable().optional(),
+      aiProvider: aiProviderChoiceSchema.nullable().optional(),
     }).refine((value) => Object.values(value).some((entry) => entry !== undefined), 'Choose at least one preference.').parse(request.body);
     const conversation = repository.setConversationComposerPreferences(request.params.id, {
       ...(preferences.executionProfile === undefined ? {} : { preferredExecutionProfile: preferences.executionProfile }),
       ...(preferences.accountProfile === undefined ? {} : { preferredAccountProfile: preferences.accountProfile }),
       ...(preferences.dispatchTarget === undefined ? {} : { preferredDispatchTarget: preferences.dispatchTarget }),
+      ...(preferences.aiProvider === undefined ? {} : { preferredAiProvider: preferences.aiProvider }),
     });
     if (!conversation) return response.status(404).json({ error: 'Conversation not found.' });
     response.json({ conversation });

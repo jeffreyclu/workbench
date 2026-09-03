@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { sourceClient } from '../../data/source-client.js';
 import { reviewAssistDecisionPayload, type ReviewDecision } from '../../../shared/review-decisions.js';
 import type { ReviewAssistTaskIntent } from '../diff-review/review-assist.js';
+// Read at dispatch rather than through the hook: this sweep runs outside React
+// rendering, and each queued turn should use the choice in force when it runs.
+import { readAiProvider } from '../../lib/preferences.js';
 import { delegationOutcome, type DelegationTarget } from './review-delegation.js';
 
 /** Two at a time. The same warm worker pool serves the reviewer's own clicks,
@@ -173,6 +176,7 @@ export function useDelegatedReview(input: {
           decision: reviewAssistDecisionPayload(target.decision, latest.current.siblings, fileContext),
           taskIntent: latest.current.taskIntent,
           tier: target.tier,
+          provider: readAiProvider(),
         });
         // The answer is bought and server-side cached, but nothing here applied
         // it. Owing the change again costs a cache hit, not another turn.

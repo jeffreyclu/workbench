@@ -12,7 +12,7 @@ import { humanizeRunOutputBlocks } from '../shared/run-output.js';
 import { agentAccountEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
 import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
-import { groundTurnWithHaiku } from './turn-grounding-ai.js';
+import { groundTurn } from './turn-grounding-ai.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
@@ -946,7 +946,7 @@ function parseTurnGrounding(raw: string): TurnGrounding | null {
 /** Resolve once per human turn, then share the exact result with both agents. */
 export async function resolveTurnGrounding(
   thread: SharedMessage[],
-  classify: (prompt: string) => Promise<string> = groundTurnWithHaiku,
+  classify: (prompt: string) => Promise<string> = groundTurn,
   priorGrounding?: TurnGrounding | null,
 ): Promise<TurnGrounding> {
   const fallback = fallbackTurnGrounding(thread, priorGrounding);
@@ -1112,7 +1112,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   repository.setSharedTurnGrounding(queued.message.id, conversationId, JSON.stringify(fallbackGrounding));
   const resolvedGrounding = process.env.VITEST
     ? Promise.resolve(fallbackGrounding)
-    : resolveTurnGrounding(retrievalThread, groundTurnWithHaiku, priorGrounding).then((resolved) => {
+    : resolveTurnGrounding(retrievalThread, (prompt) => groundTurn(prompt, undefined, conversation?.preferredAiProvider ?? null, conversation?.preferredAccountProfile ?? undefined), priorGrounding).then((resolved) => {
       repository.setSharedTurnGrounding(queued.message.id, conversationId, JSON.stringify(resolved));
       return resolved;
     });

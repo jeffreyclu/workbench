@@ -1,7 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { GeneratedTaskDraft } from '../shared/contracts.js';
 import { fastTaskDraft } from '../shared/task-draft.js';
-import { completeWithPalmyra, isPalmyraConfigured } from './providers/palmyra.js';
+import { completeWithPalmyra } from './providers/palmyra.js';
+import { resolveAiProvider } from './providers/provider-choice.js';
+import type { AiProviderChoice } from '../shared/ai-providers.js';
 
 const SYSTEM_PROMPT = `You convert a rough work request into one agent-executable task. Return only minified JSON: {"title":"...","description":"..."}. The title must start with a concrete imperative verb that identifies the work type (for example Fix, Implement, Review, Research, Write, or Investigate). Keep it under 120 characters. The description must be concise and self-contained while preserving every supplied link, constraint, and expected outcome. Do not invent scope, requirements, files, or acceptance criteria.`;
 
@@ -102,12 +104,12 @@ async function draftWithPalmyra(prompt: string): Promise<GeneratedTaskDraft> {
   return parseTaskDraftResponse(content, prompt);
 }
 
-/** Palmyra is preferred when a Writer key is configured: one HTTP round trip
- * instead of a persistent agent-CLI subprocess for a turn that only has to
- * return two strings. The Claude worker stays as the fallback so an expired
- * key, a rate limit, or an unparseable reply still produces a draft. */
-export function generateFastAiTaskDraft(prompt: string): Promise<GeneratedTaskDraft> {
-  if (!isPalmyraConfigured()) return draftWithWorker(prompt);
+/** Palmyra is one HTTP round trip instead of a persistent agent-CLI subprocess
+ * for a turn that only has to return two strings, so `auto` prefers it wherever
+ * it is usable. The Claude worker stays as the fallback so an expired key, a
+ * rate limit, or an unparseable reply still produces a draft. */
+export function generateFastAiTaskDraft(prompt: string, provider: AiProviderChoice | null = null, accountProfile?: string): Promise<GeneratedTaskDraft> {
+  if (resolveAiProvider(provider, accountProfile) !== 'palmyra') return draftWithWorker(prompt);
   return draftWithPalmyra(prompt).catch((error: unknown) => {
     console.warn(`[palmyra] task draft fell back to the Claude worker: ${error instanceof Error ? error.message : String(error)}`);
     return draftWithWorker(prompt);
@@ -116,7 +118,7 @@ export function generateFastAiTaskDraft(prompt: string): Promise<GeneratedTaskDr
 
 export function warmFastTaskDraftModel(): void {
   // The Palmyra path is stateless, so there is no subprocess worth spawning.
-  if (isPalmyraConfigured()) return;
+  if (resolveAiProvider('auto') === 'palmyra') return;
   void generateFastAiTaskDraft('Write a task to verify the fast task-draft formatter is ready.').catch(() => undefined);
 }
 

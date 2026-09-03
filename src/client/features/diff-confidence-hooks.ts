@@ -1,6 +1,7 @@
 import { useQueries } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../data/api.js';
+import { useAiProvider } from '../hooks/ai-provider.js';
 import { subscribeRealtimeMessages } from '../hooks/realtime.js';
 import { boundConfidenceRequestBlocks } from './diff-confidence.js';
 import { HIGH_RISK_THRESHOLD } from './diff-review-logic.js';
@@ -18,6 +19,10 @@ type Assessment = { risk: number | null; reasoning: string };
 /** Scores small groups independently. Results arrive over the shared WebSocket
  * as each group completes; HTTPS remains the recovery path when WS is down. */
 export function useDiffBlockConfidence(blocks: Block[]) {
+  // Read from the shared selector rather than a prop: every surface that spends
+  // an AI turn reads the same choice, and threading it through the diff tree
+  // would touch components that have nothing to do with providers.
+  const { provider } = useAiProvider();
   // Requests are bounded to the server's contract, so an oversized hunk or a
   // long grouped decision key is scored rather than rejected wholesale.
   const { batches, sourceKeyByRequestKey } = useMemo(() => {
@@ -29,9 +34,11 @@ export function useDiffBlockConfidence(blocks: Block[]) {
   const [streamed, setStreamed] = useState<Record<string, Assessment>>({});
   const queries = useQueries({
     queries: batches.map((batch) => ({
-      queryKey: ['diff-confidence', JSON.stringify(batch)],
+      // The provider is part of the key for the same reason the server keys its
+      // cache on it: switching models must re-ask, not replay.
+      queryKey: ['diff-confidence', provider, JSON.stringify(batch)],
       queryFn: async () => {
-        const result = await api.assessDiffBlocks(batch);
+        const result = await api.assessDiffBlocks(batch, provider);
         const assessments = result.assessments ?? {};
         // An unscored block is a failure, not a result: caching it would leave
         // the decision reading "unavailable" for the rest of the session.

@@ -39,6 +39,8 @@ import { ReviewFullFilePane } from '../review-stack/review-full-file-pane.js';
 import { readReviewStackReadingMode, readWorkspaceDiffSelection, writeReviewStackReadingMode, writeWorkspaceDiffDecision, writeWorkspaceDiffSource, type ReviewStackReadingMode } from '../../lib/preferences.js';
 import { useWorkspaceDiffKeyboardNavigation } from './use-keyboard-navigation.js';
 import { WorkspaceContextSwitcher } from './context-switcher.js';
+import { AiProviderSelect } from '../../components/ai-provider-select.js';
+import { useAiProvider } from '../../hooks/ai-provider.js';
 
 /** The parts of a diff this review surface reads, whichever source produced
  * it. A local workspace diff satisfies it directly; a pull request is adapted
@@ -448,6 +450,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // exactly like one Jeffrey gave. T2 is delegated but never auto-reviewed:
   // routing priced it as a judgment call, and buying the answer early only
   // means it is already waiting when the decision is opened.
+  // This pane spends three kinds of AI turn — block scoring, the background
+  // auto-score, and the delegated sweep — and until now offered no way to say
+  // which model buys them. The selector writes the shared browser-local
+  // choice, which `useDiffBlockConfidence` reads directly and the delegated
+  // sweep reads at dispatch time.
+  const { provider: aiProvider, setProvider: setAiProvider } = useAiProvider();
   const delegation = useDelegatedReview({
     targets: delegationTargets,
     siblings: decisions,
@@ -653,6 +661,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
         {isRepositorySource && <label className="workspace-repository-commit"><GitCommitHorizontal size={13} /><span className="visually-hidden">Commit</span><select value={selectedCommitSha} onChange={(event) => { setSelectedCommitSha(event.target.value); setSelectedDecisionId(null); }} disabled={commitsQuery.isPending || commits.length === 0}><option value="" disabled>{commitsQuery.isPending ? 'Reading repository' : 'Select a commit'}</option>{commits.map((commit) => <option key={commit.sha} value={commit.sha}>{commit.shortSha} · {commit.title}</option>)}</select></label>}
         {reviewSource === 'history' && snapshots.length > 0 && <label className="workspace-diff-timeline"><History size={13} /><span className="visually-hidden">Workspace diff history</span><select value={selectedSnapshotId ?? selectedSnapshot?.id ?? ''} onChange={(event) => { setSelectedSnapshotId(event.target.value); setSelectedDecisionId(null); writeWorkspaceDiffSource(preferenceScope, `history:${event.target.value}`); }}><option value="">Latest recorded version</option>{snapshots.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{new Date(snapshot.capturedAt).toLocaleString()} · {snapshot.diff.changedFiles} files</option>)}</select></label>}
         {reviewSource === 'pull-request' && <div className="workspace-pr-source"><form onSubmit={submitPullRequestUrl}><label><span className="visually-hidden">Pull request URL</span><input aria-label="Pull request URL" value={pullRequestUrlDraft} onChange={(event) => setPullRequestUrlDraft(event.target.value)} placeholder="Paste GitHub PR URL" /></label><button type="submit">Review PR</button></form>{availablePullRequests.length > 0 && <label className="workspace-repository-picker"><span>PR</span><select aria-label="Pull request" value={selectedPullRequestUrl ?? ''} onChange={(event) => selectSource(event.target.value)}><option value="" disabled>Select pull request</option>{availablePullRequests.map((url) => <option key={url} value={url}>{pullRequestLabel(url)}</option>)}</select></label>}{pullRequestUrlError && <small role="alert">{pullRequestUrlError}</small>}</div>}
+        <AiProviderSelect value={aiProvider} onChange={setAiProvider} ariaLabel="AI provider for diff scoring and delegated review" />
         {!isPullRequestSource && <button className="workspace-diff-handoff" type="button" onClick={() => setIsHandoffOpen(true)}><ClipboardCheck size={14} />Agentic handoff</button>}
         <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={refreshSource} disabled={isRefreshing}><RefreshCw size={13} className={isRefreshing ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>
       </div>

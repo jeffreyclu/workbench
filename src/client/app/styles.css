@@ -620,6 +620,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-ai-risk-score.is-pending { opacity: .55; }
 .diff-review-ai-risk-reason { color: #a9a89f; font-size: 11px; min-width: 0; }
 .diff-review-ai-assist { display: grid; align-content: start; gap: 8px; padding-top: 14px; border-top: 1px solid #242421; }
+.diff-review-ai-assist-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.diff-review-ai-assist-head h4 { margin: 0; }
 .diff-review-ai-assist-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
 .diff-review-ai-assist-actions button { display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 11px; color: #c9c8c1; border: 1px solid #45443e; border-radius: 6px; background: #20201d; cursor: pointer; font: 700 10px 'DM Mono'; }
 .diff-review-ai-assist-actions button:hover:not(:disabled), .diff-review-ai-assist-actions button:focus-visible { color: var(--acid); border-color: #596234; outline: 0; }
@@ -1250,6 +1252,11 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .composer-hint { color: #55544f; font: 8px 'DM Mono'; }
 .model-target { width: 112px; margin-left: auto; padding: 7px 24px 7px 8px; color: #c5c4bc; background: #11110f; border: 1px solid #30302b; border-radius: 7px; font: 10px 'DM Mono'; }
 .agent-target { width: 92px; padding: 7px 24px 7px 8px; color: #c5c4bc; background: #11110f; border: 1px solid #30302b; border-radius: 7px; font: 10px 'DM Mono'; }
+/* The provider selector carries a longer label than the account and dispatch
+   pickers beside it, so it gets its own width rather than truncating. */
+.ai-provider-target { width: 116px; }
+.ai-provider-target option:disabled { color: #6d6c65; }
+.ai-provider-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .composer-send { width: 34px; height: 34px; }
 .composer-send:hover:not(:disabled) { background: #d4ff45; transform: translateY(-1px); }.composer-send:disabled { color: #64645e; background: #292925; cursor: not-allowed; }
 .shared-thread { display: block; flex: 1; min-height: 0; overflow: auto; padding: 4px 5px 16px; }

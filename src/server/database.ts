@@ -2073,6 +2073,19 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // The composer's provider selector is conversation state, exactly like the
+    // account and dispatch preferences beside it: the choice has to survive a
+    // reload and reach the server-side turn-grounding call, which has no
+    // request body of its own to carry it.
+    id: '075_shared_conversation_ai_provider',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'preferred_ai_provider')) {
+        database.exec('ALTER TABLE shared_conversations ADD COLUMN preferred_ai_provider TEXT;');
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

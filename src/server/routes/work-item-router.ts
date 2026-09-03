@@ -88,8 +88,8 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
   const taskWorkingDirectory = (workItemId: string) => taskWorkspaces(workItemId)?.selectedPath ?? null;
   router.post('/api/diff-confidence', async (request, response, next) => {
     try {
-      const { blocks } = diffConfidenceRequestSchema.parse(request.body);
-      response.json({ assessments: await assessDiffBlocks(database, blocks) });
+      const { blocks, provider, accountProfile } = diffConfidenceRequestSchema.parse(request.body);
+      response.json({ assessments: await assessDiffBlocks(database, blocks, provider ?? null, accountProfile ?? undefined) });
     } catch (error) { next(error); }
   });
   // Cache-only: never spawns a model turn. Lets the client show an
@@ -97,14 +97,14 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
   // "Score risk (AI)" flow turning ambient just because a cache exists.
   router.post('/api/diff-confidence/lookup', (request, response, next) => {
     try {
-      const { blocks } = diffConfidenceRequestSchema.parse(request.body);
-      response.json({ assessments: lookupDiffConfidenceBlocks(database, blocks) });
+      const { blocks, provider, accountProfile } = diffConfidenceRequestSchema.parse(request.body);
+      response.json({ assessments: lookupDiffConfidenceBlocks(database, blocks, provider ?? null, accountProfile ?? undefined) });
     } catch (error) { next(error); }
   });
   router.post('/api/review-assist', async (request, response, next) => {
     try {
-      const { action, decision, taskIntent, tier } = reviewAssistRequestSchema.parse(request.body);
-      response.json({ answer: await requestReviewAssist(database, action, decision, taskIntent, undefined, tier) });
+      const { action, decision, taskIntent, tier, provider, accountProfile } = reviewAssistRequestSchema.parse(request.body);
+      response.json({ answer: await requestReviewAssist(database, action, decision, taskIntent, undefined, tier, provider ?? null, accountProfile ?? undefined) });
     } catch (error) { next(error); }
   });
   // Streams the answer token by token over SSE. The full turn still takes a
@@ -124,7 +124,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       response.write(`data: ${JSON.stringify(event)}\n\n`);
     };
     try {
-      const answer = await requestReviewAssist(database, parsed.action, parsed.decision, parsed.taskIntent, (text) => send({ type: 'delta', text }), parsed.tier);
+      const answer = await requestReviewAssist(database, parsed.action, parsed.decision, parsed.taskIntent, (text) => send({ type: 'delta', text }), parsed.tier, parsed.provider ?? null, parsed.accountProfile ?? undefined);
       send({ type: 'done', answer });
     } catch (error) {
       // A failed turn must stay a visible failure the reviewer can retry, not
@@ -153,8 +153,8 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
   // Cache-only: never spawns a model turn. See /api/diff-confidence/lookup.
   router.post('/api/review-assist/lookup', (request, response, next) => {
     try {
-      const { action, decision, taskIntent, tier } = reviewAssistRequestSchema.parse(request.body);
-      response.json({ answer: lookupReviewAssist(database, action, decision, taskIntent, tier) });
+      const { action, decision, taskIntent, tier, provider, accountProfile } = reviewAssistRequestSchema.parse(request.body);
+      response.json({ answer: lookupReviewAssist(database, action, decision, taskIntent, tier, provider ?? null, accountProfile ?? undefined) });
     } catch (error) { next(error); }
   });
   const persistAttachments = (attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }>) => {
@@ -523,7 +523,7 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
   router.post('/api/work-items/generate-draft', async (request, response, next) => {
     try {
       const input = generateTaskDraftSchema.parse(request.body);
-      response.json({ draft: await generateFastAiTaskDraft(input.prompt) });
+      response.json({ draft: await generateFastAiTaskDraft(input.prompt, input.provider ?? null, input.accountProfile ?? undefined) });
     } catch (error) { next(error); }
   });
 
