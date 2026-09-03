@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasPrematureEvidenceRequest, hasProviderLifecycleActivity, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -242,6 +242,15 @@ describe('classifyExecution', () => {
     // under dozens of identical markers, and the raw reasoning is never printed.
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'thinking' } } }))).toEqual({ progress: '', final: null, audit: [] });
     expect(readableAgentEvent('claude', JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'private' } } }))).toEqual({ progress: '', final: null, audit: [] });
+  });
+
+  it('counts hidden Claude thinking as lifecycle activity without rendering it', () => {
+    expect(hasProviderLifecycleActivity('claude', JSON.stringify({ type: 'stream_event', event: { type: 'message_start' } }))).toBe(true);
+    expect(hasProviderLifecycleActivity('claude', JSON.stringify({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 100 }))).toBe(true);
+    expect(hasProviderLifecycleActivity('claude', JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '' } } }))).toBe(true);
+    expect(hasProviderLifecycleActivity('claude', JSON.stringify({ type: 'system', subtype: 'status', status: 'requesting' }))).toBe(false);
+    expect(hasProviderLifecycleActivity('claude', JSON.stringify({ type: 'system', subtype: 'init' }))).toBe(false);
+    expect(hasProviderLifecycleActivity('codex', JSON.stringify({ type: 'stream_event', event: { type: 'message_start' } }))).toBe(false);
   });
 
   it('keeps every task kind tool-capable while routing read-only behavior through instructions', () => {
@@ -526,6 +535,26 @@ fi`;
     expect(readFileSync(fixture.log, 'utf8').trim().split('\n')).toEqual(['claude', 'claude']);
     expect(progress.some((entry) => entry.includes('Retrying once in a fresh session'))).toBe(true);
     rmSync(markerFile, { force: true });
+  });
+
+  it('keeps a Claude turn alive while deep thinking emits hidden lifecycle events', async () => {
+    const started = JSON.stringify({ type: 'stream_event', event: { type: 'message_start' } });
+    const thinking = JSON.stringify({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 100 });
+    const completed = JSON.stringify({ type: 'result', result: 'Completed after deep thinking.' });
+    const body = `IFS= read -r prompt
+printf '%s\n' '${started}'
+/bin/sleep 0.2
+printf '%s\n' '${thinking}'
+/bin/sleep 0.2
+printf '%s\n' '${completed}'`;
+    const fixture = fakeAgentDirectory('exit 1', body);
+    process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS = '300';
+    process.env.WORKBENCH_PROVIDER_IDLE_ACTIVITY_TIMEOUT_MS = '500';
+
+    const result = await runAgentCommandWithFallback('claude', fixture.directory, 'Complete the task.');
+
+    expect(result.output).toBe('Completed after deep thinking.');
+    expect(readFileSync(fixture.log, 'utf8').trim().split('\n')).toEqual(['claude']);
   });
 
   it('resumes the same Claude session once when an active turn later stops producing activity', async () => {

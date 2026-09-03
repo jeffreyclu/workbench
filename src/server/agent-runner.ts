@@ -1049,6 +1049,38 @@ export function recordedDecision(text: string): string | null {
   return match?.[1]?.trim() ? match[1].trim().slice(0, 2_000) : null;
 }
 
+/**
+ * Provider activity that proves a turn is advancing even when it intentionally
+ * produces no user-visible text. Claude's deep-thinking stream emits a
+ * `message_start` followed by hidden thinking-token updates before its first
+ * sentence or tool call. Treating only rendered output as activity killed
+ * healthy Opus turns at the first-activity deadline.
+ *
+ * Mere process/MCP acknowledgements (`system:init`, `status:requesting`, and
+ * rate-limit metadata) deliberately do not count: a transport stuck before the
+ * model starts must still be recovered by the startup watchdog.
+ */
+export function hasProviderLifecycleActivity(agent: AgentRun['agent'], line: string): boolean {
+  if (agent !== 'claude') return false;
+  try {
+    const event = JSON.parse(line) as Record<string, unknown>;
+    if (event.type === 'stream_event') {
+      const streamed = (event.event ?? {}) as Record<string, unknown>;
+      return streamed.type === 'message_start'
+        || streamed.type === 'content_block_start'
+        || streamed.type === 'content_block_delta'
+        || streamed.type === 'message_delta'
+        || streamed.type === 'message_stop';
+    }
+    if (event.type === 'system') return event.subtype === 'thinking_tokens';
+    return event.type === 'assistant' || event.type === 'user' || event.type === 'result';
+  } catch {
+    // Plain provider output is visible activity and is handled by
+    // `readableAgentEvent`; this helper only classifies structured hidden data.
+    return false;
+  }
+}
+
 export function readableAgentEvent(agent: AgentRun['agent'], line: string, context?: AgentEventContext): { progress: string; final: string | null; audit: AgentAuditCandidate[]; delta?: string; blockBreak?: boolean } {
   try {
     const event = JSON.parse(line) as Record<string, unknown>;
@@ -1492,7 +1524,8 @@ ${AGENT_EXECUTION_CONTRACT}`;
         terminalError ||= terminalAgentError(agent, line) ?? '';
         try { const usage = usageFromEvent(agent, JSON.parse(line)); if (usage) reportUsage(usage); } catch { /* non-JSON provider output has no structured usage */ }
         const event = readableAgentEvent(agent, line, eventContext);
-        const meaningfulActivity = Boolean(event.delta || event.progress || event.final || event.audit.length);
+        const meaningfulActivity = Boolean(event.delta || event.progress || event.final || event.audit.length)
+          || hasProviderLifecycleActivity(agent, line);
         if (meaningfulActivity) {
           lastEventAt = Date.now();
           providerWatchdog?.activity();
