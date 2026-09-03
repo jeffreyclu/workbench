@@ -7,8 +7,8 @@ test('reviews a pull-request diff from the task workspace review UI', async ({ p
   await page.goto(`/tasks/${item.id}`);
   await page.getByText('Workspace review').click();
   await page.getByRole('button', { name: 'GitHub PR' }).click();
-  await expect(page.getByRole('heading', { name: 'feature/reconnect → main' })).toBeVisible();
-  await expect(page.getByText('src/realtime.ts', { exact: true })).toHaveCount(2);
+  await expect(page.getByRole('heading', { name: 'Add reliable reconnect handling' })).toBeVisible();
+  await expect(page.getByText('src/realtime.ts', { exact: true })).toBeVisible();
 });
 
 test('keeps a failed pull-request fetch visible and retryable', async ({ page, request }, testInfo) => {
@@ -17,6 +17,6 @@ test('keeps a failed pull-request fetch visible and retryable', async ({ page, r
   await page.goto(`/tasks/${item.id}`);
   await page.getByText('Workspace review').click();
   await page.getByRole('button', { name: 'GitHub PR' }).click();
-  await expect(page.getByText('Could not load this source.')).toBeVisible();
+  await expect(page.getByText('Could not load this pull-request diff.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
 });

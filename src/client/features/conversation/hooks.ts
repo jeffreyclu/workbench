@@ -4,7 +4,7 @@ import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { workspaceDiffScopeKey } from '../workspace-diff/data.js';
 import { pullRequestUrls } from '../github-diff/logic.js';
 import { useGitHubPullRequestDiffPreviews } from '../github-diff/hooks.js';
-import { useWorkspaceDiff, useWorkspaceDiffSnapshots, useWorkspaceExplorer } from '../workspace-diff/hooks.js';
+import { useWorkspaceDiff, useWorkspaceDiffSnapshots } from '../workspace-diff/hooks.js';
 import { workspaceDiffQueryKeys } from '../workspace-diff/data.js';
 
 export function useDebouncedValue(value: string, delayMs: number) {
@@ -18,12 +18,10 @@ export function useDebouncedValue(value: string, delayMs: number) {
 
 export function useConversationChangesAvailability(scope: WorkspaceDiffScope | null, candidateUrls: string[], isRunning: boolean) {
   const queryClient = useQueryClient();
-  const explorer = useWorkspaceExplorer(scope, isRunning);
-  const workspacePath = explorer.data?.selectedPath ?? null;
-  const workspaceDiff = useWorkspaceDiff(scope, workspacePath);
+  const workspaceDiff = useWorkspaceDiff(scope);
   // A commit clears Git's current diff, but Workbench preserves it as a
   // snapshot. Keep the tab available for those reviewable recorded changes.
-  const snapshots = useWorkspaceDiffSnapshots(scope, workspacePath, workspaceDiff.data?.diff?.revision);
+  const snapshots = useWorkspaceDiffSnapshots(scope, workspaceDiff.data?.diff?.revision);
   const wasRunning = useRef(isRunning);
   const previousScopeKey = useRef(scope ? workspaceDiffScopeKey(scope) : null);
   const scopeKey = scope ? workspaceDiffScopeKey(scope) : null;
@@ -46,25 +44,21 @@ export function useConversationChangesAvailability(scope: WorkspaceDiffScope | n
   const hasWorkspaceChanges = (workspaceDiff.data?.diff?.changedFiles ?? 0) > 0;
   const hasRecordedWorkspaceChanges = (snapshots.data?.snapshots ?? []).some((snapshot) => snapshot.diff.changedFiles > 0);
   const hasPullRequestChanges = pullRequestDiffs.some((pullRequestDiff) => (pullRequestDiff.data?.diff.changedFiles ?? 0) > 0);
-  const isError = explorer.isError || workspaceDiff.isError || snapshots.isError || pullRequestDiffs.some((pullRequestDiff) => pullRequestDiff.isError);
-  const refetchExplorer = explorer.refetch;
-  const refetchWorkspaceDiff = workspaceDiff.refetch;
-  const refetchSnapshots = snapshots.refetch;
+  const isError = workspaceDiff.isError || snapshots.isError || pullRequestDiffs.some((pullRequestDiff) => pullRequestDiff.isError);
   const retry = useCallback(async () => {
     await Promise.all([
-      refetchWorkspaceDiff(),
-      refetchSnapshots(),
-      refetchExplorer(),
+      workspaceDiff.refetch(),
+      snapshots.refetch(),
       ...pullRequestDiffs.map((pullRequestDiff) => pullRequestDiff.refetch()),
     ]);
-  }, [pullRequestDiffs, refetchExplorer, refetchSnapshots, refetchWorkspaceDiff]);
+  }, [pullRequestDiffs, snapshots.refetch, workspaceDiff.refetch]);
 
   return {
     hasChanges: hasWorkspaceChanges || hasRecordedWorkspaceChanges || hasPullRequestChanges,
     // A scoped request that is still waiting for Repo Explorer's selection is
     // pending, not loading. Reporting it as settled would hide Changes for the
     // moment before the repository is known.
-    isLoading: (Boolean(scope) && (explorer.isPending || workspaceDiff.isPending || snapshots.isPending)) || pullRequestDiffs.some((pullRequestDiff) => pullRequestDiff.isLoading),
+    isLoading: (Boolean(scope) && (workspaceDiff.isPending || snapshots.isPending)) || pullRequestDiffs.some((pullRequestDiff) => pullRequestDiff.isLoading),
     isError,
     retry,
   };

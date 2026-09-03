@@ -15,15 +15,6 @@ const workspaceDiffBasePath = (scope: WorkspaceDiffScope) => {
   if ('reviewId' in scope) return `/api/reviews/${scope.reviewId}`;
   return `/api/shared/conversations/${scope.conversationId}`;
 };
-const workspaceDiffPath = (scope: WorkspaceDiffScope, suffix: string, workspacePath: string | null, parameters: Record<string, string | null> = {}) => {
-  const query = new URLSearchParams();
-  if (workspacePath) query.set('workspacePath', workspacePath);
-  for (const [name, value] of Object.entries(parameters)) {
-    if (value) query.set(name, value);
-  }
-  const serialized = query.toString();
-  return `${workspaceDiffBasePath(scope)}/workspace-diff${suffix}${serialized ? `?${serialized}` : ''}`;
-};
 
 /** Wire-level action union for `/api/review-assist*`; mirrors
  * `reviewAssistRequestSchema` in shared contracts. */
@@ -38,14 +29,14 @@ export const sourceClient = {
   startMcpOAuth: (provider: 'confluence' | 'slack' | 'figma' | 'gmail', serverUrl?: string) => request<{ url: string } | { connected: true }>(`/api/source-connections/${provider}/mcp/oauth/start`, { method: 'POST', body: JSON.stringify({ serverUrl }) }),
   configureGrafana: (token: string) => request<{ configured: true }>('/api/source-connections/grafana', { method: 'PUT', body: JSON.stringify({ token }) }),
   disconnectSource: (provider: 'confluence' | 'slack' | 'figma' | 'grafana' | 'gmail' | 'github') => request<void>(`/api/source-connections/${provider}`, { method: 'DELETE' }),
-  getWorkspaceDiff: (scope: WorkspaceDiffScope, workspacePath: string | null) => request<{ diff: WorkspaceDiff }>(workspaceDiffPath(scope, '', workspacePath)),
-  getWorkspaceDiffSnapshots: (scope: WorkspaceDiffScope, workspacePath: string | null) => request<{ snapshots: WorkspaceDiffSnapshot[] }>(workspaceDiffPath(scope, '/snapshots', workspacePath)),
-  getWorkspaceRefs: (scope: WorkspaceDiffScope, workspacePath: string | null) => request<{ refs: WorkspaceRefs }>(workspaceDiffPath(scope, '/refs', workspacePath)),
-  getWorkspaceRefDiff: (scope: WorkspaceDiffScope, workspacePath: string | null, ref: string) => request<{ diff: WorkspaceDiff }>(workspaceDiffPath(scope, '/ref', workspacePath, { ref })),
-  getWorkspaceRefCommits: (scope: WorkspaceDiffScope, workspacePath: string | null, ref: string | null) => request<{ commits: ReviewCommit[] }>(workspaceDiffPath(scope, '/ref/commits', workspacePath, { ref })),
-  getWorkspaceCommitDiff: (scope: WorkspaceDiffScope, workspacePath: string | null, commit: string) => request<{ diff: WorkspaceDiff }>(workspaceDiffPath(scope, '/commit', workspacePath, { commit })),
-  getWorkspaceFileSource: (scope: WorkspaceDiffScope, workspacePath: string | null, filePath: string, revision: string | null) => request<{ file: WorkspaceFileSource }>(workspaceDiffPath(scope, '/file', workspacePath, { path: filePath, revision })),
-  getWorkspaceDiffStatus: (scope: WorkspaceDiffScope, workspacePath: string | null, revision: string) => request<{ changed: boolean }>(workspaceDiffPath(scope, '/status', workspacePath, { revision })),
+  getWorkspaceDiff: (scope: WorkspaceDiffScope) => request<{ diff: WorkspaceDiff }>(`${workspaceDiffBasePath(scope)}/workspace-diff`),
+  getWorkspaceDiffSnapshots: (scope: WorkspaceDiffScope) => request<{ snapshots: WorkspaceDiffSnapshot[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/snapshots`),
+  getWorkspaceRefs: (scope: WorkspaceDiffScope) => request<{ refs: WorkspaceRefs }>(`${workspaceDiffBasePath(scope)}/workspace-diff/refs`),
+  getWorkspaceRefDiff: (scope: WorkspaceDiffScope, ref: string) => request<{ diff: WorkspaceDiff }>(`${workspaceDiffBasePath(scope)}/workspace-diff/ref?ref=${encodeURIComponent(ref)}`),
+  getWorkspaceRefCommits: (scope: WorkspaceDiffScope, ref: string | null) => request<{ commits: ReviewCommit[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/ref/commits${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`),
+  getWorkspaceCommitDiff: (scope: WorkspaceDiffScope, commit: string) => request<{ diff: WorkspaceDiff }>(`${workspaceDiffBasePath(scope)}/workspace-diff/commit?commit=${encodeURIComponent(commit)}`),
+  getWorkspaceFileSource: (scope: WorkspaceDiffScope, filePath: string, revision: string | null) => request<{ file: WorkspaceFileSource }>(`${workspaceDiffBasePath(scope)}/workspace-diff/file?path=${encodeURIComponent(filePath)}${revision ? `&revision=${encodeURIComponent(revision)}` : ''}`),
+  getWorkspaceDiffStatus: (scope: WorkspaceDiffScope, revision: string) => request<{ changed: boolean }>(`${workspaceDiffBasePath(scope)}/workspace-diff/status?revision=${encodeURIComponent(revision)}`),
   getDiffHunkReviews: (scope: WorkspaceDiffScope, revision: string) => request<{ reviews: DiffHunkReview[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/hunk-reviews?revision=${encodeURIComponent(revision)}`),
   upsertDiffHunkReview: (scope: WorkspaceDiffScope, input: { revision: string; filePath: string; hunkRange: string; state: DiffHunkReviewState; note?: string }) => request<{ review: DiffHunkReview }>(`${workspaceDiffBasePath(scope)}/workspace-diff/hunk-reviews`, { method: 'PUT', body: JSON.stringify(input) }),
   upsertDiffHunkReviews: (scope: WorkspaceDiffScope, input: UpsertDiffHunkReviewsInput) => request<{ reviews: DiffHunkReview[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/hunk-reviews/batch`, { method: 'PUT', body: JSON.stringify(input) }),
