@@ -16,15 +16,16 @@ import {
   type AgentAuditCandidate,
   type AgentUsage,
 } from './agent-runner.js';
+import { ProviderTurnWatchdog, providerTurnTimeouts } from './provider-turn-watchdog.js';
 import { connectPalmyraWorkbenchTools, type PalmyraWorkbenchToolBridge } from './palmyra-workbench-tools.js';
-import { palmyraMaxOutputTokens, streamChatWithPalmyra, type PalmyraMessage, type PalmyraTool, type PalmyraToolCall } from './providers/palmyra.js';
+import { palmyraMaxOutputTokens, streamChatWithPalmyra, type PalmyraFunctionTool, type PalmyraMessage, type PalmyraTool, type PalmyraToolCall } from './providers/palmyra.js';
 
 const MAX_TOOL_OUTPUT = 40_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const PALMYRA_CONTEXT_CHECKPOINT_TOKENS = 900_000;
 const PALMYRA_REQUEST_RETRIES = 3;
 
-const localTools: PalmyraTool[] = [
+const localTools: PalmyraFunctionTool[] = [
   {
     type: 'function',
     function: {
@@ -58,6 +59,8 @@ const localTools: PalmyraTool[] = [
     },
   },
 ];
+
+const nativeTools: PalmyraTool[] = [{ type: 'web_search', function: {} }];
 
 type JsonObject = Record<string, unknown>;
 
@@ -210,6 +213,12 @@ function finalAnswerFragment(content: string): string {
   return value.replace(/^\s*Decision:\s*[^\n]*(?:\n+|$)/i, '').trim();
 }
 
+function withWebSearchSources(content: string | null, sources: string[] | undefined): string | null {
+  if (!content || !sources?.length) return content;
+  const missing = [...new Set(sources)].filter((source) => !content.includes(source));
+  return missing.length ? `${content.trim()}\n\nSources:\n${missing.map((source) => `- ${source}`).join('\n')}` : content;
+}
+
 function compactMessagesForContinuation(system: PalmyraMessage, objective: string, progress: string, messages: PalmyraMessage[]): PalmyraMessage[] {
   const recent = messages.slice(-8).map((message) => {
     if (typeof message.content !== 'string') return { ...message, content: '[Image attachment was supplied earlier in this run.]' } as PalmyraMessage;
@@ -267,7 +276,7 @@ export async function runPalmyraAgent(options: {
       return null;
     })
     : options.workbenchTools ?? null;
-  const allTools = [...localTools, ...(bridge?.tools ?? [])];
+  const allTools: PalmyraTool[] = [...localTools, ...(bridge?.tools ?? []), ...nativeTools];
   const pendingInterjections: string[] = [];
   let activeRequest: AbortController | null = null;
   const steer = Object.assign(async (body: string) => {
@@ -293,12 +302,19 @@ export async function runPalmyraAgent(options: {
     let response: Awaited<ReturnType<typeof streamChatWithPalmyra>> | null = null;
     for (let attempt = 0; attempt < PALMYRA_REQUEST_RETRIES; attempt += 1) {
       activeRequest = new AbortController();
+      const requestWatchdog = new ProviderTurnWatchdog({
+        ...providerTurnTimeouts(),
+        onTimeout: (reason) => activeRequest?.abort(new Error(`Palmyra provider lifecycle timed out waiting for ${reason === 'first_activity' ? 'first meaningful activity' : 'continued activity'}.`)),
+      });
+      requestWatchdog.accepted();
       const signal = options.signal ? AbortSignal.any([options.signal, activeRequest.signal]) : activeRequest.signal;
       try {
         const prefix = progress ? `${progress}\n\n` : '';
-        response = await streamChatWithPalmyra({ messages, tools: allTools, toolChoice: 'auto', maxTokens: palmyraMaxOutputTokens(options.model), timeoutMs: 120_000, signal, model: options.model }, {
+        response = await streamChatWithPalmyra({ messages, tools: allTools, toolChoice: 'auto', maxTokens: palmyraMaxOutputTokens(options.model), timeoutMs: null, signal, model: options.model }, {
+          onActivity: () => requestWatchdog.activity(),
           onContent: (_delta, accumulated) => options.onProgress?.(`${prefix}${accumulated}`),
         });
+        requestWatchdog.completed();
         break;
       } catch (error) {
         if (options.signal?.aborted) throw options.signal.reason ?? error;
@@ -311,6 +327,7 @@ export async function runPalmyraAgent(options: {
         emitProgress();
         await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 500 * 2 ** attempt));
       } finally {
+        requestWatchdog.terminal();
         activeRequest = null;
       }
     }
@@ -323,16 +340,22 @@ export async function runPalmyraAgent(options: {
     };
     peakContextTokens = Math.max(peakContextTokens, response.usage.inputTokens ?? 0);
     options.onUsage?.(usage, 'palmyra');
-    messages.push({ role: 'assistant', content: response.content, ...(response.toolCalls.length ? { tool_calls: response.toolCalls } : {}) });
+    const responseContent = withWebSearchSources(response.content, response.webSearchSources);
+    messages.push({ role: 'assistant', content: responseContent, ...(response.toolCalls.length ? { tool_calls: response.toolCalls } : {}) });
+    if (response.webSearchSources?.length) {
+      options.onAudit?.([{ category: 'agent_tool_use', streamKind: 'tool', detail: `Writer web search: ${response.webSearchSources.length} source${response.webSearchSources.length === 1 ? '' : 's'}` }], 'palmyra');
+      progress = appendProgress(progress, `● Palmyra searched the public web: ${response.webSearchSources.length} source${response.webSearchSources.length === 1 ? '' : 's'}`);
+      emitProgress();
+    }
     if (!response.toolCalls.length && pendingInterjections.length) {
       messages.push(...pendingInterjections.splice(0).map((content): PalmyraMessage => ({ role: 'user', content })));
       continue;
     }
     if (!response.toolCalls.length) {
-      if (!response.content) throw new Error('Palmyra returned no final response.');
-      progress = appendProgress(progress, response.content);
+      if (!responseContent) throw new Error('Palmyra returned no final response.');
+      progress = appendProgress(progress, responseContent);
       emitProgress();
-      const finalFragment = finalAnswerFragment(response.content);
+      const finalFragment = finalAnswerFragment(responseContent);
       if (finalFragment) finalAnswerFragments.push(finalFragment);
       if (response.finishReason === 'length') {
         messages.push({ role: 'user', content: 'Continue exactly where the response stopped. Do not repeat prior text, and finish the same objective.' });
@@ -342,8 +365,8 @@ export async function runPalmyraAgent(options: {
       if (!output) throw new Error('Palmyra returned progress but no synthesized final response.');
       return { output, agent: 'palmyra', usage, fallbackFrom: null, fallbackReason: null, sessionId: null, costUsd: null, messages: messagesForPersistence(messages), peakContextTokens };
     }
-    if (response.content) {
-      progress = appendProgress(progress, response.content);
+    if (responseContent) {
+      progress = appendProgress(progress, responseContent);
       emitProgress();
     }
     for (const call of response.toolCalls) {

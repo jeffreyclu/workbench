@@ -50,7 +50,7 @@ export interface PalmyraToolCall {
   };
 }
 
-export interface PalmyraTool {
+export interface PalmyraFunctionTool {
   type: 'function';
   function: {
     name: string;
@@ -59,12 +59,22 @@ export interface PalmyraTool {
   };
 }
 
+export interface PalmyraWebSearchTool {
+  type: 'web_search';
+  function: {
+    include_domains?: string[];
+    exclude_domains?: string[];
+  };
+}
+
+export type PalmyraTool = PalmyraFunctionTool | PalmyraWebSearchTool;
+
 export interface PalmyraCompletionRequest {
   messages: PalmyraMessage[];
   model?: string;
   maxTokens?: number;
   temperature?: number;
-  timeoutMs?: number;
+  timeoutMs?: number | null;
   signal?: AbortSignal;
 }
 
@@ -76,6 +86,7 @@ export interface PalmyraChatRequest extends PalmyraCompletionRequest {
 export interface PalmyraChatResult {
   content: string | null;
   toolCalls: PalmyraToolCall[];
+  webSearchSources?: string[];
   usage: {
     inputTokens: number | null;
     outputTokens: number | null;
@@ -87,7 +98,7 @@ interface PalmyraChatResponse {
   id?: string;
   choices?: Array<{
     finish_reason?: string | null;
-    message?: { content?: string | null; tool_calls?: PalmyraToolCall[] };
+    message?: { content?: string | null; tool_calls?: PalmyraToolCall[]; web_search_data?: { sources?: Array<{ url?: string | null }> } | null };
     delta?: {
       content?: string | null;
       tool_calls?: Array<{
@@ -96,6 +107,7 @@ interface PalmyraChatResponse {
         type?: 'function';
         function?: { name?: string; arguments?: string };
       }>;
+      web_search_data?: { sources?: Array<{ url?: string | null }> } | null;
     };
   }>;
   usage?: {
@@ -111,9 +123,16 @@ interface PalmyraChatResponse {
 export interface PalmyraStreamCallbacks {
   onContent?: (delta: string, accumulated: string) => void;
   onToolCall?: (calls: PalmyraToolCall[]) => void;
+  onActivity?: () => void;
 }
 
 const palmyraFetch = createOutboundFetch('palmyra-api');
+
+function requestSignal(signal: AbortSignal | undefined, timeoutMs: number | null | undefined): AbortSignal | undefined {
+  if (timeoutMs === null) return signal;
+  const timeout = AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
 
 /** The key is read per call, not captured at import time, so a key added to
  * the environment of a restarted process takes effect without touching this
@@ -145,9 +164,7 @@ export async function chatWithPalmyra(request: PalmyraChatRequest, fetchImpl: ty
       ...(request.tools ? { tools: request.tools } : {}),
       ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
     }),
-    signal: request.signal
-      ? AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS)])
-      : AbortSignal.timeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    signal: requestSignal(request.signal, request.timeoutMs),
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
@@ -158,6 +175,9 @@ export async function chatWithPalmyra(request: PalmyraChatRequest, fetchImpl: ty
   return {
     content: message?.content?.trim() || null,
     toolCalls: message?.tool_calls ?? [],
+    ...((message?.web_search_data?.sources ?? []).flatMap((source) => source.url ? [source.url] : []).length
+      ? { webSearchSources: [...new Set((message?.web_search_data?.sources ?? []).flatMap((source) => source.url ? [source.url] : []))] }
+      : {}),
     usage: {
       inputTokens: payload.usage?.prompt_tokens ?? null,
       outputTokens: payload.usage?.completion_tokens ?? null,
@@ -191,9 +211,7 @@ export async function streamChatWithPalmyra(
       ...(request.tools ? { tools: request.tools } : {}),
       ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
     }),
-    signal: request.signal
-      ? AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS)])
-      : AbortSignal.timeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    signal: requestSignal(request.signal, request.timeoutMs),
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
@@ -206,12 +224,14 @@ export async function streamChatWithPalmyra(
   let finishReason: string | null = null;
   let inputTokens: number | null = null;
   let outputTokens: number | null = null;
+  const webSearchSources = new Set<string>();
   let buffered = '';
   const consume = (line: string) => {
     if (!line.startsWith('data:')) return;
     const data = line.slice(5).trim();
     if (!data || data === '[DONE]') return;
     const chunk = JSON.parse(data) as PalmyraChatResponse;
+    callbacks.onActivity?.();
     const choice = chunk.choices?.[0];
     if (choice?.finish_reason) finishReason = choice.finish_reason;
     if (choice?.delta?.content) {
@@ -225,6 +245,9 @@ export async function streamChatWithPalmyra(
       if (fragment.function?.name) existing.function.name += fragment.function.name;
       if (fragment.function?.arguments) existing.function.arguments += fragment.function.arguments;
       calls.set(index, existing);
+    }
+    for (const source of choice?.delta?.web_search_data?.sources ?? choice?.message?.web_search_data?.sources ?? []) {
+      if (source.url) webSearchSources.add(source.url);
     }
     const streamedUsage = chunk.accumulated_usage ?? chunk.usage;
     if (typeof streamedUsage?.prompt_tokens === 'number') inputTokens = streamedUsage.prompt_tokens;
@@ -241,7 +264,7 @@ export async function streamChatWithPalmyra(
   for (const line of buffered.split(/\r?\n/)) consume(line);
   const toolCalls = [...calls.entries()].sort(([left], [right]) => left - right).map(([, call]) => call);
   if (toolCalls.length) callbacks.onToolCall?.(toolCalls);
-  return { content: content.trim() || null, toolCalls, usage: { inputTokens, outputTokens }, finishReason };
+  return { content: content.trim() || null, toolCalls, ...(webSearchSources.size ? { webSearchSources: [...webSearchSources] } : {}), usage: { inputTokens, outputTokens }, finishReason };
 }
 
 export async function completeWithPalmyra(request: PalmyraCompletionRequest, fetchImpl: typeof fetch = palmyraFetch): Promise<string> {

@@ -162,12 +162,12 @@ function requireWorkItem(repository: WorkItemRepository, id: string) {
 export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: WorkbenchAdminActions): McpServer {
   const server = new McpServer({ name: 'workbench', version: '1.0.0' }, {
     instructions: [
-      'Workbench is the canonical shared state for Jeffrey, Codex, and Claude.',
-      'Codex and Claude hold complete control over Workbench-local task actions, execution dispatch/cancel/retry, plan approval, local state, the artifact library, and runtime promotion when Jeffrey explicitly authorizes that promotion in the current turn. External-provider access remains unavailable through this agent surface.',
+      'Workbench is the canonical shared state for Jeffrey, Codex, Claude, and Palmyra.',
+      'Codex, Claude, and Palmyra hold identical, complete control over Workbench-local task actions, execution dispatch/cancel/retry, plan approval, local state, the artifact library, connected-source reads, and runtime promotion when Jeffrey explicitly authorizes that promotion in the current turn. External-provider mutations remain unavailable without a current-turn capability.',
       'Read current state before mutating it, and use the actor that represents the calling assistant so the shared log stays truthful.',
       'Durable context is available through recall_context. Use it when prior decisions, implementations, failures, constraints, preferences, or related work could improve the answer. Research, analysis, strategy, and bug-fix work may recall once near the start unless the task is clearly self-contained or the current provider session already supplies enough context. It is not a mandatory preflight: never repeat or broaden recall in the same turn, and never treat an assistant\'s earlier claim as corroboration for itself.',
       'External websites, services, and networked CLIs require Jeffrey\'s explicit current instruction for the particular operation. This MCP surface cannot perform them.',
-      'The only things outside this surface are provider credentials, external-provider operations, public deployment, direct database access, and general machine administration.',
+      'The only things outside this surface are provider credentials, unauthorized external-provider mutations, public deployment, direct database access, and general machine administration.',
       'You are a Workbench-local administrator. Execute requested local Workbench actions directly; do not ask Jeffrey for approval, force flags, or a handoff. Only concrete state-integrity conflicts — such as an active run, dependency cycle, or stale plan — can reject a local action.',
     ].join(' '),
   });

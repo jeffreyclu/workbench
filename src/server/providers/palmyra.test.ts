@@ -102,11 +102,14 @@ describe('palmyra client', () => {
       headers: { 'Content-Type': 'text/event-stream' },
     }));
     const updates: string[] = [];
+    let activityEvents = 0;
     const result = await streamChatWithPalmyra({ messages: [{ role: 'user', content: 'Inspect.' }] }, {
+      onActivity: () => { activityEvents += 1; },
       onContent: (_delta, accumulated) => updates.push(accumulated),
     }, stub.fetch);
 
     expect(updates).toEqual(['Inspecting ', 'Inspecting now.']);
+    expect(activityEvents).toBe(chunks.length);
     expect(result).toEqual({
       content: 'Inspecting now.',
       toolCalls: [{ id: 'call-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"README.md"}' } }],
@@ -114,6 +117,30 @@ describe('palmyra client', () => {
       finishReason: 'tool_calls',
     });
     expect(JSON.parse(String(stub.calls[0].init.body))).toMatchObject({ stream: true, stream_options: { include_usage: true }, max_tokens: 8_192 });
+  });
+
+  it('preserves Writer-native web-search sources from streamed metadata', async () => {
+    const encoder = new TextEncoder();
+    const body = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: 'Current answer.' } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { web_search_data: { sources: [{ url: 'https://example.com/source' }] } }, finish_reason: 'tool_calls' }] })}`,
+      'data: [DONE]',
+      '',
+    ].join('\n\n');
+    const stub = stubFetch(new Response(new ReadableStream({ start(controller) { controller.enqueue(encoder.encode(body)); controller.close(); } }), { status: 200 }));
+
+    const result = await streamChatWithPalmyra({ messages: [{ role: 'user', content: 'Search.' }], tools: [{ type: 'web_search', function: {} }] }, {}, stub.fetch);
+
+    expect(result).toMatchObject({ content: 'Current answer.', finishReason: 'tool_calls', webSearchSources: ['https://example.com/source'] });
+  });
+
+  it('can rely on an activity watchdog without adding a fixed request deadline', async () => {
+    const stub = stubFetch(jsonResponse({ choices: [{ message: { content: 'ok' } }] }));
+    const signal = new AbortController().signal;
+
+    await completeWithPalmyra({ messages: [{ role: 'user', content: 'hi' }], timeoutMs: null, signal }, stub.fetch);
+
+    expect(stub.calls[0].init.signal).toBe(signal);
   });
 
   it('uses the Writer-native X5/X6 output allowance without a Workbench reduction', () => {

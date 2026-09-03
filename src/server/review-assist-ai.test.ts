@@ -222,6 +222,41 @@ describe('warm Changes agent', () => {
   });
 });
 
+describe('Palmyra review-assist parity', () => {
+  it('streams incremental text and uses the Writer-native output allowance', async () => {
+    vi.resetModules();
+    const previousKey = process.env.WRITER_API_KEY;
+    process.env.WRITER_API_KEY = 'test-key';
+    const streamChatWithPalmyra = vi.fn(async (
+      request: import('./providers/palmyra.js').PalmyraChatRequest,
+      callbacks: import('./providers/palmyra.js').PalmyraStreamCallbacks,
+    ) => {
+      callbacks.onContent?.('Palmyra ', 'Palmyra ');
+      callbacks.onContent?.('answer.', 'Palmyra answer.');
+      return { content: 'Palmyra answer.', toolCalls: [], usage: { inputTokens: 10, outputTokens: 3 }, finishReason: 'stop' };
+    });
+    vi.doMock('./providers/palmyra.js', async () => ({
+      ...(await vi.importActual<typeof import('./providers/palmyra.js')>('./providers/palmyra.js')),
+      streamChatWithPalmyra,
+    }));
+    try {
+      const { requestReviewAssist } = await import('./review-assist-ai.js');
+      const database = openDatabase(':memory:');
+      const deltas: string[] = [];
+
+      await expect(requestReviewAssist(database, 'score_risk', decision, null, (text) => deltas.push(text), null, 'palmyra'))
+        .resolves.toBe('Palmyra answer.');
+      expect(deltas).toEqual(['Palmyra ', 'answer.']);
+      expect(streamChatWithPalmyra.mock.calls[0][0]).toMatchObject({ maxTokens: 8_192 });
+      database.close();
+    } finally {
+      if (previousKey === undefined) delete process.env.WRITER_API_KEY;
+      else process.env.WRITER_API_KEY = previousKey;
+      vi.doUnmock('./providers/palmyra.js');
+    }
+  });
+});
+
 describe('lookupReviewAssist', () => {
   it('returns null without spawning when nothing has been cached yet', async () => {
     vi.resetModules();

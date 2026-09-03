@@ -995,7 +995,7 @@ export function buildSharedReplyPrompt(
     ? buildPrompt(linked.item, linked.run, sharedContext, externalActionContract)
     : `${externalActionContract ?? EXTERNAL_ACTION_CONTRACT}
 
-You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey, Codex, and Claude.
+You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey and the other Workbench agents: Codex, Claude, and Palmyra.
 
 This conversation is not linked to a project task. Start in Workbench, but treat that directory only as execution context: every local repository and Jeffrey's home directory remain fully accessible. Follow Jeffrey's current request directly, including repository edits and Git branch/worktree operations; linking a task is never required for access.
 
@@ -1372,6 +1372,7 @@ export async function replyInSharedRoom(
     const palmyraTier: 'palmyra-x5' | 'palmyra-x6' = target.executionProfile === 'palmyra-x6' ? 'palmyra-x6' : 'palmyra-x5';
     const model = agent === 'palmyra' ? palmyraTier : modelFor(agent, profile);
     const recordedProfile = agent === 'palmyra' ? palmyraTier : profile;
+    const modelForResult = (resultAgent: AgentRun['agent']) => resultAgent === 'palmyra' ? palmyraTier : modelFor(resultAgent, profile);
     repository.updateSharedMessage(messageId, { model, executionProfile: recordedProfile });
     if (runId) repository.updateRun(runId, { model, executionProfile: recordedProfile });
     repository.setConversationExecutionProfile(target.conversationId, recordedProfile);
@@ -1573,8 +1574,8 @@ export async function replyInSharedRoom(
       const recovered = await recoveryRun(`Recovery requirement: the previous response tried to hand evidence collection back to Jeffrey without using Workbench's available sources. Do the original task now. Inspect the existing conversation, durable context, repository, logs, and database as applicable before asking anything. Do not repeat the request for examples or details.`);
       if (hasPrematureEvidenceRequest(recovered.output)) throw new Error(reason);
       result = { ...recovered, fallbackFrom: result.agent === 'claude' ? 'claude' : result.fallbackFrom, fallbackReason: reason };
-      repository.updateSharedMessage(messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
-      if (runId) repository.updateRun(runId, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
+      repository.updateSharedMessage(messageId, { author: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
+      if (runId) repository.updateRun(runId, { agent: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
     }
     // A completion claim is the last point where a cascade can leave the harness
     // and become Jeffrey's problem. Refuse to deliver one that this run did
@@ -1588,8 +1589,8 @@ export async function replyInSharedRoom(
       const recoveredExecuted = turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_write');
       if (!recoveredExecuted && hasUnverifiedCompletionClaim(recovered.output)) throw new Error(reason);
       result = { ...recovered, fallbackFrom: result.agent === 'claude' ? 'claude' : result.fallbackFrom, fallbackReason: reason };
-      repository.updateSharedMessage(messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
-      if (runId) repository.updateRun(runId, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
+      repository.updateSharedMessage(messageId, { author: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
+      if (runId) repository.updateRun(runId, { agent: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
     }
     if (result.agent === 'codex') {
       const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile);

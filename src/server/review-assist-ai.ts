@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { AiProviderChoice, ResolvedAiProvider } from '../shared/ai-providers.js';
-import { completeWithPalmyra } from './providers/palmyra.js';
+import { palmyraMaxOutputTokens, streamChatWithPalmyra } from './providers/palmyra.js';
 import { resolveAiProvider } from './providers/provider-choice.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
@@ -474,18 +474,17 @@ function dispatchTurn(worker: AssistWorker, prompt: string, timeoutMs: number, o
  * fell back to Claude is never written under the Palmyra cache key. */
 type AssistAnswer = { answer: string; provider: ResolvedAiProvider };
 
-/** Palmyra answers the same prompt in one HTTP round trip. It does not stream,
- * so `onDelta` stays silent and the reviewer gets the whole answer at once —
- * the streaming route still delivers it in its `done` frame. */
+/** Palmyra uses the same incremental answer contract as Claude so the slowest
+ * review tier never leaves the reviewer staring at a spinner. */
 async function runPalmyraTurn(prompt: string, spend: AssistSpend, onDelta?: (text: string) => void): Promise<AssistAnswer> {
   try {
-    const answer = (await completeWithPalmyra({
+    const result = await streamChatWithPalmyra({
       messages: [{ role: 'system', content: CHANGES_AGENT_SYSTEM_PROMPT }, { role: 'user', content: prompt }],
-      maxTokens: 2_048,
+      maxTokens: palmyraMaxOutputTokens(),
       timeoutMs: spend.timeoutMs,
-    })).trim();
+    }, { onContent: (delta) => onDelta?.(delta) });
+    const answer = result.content?.trim() ?? '';
     if (!answer) throw new Error('Palmyra returned no answer.');
-    onDelta?.(answer);
     return { answer, provider: 'palmyra' };
   } catch (error) {
     console.warn(`[palmyra] review assist fell back to Claude: ${error instanceof Error ? error.message : String(error)}`);

@@ -1210,6 +1210,17 @@ turn completes, both task-backed and standalone conversation messages must be
 replaced with one clean terminal answer that synthesizes the outcome. The
 completed message must not retain or replay the accumulated live activity log.
 
+### All three agents have Workbench capability parity
+
+*Decision from Jeffrey, 2026-09-03.* Codex, Claude/Opus, and Palmyra must have
+the same Workbench capabilities across conversations, task execution, durable
+context and RAG, filesystem and repository tools, connected-source and public
+web research, attachments, steering, cancellation, retry, review workflows,
+and lifecycle supervision. Provider-native mechanics and model limits may
+differ, but choosing Palmyra must not silently remove a Workbench capability
+or add a locally invented token, turn-count, or fixed total wall-clock ceiling
+while useful provider activity continues.
+
 What survives from the earlier framing is only the map's internal modeling.
 When a map is drawn for a critical block, node identity should be a place in the
 system — a module or symbol that exists whether or not it changed — so unchanged

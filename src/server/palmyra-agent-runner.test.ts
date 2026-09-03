@@ -40,6 +40,11 @@ describe('Palmyra durable agent runs', () => {
     await executeAgentRun(repository, run, 'palmyra-test-owner', 60_000);
 
     expect(repository.getRun(run.id)).toMatchObject({ status: 'completed', agent: 'palmyra', model: 'palmyra-x5', inputTokens: 22, outputTokens: 9, output: 'Implemented the direct run edit.' });
+    expect(streamChatWithPalmyra.mock.calls[0][0]).toMatchObject({
+      timeoutMs: null,
+      maxTokens: 8_192,
+      tools: expect.arrayContaining([{ type: 'web_search', function: {} }]),
+    });
     expect(readFileSync(join(workspace, 'direct.txt'), 'utf8')).toBe('direct run\n');
     const diagnostics = database.prepare('SELECT kind FROM agent_run_diagnostics WHERE run_id = ? ORDER BY created_at').all(run.id) as Array<{ kind: string }>;
     expect(diagnostics.map((event) => event.kind)).toEqual(expect.arrayContaining(['prompt', 'usage', 'tool']));
@@ -119,6 +124,21 @@ describe('Palmyra durable agent runs', () => {
 
     await expect(runPalmyraAgent({ cwd: workspace, prompt: 'Complete the work.', workbenchTools: null }))
       .rejects.toThrow('Palmyra returned progress but no synthesized final response.');
+  });
+
+  it('keeps Writer web-search provenance in the final answer and audit stream', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'palmyra-web-search-'));
+    workspaces.push(workspace);
+    const audits: string[] = [];
+    streamChatWithPalmyra.mockResolvedValueOnce({
+      content: 'The current answer is supported.', toolCalls: [], webSearchSources: ['https://example.com/current'],
+      usage: { inputTokens: 10, outputTokens: 5 }, finishReason: 'tool_calls',
+    });
+
+    const result = await runPalmyraAgent({ cwd: workspace, prompt: 'Research the current answer.', workbenchTools: null, onAudit: (entries) => audits.push(...entries.map((entry) => entry.detail)) });
+
+    expect(result.output).toBe('The current answer is supported.\n\nSources:\n- https://example.com/current');
+    expect(audits).toContain('Writer web search: 1 source');
   });
 
   it('continues a provider-length stop and sends image attachments in the same user turn', async () => {

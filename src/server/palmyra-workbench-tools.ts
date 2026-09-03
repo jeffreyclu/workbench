@@ -1,10 +1,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-import type { PalmyraTool } from './providers/palmyra.js';
+import type { PalmyraFunctionTool } from './providers/palmyra.js';
 
 export interface PalmyraWorkbenchToolBridge {
-  tools: PalmyraTool[];
+  tools: PalmyraFunctionTool[];
   call(name: string, args: Record<string, unknown>): Promise<string>;
   close(): Promise<void>;
 }
