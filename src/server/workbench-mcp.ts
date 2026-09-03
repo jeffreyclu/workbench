@@ -26,7 +26,7 @@ import { DEFAULT_DURABLE_MEMORY_SOURCES, selectDurableMemoryEvidence } from './m
 import { WorkItemDependencyError, WorkItemVersionConflictError } from './repository.js';
 import type { WorkItemRepository } from './repository.js';
 
-const actorSchema = z.enum(['codex', 'claude']).describe('Which assistant is acting. This is attribution, not permission: both actors hold identical, complete Workbench admin rights. Jeffrey and system are excluded only so the log never misreports who acted.');
+const actorSchema = z.enum(['codex', 'claude', 'palmyra']).describe('Which assistant is acting. This is attribution, not permission: all three agents hold identical, complete Workbench admin rights. Jeffrey and system are excluded only so the log never misreports who acted.');
 const stackSchema = z.enum(['attention', 'workbench', 'archive']);
 const activeStackSchema = z.enum(['attention', 'workbench']);
 const activityKindSchema = z.enum(['note', 'progress', 'decision', 'blocker', 'handoff']);
@@ -117,13 +117,13 @@ export interface WorkbenchAdminActions {
     target: z.infer<typeof agentTargetSchema>;
     instructions: string;
     executionProfile: 'economy' | 'standard' | 'deep' | 'palmyra-x5' | 'palmyra-x6' | null;
-  }, options: { actor: 'codex' | 'claude'; force: boolean }): Promise<unknown>;
+  }, options: { actor: 'codex' | 'claude' | 'palmyra'; force: boolean }): Promise<unknown>;
   cancelRun(runId: string): unknown;
   retryRun(runId: string, options: { force: boolean }): Promise<unknown>;
   resolvePlan(planId: string, resolution: 'accepted' | 'rejected', selectedTaskIndexes?: number[], archiveParent?: boolean): unknown;
-  deleteWorkItem(workItemId: string, actor: 'codex' | 'claude'): unknown;
-  deleteConversation(conversationId: string, actor: 'codex' | 'claude'): unknown;
-  dispatchConversationTurn(conversationId: string, actor: 'codex' | 'claude', body: string, dispatchTo: 'none' | 'auto' | 'codex' | 'claude' | 'both', executionProfile: 'economy' | 'standard' | 'deep' | 'palmyra-x5' | 'palmyra-x6' | null): unknown;
+  deleteWorkItem(workItemId: string, actor: 'codex' | 'claude' | 'palmyra'): unknown;
+  deleteConversation(conversationId: string, actor: 'codex' | 'claude' | 'palmyra'): unknown;
+  dispatchConversationTurn(conversationId: string, actor: 'codex' | 'claude' | 'palmyra', body: string, dispatchTo: 'none' | 'auto' | 'codex' | 'claude' | 'palmyra' | 'both', executionProfile: 'economy' | 'standard' | 'deep' | 'palmyra-x5' | 'palmyra-x6' | null): unknown;
   cancelSharedMessage(messageId: string): unknown;
   publishArtifact(input: { path: string; title?: string; workItemId?: string; conversationId?: string }): Promise<unknown>;
   listArtifacts(view: 'published' | 'revoked' | 'all' | 'favorites'): unknown;
@@ -138,7 +138,7 @@ export interface WorkbenchAdminActions {
   connectorObservabilityQuery(input: RawTelemetryQueryInput): Promise<unknown>;
   authorizeSource(input: { provider: 'confluence' | 'slack' | 'figma' | 'grafana' | 'gmail'; serverUrl?: string }): Promise<unknown>;
   setFigmaScope(roots: string[]): unknown;
-  disconnectSource(provider: 'github' | 'slack' | 'figma' | 'confluence' | 'grafana' | 'gmail', actor: 'codex' | 'claude'): unknown;
+  disconnectSource(provider: 'github' | 'slack' | 'figma' | 'confluence' | 'grafana' | 'gmail', actor: 'codex' | 'claude' | 'palmyra'): unknown;
   getLinearProvider(teamId?: string): Promise<unknown>;
   syncLinearProvider(): Promise<unknown>;
   configureLinearProvider(teamIds: string[], projectIds: string[]): unknown;
@@ -257,7 +257,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     const message = messageId ? repository.getSharedMessageById(messageId) : null;
     if (messageId && !message) throw new ToolFailure('NOT_FOUND', 'Conversation message not found.');
     if (message && conversationId && message.conversationId !== conversationId) throw new ToolFailure('INVALID_ARGUMENT', 'messageId does not belong to conversationId.');
-    if (message && message.author !== 'codex' && message.author !== 'claude') throw new ToolFailure('INVALID_ARGUMENT', 'messageId must identify an assistant reply.');
+    if (message && message.author !== 'codex' && message.author !== 'claude' && message.author !== 'palmyra') throw new ToolFailure('INVALID_ARGUMENT', 'messageId must identify an assistant reply.');
     const explicitItem = workItemId ? requireWorkItem(repository, workItemId) : null;
     const linkedItem = !explicitItem && conversation?.workItemId ? repository.get(conversation.workItemId) : null;
     const contextualItem = explicitItem ?? linkedItem;
@@ -331,7 +331,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       dueDate: calendarDateSchema.nullable().optional(),
       strategy: z.string().max(50_000).optional(),
       assignees: assigneeSelectionSchema.optional()
-        .describe('Owners of the task. Jeffrey is exclusive: he cannot be listed alongside codex or claude.'),
+        .describe('Owners of the task. Jeffrey is exclusive: he cannot be listed alongside codex, claude, or palmyra.'),
       blockedByIds: z.array(z.string().uuid()).max(200).optional()
         .describe('Full replacement set of prerequisite task ids. An empty array clears them. Cycles and self-references are rejected.'),
       expectedVersion: z.number().int().optional()
@@ -481,7 +481,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
 
   server.registerTool('add_conversation_message', {
     title: 'Append an assistant conversation message',
-    description: 'Appends a completed Codex or Claude message to a shared conversation without dispatching anything. Use dispatch_conversation_turn when the message should hand work to an agent. Existing messages stay immutable.',
+    description: 'Appends a completed Codex, Claude, or Palmyra message to a shared conversation without dispatching anything. Use dispatch_conversation_turn when the message should hand work to an agent. Existing messages stay immutable.',
     inputSchema: {
       conversationId: z.string().uuid(),
       actor: actorSchema,
@@ -672,12 +672,12 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
 
   server.registerTool('dispatch_conversation_turn', {
     title: 'Post a conversation message and dispatch an agent',
-    description: 'Appends a message and hands the turn to an agent. dispatchTo auto lets Workbench balance, codex/claude target one, both fan out, none posts without dispatching.',
+    description: 'Appends a message and hands the turn to an agent. dispatchTo auto lets Workbench balance, codex/claude/palmyra target one, both fans out to Codex and Claude, and none posts without dispatching.',
     inputSchema: {
       conversationId: z.string().uuid(),
       actor: actorSchema,
       body: z.string().trim().min(1).max(50_000),
-      dispatchTo: z.enum(['none', 'auto', 'codex', 'claude', 'both']).default('auto'),
+      dispatchTo: z.enum(['none', 'auto', 'codex', 'claude', 'palmyra', 'both']).default('auto'),
       executionProfile: executionProfileOverrideSchema,
     },
     annotations: mutationAnnotations(),

@@ -184,7 +184,11 @@ export class WorkbenchAdminService {
     // executed task hydrates the composer with the agent actually running it
     // instead of treating a null preference as the manual-conversation "Both"
     // default.
-    const dispatchTarget = agents.length > 1 ? 'both' : agents[0];
+    // `both` has the established meaning Codex + Claude. Mixed explicit
+    // assignments that include Palmyra still launch every selected run, but
+    // the next composer turn defaults to the first assigned agent rather than
+    // incorrectly claiming it represents the Codex + Claude pair.
+    const dispatchTarget = agents.length === 2 && agents.includes('codex') && agents.includes('claude') ? 'both' : agents[0];
     conversation = this.repository.setConversationComposerPreferences(conversation.id, {
       preferredDispatchTarget: dispatchTarget,
     }) ?? conversation;
@@ -269,7 +273,7 @@ export class WorkbenchAdminService {
     return { url: await startRemoteMcpOAuth(input.provider, serverUrl, oauthCallbackBase()) };
   }
 
-  disconnectSource(provider: z.infer<typeof sourceProviderSchema>, actor: 'codex' | 'claude' | 'jeffrey' = 'jeffrey') {
+  disconnectSource(provider: z.infer<typeof sourceProviderSchema>, actor: 'codex' | 'claude' | 'palmyra' | 'jeffrey' = 'jeffrey') {
     if (!this.repository.removeSourceConnection(provider)) return { status: 404, body: { error: 'Source connection not found.' } } as ActionFailure;
     this.repository.addAuditEntry('destructive_action', 'workbench', `Removed source connection ${provider} (${actor})`);
     return { disconnected: true, provider };

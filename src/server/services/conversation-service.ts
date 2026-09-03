@@ -50,7 +50,7 @@ export class ConversationService {
 
   adoptRuns(workItemId: string, conversationId: string): number {
     const kind = this.collaborators.getClassification(workItemId)?.kind ?? 'analysis';
-    const messages = this.collaborators.listAllSharedMessages(conversationId).filter((message) => message.author === 'codex' || message.author === 'claude');
+    const messages = this.collaborators.listAllSharedMessages(conversationId).filter((message) => message.author === 'codex' || message.author === 'claude' || message.author === 'palmyra');
     const insertRun = this.database.prepare(`INSERT INTO agent_runs (id, work_item_id, kind, requested_target, requested_agent, agent, status, instructions, output, error, started_at, completed_at, created_at, conversation_id, message_id, model, execution_profile, input_tokens, output_tokens, fallback_from, fallback_reason, adopted_conversation_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     let adopted = 0;
@@ -95,7 +95,7 @@ export class ConversationService {
       && !(message.author === 'jeffrey' && isRuntimeApproval(message.body))
     );
     const userMessageIndex = messages.findLastIndex((message) => message.author === 'jeffrey');
-    const reply = messages.slice(userMessageIndex + 1).findLast((message) => message.author === 'codex' || message.author === 'claude');
+    const reply = messages.slice(userMessageIndex + 1).findLast((message) => message.author === 'codex' || message.author === 'claude' || message.author === 'palmyra');
     if (userMessageIndex < 0 || !reply) throw new Error('A conversation needs a user message and assistant reply before it can be forked.');
     const exchange = [messages[userMessageIndex]!, reply];
     return this.unitOfWork.transaction(() => {

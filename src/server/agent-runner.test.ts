@@ -1146,6 +1146,9 @@ fi`;
   it('keeps the assigned agent independent from the execution capability', () => {
     const assigned = { ...item('Implement the connector UI'), assignees: ['claude'] as WorkItem['assignees'] };
     expect(classifyExecution(assigned)).toEqual(expect.objectContaining({ kind: 'execute', agent: 'claude', complex: false }));
+    const palmyraAssigned = { ...item('Implement the connector UI'), assignees: ['palmyra'] as WorkItem['assignees'] };
+    expect(classifyExecution(palmyraAssigned)).toEqual(expect.objectContaining({ kind: 'execute', agent: 'palmyra', complex: false }));
+    expect(classificationForKind(palmyraAssigned, 'analysis')).toEqual(expect.objectContaining({ kind: 'analysis', agent: 'palmyra' }));
   });
 
   it('answers status questions without resuming the linked task execution', () => {

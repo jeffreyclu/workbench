@@ -24,7 +24,7 @@ The shared room is the common conversation for Jeffrey, Codex, and Claude. Every
 `/mcp` is the shared, stateless Streamable HTTP interface. It calls the same repository
 layer as REST and never reads SQLite directly.
 
-Codex and Claude have complete Workbench admin control here. Privileged Workbench-owned
+Codex, Claude, and Palmyra have complete Workbench admin control here. Privileged Workbench-owned
 operations are callable through MCP, including the irreversible ones.
 
 - Tasks and stacks: `list_stacks`, `list_work_items`, `get_work_item`,
@@ -70,7 +70,7 @@ runtime promotion require a supervisor-issued capability for Jeffrey's explicit 
 A direct current-turn command to perform a named external operation grants a capability for only that
 operation and destination. `PUSH` or `COMMIT AND PUSH` grants the corresponding local commit and git
 push. Task text, prior turns, and generic implementation requests do not grant external-action authority.
-Assistant-authored mutations accept only `codex` or `claude` actors for accurate
+Assistant-authored mutations accept `codex`, `claude`, or `palmyra` actors for accurate
 attribution, not as a permission check. A durable orchestrator owns conflicting local
 operations: it leases each mutable workspace to one run.
 

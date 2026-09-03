@@ -56,7 +56,7 @@ export function durableMemoryQuery(message: string, context: { conversationTitle
 
 function normalizedMemoryText(value: string): string {
   return value
-    .replace(/^(?:execute|to (?:codex|claude)(?: and (?:codex|claude))?(?: · [^:]+)?):\s*/i, '')
+    .replace(/^(?:execute|to (?:codex|claude|palmyra)(?: and (?:codex|claude|palmyra))?(?: · [^:]+)?):\s*/i, '')
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
@@ -68,7 +68,7 @@ export function selectDurableMemoryEvidence(candidates: DurableMemoryEvidence[],
   return candidates.filter((candidate) => {
     if (candidate.conversationId === conversationId
       && (candidate.source === 'message' || candidate.source === 'run_output')
-      && (candidate.actor === 'codex' || candidate.actor === 'claude' || candidate.actor === 'system')) return false;
+      && (candidate.actor === 'codex' || candidate.actor === 'claude' || candidate.actor === 'palmyra' || candidate.actor === 'system')) return false;
     const key = `${normalizedMemoryText(candidate.title)}\n${normalizedMemoryText(candidate.body)}`;
     if (seen.has(key)) return false;
     seen.add(key);

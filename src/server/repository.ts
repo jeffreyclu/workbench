@@ -511,6 +511,14 @@ export class WorkItemRepository {
     return this.conversations.setCodexThreadId(id, threadId) ? this.getConversation(id) : null;
   }
 
+  getConversationPalmyraContext(id: string): string | null {
+    return this.conversations.getPalmyraContext(id);
+  }
+
+  setConversationPalmyraContext(id: string, context: string | null): SharedConversation | null {
+    return this.conversations.setPalmyraContext(id, context) ? this.getConversation(id) : null;
+  }
+
   setConversationWorkItem(id: string, workItemId: string | null): SharedConversation | null {
     const before = this.getConversation(id);
     let conversation = this.conversationService.setWorkItem(id, workItemId);
@@ -1190,7 +1198,7 @@ export class WorkItemRepository {
 
   /**
    * Persists a completed agent result as a scoped handoff. This is deliberately
-   * separate from the transcript: the next Codex or Claude process gets the
+   * separate from the transcript: the next Codex, Claude, or Palmyra process gets the
    * same bounded, durable record even after a restart or a task continuation.
    */
   recordAgentHandoff(conversationId: string, messageId: string, author: 'codex' | 'claude' | 'palmyra' | 'system', body: string): void {
@@ -1968,7 +1976,7 @@ export class WorkItemRepository {
     const row = this.database.prepare('SELECT assignees_json, agent_assignment_mode FROM work_items WHERE id = ?').get(id) as
       { assignees_json: string; agent_assignment_mode: string } | undefined;
     if (!row || row.agent_assignment_mode !== 'manual') return [];
-    return (JSON.parse(row.assignees_json) as Assignee[]).filter((assignee): assignee is 'codex' | 'claude' => assignee === 'codex' || assignee === 'claude');
+    return (JSON.parse(row.assignees_json) as Assignee[]).filter((assignee): assignee is AgentRun['agent'] => assignee === 'codex' || assignee === 'claude' || assignee === 'palmyra');
   }
 
   updateAutomaticAgentAssignees(id: string, agents: AgentRun['agent'][]): WorkItem | null {

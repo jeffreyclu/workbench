@@ -2128,6 +2128,19 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // palmyra-first-class-parity LEGACY-AFFECTING: Writer's chat API is
+    // stateless, while existing conversation callers expect Claude/Codex
+    // provider sessions to survive across turns. Persist Palmyra's equivalent
+    // message state instead of collapsing every new turn into a 1.5 KB recap.
+    id: '077_shared_conversation_palmyra_context',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'palmyra_context_json')) {
+        database.exec('ALTER TABLE shared_conversations ADD COLUMN palmyra_context_json TEXT;');
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

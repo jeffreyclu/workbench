@@ -989,7 +989,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   // stale response never invalidates over a newer, still-in-flight change.
   const ownerMutationSeq = useRef(0);
   const updateConversationOwner = useMutation({
-    mutationFn: async (target: 'both' | 'codex' | 'claude') => {
+    mutationFn: async (target: 'both' | 'codex' | 'claude' | 'palmyra') => {
       const seq = ++ownerMutationSeq.current;
       const agents = target === 'both' ? ['codex' as const, 'claude' as const] : [target];
       const result = await api.updateWorkItem(linkedWorkItemId!, { assignees: agents });
@@ -1446,19 +1446,18 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
         {conversationDetail.isLoading ? <ConversationComposerSkeleton /> : conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <>{isPhoneChrome && mobileComposerOpen && <button type="button" className="mobile-composer-backdrop" aria-label="Dismiss composer" onClick={() => setMobileComposerOpen(false)} />}<form id="conversation-composer" className={`shared-composer${mobileComposerOpen ? ' mobile-composer-sheet' : ' is-mobile-composer-collapsed'}`} onSubmit={submit}>
           {isPhoneChrome && mobileComposerOpen && <button type="button" className="mobile-composer-handle" aria-label="Collapse composer" title="Collapse composer" onPointerDown={(event) => { mobileComposerDragStartY.current = event.clientY; }} onPointerUp={(event) => { if (mobileComposerDragStartY.current !== null && event.clientY - mobileComposerDragStartY.current >= 36) setMobileComposerOpen(false); mobileComposerDragStartY.current = null; }} onPointerCancel={() => { mobileComposerDragStartY.current = null; }} onClick={() => setMobileComposerOpen(false)}><span /></button>}
           {files.length > 0 && <div className="pending-files">{files.map((file) => <button type="button" key={`${file.name}-${file.size}`} onClick={() => setFiles((current) => current.filter((item) => item !== file))}><Paperclip size={11} /> {file.name} <X size={10} /></button>)}</div>}
-          <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} placeholder="Message Codex or Claude…" ariaLabel="Message Codex or Claude" onSubmit={retrySend} disabled={send.isPending} />
+          <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} placeholder="Message an agent…" ariaLabel="Message an agent" onSubmit={retrySend} disabled={send.isPending} />
           <div className="composer-toolbar">
             <input ref={fileRef} className="visually-hidden" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
             <button type="button" className="composer-tool attach-button" onClick={() => fileRef.current?.click()} aria-label="Attach files" title="Attach files"><Paperclip size={14} /></button>
             <span className="composer-hint">Files, screenshots, or context</span>
             <ComposerModelSelect executionProfile={composerSelection.executionProfile} provider={composerSelection.dispatchTarget} accountProfile={composerSelection.accountProfile} onChange={(executionProfile) => updateComposerPreferences({ executionProfile })} disabled={selectionHydratedFor !== conversationId} />
-            <select className="agent-target account-target" value={composerSelection.accountProfile} onChange={(event) => updateComposerPreferences({ accountProfile: event.target.value })} aria-label="Account profile" disabled={agentAccounts.isLoading || selectionHydratedFor !== conversationId}>
+            {composerSelection.dispatchTarget !== 'palmyra' && <select className="agent-target account-target" value={composerSelection.accountProfile} onChange={(event) => updateComposerPreferences({ accountProfile: event.target.value })} aria-label="Account profile" disabled={agentAccounts.isLoading || selectionHydratedFor !== conversationId}>
               {accountProfiles.map((account) => <option key={account.name} value={account.name}>{account.name === 'default' ? 'Default' : account.name}</option>)}
-            </select>
-            <ComposerProviderSelect value={composerSelection.dispatchTarget} accountProfile={composerSelection.accountProfile} onChange={(target) => { updateComposerPreferences({ dispatchTarget: target, aiProvider: target === 'palmyra' ? 'palmyra' : target === 'claude' ? 'claude' : 'auto', ...(target === 'palmyra' ? { executionProfile: null } : {}) }); if (linkedWorkItemId && !linkedTaskIsSelfAssigned && target !== 'palmyra') updateConversationOwner.mutate(target); }} disabled={selectionHydratedFor !== conversationId} />
+            </select>}
+            <ComposerProviderSelect value={composerSelection.dispatchTarget} accountProfile={composerSelection.accountProfile} onChange={(target) => { updateComposerPreferences({ dispatchTarget: target, aiProvider: target === 'palmyra' ? 'palmyra' : target === 'claude' ? 'claude' : 'auto', ...(target === 'palmyra' ? { executionProfile: null } : {}) }); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} disabled={selectionHydratedFor !== conversationId} />
             <button className="icon-button primary composer-send" aria-label="Send message" title="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
           </div>
-          {composerSelection.dispatchTarget === 'palmyra' && <p className="composer-provider-limit" role="status"><AlertTriangle size={12} aria-hidden="true" /><span>Palmyra is chat-only in Workbench. X6 access changes the model, not file permissions. Choose Codex or Claude for code changes.</span></p>}
           {send.error && <div className="composer-send-error" role="alert"><span>Could not send: {send.error.message}</span><button type="button" className="button secondary compact" onMouseDown={(event) => event.preventDefault()} onClick={retrySend} disabled={send.isPending}>Retry</button></div>}
         </form></>}
         </div>
@@ -1473,7 +1472,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
             // through a DOM range rather than a textarea selection. Landing it
             // at the end is the point: the reviewer types straight into the
             // sentence the handoff left open.
-            const composer = document.querySelector<HTMLElement>('.markdown-contenteditable[aria-label="Message Codex or Claude"]');
+            const composer = document.querySelector<HTMLElement>('.markdown-contenteditable[aria-label="Message an agent"]');
             if (!composer) return;
             composer.focus();
             const range = document.createRange();

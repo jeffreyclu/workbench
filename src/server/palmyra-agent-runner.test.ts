@@ -1,16 +1,17 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { executeAgentRun } from './agent-runner.js';
 import { openDatabase } from './database.js';
+import { runPalmyraAgent } from './palmyra-agent.js';
 import { WorkItemRepository } from './repository.js';
 
-const chatWithPalmyra = vi.hoisted(() => vi.fn());
+const streamChatWithPalmyra = vi.hoisted(() => vi.fn());
 vi.mock('./providers/palmyra.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./providers/palmyra.js')>()),
-  chatWithPalmyra,
+  streamChatWithPalmyra,
 }));
 vi.mock('./review-auto-score.js', () => ({
   scheduleReviewAutoScore: vi.fn(async () => {}),
@@ -20,7 +21,7 @@ vi.mock('./review-auto-score.js', () => ({
 
 const workspaces: string[] = [];
 afterEach(() => {
-  chatWithPalmyra.mockReset();
+  streamChatWithPalmyra.mockReset();
   for (const workspace of workspaces.splice(0)) rmSync(workspace, { recursive: true, force: true });
 });
 
@@ -28,9 +29,9 @@ describe('Palmyra durable agent runs', () => {
   it('executes tools and completes a directly dispatched run', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'palmyra-run-'));
     workspaces.push(workspace);
-    chatWithPalmyra
-      .mockResolvedValueOnce({ content: null, toolCalls: [{ id: 'write-direct', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'direct.txt', content: 'direct run\n' }) } }], usage: { inputTokens: 10, outputTokens: 4 } })
-      .mockResolvedValueOnce({ content: 'Implemented the direct run edit.', toolCalls: [], usage: { inputTokens: 12, outputTokens: 5 } });
+    streamChatWithPalmyra
+      .mockResolvedValueOnce({ content: null, toolCalls: [{ id: 'write-direct', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'direct.txt', content: 'direct run\n' }) } }], usage: { inputTokens: 10, outputTokens: 4 }, finishReason: 'tool_calls' })
+      .mockResolvedValueOnce({ content: 'Implemented the direct run edit.', toolCalls: [], usage: { inputTokens: 12, outputTokens: 5 }, finishReason: 'stop' });
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);
     const task = repository.create({ title: 'Create a file', description: '', priority: 1, status: 'ready', projectName: 'Test', workspacePath: workspace, dueDate: null });
@@ -46,5 +47,54 @@ describe('Palmyra durable agent runs', () => {
     expect(insights.byAgent).toContainEqual(expect.objectContaining({ agent: 'palmyra', total: 1, completed: 1 }));
     expect(insights.agentFit).toContainEqual(expect.objectContaining({ agent: 'palmyra', kind: 'execute', completed: 1 }));
     database.close();
+  });
+
+  it('keeps working beyond the former 48-round ceiling and can use the Workbench MCP tool surface', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'palmyra-uncapped-'));
+    workspaces.push(workspace);
+    const toolCall = { id: 'workbench-call', type: 'function' as const, function: { name: 'list_work_items', arguments: '{}' } };
+    for (let round = 0; round < 49; round += 1) {
+      streamChatWithPalmyra.mockResolvedValueOnce({ content: null, toolCalls: [toolCall], usage: { inputTokens: 10, outputTokens: 1 }, finishReason: 'tool_calls' });
+    }
+    streamChatWithPalmyra.mockResolvedValueOnce({ content: 'All 49 tool rounds completed.', toolCalls: [], usage: { inputTokens: 10, outputTokens: 6 }, finishReason: 'stop' });
+    const bridge = {
+      tools: [{ type: 'function' as const, function: { name: 'list_work_items', description: 'List work.', parameters: { type: 'object' } } }],
+      call: vi.fn(async () => 'Tool succeeded:\n[]'),
+      close: vi.fn(async () => {}),
+    };
+
+    const result = await runPalmyraAgent({ cwd: workspace, prompt: 'Inspect all work.', workbenchTools: bridge });
+
+    expect(streamChatWithPalmyra).toHaveBeenCalledTimes(50);
+    expect(bridge.call).toHaveBeenCalledTimes(49);
+    expect(bridge.close).toHaveBeenCalledOnce();
+    expect(result.output).toContain('All 49 tool rounds completed.');
+  });
+
+  it('continues a provider-length stop and sends image attachments in the same user turn', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'palmyra-image-'));
+    workspaces.push(workspace);
+    const imagePath = join(workspace, 'reference.png');
+    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    streamChatWithPalmyra
+      .mockResolvedValueOnce({ content: 'First half', toolCalls: [], usage: { inputTokens: 20, outputTokens: 8 }, finishReason: 'length' })
+      .mockResolvedValueOnce({ content: 'second half', toolCalls: [], usage: { inputTokens: 22, outputTokens: 5 }, finishReason: 'stop' });
+
+    const result = await runPalmyraAgent({
+      cwd: workspace,
+      prompt: 'Describe the image.',
+      imageAttachments: [{ path: imagePath, mimeType: 'image/png', name: 'reference.png' }],
+      workbenchTools: null,
+    });
+
+    const firstRequest = streamChatWithPalmyra.mock.calls[0][0];
+    expect(firstRequest.maxTokens).toBe(8_192);
+    expect(firstRequest.messages[1].content).toEqual([
+      { type: 'text', text: 'Describe the image.' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw==' } },
+    ]);
+    expect(streamChatWithPalmyra.mock.calls[1][0].messages).toContainEqual(expect.objectContaining({ role: 'user', content: expect.stringMatching(/Continue exactly/) }));
+    expect(result.output).toBe('First half\n\nsecond half');
+    expect(JSON.stringify(result.messages)).not.toContain('base64');
   });
 });

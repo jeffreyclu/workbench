@@ -1188,7 +1188,7 @@ describe('shared room', () => {
     ]);
     expect(screen.getByRole('button', { name: 'Changes' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('button', { name: 'Split' })).toBeNull();
-    expect(screen.getByLabelText('Message Codex or Claude').closest('.conversation-review-layout')).toHaveClass('layout-changes');
+    expect(screen.getByLabelText('Message an agent').closest('.conversation-review-layout')).toHaveClass('layout-changes');
     expect(document.querySelectorAll('#conversation-composer')).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Conversation' }));
@@ -1433,7 +1433,7 @@ describe('shared room', () => {
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
-    const composer = await screen.findByLabelText('Message Codex or Claude');
+    const composer = await screen.findByLabelText('Message an agent');
     expect(composer.getAttribute('contenteditable')).toBe('true');
   });
 
@@ -1452,7 +1452,7 @@ describe('shared room', () => {
 
     const heading = await screen.findByRole('heading', { name: 'Compact mobile conversation' });
     expect(heading.closest('header')).toHaveClass('is-mobile-header-collapsed');
-    const composer = screen.getByLabelText('Message Codex or Claude').closest('form');
+    const composer = screen.getByLabelText('Message an agent').closest('form');
     expect(composer).toHaveClass('is-mobile-composer-collapsed');
 
     const trayGrabber = screen.getByRole('button', { name: 'Expand conversation tray' });
@@ -1896,8 +1896,9 @@ describe('shared room', () => {
     expect(provider.value).toBe('palmyra');
     await waitFor(() => expect(preferenceBodies.some((body) => body.includes('"dispatchTarget":"palmyra"') && body.includes('"aiProvider":"palmyra"'))).toBe(true));
     expect(screen.getByLabelText('Model choice')).toHaveValue('palmyra-x5');
-    expect(screen.getByRole('status')).toHaveTextContent('Palmyra is chat-only in Workbench. X6 access changes the model, not file permissions. Choose Codex or Claude for code changes.');
-    expect(screen.getAllByRole('combobox')).toHaveLength(3);
+    expect(screen.queryByText(/Palmyra is chat-only/)).toBeNull();
+    expect(screen.queryByLabelText('Account profile')).toBeNull();
+    expect(screen.getAllByRole('combobox')).toHaveLength(2);
   });
 
   it('keeps Both selected after switching away from and back to a conversation', async () => {
@@ -1990,7 +1991,7 @@ describe('shared room', () => {
     fireEvent.click(within(executionMenu).getByRole('option', { name: 'Review' }));
     const attachmentInput = document.querySelector('#conversation-composer input[type="file"]') as HTMLInputElement;
     fireEvent.change(attachmentInput, { target: { files: [new File(['review'], 'change.txt', { type: 'text/plain' })] } });
-    fireEvent.submit(screen.getByLabelText('Message Codex or Claude').closest('form')!);
+    fireEvent.submit(screen.getByLabelText('Message an agent').closest('form')!);
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === '/api/shared/messages' && init?.method === 'POST' && JSON.parse(String(init.body)).executionKind === 'review')).toBe(true));
   });
@@ -2023,7 +2024,7 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
-    const composer = await screen.findByLabelText('Message Codex or Claude');
+    const composer = await screen.findByLabelText('Message an agent');
     composer.focus();
     fireEvent.submit(composer.closest('form')!);
 
@@ -2848,6 +2849,7 @@ describe('self-assigned ownership', () => {
     const codex = within(owners).getByRole('button', { name: /codex/i });
     expect(codex.hasAttribute('disabled')).toBe(true);
     expect(within(owners).getByRole('button', { name: /claude/i }).hasAttribute('disabled')).toBe(true);
+    expect(within(owners).getByRole('button', { name: /palmyra/i }).hasAttribute('disabled')).toBe(true);
 
     fireEvent.click(codex);
     expect(patches(fetchMock)).toEqual([]);
@@ -2879,6 +2881,18 @@ describe('self-assigned ownership', () => {
     const execute = await screen.findByRole('button', { name: 'Execute task' });
     expect(execute.hasAttribute('disabled')).toBe(false);
     expect(within(document.querySelector('.assignee-picker')!).getByRole('button', { name: /claude/i }).hasAttribute('disabled')).toBe(false);
+  });
+
+  it('offers Palmyra ownership and X5/X6 execution without a CLI account profile', async () => {
+    renderDetail(['palmyra']);
+
+    const owners = (await screen.findByText('Owners')).parentElement!.querySelector('.assignee-picker') as HTMLElement;
+    expect(within(owners).getByRole('button', { name: /palmyra/i })).toHaveClass('selected');
+    const model = screen.getByLabelText('Model choice') as HTMLSelectElement;
+    expect(Array.from(model.options).map((option) => option.value)).toEqual(['palmyra-x5', 'palmyra-x6']);
+    expect(screen.queryByLabelText('Account profile')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Edit profile' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Execute task' })).toBeEnabled();
   });
 
   it('uses the app dialog before permanently deleting a task', async () => {

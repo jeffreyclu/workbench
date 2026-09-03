@@ -164,19 +164,22 @@ export class RunRepository {
       )
       GROUP BY agent
     `).all() as Array<{ agent: AgentRun['agent']; load: number }>;
-    const load = { codex: 0, claude: 0 };
-    for (const row of rows) if (row.agent === 'codex' || row.agent === 'claude') load[row.agent] = Number(row.load);
-    if (load.codex === 0 && load.claude === 0) return preferred;
-    if (load.codex === load.claude) {
+    const load: Record<AgentRun['agent'], number> = { codex: 0, claude: 0, palmyra: 0 };
+    for (const row of rows) load[row.agent] = Number(row.load);
+    if (Object.values(load).every((value) => value === 0)) return preferred;
+    const lowest = Math.min(...Object.values(load));
+    const available = (Object.keys(load) as AgentRun['agent'][]).filter((agent) => load[agent] === lowest);
+    if (available.length > 1) {
       const latest = this.database.prepare(`
         SELECT agent FROM agent_runs
         WHERE requested_target = 'auto'
         ORDER BY created_at DESC, rowid DESC
         LIMIT 1
       `).get() as { agent: AgentRun['agent'] } | undefined;
-      return latest?.agent === 'codex' ? 'claude' : 'codex';
+      const latestIndex = latest ? available.indexOf(latest.agent) : -1;
+      return available[(latestIndex + 1) % available.length] ?? preferred;
     }
-    return load.codex < load.claude ? 'codex' : 'claude';
+    return available[0] ?? preferred;
   }
 
   /**

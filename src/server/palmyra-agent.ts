@@ -17,13 +17,15 @@ import {
   type AgentAuditCandidate,
   type AgentUsage,
 } from './agent-runner.js';
-import { chatWithPalmyra, type PalmyraMessage, type PalmyraTool, type PalmyraToolCall } from './providers/palmyra.js';
+import { connectPalmyraWorkbenchTools, type PalmyraWorkbenchToolBridge } from './palmyra-workbench-tools.js';
+import { palmyraMaxOutputTokens, streamChatWithPalmyra, type PalmyraMessage, type PalmyraTool, type PalmyraToolCall } from './providers/palmyra.js';
 
-const MAX_ROUNDS = 48;
 const MAX_TOOL_OUTPUT = 40_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
+const PALMYRA_CONTEXT_CHECKPOINT_TOKENS = 900_000;
+const PALMYRA_REQUEST_RETRIES = 3;
 
-const tools: PalmyraTool[] = [
+const localTools: PalmyraTool[] = [
   {
     type: 'function',
     function: {
@@ -189,6 +191,52 @@ export interface PalmyraAgentResult {
   fallbackReason: null;
   sessionId: null;
   costUsd: null;
+  messages: PalmyraMessage[];
+  peakContextTokens: number;
+}
+
+export interface PalmyraImageAttachment {
+  path: string;
+  mimeType: string;
+  name: string;
+}
+
+function transientPalmyraError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|network|timed out|timeout|Palmyra request failed \((?:429|5\d\d)\))/i.test(message);
+}
+
+function appendProgress(current: string, next: string): string {
+  const value = next.trim();
+  return value ? (current ? `${current}\n\n${value}` : value) : current;
+}
+
+function compactMessagesForContinuation(system: PalmyraMessage, objective: string, progress: string, messages: PalmyraMessage[]): PalmyraMessage[] {
+  const recent = messages.slice(-8).map((message) => {
+    if (typeof message.content !== 'string') return { ...message, content: '[Image attachment was supplied earlier in this run.]' } as PalmyraMessage;
+    return { ...message, content: message.content.slice(-20_000) } as PalmyraMessage;
+  });
+  return [system, {
+    role: 'user',
+    content: `Continue the same objective after a provider-context checkpoint. Do not restart completed work.\n\nOriginal objective:\n${objective.slice(0, 40_000)}\n\nVisible progress:\n${progress.slice(-80_000)}`,
+  }, ...recent];
+}
+
+function messagesForPersistence(messages: PalmyraMessage[]): PalmyraMessage[] {
+  return messages.map((message) => message.content === null || typeof message.content === 'string'
+    ? message
+    : { ...message, content: '[Image attachment was supplied in this turn.]' });
+}
+
+export function parsePalmyraContext(value: string | null | undefined): PalmyraMessage[] | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed) || !parsed.every((message) => message && typeof message === 'object' && ['system', 'user', 'assistant', 'tool'].includes(String((message as { role?: unknown }).role)))) return undefined;
+    return parsed as PalmyraMessage[];
+  } catch {
+    return undefined;
+  }
 }
 
 export async function runPalmyraAgent(options: {
@@ -200,17 +248,35 @@ export async function runPalmyraAgent(options: {
   onUsage?: (usage: AgentUsage, agent: 'palmyra') => void;
   onAudit?: (entries: AgentAuditCandidate[], agent: 'palmyra') => void;
   onSteeringReady?: (steer: ((body: string) => Promise<boolean>) & { cancel?: () => void }) => void;
+  previousMessages?: PalmyraMessage[];
+  imageAttachments?: PalmyraImageAttachment[];
+  workbenchTools?: PalmyraWorkbenchToolBridge | null;
 }): Promise<PalmyraAgentResult> {
-  const messages: PalmyraMessage[] = [
-    { role: 'system', content: `You are Palmyra, a first-class coding agent running inside Workbench. Use the provided tools to inspect, execute, edit, and verify directly in the resolved workspace. Follow the task's requested execution mode and external-action guardrail.\n\n${AGENT_EXECUTION_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\n${AGENT_DEBUGGER_CONTRACT}` },
-    { role: 'user', content: options.prompt },
-  ];
+  const systemMessage: PalmyraMessage = { role: 'system', content: `You are Palmyra, a first-class coding agent running inside Workbench. Use the provided tools to inspect, execute, edit, and verify directly in the resolved workspace. Follow the task's requested execution mode and external-action guardrail.\n\n${AGENT_EXECUTION_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\n${AGENT_DEBUGGER_CONTRACT}` };
+  const imageContent = await Promise.all((options.imageAttachments ?? [])
+    .filter((attachment) => attachment.mimeType.startsWith('image/'))
+    .map(async (attachment) => ({ type: 'image_url' as const, image_url: { url: `data:${attachment.mimeType};base64,${(await readFile(attachment.path)).toString('base64')}` } })));
+  const userMessage: PalmyraMessage = imageContent.length
+    ? { role: 'user', content: [{ type: 'text', text: options.prompt }, ...imageContent] }
+    : { role: 'user', content: options.prompt };
+  let messages: PalmyraMessage[] = options.previousMessages?.length
+    ? [...options.previousMessages, userMessage]
+    : [systemMessage, userMessage];
+  const bridge = options.workbenchTools === undefined && !process.env.VITEST
+    ? await connectPalmyraWorkbenchTools().catch((error) => {
+      options.onProgress?.(`● Workbench tools are temporarily unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    })
+    : options.workbenchTools ?? null;
+  const allTools = [...localTools, ...(bridge?.tools ?? [])];
   const pendingInterjections: string[] = [];
+  let activeRequest: AbortController | null = null;
   const steer = Object.assign(async (body: string) => {
     if (options.signal?.aborted) return false;
     pendingInterjections.push(body);
+    activeRequest?.abort(new Error('Palmyra turn steered.'));
     return true;
-  }, { cancel: () => { /* The shared AbortController owns cancellation. */ } });
+  }, { cancel: () => activeRequest?.abort(new Error('Palmyra run canceled.')) });
   options.onSteeringReady?.(steer);
   let usage: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
   // Palmyra's onProgress must pass the full accumulated activity log, not just
@@ -220,15 +286,42 @@ export async function runPalmyraAgent(options: {
   // into a single buffer and pass that. Match that pattern here.
   let progress = '';
   const emitProgress = () => options.onProgress?.(progress);
-  for (let round = 0; round < MAX_ROUNDS; round += 1) {
+  let peakContextTokens = 0;
+  try {
+  for (;;) {
     if (options.signal?.aborted) throw options.signal.reason ?? new Error('Palmyra run canceled.');
-    const response = await chatWithPalmyra({ messages, tools, toolChoice: 'auto', maxTokens: 4_096, timeoutMs: 120_000, signal: options.signal, model: options.model });
+    let response: Awaited<ReturnType<typeof streamChatWithPalmyra>> | null = null;
+    for (let attempt = 0; attempt < PALMYRA_REQUEST_RETRIES; attempt += 1) {
+      activeRequest = new AbortController();
+      const signal = options.signal ? AbortSignal.any([options.signal, activeRequest.signal]) : activeRequest.signal;
+      try {
+        const prefix = progress ? `${progress}\n\n` : '';
+        response = await streamChatWithPalmyra({ messages, tools: allTools, toolChoice: 'auto', maxTokens: palmyraMaxOutputTokens(options.model), timeoutMs: 120_000, signal, model: options.model }, {
+          onContent: (_delta, accumulated) => options.onProgress?.(`${prefix}${accumulated}`),
+        });
+        break;
+      } catch (error) {
+        if (options.signal?.aborted) throw options.signal.reason ?? error;
+        if (pendingInterjections.length) {
+          messages.push(...pendingInterjections.splice(0).map((content): PalmyraMessage => ({ role: 'user', content })));
+          break;
+        }
+        if (attempt + 1 >= PALMYRA_REQUEST_RETRIES || !transientPalmyraError(error)) throw error;
+        progress = appendProgress(progress, `● Palmyra connection interrupted. Retrying request ${attempt + 2} of ${PALMYRA_REQUEST_RETRIES}…`);
+        emitProgress();
+        await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 500 * 2 ** attempt));
+      } finally {
+        activeRequest = null;
+      }
+    }
+    if (!response) continue;
     usage = {
       inputTokens: response.usage.inputTokens === null ? usage.inputTokens : (usage.inputTokens ?? 0) + response.usage.inputTokens,
       cacheCreationInputTokens: null,
       cacheReadInputTokens: null,
       outputTokens: response.usage.outputTokens === null ? usage.outputTokens : (usage.outputTokens ?? 0) + response.usage.outputTokens,
     };
+    peakContextTokens = Math.max(peakContextTokens, response.usage.inputTokens ?? 0);
     options.onUsage?.(usage, 'palmyra');
     messages.push({ role: 'assistant', content: response.content, ...(response.toolCalls.length ? { tool_calls: response.toolCalls } : {}) });
     if (!response.toolCalls.length && pendingInterjections.length) {
@@ -237,21 +330,34 @@ export async function runPalmyraAgent(options: {
     }
     if (!response.toolCalls.length) {
       if (!response.content) throw new Error('Palmyra returned no final response.');
-      progress = progress ? `${progress}\n\n${response.content}` : response.content;
+      progress = appendProgress(progress, response.content);
       emitProgress();
-      return { output: response.content, agent: 'palmyra', usage, fallbackFrom: null, fallbackReason: null, sessionId: null, costUsd: null };
+      if (response.finishReason === 'length') {
+        messages.push({ role: 'user', content: 'Continue exactly where the response stopped. Do not repeat prior text, and finish the same objective.' });
+        continue;
+      }
+      return { output: progress, agent: 'palmyra', usage, fallbackFrom: null, fallbackReason: null, sessionId: null, costUsd: null, messages: messagesForPersistence(messages), peakContextTokens };
     }
     if (response.content) {
-      progress = progress ? `${progress}\n\n${response.content}` : response.content;
+      progress = appendProgress(progress, response.content);
       emitProgress();
     }
     for (const call of response.toolCalls) {
       let content: string;
       try {
-        const result = await executeTool(call, options.cwd, options.signal);
-        content = result.content;
-        options.onAudit?.([result.audit], 'palmyra');
-        progress = progress ? `${progress}\n● Palmyra used ${call.function.name}: ${result.audit.detail}` : `● Palmyra used ${call.function.name}: ${result.audit.detail}`;
+        if (localTools.some((tool) => tool.function.name === call.function.name)) {
+          const result = await executeTool(call, options.cwd, options.signal);
+          content = result.content;
+          options.onAudit?.([result.audit], 'palmyra');
+          progress = progress ? `${progress}\n● Palmyra used ${call.function.name}: ${result.audit.detail}` : `● Palmyra used ${call.function.name}: ${result.audit.detail}`;
+        } else if (bridge) {
+          content = await bridge.call(call.function.name, parseArguments(call));
+          const audit = { category: 'agent_tool_use' as const, streamKind: 'tool' as const, detail: `Workbench MCP: ${call.function.name}` };
+          options.onAudit?.([audit], 'palmyra');
+          progress = progress ? `${progress}\n● Palmyra used ${call.function.name}` : `● Palmyra used ${call.function.name}`;
+        } else {
+          throw new Error(`Unknown tool: ${call.function.name}`);
+        }
         emitProgress();
       } catch (error) {
         content = `Tool error: ${error instanceof Error ? error.message : String(error)}`;
@@ -261,6 +367,15 @@ export async function runPalmyraAgent(options: {
       messages.push({ role: 'tool', name: call.function.name, tool_call_id: call.id, content });
     }
     messages.push(...pendingInterjections.splice(0).map((content): PalmyraMessage => ({ role: 'user', content })));
+    if (peakContextTokens >= PALMYRA_CONTEXT_CHECKPOINT_TOKENS) {
+      progress = appendProgress(progress, '● Provider context checkpoint saved. Continuing the same task without a turn limit…');
+      emitProgress();
+      messages = compactMessagesForContinuation(systemMessage, options.prompt, progress, messages);
+      peakContextTokens = 0;
+    }
   }
-  throw new Error(`Palmyra exceeded the ${MAX_ROUNDS}-round tool limit.`);
+  } finally {
+    activeRequest?.abort();
+    await bridge?.close().catch(() => {});
+  }
 }

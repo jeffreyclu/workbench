@@ -1938,10 +1938,13 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const resumeSessionId = run.agent === 'claude' && run.kind === 'execute' && run.conversationId
       ? repository.getConversation(run.conversationId)?.claudeSessionId ?? undefined
       : undefined;
+    const palmyraContext = run.agent === 'palmyra' && run.conversationId
+      ? (await import('./palmyra-agent.js')).parsePalmyraContext(repository.getConversationPalmyraContext(run.conversationId))
+      : undefined;
     // A conversation id alone is not enough: the first turn still needs the
     // complete task prompt. Once Claude has returned a session id, --resume
     // retains that context, so replaying shared context and RAG is pure cost.
-    const resumesSession = Boolean(resumeSessionId);
+    const resumesSession = Boolean(resumeSessionId || palmyraContext?.length);
     const sharedContext = resumesSession
       ? ''
       : [repository.getSharedContext(undefined, { workItemId: item.id }), externalContext].filter(Boolean).join('\n\n');
@@ -1955,7 +1958,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         items: memoryEvidence.map(({ source, title, body, createdAt }) => ({ source, title, body, createdAt })),
       } : null,
     });
-    if (resumesSession) repository.addActivity(item.id, 'system', 'progress', 'Resuming Claude session with bounded continuation context.');
+    if (resumesSession) repository.addActivity(item.id, 'system', 'progress', `Resuming ${run.agent === 'palmyra' ? 'Palmyra context' : 'Claude session'} with bounded continuation context.`);
     const prompt = resumesSession
       ? buildResumedPrompt(item, run, externalActionContract, memoryContext)
       : buildPrompt(item, run, sharedContext, externalActionContract, memoryContext);
@@ -1985,7 +1988,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // choice and its reason so the activity log explains what actually ran.
     repository.addActivity(item.id, 'system', 'model_selected', describeModelSelection({ agent: run.agent, kind: run.kind, model, profile, source: decision.source }));
     let result = run.agent === 'palmyra'
-      ? await (await import('./palmyra-agent.js')).runPalmyraAgent({ cwd, prompt, model: palmyraTier, signal: controller.signal, onProgress: (partialOutput) => {
+      ? await (await import('./palmyra-agent.js')).runPalmyraAgent({ cwd, prompt, model: palmyraTier, signal: controller.signal, previousMessages: palmyraContext, imageAttachments: item.attachments ?? [], onProgress: (partialOutput) => {
         repository.updateRun(run.id, { output: partialOutput });
         if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
       }, onUsage: (usage) => {
@@ -2034,13 +2037,16 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // Only a Claude result may write this column: after a fallback the id
     // belongs to a different agent, and the Claude session that failed mid-turn
     // is not worth resuming either way.
-    if (resumesSession && run.conversationId) {
+    if (resumeSessionId && run.conversationId) {
       if (result.agent !== 'claude') repository.setConversationClaudeSessionId(run.conversationId, null);
       else {
         const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile, result.usage.cacheReadInputTokens ?? 0);
         repository.setConversationClaudeSessionId(run.conversationId, checkpoint ? null : result.sessionId ?? null);
         if (checkpoint) repository.addActivity(item.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile, result.usage.cacheReadInputTokens ?? 0));
       }
+    }
+    if (result.agent === 'palmyra' && run.conversationId && 'messages' in result && result.messages) {
+      repository.setConversationPalmyraContext(run.conversationId, JSON.stringify(result.messages));
     }
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the run to Codex.';
@@ -2226,7 +2232,7 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
   else if (/\b(research|investigate|explore|compare|evaluate)\b/.test(text)) { kind = 'research'; agent = 'claude'; reason = 'keyword rules: the task asks for investigation'; }
 
   if (kind === 'execute' && isDocumentWork(item)) agent = 'claude';
-  const assignedAgent = item.assignees.find((assignee): assignee is CliAgent => assignee === 'codex' || assignee === 'claude');
+  const assignedAgent = item.assignees.find((assignee): assignee is AgentRun['agent'] => assignee !== 'jeffrey');
   if (assignedAgent && kind !== 'review') agent = assignedAgent;
 
   if (complex && kind !== 'review') {
@@ -2334,7 +2340,7 @@ export function classifyMessageIntent(message: string): AgentRun['kind'] | null 
 export function classificationForKind(item: WorkItem, kind: AgentRun['kind']): ReturnType<typeof classifyExecution> {
   let agent: AgentRun['agent'] = kind === 'execute' || kind === 'review' ? 'codex' : 'claude';
   if (kind === 'execute' && isDocumentWork(item)) agent = 'claude';
-  const assignedAgent = item.assignees.find((assignee): assignee is CliAgent => assignee === 'codex' || assignee === 'claude');
+  const assignedAgent = item.assignees.find((assignee): assignee is AgentRun['agent'] => assignee !== 'jeffrey');
   if (assignedAgent && kind !== 'review') agent = assignedAgent;
   return {
     kind, agent, complex: false, reason: 'you picked this task type by hand',
@@ -2394,7 +2400,7 @@ SOURCE: ${item.sourceUrl ?? item.sourceIdentifier ?? item.source}`);
     }
     let agent: AgentRun['agent'] = resolvedKind === 'execute' || resolvedKind === 'review' ? 'codex' : 'claude';
     if (resolvedKind === 'execute' && isDocumentWork(item)) agent = 'claude';
-    const assignedAgent = item.assignees.find((assignee): assignee is CliAgent => assignee === 'codex' || assignee === 'claude');
+    const assignedAgent = item.assignees.find((assignee): assignee is AgentRun['agent'] => assignee !== 'jeffrey');
     if (assignedAgent && resolvedKind !== 'review') agent = assignedAgent;
     return {
       kind: resolvedKind, agent, complex: false, reason,

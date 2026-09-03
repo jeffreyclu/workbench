@@ -16,7 +16,7 @@ export type DecisionTreeEvent = AgentStreamEvent & {
   decisionId: string | null;
 };
 
-const isAgentMessage = (message: SharedMessage) => message.author === 'codex' || message.author === 'claude';
+const isAgentMessage = (message: SharedMessage) => message.author === 'codex' || message.author === 'claude' || message.author === 'palmyra';
 
 function requestLabel(message: SharedMessage) {
   const target = message.dispatchTarget === 'both' ? 'Codex + Claude'

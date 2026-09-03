@@ -90,6 +90,7 @@ const EXPECTED_MIGRATIONS = [
   '074_artifact_favorites',
   '075_shared_conversation_ai_provider',
   '076_palmyra_agent_records',
+  '077_shared_conversation_palmyra_context',
 ];
 
 describe('openDatabase', () => {
@@ -819,6 +820,25 @@ describe('openDatabase', () => {
       .run(run.id, new Date().toISOString())).not.toThrow();
     expect(upgraded.prepare('SELECT author, body FROM agent_handoffs WHERE message_id = ?').get(oldMessage.id)).toEqual({ author: 'codex', body: 'old handoff' });
     expect(() => new WorkItemRepository(upgraded).recordAgentHandoff(conversation.id, palmyraMessage.id, 'palmyra', 'new handoff')).not.toThrow();
+    upgraded.close();
+  });
+
+  it('adds persistent Palmyra conversation context on upgrade from migration 076', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE shared_conversations DROP COLUMN palmyra_context_json;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '077_shared_conversation_palmyra_context'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(shared_conversations)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toContain('palmyra_context_json');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '077_shared_conversation_palmyra_context'").get()).toBeTruthy();
+    const repository = new WorkItemRepository(upgraded);
+    const conversation = repository.createConversation('Persistent Palmyra context');
+    repository.setConversationPalmyraContext(conversation.id, '[{"role":"user","content":"resume me"}]');
+    expect(repository.getConversationPalmyraContext(conversation.id)).toContain('resume me');
     upgraded.close();
   });
 

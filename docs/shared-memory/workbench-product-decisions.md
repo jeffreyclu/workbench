@@ -14,7 +14,7 @@ Jeffrey verified manually; the browser Notification API is a fallback, not the p
 
 *Decision from Jeffrey, 2026-08-31.* Forking a conversation creates a standalone
 conversation with exactly two messages: Jeffrey's most recent message and the
-most recent Codex or Claude reply after it. Do not copy earlier messages, system
+most recent Codex, Claude, or Palmyra reply after it. Do not copy earlier messages, system
 messages, shared context, or conversation metadata into the fork. If the latest
 Jeffrey message has no assistant reply yet, do not create a partial fork.
 
@@ -1189,6 +1189,18 @@ opens on the most important paths only, the way a surgeon uses a camera for the
 critical parts of a procedure rather than for every step. Do not restructure the
 review surface so the map is the spine, and do not make the queue a derived
 ordering of camera positions.
+
+### Palmyra is a first-class provider with no Workbench usage caps
+
+*Decision from Jeffrey, 2026-09-03.* Palmyra belongs beside Claude/Opus as a
+first-class Workbench conversation provider, not as a model tier or a
+turn-grounding helper. Jeffrey is a Writer employee and states that his Writer
+Palmyra access has no usage limits. Workbench must not impose an artificial
+Palmyra token budget, maximum turn count, daily/weekly quota, or automatic
+fallback caused by a locally invented usage ceiling. Provider-native request
+limits required by the Writer API are still valid protocol constraints; they
+must be sourced from the API rather than guessed or derived from Claude/Codex
+subscription budgeting.
 
 What survives from the earlier framing is only the map's internal modeling.
 When a map is drawn for a critical block, node identity should be a place in the

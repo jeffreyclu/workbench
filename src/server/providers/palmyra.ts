@@ -5,11 +5,25 @@ import { createOutboundFetch } from '../outbound-policy.js';
 const ENDPOINT = 'https://api.writer.com/v1/chat';
 const DEFAULT_MODEL = 'palmyra-x5';
 const DEFAULT_TIMEOUT_MS = 20_000;
-const DEFAULT_MAX_TOKENS = 1_024;
+const PALMYRA_X_MAX_OUTPUT_TOKENS = 8_192;
+
+export function palmyraMaxOutputTokens(model = palmyraModel()): number {
+  return model === 'palmyra-x5' || model === 'palmyra-x6' ? PALMYRA_X_MAX_OUTPUT_TOKENS : 4_096;
+}
+
+export interface PalmyraTextContent {
+  type: 'text';
+  text: string;
+}
+
+export interface PalmyraImageContent {
+  type: 'image_url';
+  image_url: { url: string };
+}
 
 interface PalmyraTextMessage {
   role: 'system' | 'user';
-  content: string;
+  content: string | Array<PalmyraTextContent | PalmyraImageContent>;
 }
 
 interface PalmyraAssistantMessage {
@@ -66,14 +80,37 @@ export interface PalmyraChatResult {
     inputTokens: number | null;
     outputTokens: number | null;
   };
+  finishReason: string | null;
 }
 
 interface PalmyraChatResponse {
-  choices?: Array<{ message?: { content?: string | null; tool_calls?: PalmyraToolCall[] } }>;
+  id?: string;
+  choices?: Array<{
+    finish_reason?: string | null;
+    message?: { content?: string | null; tool_calls?: PalmyraToolCall[] };
+    delta?: {
+      content?: string | null;
+      tool_calls?: Array<{
+        index?: number;
+        id?: string;
+        type?: 'function';
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+  }>;
   usage?: {
     prompt_tokens?: number;
     completion_tokens?: number;
   };
+  accumulated_usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+  };
+}
+
+export interface PalmyraStreamCallbacks {
+  onContent?: (delta: string, accumulated: string) => void;
+  onToolCall?: (calls: PalmyraToolCall[]) => void;
 }
 
 const palmyraFetch = createOutboundFetch('palmyra-api');
@@ -102,7 +139,7 @@ export async function chatWithPalmyra(request: PalmyraChatRequest, fetchImpl: ty
     body: JSON.stringify({
       model: request.model ?? palmyraModel(),
       messages: request.messages,
-      max_tokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
+      max_tokens: request.maxTokens ?? palmyraMaxOutputTokens(request.model),
       temperature: request.temperature ?? 0,
       stream: false,
       ...(request.tools ? { tools: request.tools } : {}),
@@ -125,7 +162,86 @@ export async function chatWithPalmyra(request: PalmyraChatRequest, fetchImpl: ty
       inputTokens: payload.usage?.prompt_tokens ?? null,
       outputTokens: payload.usage?.completion_tokens ?? null,
     },
+    finishReason: payload.choices?.[0]?.finish_reason ?? null,
   };
+}
+
+/**
+ * Writer exposes OpenAI-compatible SSE chat chunks. Keep this transport here,
+ * beside the non-streaming client, so every Palmyra caller shares the same
+ * authentication, model-limit, timeout, and response decoding rules.
+ */
+export async function streamChatWithPalmyra(
+  request: PalmyraChatRequest,
+  callbacks: PalmyraStreamCallbacks = {},
+  fetchImpl: typeof fetch = palmyraFetch,
+): Promise<PalmyraChatResult> {
+  const key = palmyraApiKey();
+  if (!key) throw new Error('Palmyra is not configured: set WRITER_API_KEY.');
+  const response = await fetchImpl(ENDPOINT, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({
+      model: request.model ?? palmyraModel(),
+      messages: request.messages,
+      max_tokens: request.maxTokens ?? palmyraMaxOutputTokens(request.model),
+      temperature: request.temperature ?? 0,
+      stream: true,
+      stream_options: { include_usage: true },
+      ...(request.tools ? { tools: request.tools } : {}),
+      ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
+    }),
+    signal: request.signal
+      ? AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS)])
+      : AbortSignal.timeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`Palmyra request failed (${response.status}).${detail ? ` ${detail.slice(0, 200)}` : ''}`);
+  }
+  if (!response.body) throw new Error('Palmyra streaming response had no body.');
+
+  const calls = new Map<number, PalmyraToolCall>();
+  let content = '';
+  let finishReason: string | null = null;
+  let inputTokens: number | null = null;
+  let outputTokens: number | null = null;
+  let buffered = '';
+  const consume = (line: string) => {
+    if (!line.startsWith('data:')) return;
+    const data = line.slice(5).trim();
+    if (!data || data === '[DONE]') return;
+    const chunk = JSON.parse(data) as PalmyraChatResponse;
+    const choice = chunk.choices?.[0];
+    if (choice?.finish_reason) finishReason = choice.finish_reason;
+    if (choice?.delta?.content) {
+      content += choice.delta.content;
+      callbacks.onContent?.(choice.delta.content, content);
+    }
+    for (const fragment of choice?.delta?.tool_calls ?? []) {
+      const index = fragment.index ?? calls.size;
+      const existing = calls.get(index) ?? { id: '', type: 'function' as const, function: { name: '', arguments: '' } };
+      if (fragment.id) existing.id += fragment.id;
+      if (fragment.function?.name) existing.function.name += fragment.function.name;
+      if (fragment.function?.arguments) existing.function.arguments += fragment.function.arguments;
+      calls.set(index, existing);
+    }
+    const streamedUsage = chunk.accumulated_usage ?? chunk.usage;
+    if (typeof streamedUsage?.prompt_tokens === 'number') inputTokens = streamedUsage.prompt_tokens;
+    if (typeof streamedUsage?.completion_tokens === 'number') outputTokens = streamedUsage.completion_tokens;
+  };
+  const decoder = new TextDecoder();
+  for await (const bytes of response.body) {
+    buffered += decoder.decode(bytes, { stream: true });
+    const lines = buffered.split(/\r?\n/);
+    buffered = lines.pop() ?? '';
+    for (const line of lines) consume(line);
+  }
+  buffered += decoder.decode();
+  for (const line of buffered.split(/\r?\n/)) consume(line);
+  const toolCalls = [...calls.entries()].sort(([left], [right]) => left - right).map(([, call]) => call);
+  if (toolCalls.length) callbacks.onToolCall?.(toolCalls);
+  return { content: content.trim() || null, toolCalls, usage: { inputTokens, outputTokens }, finishReason };
 }
 
 export async function completeWithPalmyra(request: PalmyraCompletionRequest, fetchImpl: typeof fetch = palmyraFetch): Promise<string> {

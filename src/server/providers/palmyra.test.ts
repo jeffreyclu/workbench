@@ -3,7 +3,9 @@ import {
   chatWithPalmyra,
   completeWithPalmyra,
   isPalmyraConfigured,
+  palmyraMaxOutputTokens,
   palmyraModel,
+  streamChatWithPalmyra,
   type PalmyraTool,
   type PalmyraToolCall,
 } from './palmyra.js';
@@ -44,6 +46,7 @@ describe('palmyra client', () => {
     expect((stub.calls[0].init.headers as Record<string, string>).Authorization).toBe('Bearer test-key');
     expect(JSON.parse(String(stub.calls[0].init.body))).toMatchObject({
       model: 'palmyra-x5',
+      max_tokens: 8_192,
       stream: false,
       messages: [{ role: 'user', content: 'hi' }],
     });
@@ -72,7 +75,7 @@ describe('palmyra client', () => {
       toolChoice: 'auto',
     }, stub.fetch);
 
-    expect(result).toEqual({ content: null, toolCalls: [toolCall], usage: { inputTokens: 31, outputTokens: 9 } });
+    expect(result).toEqual({ content: null, toolCalls: [toolCall], usage: { inputTokens: 31, outputTokens: 9 }, finishReason: null });
     expect(JSON.parse(String(stub.calls[0].init.body))).toMatchObject({
       tool_choice: 'auto',
       tools: [{ function: { name: 'read_file' } }],
@@ -82,6 +85,40 @@ describe('palmyra client', () => {
         { role: 'tool', name: 'read_file', tool_call_id: 'call-1', content: '1: Workbench' },
       ],
     });
+  });
+
+  it('streams text, fragmented tool calls, finish reason, and final usage', async () => {
+    const encoder = new TextEncoder();
+    const chunks = [
+      { choices: [{ delta: { content: 'Inspecting ' } }] },
+      { choices: [{ delta: { content: 'now.' } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-1', type: 'function', function: { name: 'read_', arguments: '{"path":' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'file', arguments: '"README.md"}' } }] }, finish_reason: 'tool_calls' }] },
+      { choices: [], accumulated_usage: { prompt_tokens: 44, completion_tokens: 12 } },
+    ];
+    const body = `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('')}data: [DONE]\n\n`;
+    const stub = stubFetch(new Response(new ReadableStream({ start(controller) { controller.enqueue(encoder.encode(body)); controller.close(); } }), {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    const updates: string[] = [];
+    const result = await streamChatWithPalmyra({ messages: [{ role: 'user', content: 'Inspect.' }] }, {
+      onContent: (_delta, accumulated) => updates.push(accumulated),
+    }, stub.fetch);
+
+    expect(updates).toEqual(['Inspecting ', 'Inspecting now.']);
+    expect(result).toEqual({
+      content: 'Inspecting now.',
+      toolCalls: [{ id: 'call-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"README.md"}' } }],
+      usage: { inputTokens: 44, outputTokens: 12 },
+      finishReason: 'tool_calls',
+    });
+    expect(JSON.parse(String(stub.calls[0].init.body))).toMatchObject({ stream: true, stream_options: { include_usage: true }, max_tokens: 8_192 });
+  });
+
+  it('uses the Writer-native X5/X6 output allowance without a Workbench reduction', () => {
+    expect(palmyraMaxOutputTokens('palmyra-x5')).toBe(8_192);
+    expect(palmyraMaxOutputTokens('palmyra-x6')).toBe(8_192);
   });
 
   it('reports configuration state from WRITER_API_KEY', async () => {

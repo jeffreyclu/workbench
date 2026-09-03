@@ -1317,7 +1317,9 @@ describe('WorkItemRepository', () => {
     repository.createRun(task.id, 'execute', 'auto', 'codex', 'first');
     expect(repository.selectBalancedAgent('codex')).toBe('claude');
     repository.createRun(task.id, 'execute', 'auto', 'claude', 'second');
-    expect(repository.selectBalancedAgent('claude')).toBe('codex');
+    expect(repository.selectBalancedAgent('claude')).toBe('palmyra');
+    repository.createRun(task.id, 'execute', 'auto', 'palmyra', 'third');
+    expect(repository.selectBalancedAgent('palmyra')).toBe('codex');
     repository.createRun(task.id, 'execute', 'codex', 'codex', 'explicit selection');
     // Explicit work still consumes capacity, even though it must not skew the historical auto split.
     expect(repository.selectBalancedAgent('claude')).toBe('claude');

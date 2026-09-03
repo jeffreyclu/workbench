@@ -77,4 +77,13 @@ describe('buildDecisionTree', () => {
     expect(tree[0].children[0]).toMatchObject({ id: 'reply', status: 'failed' });
     expect(tree[0].children[0].detail).toContain('Provider unavailable');
   });
+
+  it('renders Palmyra as its own inspectable stream', () => {
+    const tree = buildDecisionTree([
+      message({ id: 'request', dispatchTarget: 'palmyra', body: 'Use Writer.' }),
+      message({ id: 'reply', author: 'palmyra', dispatchGroupId: 'request', model: 'palmyra-x6', inputTokens: 20, outputTokens: 8 }),
+    ]);
+
+    expect(tree).toMatchObject([{ label: 'Requested Palmyra', children: [{ label: 'Palmyra', detail: 'palmyra-x6' }] }]);
+  });
 });

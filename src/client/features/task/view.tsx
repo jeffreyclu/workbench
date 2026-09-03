@@ -55,6 +55,7 @@ import { toast, toastError } from '../../state/toast-store';
 import { SortableQueueItem as TaskQueueItem, TaskClassificationSelect } from '../queue';
 import { AgentMessageBody, LiveRunOutput } from '../../components/agent-message/agent-message';
 import { ConversationOriginBadge, ModelProfileSelect, ReferenceTypeIcon } from '../../components/badges';
+import { ComposerModelSelect } from '../../components/composer-model-select';
 import { CreateTask } from '../../components/dialogs/create-task-dialog';
 import { DiscoveryInboxView } from '../discovery';
 import { useNavigation } from '../../features/navigation/hooks';
@@ -427,6 +428,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
     const next = item.assignees.includes(assignee)
       ? item.assignees.filter((value) => value !== assignee)
       : [...item.assignees, assignee];
+    if (assignee === 'palmyra') setExecutionProfile(item.assignees.includes('palmyra') ? null : 'palmyra-x5');
     update.mutate({ assignees: next });
   }
 
@@ -526,7 +528,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       <div className="detail-section">
         <span className="section-label">Owners</span>
         <div className="assignee-picker">
-          {(['jeffrey', 'codex', 'claude'] as const).map((assignee) => (
+          {(['jeffrey', 'codex', 'claude', 'palmyra'] as const).map((assignee) => (
             <button
               key={assignee}
               className={item.assignees.includes(assignee) ? 'selected' : ''}
@@ -610,18 +612,20 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         <p className="execution-copy">Workbench will classify the task, choose the right agent, and either execute it directly or return an approval-ready decomposition for complex work.</p>
         {execute.error && <p className="error-message">{execute.error.message}</p>}
         <div className="execution-controls">
-          <ModelProfileSelect className="execution-control" value={executionProfile} onChange={setExecutionProfile} />
-          <select className="execution-control" value={accountProfile} onChange={(event) => setAccountProfile(event.target.value)} aria-label="Account profile">
+          {item.assignees.includes('palmyra')
+            ? <ComposerModelSelect executionProfile={executionProfile} provider="palmyra" onChange={setExecutionProfile} disabled={execute.isPending} />
+            : <ModelProfileSelect className="execution-control" value={executionProfile} onChange={setExecutionProfile} />}
+          {!item.assignees.includes('palmyra') && <select className="execution-control" value={accountProfile} onChange={(event) => setAccountProfile(event.target.value)} aria-label="Account profile">
             {(agentAccounts.data?.accounts ?? [{ name: 'default' } as AgentAccountProfile]).map((account) => <option key={account.name} value={account.name}>{account.name === 'default' ? 'Default profile' : account.name}</option>)}
-          </select>
-          <button className="button secondary compact edit-profile-button" type="button" onClick={() => setProfileEditorOpen((open) => !open)} aria-label={profileEditorOpen ? 'Close profile editor' : 'Edit profile'} title={profileEditorOpen ? 'Close profile editor' : 'Edit profile'} aria-expanded={profileEditorOpen} aria-controls="agent-profile-editor"><Settings size={15} /></button>
+          </select>}
+          {!item.assignees.includes('palmyra') && <button className="button secondary compact edit-profile-button" type="button" onClick={() => setProfileEditorOpen((open) => !open)} aria-label={profileEditorOpen ? 'Close profile editor' : 'Edit profile'} title={profileEditorOpen ? 'Close profile editor' : 'Edit profile'} aria-expanded={profileEditorOpen} aria-controls="agent-profile-editor"><Settings size={15} /></button>}
           <button className="icon-button primary execute-button" onClick={() => execute.mutate()} disabled={hasBeenExecuted || selfAssigned || openDependencies.length > 0 || execute.isPending}
             aria-label={hasBeenExecuted ? 'Already executed' : selfAssigned ? 'Assigned to you' : openDependencies.length > 0 ? 'Blocked by prerequisites' : execute.isPending ? 'Executing task' : 'Execute task'}
             title={hasBeenExecuted ? 'This task has already been executed.' : selfAssigned ? SELF_ASSIGNED_EXECUTION_MESSAGE : openDependencies.length > 0 ? 'Complete this task\u2019s prerequisites before dispatching an agent.' : execute.isPending ? 'Executing task' : 'Execute task'}>
             {execute.isPending ? <LoaderCircle className="spin" size={16} /> : selfAssigned ? <User size={16} /> : openDependencies.length > 0 ? <AlertTriangle size={16} /> : <Sparkles size={16} />}
           </button>
         </div>
-        {profileEditorOpen && <div id="agent-profile-editor" className="agent-account-manager agent-profile-editor">
+        {profileEditorOpen && !item.assignees.includes('palmyra') && <div id="agent-profile-editor" className="agent-account-manager agent-profile-editor">
           {(agentAccounts.data?.accounts ?? []).map((account) => <div className="agent-account-profile" key={account.name}>
             <div className="agent-account-profile-heading"><strong>{account.name === 'default' ? 'Default account' : account.name}</strong>{account.name === accountProfile && <small>Selected</small>}</div>
             {(['codex', 'claude'] as const).map((provider) => {

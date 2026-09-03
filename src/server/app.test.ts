@@ -134,6 +134,7 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     const conversation = repository.createConversation('Move repository', item.id);
     repository.setConversationClaudeSessionId(conversation.id, 'claude-session');
     repository.setConversationCodexThreadId(conversation.id, 'codex-thread');
+    repository.setConversationPalmyraContext(conversation.id, '[{"role":"user","content":"palmyra-context"}]');
 
     try {
       const response = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/workspaces/selection`, {
@@ -144,6 +145,7 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
 
       expect(response.status).toBe(200);
       expect(repository.getConversation(conversation.id)).toEqual(expect.objectContaining({ claudeSessionId: null, codexThreadId: null }));
+      expect(repository.getConversationPalmyraContext(conversation.id)).toBeNull();
     } finally {
       rmSync(originalWorkspace, { recursive: true, force: true });
     }
@@ -181,6 +183,7 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     const conversation = repository.createConversation('Keep repository', item.id);
     repository.setConversationClaudeSessionId(conversation.id, 'claude-session');
     repository.setConversationCodexThreadId(conversation.id, 'codex-thread');
+    repository.setConversationPalmyraContext(conversation.id, '[{"role":"user","content":"palmyra-context"}]');
 
     try {
       const response = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/workspaces/selection`, {
@@ -191,6 +194,7 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
 
       expect(response.status).toBe(200);
       expect(repository.getConversation(conversation.id)).toEqual(expect.objectContaining({ claudeSessionId: 'claude-session', codexThreadId: 'codex-thread' }));
+      expect(repository.getConversationPalmyraContext(conversation.id)).toContain('palmyra-context');
       expect(database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversation.id)).toBeUndefined();
     } finally {
       rmSync(workspace, { recursive: true, force: true });

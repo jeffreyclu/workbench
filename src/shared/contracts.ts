@@ -26,7 +26,7 @@ export const calendarDateSchema = z.string()
     return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
   }, 'Use a real calendar date.');
 
-export const assigneeSchema = z.enum(['jeffrey', 'codex', 'claude']);
+export const assigneeSchema = z.enum(['jeffrey', 'codex', 'claude', 'palmyra']);
 export const sourceSchema = z.enum(['manual', 'linear']);
 
 /**
@@ -36,7 +36,7 @@ export const sourceSchema = z.enum(['manual', 'linear']);
  */
 export const isAgentAssignee = (assignee: Assignee): assignee is AgentAssignee => assignee !== 'jeffrey';
 export const isSelfAssigned = (assignees: readonly Assignee[]): boolean => assignees.includes('jeffrey');
-export const SELF_ASSIGNED_OWNER_MESSAGE = 'Jeffrey owns this task. Unassign him before assigning Codex or Claude.';
+export const SELF_ASSIGNED_OWNER_MESSAGE = 'Jeffrey owns this task. Unassign him before assigning an agent.';
 export const SELF_ASSIGNED_EXECUTION_MESSAGE = 'Jeffrey owns this task, so an agent cannot execute it. Unassign him first.';
 
 /**
@@ -52,7 +52,7 @@ export const VERSION_CONFLICT_MESSAGE = 'This task changed since it was last rea
  * Assignment lists carry the exclusivity rule. Filter inputs deliberately keep the
  * plain array schema: filtering for "mine and Codex's" is a legitimate query.
  */
-export const assigneeSelectionSchema = z.array(assigneeSchema).max(3)
+export const assigneeSelectionSchema = z.array(assigneeSchema).max(4)
   .refine((assignees) => !(isSelfAssigned(assignees) && assignees.some(isAgentAssignee)), SELF_ASSIGNED_OWNER_MESSAGE);
 
 export interface WorkItemLineage {
@@ -179,7 +179,7 @@ export type ProviderSyncConflictResolution = z.infer<typeof providerSyncConflict
 export const workItemFilterSchema = z.object({
   projectNames: z.array(z.string().trim().min(1).max(200)).max(50).default([]),
   statuses: z.array(workItemStatusSchema).max(20).default([]),
-  assignees: z.array(assigneeSchema).max(3).default([]),
+  assignees: z.array(assigneeSchema).max(4).default([]),
   sources: z.array(sourceSchema).max(2).default([]),
   labels: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
   dueStates: z.array(z.enum(['overdue', 'due_today', 'due_later', 'unscheduled'])).max(4).default([]),
@@ -1198,7 +1198,7 @@ export interface SharedMessage {
   /** Dollars for this reply; see AgentRun.estimatedCostUsd. */
   estimatedCostUsd: number | null;
   costSource: 'provider' | 'estimated' | null;
-  fallbackFrom: 'codex' | 'claude' | null;
+  fallbackFrom: 'codex' | 'claude' | 'palmyra' | null;
   fallbackReason: string | null;
   dispatchTarget: 'auto' | 'both' | 'codex' | 'claude' | 'palmyra' | 'none';
   /** The human turn that dispatched this reply; both-agent replies share it. */

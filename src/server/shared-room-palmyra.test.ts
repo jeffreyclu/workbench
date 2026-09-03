@@ -3,13 +3,19 @@ import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { dispatchNextSharedTurn } from './shared-room.js';
 
-// Palmyra answers through Writer's hosted API, so the network call is stubbed.
-// Everything else — dispatch, lease claim, message lifecycle — is the real path.
-vi.mock('./providers/palmyra.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./providers/palmyra.js')>()),
-  completeWithPalmyra: vi.fn(async () => {
+// Palmyra answers through Writer's hosted API, so only the provider runner is
+// stubbed. Dispatch, lease claim, persisted context, and lifecycle stay real.
+vi.mock('./palmyra-agent.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./palmyra-agent.js')>()),
+  runPalmyraAgent: vi.fn(async () => {
     if (!process.env.WRITER_API_KEY?.trim()) throw new Error('Palmyra is not configured: set WRITER_API_KEY.');
-    return 'A database index speeds up lookups.';
+    return {
+      output: 'A database index speeds up lookups.', agent: 'palmyra',
+      usage: { inputTokens: 12, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: 7 },
+      fallbackFrom: null, fallbackReason: null, sessionId: null, costUsd: null,
+      messages: [{ role: 'user', content: 'What is a database index?' }, { role: 'assistant', content: 'A database index speeds up lookups.' }],
+      peakContextTokens: 12,
+    };
   }),
 }));
 
@@ -39,6 +45,7 @@ describe('Palmyra as a conversation provider', () => {
       expect(current.body).toContain('database index');
       expect(current.model).toBe('palmyra-x5');
     });
+    expect(repository.getConversationPalmyraContext(conversation.id)).toContain('database index');
     database.close();
   });
 

@@ -134,7 +134,10 @@ export function createConversationRouter({ repository, database, capabilities, a
     // to be recorded, because that write is what makes the choice outrank the
     // run. Short-circuiting it would leave the picker permanently inert.
     const storedSelection = database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(request.params.id) as { workspace_path: string } | undefined;
-    if (explorer.selectedPath === workspacePath && storedSelection?.workspace_path === workspacePath) return response.json(explorer);
+    const conversation = repository.getConversation(request.params.id);
+    const selectedByActiveRun = Boolean(conversation?.workItemId && repository.listRuns(conversation.workItemId)
+      .some((run) => run.conversationId === conversation.id && (run.status === 'queued' || run.status === 'running') && run.resolvedWorkspace && resolve(run.resolvedWorkspace) === workspacePath));
+    if (explorer.selectedPath === workspacePath && (!selectedByActiveRun || storedSelection?.workspace_path === workspacePath)) return response.json(explorer);
     database.prepare(`INSERT INTO shared_conversation_workspace_selection (conversation_id, workspace_path, updated_at)
       VALUES (?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET workspace_path = excluded.workspace_path, updated_at = excluded.updated_at`)
       .run(request.params.id, workspacePath, new Date().toISOString());
@@ -142,6 +145,7 @@ export function createConversationRouter({ repository, database, capabilities, a
     // one after Repo Explorer changes the conversation's working directory.
     repository.setConversationClaudeSessionId(request.params.id, null);
     repository.setConversationCodexThreadId(request.params.id, null);
+    repository.setConversationPalmyraContext(request.params.id, null);
     response.json({ selectedPath: workspacePath, workspaces: explorer.workspaces.map((workspace) => ({ ...workspace, selected: workspace.path === workspacePath })) });
   });
 

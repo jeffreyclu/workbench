@@ -149,6 +149,15 @@ export class ConversationRepository {
     return Number(this.database.prepare('UPDATE shared_conversations SET codex_thread_id = ?, updated_at = ? WHERE id = ?').run(threadId, new Date().toISOString(), id).changes) > 0;
   }
 
+  getPalmyraContext(id: string): string | null {
+    const row = this.database.prepare('SELECT palmyra_context_json FROM shared_conversations WHERE id = ?').get(id) as { palmyra_context_json: string | null } | undefined;
+    return row?.palmyra_context_json ?? null;
+  }
+
+  setPalmyraContext(id: string, context: string | null): boolean {
+    return Number(this.database.prepare('UPDATE shared_conversations SET palmyra_context_json = ?, updated_at = ? WHERE id = ?').run(context, new Date().toISOString(), id).changes) > 0;
+  }
+
   updateWorkItemId(id: string, workItemId: string | null): boolean {
     return Number(this.database.prepare('UPDATE shared_conversations SET work_item_id = ?, updated_at = ? WHERE id = ?').run(workItemId, new Date().toISOString(), id).changes) > 0;
   }
