@@ -202,9 +202,17 @@ export function blockedWorkbenchBranchCommand(command: string): boolean {
   return command.split(/(?:&&|\|\||;|\n)/).some((segment) => {
     const match = segment.match(/(?:^|\s)git\s+(?:-C\s+\S+\s+)?(checkout|switch|worktree|branch)(?:\s+([^;&|]+))?/i);
     if (!match) return false;
-    if (match[1] !== 'branch') return true;
+    const subcommand = match[1].toLowerCase();
     const argumentsText = (match[2] ?? '').trim();
-    return Boolean(argumentsText) && !/^(?:--show-current|--list|-l|-a|--all|-r|--remotes|-v|--verbose)(?:\s|$)/.test(argumentsText);
+    // Keep this early stream check aligned with git-command-guard.mjs. A
+    // pathspec-scoped checkout restores files but cannot move HEAD, and
+    // `worktree list` only inspects runtime-owned state.
+    if (subcommand === 'checkout') return !/(?:^|\s)--(?:\s|$)/.test(argumentsText);
+    if (subcommand === 'worktree') return !/^list(?:\s|$)/i.test(argumentsText);
+    if (subcommand === 'switch') return true;
+    const branchArguments = argumentsText.split(/\s+/).filter(Boolean);
+    const branchReadOnly = new Set(['--show-current', '--list', '-l', '-a', '--all', '-r', '--remotes', '-v', '--verbose']);
+    return branchArguments.some((argument) => !branchReadOnly.has(argument) && !argument.startsWith('--format='));
   });
 }
 

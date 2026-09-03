@@ -42,6 +42,10 @@ describe('Writer agent test command guard', () => {
     expect(blockedWorkbenchBranchCommand('git branch fix/bad')).toBe(true);
     expect(blockedWorkbenchBranchCommand('git worktree add /tmp/bad')).toBe(true);
     expect(blockedWorkbenchBranchCommand('git status && git branch --show-current')).toBe(false);
+    expect(blockedWorkbenchBranchCommand('git checkout -- src/client/features/workspace-diff/view.tsx')).toBe(false);
+    expect(blockedWorkbenchBranchCommand('git checkout --quiet HEAD -- package.json')).toBe(false);
+    expect(blockedWorkbenchBranchCommand('git worktree list --porcelain')).toBe(false);
+    expect(blockedWorkbenchBranchCommand('git diff -- src/client/features/workspace-diff/view.tsx > /tmp/ai-selector-diffview.patch && wc -l /tmp/ai-selector-diffview.patch && git checkout -- src/client/features/workspace-diff/view.tsx && npx vitest run src/client/features/workspace-diff/view.test.tsx 2>&1 | tail -8')).toBe(false);
   });
 
   it('blocks dependency bootstraps in provisioned run worktrees but allows explicit package changes', () => {

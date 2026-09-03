@@ -1,5 +1,22 @@
 ## Verification and debugging method
 
+### Keep duplicate command guards behaviorally identical **(always)**
+
+Workbench can inspect a provider's streamed shell command before execution and
+also intercept the executable later through a `PATH` shim. When both layers
+guard the same operation, they must implement the same allow/block boundary and
+share regression cases for allowed commands. A stricter preflight check makes
+the executable guard's exceptions unreachable and repeatedly kills legitimate
+agent turns before the command runs.
+
+This happened with pathspec-scoped checkout. The executable Git guard correctly
+allowed `git checkout <tree-ish> -- <paths>` because it restores files without
+moving `HEAD`, while `blockedWorkbenchBranchCommand` rejected every checkout.
+The result was a false "Git branch/worktree mutation" blocker during a focused
+baseline-test workflow. For future guard changes, test the complete provider
+command at the preflight layer as well as the parsed executable arguments at the
+shim layer. An exception is not implemented until both layers allow it.
+
 ### Verify in the right repo before asserting state
 
 *This Workbench setup spans multiple repos (workbench, writer-monorepo, fe.wds, fe.web-app) with a shell cwd that can silently reset between tool calls — always confirm which repo a check ran against before asserting git state.*
