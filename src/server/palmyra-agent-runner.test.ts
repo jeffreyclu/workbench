@@ -39,7 +39,7 @@ describe('Palmyra durable agent runs', () => {
 
     await executeAgentRun(repository, run, 'palmyra-test-owner', 60_000);
 
-    expect(repository.getRun(run.id)).toMatchObject({ status: 'completed', agent: 'palmyra', model: 'palmyra-x5', inputTokens: 22, outputTokens: 9 });
+    expect(repository.getRun(run.id)).toMatchObject({ status: 'completed', agent: 'palmyra', model: 'palmyra-x5', inputTokens: 22, outputTokens: 9, output: 'Implemented the direct run edit.' });
     expect(readFileSync(join(workspace, 'direct.txt'), 'utf8')).toBe('direct run\n');
     const diagnostics = database.prepare('SELECT kind FROM agent_run_diagnostics WHERE run_id = ? ORDER BY created_at').all(run.id) as Array<{ kind: string }>;
     expect(diagnostics.map((event) => event.kind)).toEqual(expect.arrayContaining(['prompt', 'usage', 'tool']));
@@ -61,7 +61,7 @@ describe('Palmyra durable agent runs', () => {
 
     const result = await runPalmyraAgent({ cwd: workspace, prompt: 'Write and read the sibling repository file.', workbenchTools: null });
 
-    expect(result.output).toContain('Cross-repository access verified.');
+    expect(result.output).toBe('Cross-repository access verified.');
     expect(readFileSync(target, 'utf8')).toBe('cross-repo access\n');
     expect(streamChatWithPalmyra.mock.calls[2][0].messages).toContainEqual(expect.objectContaining({ role: 'tool', content: expect.stringContaining('cross-repo access') }));
   });
@@ -85,7 +85,40 @@ describe('Palmyra durable agent runs', () => {
     expect(streamChatWithPalmyra).toHaveBeenCalledTimes(50);
     expect(bridge.call).toHaveBeenCalledTimes(49);
     expect(bridge.close).toHaveBeenCalledOnce();
-    expect(result.output).toContain('All 49 tool rounds completed.');
+    expect(result.output).toBe('All 49 tool rounds completed.');
+  });
+
+  it('keeps live activity in progress but stores only the synthesized terminal answer', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'palmyra-final-answer-'));
+    workspaces.push(workspace);
+    const progress: string[] = [];
+    streamChatWithPalmyra
+      .mockImplementationOnce(async (_request, callbacks) => {
+        callbacks.onContent('Decision: Inspect the relevant file.', 'Decision: Inspect the relevant file.');
+        return { content: 'Decision: Inspect the relevant file.', toolCalls: [{ id: 'read-final', type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'missing.txt' }) } }], usage: { inputTokens: 10, outputTokens: 5 }, finishReason: 'tool_calls' };
+      })
+      .mockImplementationOnce(async (_request, callbacks) => {
+        const content = 'Decision: The inspection is complete.\n\nThe requested behavior is now verified.';
+        callbacks.onContent(content, content);
+        return { content, toolCalls: [], usage: { inputTokens: 12, outputTokens: 8 }, finishReason: 'stop' };
+      });
+
+    const result = await runPalmyraAgent({ cwd: workspace, prompt: 'Inspect the file.', workbenchTools: null, onProgress: (value) => progress.push(value) });
+
+    expect(progress.some((value) => value.includes('Decision: Inspect the relevant file.'))).toBe(true);
+    expect(progress.at(-1)).toContain('Decision: The inspection is complete.');
+    expect(result.output).toBe('The requested behavior is now verified.');
+    expect(result.output).not.toContain('Palmyra used');
+    expect(result.output).not.toContain('Decision:');
+  });
+
+  it('does not mislabel a progress-only terminal response as the final answer', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'palmyra-progress-only-'));
+    workspaces.push(workspace);
+    streamChatWithPalmyra.mockResolvedValueOnce({ content: 'Decision: The work is complete.', toolCalls: [], usage: { inputTokens: 10, outputTokens: 5 }, finishReason: 'stop' });
+
+    await expect(runPalmyraAgent({ cwd: workspace, prompt: 'Complete the work.', workbenchTools: null }))
+      .rejects.toThrow('Palmyra returned progress but no synthesized final response.');
   });
 
   it('continues a provider-length stop and sends image attachments in the same user turn', async () => {

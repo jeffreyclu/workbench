@@ -204,6 +204,12 @@ function appendProgress(current: string, next: string): string {
   return value ? (current ? `${current}\n\n${value}` : value) : current;
 }
 
+function finalAnswerFragment(content: string): string {
+  const value = content.trim();
+  if (!value) return '';
+  return value.replace(/^\s*Decision:\s*[^\n]*(?:\n+|$)/i, '').trim();
+}
+
 function compactMessagesForContinuation(system: PalmyraMessage, objective: string, progress: string, messages: PalmyraMessage[]): PalmyraMessage[] {
   const recent = messages.slice(-8).map((message) => {
     if (typeof message.content !== 'string') return { ...message, content: '[Image attachment was supplied earlier in this run.]' } as PalmyraMessage;
@@ -245,7 +251,7 @@ export async function runPalmyraAgent(options: {
   imageAttachments?: PalmyraImageAttachment[];
   workbenchTools?: PalmyraWorkbenchToolBridge | null;
 }): Promise<PalmyraAgentResult> {
-  const systemMessage: PalmyraMessage = { role: 'system', content: `You are Palmyra, a first-class coding agent running inside Workbench. Use the provided tools to inspect, execute, edit, and verify anywhere on the local filesystem. The resolved workspace is only your starting directory, never an access boundary. Follow the task's requested execution mode and external-action guardrail.\n\n${AGENT_EXECUTION_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\n${AGENT_DEBUGGER_CONTRACT}` };
+  const systemMessage: PalmyraMessage = { role: 'system', content: `You are Palmyra, a first-class coding agent running inside Workbench. Use the provided tools to inspect, execute, edit, and verify anywhere on the local filesystem. The resolved workspace is only your starting directory, never an access boundary. Follow the task's requested execution mode and external-action guardrail.\n\n${AGENT_EXECUTION_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\n${AGENT_DEBUGGER_CONTRACT}\n\nThe live stream is progress only. After the work ends, give one fresh, compact final answer that synthesizes the outcome, changed files or decisions, verification, and any remaining blocker. Do not replay the live progress log, tool-use audit, or Decision preambles in that final answer.` };
   const imageContent = await Promise.all((options.imageAttachments ?? [])
     .filter((attachment) => attachment.mimeType.startsWith('image/'))
     .map(async (attachment) => ({ type: 'image_url' as const, image_url: { url: `data:${attachment.mimeType};base64,${(await readFile(attachment.path)).toString('base64')}` } })));
@@ -278,6 +284,7 @@ export async function runPalmyraAgent(options: {
   // text would wipe prior rounds — unlike Claude/Opus, which accumulate stdout
   // into a single buffer and pass that. Match that pattern here.
   let progress = '';
+  const finalAnswerFragments: string[] = [];
   const emitProgress = () => options.onProgress?.(progress);
   let peakContextTokens = 0;
   try {
@@ -325,11 +332,15 @@ export async function runPalmyraAgent(options: {
       if (!response.content) throw new Error('Palmyra returned no final response.');
       progress = appendProgress(progress, response.content);
       emitProgress();
+      const finalFragment = finalAnswerFragment(response.content);
+      if (finalFragment) finalAnswerFragments.push(finalFragment);
       if (response.finishReason === 'length') {
         messages.push({ role: 'user', content: 'Continue exactly where the response stopped. Do not repeat prior text, and finish the same objective.' });
         continue;
       }
-      return { output: progress, agent: 'palmyra', usage, fallbackFrom: null, fallbackReason: null, sessionId: null, costUsd: null, messages: messagesForPersistence(messages), peakContextTokens };
+      const output = finalAnswerFragments.join('\n\n');
+      if (!output) throw new Error('Palmyra returned progress but no synthesized final response.');
+      return { output, agent: 'palmyra', usage, fallbackFrom: null, fallbackReason: null, sessionId: null, costUsd: null, messages: messagesForPersistence(messages), peakContextTokens };
     }
     if (response.content) {
       progress = appendProgress(progress, response.content);

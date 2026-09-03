@@ -7,8 +7,9 @@ import { dispatchNextSharedTurn } from './shared-room.js';
 // stubbed. Dispatch, lease claim, persisted context, and lifecycle stay real.
 vi.mock('./palmyra-agent.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./palmyra-agent.js')>()),
-  runPalmyraAgent: vi.fn(async () => {
+  runPalmyraAgent: vi.fn(async (options: { onProgress?: (output: string) => void }) => {
     if (!process.env.WRITER_API_KEY?.trim()) throw new Error('Palmyra is not configured: set WRITER_API_KEY.');
+    options.onProgress?.('Decision: Inspect the request.\n● Palmyra used a tool');
     return {
       output: 'A database index speeds up lookups.', agent: 'palmyra',
       usage: { inputTokens: 12, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: 7 },
@@ -42,7 +43,9 @@ describe('Palmyra as a conversation provider', () => {
     await vi.waitFor(() => {
       const current = repository.getSharedMessageById(replies[0].id)!;
       expect(current.status).toBe('completed');
-      expect(current.body).toContain('database index');
+      expect(current.body).toBe('A database index speeds up lookups.');
+      expect(current.body).not.toContain('Decision:');
+      expect(current.body).not.toContain('Palmyra used');
       expect(current.model).toBe('palmyra-x5');
     });
     expect(repository.getConversationPalmyraContext(conversation.id)).toContain('database index');

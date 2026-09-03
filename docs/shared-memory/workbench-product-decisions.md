@@ -1202,6 +1202,14 @@ limits required by the Writer API are still valid protocol constraints; they
 must be sourced from the API rather than guessed or derived from Claude/Codex
 subscription budgeting.
 
+### Palmyra live activity is replaced by a synthesized final answer
+
+*Decision from Jeffrey, 2026-09-03.* Palmyra's `Decision:` messages, streamed
+text, and tool-use audit belong to the running activity view only. When the
+turn completes, both task-backed and standalone conversation messages must be
+replaced with one clean terminal answer that synthesizes the outcome. The
+completed message must not retain or replay the accumulated live activity log.
+
 What survives from the earlier framing is only the map's internal modeling.
 When a map is drawn for a critical block, node identity should be a place in the
 system — a module or symbol that exists whether or not it changed — so unchanged
