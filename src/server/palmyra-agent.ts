@@ -213,6 +213,13 @@ export async function runPalmyraAgent(options: {
   }, { cancel: () => { /* The shared AbortController owns cancellation. */ } });
   options.onSteeringReady?.(steer);
   let usage: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
+  // Palmyra's onProgress must pass the full accumulated activity log, not just
+  // the latest fragment. The agent-runner overwrites the shared message body
+  // with whatever onProgress supplies, so passing only the current round's
+  // text would wipe prior rounds — unlike Claude/Opus, which accumulate stdout
+  // into a single buffer and pass that. Match that pattern here.
+  let progress = '';
+  const emitProgress = () => options.onProgress?.(progress);
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (options.signal?.aborted) throw options.signal.reason ?? new Error('Palmyra run canceled.');
     const response = await chatWithPalmyra({ messages, tools, toolChoice: 'auto', maxTokens: 4_096, timeoutMs: 120_000, signal: options.signal, model: options.model });
@@ -230,20 +237,26 @@ export async function runPalmyraAgent(options: {
     }
     if (!response.toolCalls.length) {
       if (!response.content) throw new Error('Palmyra returned no final response.');
-      options.onProgress?.(response.content);
+      progress = progress ? `${progress}\n\n${response.content}` : response.content;
+      emitProgress();
       return { output: response.content, agent: 'palmyra', usage, fallbackFrom: null, fallbackReason: null, sessionId: null, costUsd: null };
     }
-    if (response.content) options.onProgress?.(response.content);
+    if (response.content) {
+      progress = progress ? `${progress}\n\n${response.content}` : response.content;
+      emitProgress();
+    }
     for (const call of response.toolCalls) {
       let content: string;
       try {
         const result = await executeTool(call, options.cwd, options.signal);
         content = result.content;
         options.onAudit?.([result.audit], 'palmyra');
-        options.onProgress?.(`● Palmyra used ${call.function.name}: ${result.audit.detail}`);
+        progress = progress ? `${progress}\n● Palmyra used ${call.function.name}: ${result.audit.detail}` : `● Palmyra used ${call.function.name}: ${result.audit.detail}`;
+        emitProgress();
       } catch (error) {
         content = `Tool error: ${error instanceof Error ? error.message : String(error)}`;
-        options.onProgress?.(`● ${content}`);
+        progress = progress ? `${progress}\n● ${content}` : `● ${content}`;
+        emitProgress();
       }
       messages.push({ role: 'tool', name: call.function.name, tool_call_id: call.id, content });
     }
