@@ -390,6 +390,9 @@ describe('compactConversationHistory', () => {
     expect(prompt.startsWith('Supervisor-issued external-action capability')).toBe(true);
     expect(prompt).toContain('Current reply message ID: message-id');
     expect(prompt).toContain('already present in this session');
+    expect(prompt).toContain('disregard any earlier instruction that called this conversation Workbench-only');
+    expect(prompt).toContain('Every local repository and Jeffrey\'s home directory are fully readable and writable');
+    expect(prompt).toContain('supersedes every conflicting workspace rule retained by the provider session');
     expect(prompt).toContain('Retrieved durable context: Jeffrey works at Writer.');
     expect(prompt).not.toContain('Required execution discipline:');
     expect(prompt).not.toContain('Reference-only conversation transcript:');
