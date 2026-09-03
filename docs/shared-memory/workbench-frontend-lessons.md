@@ -69,6 +69,24 @@ because he was still looking at the stale live build, and only then was it promo
 against source and tests is not the same as verifying it against what Jeffrey actually sees — for
 UI-visible changes, promotion is part of "done."
 
+### A healthy server and present assets do not prove a promoted client can mount
+
+Confirmed 2026-09-03 after a promotion left the Workbench UI blank while
+`/api/health`, `/`, and every HTML-referenced asset still returned 200. The
+promoted source had replaced nearly the entire `App` component with an X6 demo
+branch and a placeholder comment, so normal routes rendered nothing. Its new
+`@antv/x6` import also failed during mounted-app collection with `exports is not
+defined in ES module scope`.
+
+Promotion preflight currently proves only that the candidate server starts and
+that referenced client files exist. Before accepting a UI-bearing promotion,
+run the mounted `src/client/app/App.test.tsx` suite against the candidate source;
+a Vite build alone is insufficient because it can emit a syntactically valid
+bundle whose application never mounts. When the live UI is blank after a
+promotion, first atomically return `.workbench-runtime/current` to the previous
+compatible release, then diagnose the candidate without leaving the user on the
+broken build.
+
 ### Compact form controls (select/input in dense rows) get a real `<label>`, not `aria-label`
 
 Jeffrey's explicit constraint (2026-08-25, WCAG labels-or-instructions task): `aria-label` alone is
