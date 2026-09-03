@@ -110,6 +110,12 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const [selectedExecutionTaskIndexes, setSelectedExecutionTaskIndexes] = useState<Set<number>>(new Set());
   const [executionPlanArchivePromptOpen, setExecutionPlanArchivePromptOpen] = useState(false);
   const { executionProfile, setExecutionProfile } = useTaskExecutionProfile(id);
+  // ComposerModelSelect displays X5 when a Palmyra task has no saved tier.
+  // Normalize the request to that same visible value so a reload cannot show
+  // X5 while silently posting null (or preserve a stale Codex/Claude profile).
+  const selectedExecutionProfile: AgentRun['executionProfile'] = detail.data?.item.assignees.includes('palmyra')
+    ? executionProfile === 'palmyra-x6' ? 'palmyra-x6' : 'palmyra-x5'
+    : executionProfile === 'palmyra-x5' || executionProfile === 'palmyra-x6' ? null : executionProfile;
   const { accountProfile, setAccountProfile } = useTaskAccountProfile(id, detail.data?.item);
   const [newAccountProfile, setNewAccountProfile] = useState('');
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
@@ -168,7 +174,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
     enabled: showAddArtifactLink,
   });
   const execute = useMutation({
-    mutationFn: () => api.executeWorkItem(id, executionProfile, accountProfile),
+    mutationFn: () => api.executeWorkItem(id, selectedExecutionProfile, accountProfile),
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: ['work-items'] });
       const previousLists = queryClient.getQueriesData<InfiniteData<WorkItemPage>>({ queryKey: ['work-items'] });
@@ -613,8 +619,8 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         {execute.error && <p className="error-message">{execute.error.message}</p>}
         <div className="execution-controls">
           {item.assignees.includes('palmyra')
-            ? <ComposerModelSelect executionProfile={executionProfile} provider="palmyra" onChange={setExecutionProfile} disabled={execute.isPending} />
-            : <ModelProfileSelect className="execution-control" value={executionProfile} onChange={setExecutionProfile} />}
+            ? <ComposerModelSelect executionProfile={selectedExecutionProfile} provider="palmyra" onChange={setExecutionProfile} disabled={execute.isPending} />
+            : <ModelProfileSelect className="execution-control" value={selectedExecutionProfile} onChange={setExecutionProfile} />}
           {!item.assignees.includes('palmyra') && <select className="execution-control" value={accountProfile} onChange={(event) => setAccountProfile(event.target.value)} aria-label="Account profile">
             {(agentAccounts.data?.accounts ?? [{ name: 'default' } as AgentAccountProfile]).map((account) => <option key={account.name} value={account.name}>{account.name === 'default' ? 'Default profile' : account.name}</option>)}
           </select>}

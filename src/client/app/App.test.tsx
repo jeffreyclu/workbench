@@ -2827,11 +2827,21 @@ describe('self-assigned ownership', () => {
 
   const renderDetail = (assignees: string[]) => {
     const item = { ...baseItem, assignees };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => { void init; return new Response(JSON.stringify(
-      String(input).includes('/dependency-candidates')
-        ? { items: [] }
-        : { item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [], providerConflicts: [] },
-    ), { status: 200, headers: { 'Content-Type': 'application/json' } }); });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/execute')) return new Response(JSON.stringify({
+        run: { id: 'palmyra-run', workItemId: taskId, agent: 'palmyra', executionProfile: 'palmyra-x5', status: 'running' },
+        runs: [{ id: 'palmyra-run', workItemId: taskId, agent: 'palmyra', executionProfile: 'palmyra-x5', status: 'running' }],
+        classification: { kind: 'execute', agent: 'palmyra', complex: false, instructions: 'Execute it.', source: 'manual' },
+        conversation: { id: 'palmyra-conversation', title: baseItem.title },
+        activity: { id: 'palmyra-activity', workItemId: taskId, kind: 'execution_started', body: '', createdAt: new Date().toISOString() },
+      }), { status: 202, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify(
+        url.includes('/dependency-candidates')
+          ? { items: [] }
+          : { item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [], providerConflicts: [] },
+      ), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><TaskDetail id={taskId} onClose={vi.fn()} onOpenConversation={vi.fn()} onOpenTask={vi.fn()} onCreated={vi.fn()} /></QueryClientProvider>);
@@ -2884,7 +2894,7 @@ describe('self-assigned ownership', () => {
   });
 
   it('offers Palmyra ownership and X5/X6 execution without a CLI account profile', async () => {
-    renderDetail(['palmyra']);
+    const fetchMock = renderDetail(['palmyra']);
 
     const owners = (await screen.findByText('Owners')).parentElement!.querySelector('.assignee-picker') as HTMLElement;
     expect(within(owners).getByRole('button', { name: /palmyra/i })).toHaveClass('selected');
@@ -2892,7 +2902,12 @@ describe('self-assigned ownership', () => {
     expect(Array.from(model.options).map((option) => option.value)).toEqual(['palmyra-x5', 'palmyra-x6']);
     expect(screen.queryByLabelText('Account profile')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Edit profile' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Execute task' })).toBeEnabled();
+    const execute = screen.getByRole('button', { name: 'Execute task' });
+    expect(execute).toBeEnabled();
+    fireEvent.click(execute);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/execute'))).toBe(true));
+    const executeCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/execute'))!;
+    expect(JSON.parse(String(executeCall[1]?.body))).toMatchObject({ executionProfile: 'palmyra-x5' });
   });
 
   it('uses the app dialog before permanently deleting a task', async () => {

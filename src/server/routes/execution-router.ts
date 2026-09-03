@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { createAgentRunSchema, accountProfileSchema } from '../../shared/contracts.js';
+import { createAgentRunSchema, accountProfileSchema, executionProfileOverrideSchema } from '../../shared/contracts.js';
 import type { RouteContext } from '../route-context.js';
 
 export function createExecutionRouter({ admin }: RouteContext) {
@@ -16,7 +16,10 @@ export function createExecutionRouter({ admin }: RouteContext) {
     admin.sendAction(response, await admin.retryRun(request.params.id, { force: false }));
   });
   router.post('/api/work-items/:id/execute', async (request, response) => {
-    const { executionProfile, accountProfile } = z.object({ executionProfile: z.enum(['economy', 'standard', 'deep']).nullable().default(null), accountProfile: accountProfileSchema.optional() }).parse(request.body ?? {});
+    // The task model picker sends Palmyra's X5/X6 model tier through the same
+    // field as Codex/Claude effort profiles. Reuse the canonical contract so
+    // this convenience route cannot lag behind POST /runs again.
+    const { executionProfile, accountProfile } = z.object({ executionProfile: executionProfileOverrideSchema, accountProfile: accountProfileSchema.optional() }).parse(request.body ?? {});
     admin.sendAction(response, await admin.startWorkItemExecution(request.params.id, { executionProfile, accountProfile, force: false }));
   });
   router.post('/api/execution-plans/:id/:resolution', (request, response) => {

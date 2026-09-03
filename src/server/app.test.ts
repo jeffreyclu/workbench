@@ -534,6 +534,31 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     expect(cancelAgentRun(repository, runs[0].id)).toBeTruthy();
     await vi.waitFor(() => expect(isAgentRunActive(runs[0].id)).toBe(false));
   });
+
+  it('accepts a Palmyra tier on the task execute route and creates a Palmyra run', async () => {
+    const originalWriterKey = process.env.WRITER_API_KEY;
+    delete process.env.WRITER_API_KEY; // keep this route test local and non-billable
+    try {
+      const item = repository.create({ title: 'Execute with Palmyra', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+      repository.update(item.id, { assignees: ['palmyra'] });
+      repository.setClassification(item.id, { kind: 'execute', agent: 'palmyra', complex: false, instructions: 'Implement the task.' }, 'manual');
+
+      const response = await fetch(`${baseUrl}/api/work-items/${item.id}/execute`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ executionProfile: 'palmyra-x6', accountProfile: 'default' }),
+      });
+
+      expect(response.status).toBe(202);
+      const { run, conversation } = await response.json() as { run: { id: string; agent: string; executionProfile: string }; conversation: { preferredDispatchTarget: string } };
+      expect(run).toMatchObject({ agent: 'palmyra', executionProfile: 'palmyra-x6' });
+      expect(conversation.preferredDispatchTarget).toBe('palmyra');
+      await vi.waitFor(() => expect(isAgentRunActive(run.id)).toBe(false));
+    } finally {
+      if (originalWriterKey === undefined) delete process.env.WRITER_API_KEY;
+      else process.env.WRITER_API_KEY = originalWriterKey;
+    }
+  });
 });
 
 describe('preview promotion delegation', () => {
