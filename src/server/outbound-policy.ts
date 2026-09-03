@@ -22,7 +22,7 @@ export interface OutboundPolicyDependencies {
 }
 
 type HostRule = { hostname: string; subdomains?: boolean; path?: string };
-export type OutboundPolicyName = 'source-page' | 'github-api' | 'gmail-api' | 'linear-api' | 'atlassian-api' | 'grafana-api' | 'slack-oauth' | 'mcp-slack' | 'mcp-figma' | 'mcp-atlassian';
+export type OutboundPolicyName = 'source-page' | 'github-api' | 'gmail-api' | 'linear-api' | 'atlassian-api' | 'grafana-api' | 'palmyra-api' | 'slack-oauth' | 'mcp-slack' | 'mcp-figma' | 'mcp-atlassian';
 
 const rules: Record<OutboundPolicyName, HostRule[]> = {
   'source-page': [
@@ -34,6 +34,9 @@ const rules: Record<OutboundPolicyName, HostRule[]> = {
   'linear-api': [{ hostname: 'api.linear.app' }],
   'atlassian-api': [{ hostname: 'atlassian.net', subdomains: true }],
   'grafana-api': [{ hostname: 'grafana.observability.writer.com' }],
+  // Writer's hosted Palmyra inference API. One fixed path: the chat endpoint
+  // the model client posts to. Nothing else on api.writer.com is approved.
+  'palmyra-api': [{ hostname: 'api.writer.com', path: '/v1/chat' }],
   'slack-oauth': [{ hostname: 'slack.com' }],
   // Each MCP policy contains its fixed transport endpoint plus only the vendor
   // OAuth origins its SDK flow may discover, register against, or use for tokens.

@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { GeneratedTaskDraft } from '../shared/contracts.js';
 import { fastTaskDraft } from '../shared/task-draft.js';
+import { completeWithPalmyra, isPalmyraConfigured } from './providers/palmyra.js';
 
 const SYSTEM_PROMPT = `You convert a rough work request into one agent-executable task. Return only minified JSON: {"title":"...","description":"..."}. The title must start with a concrete imperative verb that identifies the work type (for example Fix, Implement, Review, Research, Write, or Investigate). Keep it under 120 characters. The description must be concise and self-contained while preserving every supplied link, constraint, and expected outcome. Do not invent scope, requirements, files, or acceptance criteria.`;
 
@@ -19,7 +20,7 @@ function scheduleIdleShutdown(): void {
   idleShutdown.unref();
 }
 
-function parseDraft(output: string, originalPrompt: string): GeneratedTaskDraft {
+export function parseTaskDraftResponse(output: string, originalPrompt: string): GeneratedTaskDraft {
   const json = output.match(/\{[\s\S]*\}/)?.[0];
   if (!json) throw new Error('Fast task-draft AI returned no JSON.');
   const parsed = JSON.parse(json) as Record<string, unknown>;
@@ -70,7 +71,7 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
         const pending = active; active = null;
         if (event.is_error || typeof event.result !== 'string') pending.reject(new Error('Fast task-draft AI failed.'));
         else {
-          try { pending.resolve(parseDraft(event.result, pending.prompt)); }
+          try { pending.resolve(parseTaskDraftResponse(event.result, pending.prompt)); }
           catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); }
         }
         dispatchNext();
@@ -82,7 +83,7 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
   return worker;
 }
 
-export function generateFastAiTaskDraft(prompt: string): Promise<GeneratedTaskDraft> {
+function draftWithWorker(prompt: string): Promise<GeneratedTaskDraft> {
   ensureWorker();
   return new Promise((resolve, reject) => {
     // Task drafting now happens in the background after the create-task modal
@@ -92,7 +93,30 @@ export function generateFastAiTaskDraft(prompt: string): Promise<GeneratedTaskDr
   });
 }
 
+async function draftWithPalmyra(prompt: string): Promise<GeneratedTaskDraft> {
+  const content = await completeWithPalmyra({
+    messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: prompt }],
+    maxTokens: 600,
+    timeoutMs: 15_000,
+  });
+  return parseTaskDraftResponse(content, prompt);
+}
+
+/** Palmyra is preferred when a Writer key is configured: one HTTP round trip
+ * instead of a persistent agent-CLI subprocess for a turn that only has to
+ * return two strings. The Claude worker stays as the fallback so an expired
+ * key, a rate limit, or an unparseable reply still produces a draft. */
+export function generateFastAiTaskDraft(prompt: string): Promise<GeneratedTaskDraft> {
+  if (!isPalmyraConfigured()) return draftWithWorker(prompt);
+  return draftWithPalmyra(prompt).catch((error: unknown) => {
+    console.warn(`[palmyra] task draft fell back to the Claude worker: ${error instanceof Error ? error.message : String(error)}`);
+    return draftWithWorker(prompt);
+  });
+}
+
 export function warmFastTaskDraftModel(): void {
+  // The Palmyra path is stateless, so there is no subprocess worth spawning.
+  if (isPalmyraConfigured()) return;
   void generateFastAiTaskDraft('Write a task to verify the fast task-draft formatter is ready.').catch(() => undefined);
 }
 
