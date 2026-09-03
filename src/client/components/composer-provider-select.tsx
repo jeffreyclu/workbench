@@ -25,10 +25,10 @@ export function ComposerProviderSelect({ value, onChange, accountProfile, disabl
       title={value === 'palmyra' ? note : undefined}
       disabled={disabled}
     >
-      <option value="codex">OpenAI</option>
-      <option value="claude">Anthropic</option>
+      <option value="codex">Codex</option>
+      <option value="claude">Claude</option>
       <option value="palmyra" disabled={palmyraBlocked}>Palmyra{palmyraBlocked ? ' · unavailable' : ''}</option>
-      <option value="both">OpenAI + Anthropic</option>
+      <option value="both">Codex + Claude</option>
     </select>
   </>;
 }
