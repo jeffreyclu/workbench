@@ -15,7 +15,8 @@ export type Route =
   | { name: 'conversations'; conversationId: string | null }
   | { name: 'discovery' }
   | { name: 'artifacts' }
-  | { name: 'insights' };
+  | { name: 'insights' }
+  | { name: 'x6-demo' };
 
 const stackPaths: Record<StackName, string> = { active: '/', workbench: '/workbench', archive: '/archive', 'workbench-archive': '/workbench/archive' };
 const libraryRoutes = ['discovery', 'artifacts', 'insights'] as const;
@@ -33,6 +34,7 @@ export function parseRoute(pathname: string): Route {
   if (first === 'conversations') return { name: 'conversations', conversationId: second ?? null };
   const library = libraryRoutes.find((route) => route === first);
   if (library) return { name: library };
+  if (first === 'x6-demo') return { name: 'x6-demo' };
   return { name: 'stack', stack: 'active' };
 }
 
@@ -40,6 +42,7 @@ export function routePath(route: Route): string {
   if (route.name === 'stack') return stackPaths[route.stack];
   if (route.name === 'task') return `/tasks/${encodeURIComponent(route.taskId)}`;
   if (route.name === 'conversations') return route.conversationId ? `/conversations/${encodeURIComponent(route.conversationId)}` : '/conversations';
+  if (route.name === 'x6-demo') return '/x6-demo';
   return `/${route.name}`;
 }
 
