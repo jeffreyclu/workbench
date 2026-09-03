@@ -1251,6 +1251,7 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .composer-tool.attach-button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; }
 .composer-hint { color: #55544f; font: 8px 'DM Mono'; }
 .model-target { width: 112px; margin-left: auto; padding: 7px 24px 7px 8px; color: #c5c4bc; background: #11110f; border: 1px solid #30302b; border-radius: 7px; font: 10px 'DM Mono'; }
+.composer-model-target option:disabled { color: #6d6c65; }
 .agent-target { width: 92px; padding: 7px 24px 7px 8px; color: #c5c4bc; background: #11110f; border: 1px solid #30302b; border-radius: 7px; font: 10px 'DM Mono'; }
 /* The provider selector carries a longer label than the account and dispatch
    pickers beside it, so it gets its own width rather than truncating. */

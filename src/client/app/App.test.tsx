@@ -1572,7 +1572,9 @@ describe('shared room', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Conversation' })).toHaveAttribute('aria-pressed', 'true'));
     expect(screen.getByRole('button', { name: 'Changes' })).toHaveAttribute('aria-pressed', 'false');
-    expect(fetchMock.mock.calls.some(([input, init]) => String(input) === '/api/shared/messages' && init?.method === 'POST')).toBe(true);
+    // The pane returns on mutate, but the POST only leaves after the attachment
+    // finishes base64 encoding, so the send is awaited rather than assumed.
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === '/api/shared/messages' && init?.method === 'POST')).toBe(true));
   });
 
   it('sends an ordinary composer message without exposing a separate Queue action', async () => {
@@ -1860,6 +1862,33 @@ describe('shared room', () => {
     fireEvent.change(screen.getByLabelText('Model choice'), { target: { value: 'standard' } });
     fireEvent.click(screen.getByRole('button', { name: /First task/i }));
     expect((await screen.findByLabelText('Model choice') as HTMLSelectElement).value).toBe('deep');
+  });
+
+  it('offers Palmyra in the composer model selector without a separate provider dropdown', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000091';
+    const conversation = { id: conversationId, title: 'Palmyra composer', workItemId: null, preferredExecutionProfile: 'deep', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const preferenceBodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/ai-provider/availability')) return new Response(JSON.stringify({ accountProfile: 'default', resolved: 'palmyra', palmyra: { available: true, reason: null, model: 'palmyra-x5' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.endsWith('/preferences') && init?.method === 'PATCH') { preferenceBodies.push(String(init.body)); return new Response(JSON.stringify({ conversation }), { status: 200, headers: { 'Content-Type': 'application/json' } }); }
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [conversation], nextCursor: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url === `/api/shared/conversations/${conversationId}`) return new Response(JSON.stringify({ conversation }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    const modelChoice = await screen.findByLabelText('Model choice') as HTMLSelectElement;
+    expect(Array.from(modelChoice.options).map((option) => option.value)).toEqual(['auto', 'economy', 'standard', 'deep', 'palmyra']);
+    await waitFor(() => expect(modelChoice.querySelector('option[value="palmyra"]')).not.toBeDisabled());
+    fireEvent.change(modelChoice, { target: { value: 'palmyra' } });
+    expect(modelChoice.value).toBe('palmyra');
+    await waitFor(() => expect(preferenceBodies.some((body) => body.includes('"aiProvider":"palmyra"'))).toBe(true));
+    // Palmyra is one option in the one model selector, never a second control.
+    expect(screen.queryByLabelText('AI provider for turn grounding')).toBeNull();
+    expect(screen.queryByLabelText('AI provider')).toBeNull();
   });
 
   it('keeps Both selected after switching away from and back to a conversation', async () => {

@@ -41,7 +41,7 @@ import { MarkdownComposer } from '../../components/markdown/markdown-composer.js
 import { MarkdownCode, MarkdownPre } from '../../components/markdown/markdown-code.js';
 import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAGE, SELF_ASSIGNED_OWNER_MESSAGE } from '../../../shared/contracts';
 import type { AiProviderChoice } from '../../../shared/ai-providers';
-import { AiProviderSelect } from '../../components/ai-provider-select';
+import { ComposerModelSelect } from '../../components/composer-model-select';
 import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SessionFeedbackRating, SharedConversation, SharedMessage, SharedMessagePage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
 import { api } from '../../data/api';
 import { ArtifactLibraryView } from '../artifacts/view';
@@ -54,7 +54,7 @@ import { toast, toastError } from '../../state/toast-store';
 import { Tabs } from '../../components/tabs/tabs';
 import { ClassificationKindDisclosure, SortableQueueItem as TaskQueueItem, TaskClassificationSelect } from '../queue';
 import { AgentMessageBody, LiveRunOutput, splitBodyAtInterjections, type AgentMessageInterjection } from '../../components/agent-message/agent-message';
-import { ConversationOriginBadge, ModelProfileSelect, ReferenceTypeIcon } from '../../components/badges';
+import { ConversationOriginBadge, ReferenceTypeIcon } from '../../components/badges';
 import { CreateTask } from '../../components/dialogs/create-task-dialog';
 import { DiscoveryInboxView } from '../discovery';
 import { useNavigation } from '../../features/navigation/hooks';
@@ -323,9 +323,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       return next;
     });
     updateConversationPreferences.mutate({ conversationId: targetConversationId, updates, sequence: ++preferenceMutationSequence.current });
-  }
-  function setExecutionProfile(profile: ComposerSelection['executionProfile']) {
-    updateComposerPreferences({ executionProfile: profile });
   }
   // The rail's Active/Archive selection is owned by the caller when it supplies
   // one, so it survives the workspace being remounted onto a conversation from
@@ -1449,14 +1446,13 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
             <input ref={fileRef} className="visually-hidden" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
             <button type="button" className="composer-tool attach-button" onClick={() => fileRef.current?.click()} aria-label="Attach files" title="Attach files"><Paperclip size={14} /></button>
             <span className="composer-hint">Files, screenshots, or context</span>
-            <ModelProfileSelect className="model-target" value={composerSelection.executionProfile} onChange={setExecutionProfile} disabled={selectionHydratedFor !== conversationId} />
+            <ComposerModelSelect className="model-target" executionProfile={composerSelection.executionProfile} aiProvider={composerSelection.aiProvider} accountProfile={composerSelection.accountProfile} onChange={(next) => updateComposerPreferences(next)} disabled={selectionHydratedFor !== conversationId} />
             <select className="agent-target account-target" value={composerSelection.accountProfile} onChange={(event) => updateComposerPreferences({ accountProfile: event.target.value })} aria-label="Account profile" disabled={agentAccounts.isLoading || selectionHydratedFor !== conversationId}>
               {accountProfiles.map((account) => <option key={account.name} value={account.name}>{account.name === 'default' ? 'Default' : account.name}</option>)}
             </select>
             <select className="agent-target dispatch-target" value={composerSelection.dispatchTarget} onChange={(event) => { const target = event.target.value as ConversationDispatchTarget; updateComposerPreferences({ dispatchTarget: target }); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} aria-label="Who should respond" disabled={selectionHydratedFor !== conversationId}>
               <option value="codex">Codex</option><option value="claude">Claude</option><option value="both">Both</option>
             </select>
-            <AiProviderSelect value={composerSelection.aiProvider} onChange={(next) => updateComposerPreferences({ aiProvider: next })} accountProfile={composerSelection.accountProfile} disabled={selectionHydratedFor !== conversationId} ariaLabel="AI provider for turn grounding" />
             <button className="icon-button primary composer-send" aria-label="Send message" title="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
           </div>
           {send.error && <div className="composer-send-error" role="alert"><span>Could not send: {send.error.message}</span><button type="button" className="button secondary compact" onMouseDown={(event) => event.preventDefault()} onClick={retrySend} disabled={send.isPending}>Retry</button></div>}
