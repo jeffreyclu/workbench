@@ -333,7 +333,7 @@ export function createConversationRouter({ repository, database, capabilities, a
 
   router.patch('/api/shared/conversations/:id/preferences', (request, response) => {
     const preferences = z.object({
-      executionProfile: z.enum(['economy', 'standard', 'deep']).nullable().optional(),
+      executionProfile: z.enum(['economy', 'standard', 'deep', 'palmyra-x5', 'palmyra-x6']).nullable().optional(),
       accountProfile: z.string().trim().min(1).max(120).nullable().optional(),
       dispatchTarget: z.enum(['both', 'codex', 'claude', 'palmyra']).nullable().optional(),
       aiProvider: aiProviderChoiceSchema.nullable().optional(),

@@ -981,7 +981,7 @@ export interface ExecutionPlan {
 
 export const agentTargetSchema = z.enum(['auto', 'codex', 'claude', 'palmyra', 'both']);
 export const runStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'canceled']);
-export const executionProfileOverrideSchema = z.enum(['economy', 'standard', 'deep']).nullable().default(null);
+export const executionProfileOverrideSchema = z.enum(['economy', 'standard', 'deep', 'palmyra-x5', 'palmyra-x6']).nullable().default(null);
 export const accountProfileSchema = z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9][a-zA-Z0-9 _-]*$/, 'Account profile must use letters, numbers, spaces, hyphens, or underscores.');
 
 export const createAgentRunSchema = z.object({
@@ -1047,7 +1047,7 @@ export interface AgentRun {
   conversationId: string | null;
   messageId: string | null;
   model: string | null;
-  executionProfile: 'economy' | 'standard' | 'deep' | null;
+  executionProfile: 'economy' | 'standard' | 'deep' | 'palmyra-x5' | 'palmyra-x6' | null;
   /** Named local credential profile selected at dispatch; credentials never enter Workbench data. */
   accountProfile: string;
   inputTokens: number | null;
@@ -1187,7 +1187,7 @@ export interface SharedMessage {
   /** Credential profile selected for this provider invocation; never credentials.
    * Optional while an older promoted runtime can still return the pre-proof contract. */
   accountProfile?: string | null;
-  executionProfile: 'routing' | 'economy' | 'standard' | 'deep' | null;
+  executionProfile: 'routing' | 'economy' | 'standard' | 'deep' | 'palmyra-x5' | 'palmyra-x6' | null;
   /** Fresh, non-cached input tokens. */
   inputTokens: number | null;
   /** Provider prompt-cache creation/refresh tokens, when reported. */

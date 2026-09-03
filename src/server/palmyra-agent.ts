@@ -194,6 +194,7 @@ export interface PalmyraAgentResult {
 export async function runPalmyraAgent(options: {
   cwd: string;
   prompt: string;
+  model?: string;
   signal?: AbortSignal;
   onProgress?: (output: string) => void;
   onUsage?: (usage: AgentUsage, agent: 'palmyra') => void;
@@ -214,7 +215,7 @@ export async function runPalmyraAgent(options: {
   let usage: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (options.signal?.aborted) throw options.signal.reason ?? new Error('Palmyra run canceled.');
-    const response = await chatWithPalmyra({ messages, tools, toolChoice: 'auto', maxTokens: 4_096, timeoutMs: 120_000, signal: options.signal });
+    const response = await chatWithPalmyra({ messages, tools, toolChoice: 'auto', maxTokens: 4_096, timeoutMs: 120_000, signal: options.signal, model: options.model });
     usage = {
       inputTokens: response.usage.inputTokens === null ? usage.inputTokens : (usage.inputTokens ?? 0) + response.usage.inputTokens,
       cacheCreationInputTokens: null,

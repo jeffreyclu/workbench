@@ -1360,12 +1360,19 @@ export async function replyInSharedRoom(
     if (runId) repository.updateRun(runId, { resolvedWorkspace: cwd });
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}${selectedWorkspace ? ' from Repo Explorer.' : '.'}`);
     const runKind = linkedRun?.kind ?? target.kind ?? 'analysis';
-    const profile = target.executionProfile && target.executionProfile !== 'routing'
-      ? target.executionProfile
-      : await judgeExecutionProfile(latestUserMessage || 'analysis', cwd, controller.signal);
-    repository.updateSharedMessage(messageId, { model: modelFor(agent, profile), executionProfile: profile });
-    if (runId) repository.updateRun(runId, { model: modelFor(agent, profile), executionProfile: profile });
-    repository.setConversationExecutionProfile(target.conversationId, profile);
+    const profile = agent === 'palmyra'
+      ? 'standard' as const
+      : target.executionProfile && target.executionProfile !== 'routing' && target.executionProfile !== 'palmyra-x5' && target.executionProfile !== 'palmyra-x6'
+        ? target.executionProfile
+        : await judgeExecutionProfile(latestUserMessage || 'analysis', cwd, controller.signal);
+    // Palmyra's tier is a model choice, not an effort profile: it never feeds
+    // effortFor/autocompactCeilingFor, which stay codex/claude-only concerns.
+    const palmyraTier: 'palmyra-x5' | 'palmyra-x6' = target.executionProfile === 'palmyra-x6' ? 'palmyra-x6' : 'palmyra-x5';
+    const model = agent === 'palmyra' ? palmyraTier : modelFor(agent, profile);
+    const recordedProfile = agent === 'palmyra' ? palmyraTier : profile;
+    repository.updateSharedMessage(messageId, { model, executionProfile: recordedProfile });
+    if (runId) repository.updateRun(runId, { model, executionProfile: recordedProfile });
+    repository.setConversationExecutionProfile(target.conversationId, recordedProfile);
     // Provider boot is the largest cold-start cost. Start the one exact
     // process this turn will claim while the independent prompt prerequisites
     // run; Claude deliberately gets no replenished sibling.
@@ -1461,7 +1468,7 @@ export async function replyInSharedRoom(
     try {
       result = agent === 'codex'
       ? await runCodexReply(guardedPrompt, linkedConversation?.codexThreadId, freshPrompt)
-      : agent === 'palmyra' ? await runPalmyraAgent({ cwd, prompt: guardedPrompt, signal: controller.signal, onProgress: (partial) => {
+      : agent === 'palmyra' ? await runPalmyraAgent({ cwd, prompt: guardedPrompt, model: palmyraTier, signal: controller.signal, onProgress: (partial) => {
         if (controller.signal.aborted) return;
         updateLiveSharedBody(repository, messageId, partial, runId);
       }, onUsage: (usage) => persistNonTerminalAgentUpdate(() => {

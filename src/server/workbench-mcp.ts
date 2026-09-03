@@ -111,19 +111,19 @@ async function runTool(name: string, operation: () => unknown | Promise<unknown>
  * active"), never permission refusals.
  */
 export interface WorkbenchAdminActions {
-  startWorkItemExecution(workItemId: string, options: { executionProfile: 'economy' | 'standard' | 'deep' | null; force: boolean }): Promise<unknown>;
+  startWorkItemExecution(workItemId: string, options: { executionProfile: 'economy' | 'standard' | 'deep' | 'palmyra-x5' | 'palmyra-x6' | null; force: boolean }): Promise<unknown>;
   startAgentRun(workItemId: string, input: {
     kind: z.infer<typeof runKindSchema>;
     target: z.infer<typeof agentTargetSchema>;
     instructions: string;
-    executionProfile: 'economy' | 'standard' | 'deep' | null;
+    executionProfile: 'economy' | 'standard' | 'deep' | 'palmyra-x5' | 'palmyra-x6' | null;
   }, options: { actor: 'codex' | 'claude'; force: boolean }): Promise<unknown>;
   cancelRun(runId: string): unknown;
   retryRun(runId: string, options: { force: boolean }): Promise<unknown>;
   resolvePlan(planId: string, resolution: 'accepted' | 'rejected', selectedTaskIndexes?: number[], archiveParent?: boolean): unknown;
   deleteWorkItem(workItemId: string, actor: 'codex' | 'claude'): unknown;
   deleteConversation(conversationId: string, actor: 'codex' | 'claude'): unknown;
-  dispatchConversationTurn(conversationId: string, actor: 'codex' | 'claude', body: string, dispatchTo: 'none' | 'auto' | 'codex' | 'claude' | 'both', executionProfile: 'economy' | 'standard' | 'deep' | null): unknown;
+  dispatchConversationTurn(conversationId: string, actor: 'codex' | 'claude', body: string, dispatchTo: 'none' | 'auto' | 'codex' | 'claude' | 'both', executionProfile: 'economy' | 'standard' | 'deep' | 'palmyra-x5' | 'palmyra-x6' | null): unknown;
   cancelSharedMessage(messageId: string): unknown;
   publishArtifact(input: { path: string; title?: string; workItemId?: string; conversationId?: string }): Promise<unknown>;
   listArtifacts(view: 'published' | 'revoked' | 'all' | 'favorites'): unknown;

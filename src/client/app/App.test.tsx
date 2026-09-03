@@ -1898,6 +1898,12 @@ describe('shared room', () => {
     expect(screen.getByLabelText('Model choice')).toHaveValue('palmyra-x5');
     expect(screen.getByRole('status')).toHaveTextContent('Palmyra is chat-only in Workbench. X6 access changes the model, not file permissions. Choose OpenAI or Anthropic for code changes.');
     expect(screen.getAllByRole('combobox')).toHaveLength(3);
+
+    expect(Array.from((screen.getByLabelText('Model choice') as HTMLSelectElement).options).map((option) => option.value)).toEqual(['palmyra-x5', 'palmyra-x6']);
+    fireEvent.change(screen.getByLabelText('Model choice'), { target: { value: 'palmyra-x6' } });
+    expect(screen.getByLabelText('Model choice')).toHaveValue('palmyra-x6');
+    await waitFor(() => expect(preferenceBodies.some((body) => body.includes('"executionProfile":"palmyra-x6"'))).toBe(true));
+    expect(screen.getAllByRole('combobox')).toHaveLength(3);
   });
 
   it('keeps Both selected after switching away from and back to a conversation', async () => {

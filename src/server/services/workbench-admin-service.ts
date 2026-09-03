@@ -12,7 +12,7 @@ import {
 import type { Activity, AgentRun, WorkItem } from '../../shared/contracts.js';
 import type { ActionFailure } from '../action-result.js';
 import { isActionFailure } from '../action-result.js';
-import { CANCEL_FORCE_KILL_DELAY_MS, cancelAgentRun, classifyExecutionRobust, executeAgentRun, resolveAgents } from '../agent-runner.js';
+import { CANCEL_FORCE_KILL_DELAY_MS, cancelAgentRun, classifyExecutionRobust, executeAgentRun, resolveAgents, type ExecutionProfile } from '../agent-runner.js';
 import { describeExecutionRouting } from '../activity-log.js';
 import { contextForPrompt, listBrokerConnections, resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { scanSource } from '../source-scanner.js';
@@ -52,6 +52,12 @@ async function waitForCancellationToSettle(repository: WorkItemRepository, runId
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
   }
   return true;
+}
+
+/** Palmyra's x5/x6 tier is a model choice, not an effort profile: it never
+ * feeds the effort-tier activity text, which stays a codex/claude concern. */
+function effortProfileFor(profile: AgentRun['executionProfile']): ExecutionProfile | null {
+  return profile === 'economy' || profile === 'standard' || profile === 'deep' ? profile : null;
 }
 
 export class WorkbenchAdminService {
@@ -94,7 +100,7 @@ export class WorkbenchAdminService {
       agents,
       reason: 'you asked for this run type',
       agentSource: input.target === 'auto' ? 'balanced' : 'assigned',
-      requestedProfile: input.executionProfile,
+      requestedProfile: effortProfileFor(input.executionProfile),
     }));
     // Persist the task lifecycle transition before yielding to the background
     // runner. The runner can be delayed by workspace contention or process
@@ -197,7 +203,7 @@ export class WorkbenchAdminService {
       agents,
       reason: classificationReason,
       agentSource: explicitlyAssigned.length ? 'assigned' : 'balanced',
-      requestedProfile: executionProfile,
+      requestedProfile: effortProfileFor(executionProfile),
     }));
     const sourceContext = await this.sourceContextFor(item);
     for (const run of runs) void executeAgentRun(this.repository, run, OWNER_ID, LEASE_MS, sourceContext);

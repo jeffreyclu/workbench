@@ -1969,19 +1969,23 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       retrievedMemoryChars: memoryContext.length,
     });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { executionProfile: 'routing' });
-    const decision: { profile: ExecutionProfile; source: ExecutionProfileSource } = run.executionProfile
+    const decision: { profile: ExecutionProfile; source: ExecutionProfileSource } = run.executionProfile && run.executionProfile !== 'palmyra-x5' && run.executionProfile !== 'palmyra-x6'
       ? { profile: run.executionProfile, source: 'requested' }
       : resolveExecutionProfileDecision(item, run, `${item.title}\n${item.description}\n${run.instructions}`);
     const profile = decision.profile;
-    const model = modelFor(run.agent, profile);
-    repository.updateRun(run.id, { model, executionProfile: profile });
-    if (run.messageId) repository.updateSharedMessage(run.messageId, { model, executionProfile: profile });
-    if (run.conversationId) repository.setConversationExecutionProfile(run.conversationId, profile);
+    // Palmyra's tier is a model choice, not an effort profile: it never feeds
+    // effortFor/autocompactCeilingFor, which stay codex/claude-only concerns.
+    const palmyraTier: 'palmyra-x5' | 'palmyra-x6' = run.executionProfile === 'palmyra-x6' ? 'palmyra-x6' : 'palmyra-x5';
+    const model = run.agent === 'palmyra' ? palmyraTier : modelFor(run.agent, profile);
+    const recordedProfile = run.agent === 'palmyra' ? palmyraTier : profile;
+    repository.updateRun(run.id, { model, executionProfile: recordedProfile });
+    if (run.messageId) repository.updateSharedMessage(run.messageId, { model, executionProfile: recordedProfile });
+    if (run.conversationId) repository.setConversationExecutionProfile(run.conversationId, recordedProfile);
     // The model and effort tier are picked for Jeffrey, not by him. Record the
     // choice and its reason so the activity log explains what actually ran.
     repository.addActivity(item.id, 'system', 'model_selected', describeModelSelection({ agent: run.agent, kind: run.kind, model, profile, source: decision.source }));
     let result = run.agent === 'palmyra'
-      ? await (await import('./palmyra-agent.js')).runPalmyraAgent({ cwd, prompt, signal: controller.signal, onProgress: (partialOutput) => {
+      ? await (await import('./palmyra-agent.js')).runPalmyraAgent({ cwd, prompt, model: palmyraTier, signal: controller.signal, onProgress: (partialOutput) => {
         repository.updateRun(run.id, { output: partialOutput });
         if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
       }, onUsage: (usage) => {
