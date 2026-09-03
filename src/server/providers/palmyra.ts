@@ -1,17 +1,48 @@
 import { createOutboundFetch } from '../outbound-policy.js';
 
-/** Writer's hosted Palmyra inference API. Palmyra X4+ supports custom function
- * calling, but this adapter intentionally exposes no tools: it has no isolated
- * worktree, scoped file capability, or agent audit stream. Model access (including
- * X6) therefore never becomes implicit permission to change Workbench files. */
+/** Writer's hosted Palmyra inference API. Tool execution remains owned by the
+ * caller so Workbench can enforce workspace, command, and audit policies. */
 const ENDPOINT = 'https://api.writer.com/v1/chat';
 const DEFAULT_MODEL = 'palmyra-x5';
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_TOKENS = 1_024;
 
-export interface PalmyraMessage {
-  role: 'system' | 'user' | 'assistant';
+interface PalmyraTextMessage {
+  role: 'system' | 'user';
   content: string;
+}
+
+interface PalmyraAssistantMessage {
+  role: 'assistant';
+  content: string | null;
+  tool_calls?: PalmyraToolCall[];
+}
+
+interface PalmyraToolMessage {
+  role: 'tool';
+  content: string;
+  name: string;
+  tool_call_id: string;
+}
+
+export type PalmyraMessage = PalmyraTextMessage | PalmyraAssistantMessage | PalmyraToolMessage;
+
+export interface PalmyraToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+export interface PalmyraTool {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
 }
 
 export interface PalmyraCompletionRequest {
@@ -23,8 +54,26 @@ export interface PalmyraCompletionRequest {
   signal?: AbortSignal;
 }
 
+export interface PalmyraChatRequest extends PalmyraCompletionRequest {
+  tools?: PalmyraTool[];
+  toolChoice?: 'auto' | 'none';
+}
+
+export interface PalmyraChatResult {
+  content: string | null;
+  toolCalls: PalmyraToolCall[];
+  usage: {
+    inputTokens: number | null;
+    outputTokens: number | null;
+  };
+}
+
 interface PalmyraChatResponse {
-  choices?: Array<{ message?: { content?: string | null } }>;
+  choices?: Array<{ message?: { content?: string | null; tool_calls?: PalmyraToolCall[] } }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+  };
 }
 
 const palmyraFetch = createOutboundFetch('palmyra-api');
@@ -44,7 +93,7 @@ export function isPalmyraConfigured(): boolean {
   return palmyraApiKey() !== null;
 }
 
-export async function completeWithPalmyra(request: PalmyraCompletionRequest, fetchImpl: typeof fetch = palmyraFetch): Promise<string> {
+export async function chatWithPalmyra(request: PalmyraChatRequest, fetchImpl: typeof fetch = palmyraFetch): Promise<PalmyraChatResult> {
   const key = palmyraApiKey();
   if (!key) throw new Error('Palmyra is not configured: set WRITER_API_KEY.');
   const response = await fetchImpl(ENDPOINT, {
@@ -56,6 +105,8 @@ export async function completeWithPalmyra(request: PalmyraCompletionRequest, fet
       max_tokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
       temperature: request.temperature ?? 0,
       stream: false,
+      ...(request.tools ? { tools: request.tools } : {}),
+      ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
     }),
     signal: request.signal
       ? AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS)])
@@ -66,7 +117,19 @@ export async function completeWithPalmyra(request: PalmyraCompletionRequest, fet
     throw new Error(`Palmyra request failed (${response.status}).${detail ? ` ${detail.slice(0, 200)}` : ''}`);
   }
   const payload = await response.json() as PalmyraChatResponse;
-  const content = payload.choices?.[0]?.message?.content?.trim();
+  const message = payload.choices?.[0]?.message;
+  return {
+    content: message?.content?.trim() || null,
+    toolCalls: message?.tool_calls ?? [],
+    usage: {
+      inputTokens: payload.usage?.prompt_tokens ?? null,
+      outputTokens: payload.usage?.completion_tokens ?? null,
+    },
+  };
+}
+
+export async function completeWithPalmyra(request: PalmyraCompletionRequest, fetchImpl: typeof fetch = palmyraFetch): Promise<string> {
+  const { content } = await chatWithPalmyra(request, fetchImpl);
   if (!content) throw new Error('Palmyra returned an empty completion.');
   return content;
 }

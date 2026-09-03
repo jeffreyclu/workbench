@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { chatWithPalmyra, completeWithPalmyra, isPalmyraConfigured, palmyraModel } from './palmyra.js';
+import {
+  chatWithPalmyra,
+  completeWithPalmyra,
+  isPalmyraConfigured,
+  palmyraModel,
+  type PalmyraTool,
+  type PalmyraToolCall,
+} from './palmyra.js';
 import { createOutboundFetch } from '../outbound-policy.js';
 import { parseTaskDraftResponse } from '../fast-task-draft-ai.js';
 
@@ -52,16 +59,29 @@ describe('palmyra client', () => {
   });
 
   it('sends custom tools and decodes Writer tool calls with usage', async () => {
-    const toolCall = { id: 'call-1', type: 'function' as const, function: { name: 'read_file', arguments: '{"path":"README.md"}' } };
+    const toolCall: PalmyraToolCall = { id: 'call-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"README.md"}' } };
+    const tools: PalmyraTool[] = [{ type: 'function', function: { name: 'read_file', description: 'Read a file.', parameters: { type: 'object' } } }];
     const stub = stubFetch(jsonResponse({ choices: [{ message: { content: null, tool_calls: [toolCall] } }], usage: { prompt_tokens: 31, completion_tokens: 9 } }));
     const result = await chatWithPalmyra({
-      messages: [{ role: 'user', content: 'Inspect the repository.' }],
-      tools: [{ type: 'function', function: { name: 'read_file', description: 'Read a file.', parameters: { type: 'object' } } }],
+      messages: [
+        { role: 'user', content: 'Inspect the repository.' },
+        { role: 'assistant', content: null, tool_calls: [toolCall] },
+        { role: 'tool', name: 'read_file', tool_call_id: 'call-1', content: '1: Workbench' },
+      ],
+      tools,
       toolChoice: 'auto',
     }, stub.fetch);
 
     expect(result).toEqual({ content: null, toolCalls: [toolCall], usage: { inputTokens: 31, outputTokens: 9 } });
-    expect(JSON.parse(String(stub.calls[0].init.body))).toMatchObject({ tool_choice: 'auto', tools: [{ function: { name: 'read_file' } }] });
+    expect(JSON.parse(String(stub.calls[0].init.body))).toMatchObject({
+      tool_choice: 'auto',
+      tools: [{ function: { name: 'read_file' } }],
+      messages: [
+        { role: 'user', content: 'Inspect the repository.' },
+        { role: 'assistant', content: null, tool_calls: [toolCall] },
+        { role: 'tool', name: 'read_file', tool_call_id: 'call-1', content: '1: Workbench' },
+      ],
+    });
   });
 
   it('reports configuration state from WRITER_API_KEY', async () => {
