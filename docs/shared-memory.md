@@ -503,3 +503,22 @@ category exclusion list: it governs what agents volunteer, not what he chooses t
 intro written in his own voice (lowercase, casual, Slack emoji). The correct response was to fix the
 two grammar slips and hand it straight back, preserving voice and structure — not to produce a
 "better" version.
+
+## Review the PR's own code, from the PR branch — never the primary checkout's current branch (2026-09-03)
+
+Reviewing PR #15243 (CON-230), two consecutive review passes rejected the PR claiming its artifacts
+did not exist. Both were reading `/Users/jeffrey.lu/dev/writer-monorepo`, which was sitting on an
+unrelated branch (`fix/con-221-...`). The code was real; the checkout was wrong. Jeffrey's correction
+was emphatic and came twice: review the GitHub diff, and check the branch out in its own worktree
+rather than assuming the monorepo working copy is on it.
+
+The standing rule for any code review:
+
+- Resolve the PR first (`gh pr view <n> --json headRefName,headRefOid,files`) and treat the head SHA
+  as the only thing under review.
+- Read the code at that SHA — from a worktree checked out to it, or via `gh api .../contents?ref=<sha>`
+  for individual files. Confirm the worktree's `git rev-parse HEAD` equals the PR head before trusting
+  anything read from it. Existing worktrees may already be at the right commit: check
+  `git worktree list` before creating another.
+- "The symbol does not exist in the repo" is never a finding until it has been checked at the PR's head
+  commit. The default working directory is a starting point, not the subject of the review.
