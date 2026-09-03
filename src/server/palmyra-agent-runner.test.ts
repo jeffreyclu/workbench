@@ -49,6 +49,23 @@ describe('Palmyra durable agent runs', () => {
     database.close();
   });
 
+  it('reads and writes outside its starting workspace', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'palmyra-start-'));
+    const siblingRepository = mkdtempSync(join(tmpdir(), 'palmyra-sibling-repo-'));
+    workspaces.push(workspace, siblingRepository);
+    const target = join(siblingRepository, 'cross-repo.txt');
+    streamChatWithPalmyra
+      .mockResolvedValueOnce({ content: null, toolCalls: [{ id: 'write-sibling', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: target, content: 'cross-repo access\n' }) } }], usage: { inputTokens: 10, outputTokens: 4 }, finishReason: 'tool_calls' })
+      .mockResolvedValueOnce({ content: null, toolCalls: [{ id: 'read-sibling', type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: target }) } }], usage: { inputTokens: 12, outputTokens: 4 }, finishReason: 'tool_calls' })
+      .mockResolvedValueOnce({ content: 'Cross-repository access verified.', toolCalls: [], usage: { inputTokens: 14, outputTokens: 5 }, finishReason: 'stop' });
+
+    const result = await runPalmyraAgent({ cwd: workspace, prompt: 'Write and read the sibling repository file.', workbenchTools: null });
+
+    expect(result.output).toContain('Cross-repository access verified.');
+    expect(readFileSync(target, 'utf8')).toBe('cross-repo access\n');
+    expect(streamChatWithPalmyra.mock.calls[2][0].messages).toContainEqual(expect.objectContaining({ role: 'tool', content: expect.stringContaining('cross-repo access') }));
+  });
+
   it('keeps working beyond the former 48-round ceiling and can use the Workbench MCP tool surface', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'palmyra-uncapped-'));
     workspaces.push(workspace);

@@ -94,7 +94,7 @@ ${EXECUTION_FIDELITY_CONTRACT}
 
 For an approved artifact publication, use the Workbench MCP \`publish_artifact\` tool; do not curl the Workbench UI. Publishing remains limited to a supervisor-issued capability for this one turn.
 
-Workspace isolation: a task does not need a linked repository. The resolved working directory is execution context, not proof that the task belongs to that repository. Never create or update \`docs/shared-memory*\`, Workbench operating notes, or other Workbench-internal files in another project. Use Workbench's shared conversation and activity state for handoffs. Create or edit project files only when Jeffrey explicitly asks for work in that project.
+Repository access: every Workbench agent has unrestricted filesystem access to every local repository and Jeffrey's home directory at all times. The resolved working directory is only the starting directory, never an authorization or visibility boundary. Agents may change directories, use absolute or parent paths, and perform normal Git branch/worktree operations wherever the current objective requires. Scope mutations to Jeffrey's explicit request; keep Workbench bookkeeping in Workbench and project files in their owning repositories.
 
 Writer test-suite safety: in every Writer repository, full-suite commands are forbidden. Never run \`npm test\`, \`pnpm test\`, \`yarn test\`, unscoped \`vitest\`/\`jest\`, or \`vitest run -- <test-name>\` because that discovers the repository suite. Run only an explicit, directly relevant test-file path (for example \`vitest run src/path/feature.test.ts\`). This includes hooks: before a Writer push, inspect the pre-push hook; if it launches a forbidden full suite, use \`git push --no-verify\` under the existing one-turn push capability, report that the hook was skipped, and rely only on focused verification. \`--no-verify\` changes local verification behavior, not the authorized external destination, so it does not require a second capability. If focused verification is insufficient, report the gap instead of broadening the command.
 
@@ -158,11 +158,10 @@ export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountPr
   // Workbench, so it shares the guarded subprocess environment without a
   // provider CLI credential directory.
   const env = agent === 'palmyra' ? agentSubprocessEnv() : agentAccountEnv(agent, accountProfile);
-  // Baseline command guards apply to every repository. Repository-specific
-  // guards add stricter policy without making ordinary agent behavior depend
-  // on where the provider process happened to start.
+  // The resolved workspace is a starting directory, never an access boundary.
+  // Keep only cross-repository safety shims and Writer's focused-test policy;
+  // agents must be able to use normal Git in every local repository.
   const guardPaths: string[] = [join(process.cwd(), 'scripts', 'agent-bin')];
-  if (isWorkbenchWorkspace(cwd)) guardPaths.push(join(process.cwd(), 'scripts', 'workbench-agent-bin'));
   if (isWriterWorkspace(cwd)) guardPaths.push(join(process.cwd(), 'scripts', 'writer-agent-bin'));
   // Runtime launches do not necessarily inherit the interactive shell's PATH.
   // Keep normal user/Homebrew tools available so an agent does not waste a
@@ -201,25 +200,6 @@ export function blockedWriterTestSuiteCommand(command: string): boolean {
 export function bypassesWriterTestCommandGuard(command: string): boolean {
   const normalized = command.replace(/\\\n/g, ' ').replace(/\s+/g, ' ').trim();
   return /(?:^|[\s;&|])(?:node\s+)?[^\s;&|]*\/(?:[^\s;&|]*\/)*(?:vitest|jest)(?:\.m?js)?(?:\s|$)/i.test(normalized);
-}
-
-/** Branch state is runtime-owned. Workbench agents may inspect Git but cannot mutate refs/worktrees. */
-export function blockedWorkbenchBranchCommand(command: string): boolean {
-  return command.split(/(?:&&|\|\||;|\n)/).some((segment) => {
-    const match = segment.match(/(?:^|\s)git\s+(?:-C\s+\S+\s+)?(checkout|switch|worktree|branch)(?:\s+([^;&|]+))?/i);
-    if (!match) return false;
-    const subcommand = match[1].toLowerCase();
-    const argumentsText = (match[2] ?? '').trim();
-    // Keep this early stream check aligned with git-command-guard.mjs. A
-    // pathspec-scoped checkout restores files but cannot move HEAD, and
-    // `worktree list` only inspects runtime-owned state.
-    if (subcommand === 'checkout') return !/(?:^|\s)--(?:\s|$)/.test(argumentsText);
-    if (subcommand === 'worktree') return !/^list(?:\s|$)/i.test(argumentsText);
-    if (subcommand === 'switch') return true;
-    const branchArguments = argumentsText.split(/\s+/).filter(Boolean);
-    const branchReadOnly = new Set(['--show-current', '--list', '-l', '-a', '--all', '-r', '--remotes', '-v', '--verbose']);
-    return branchArguments.some((argument) => !branchReadOnly.has(argument) && !argument.startsWith('--format='));
-  });
 }
 
 /** Worktree dependencies are runtime-provisioned; a bootstrap install is never an agent task. */
@@ -442,7 +422,7 @@ ${item.attachments?.length
 Requested capability: ${run.kind}
 Execution mode: ${readOnly
     ? 'read-only by task type. Inspect, research, or review only; do not attempt project-file edits and do not describe this intentional mode as a missing sandbox permission.'
-    : 'write-enabled for the resolved workspace. You may inspect and edit project files needed to complete this task.'}
+    : 'write-enabled across every local repository. The resolved workspace is only the starting directory; inspect and edit files anywhere needed to complete this task.'}
 Additional instructions:
 ${compactPromptSection(run.instructions || 'Use your judgment and return a concise, actionable result.', 1_500)}
 
@@ -899,11 +879,12 @@ export function commandFor(agent: CliAgent, cwd: string, profile: ExecutionProfi
     const model = modelOverride ?? modelFor(agent, profile);
     return {
       command: process.env.CODEX_BIN?.trim() || 'codex',
-      // The task workspace picks a working directory; it is not a filesystem boundary.
+      // The task workspace picks a working directory; danger-full-access keeps
+      // sibling repositories and the rest of Jeffrey's home reachable.
       // --ignore-user-config excludes every personal MCP server. Add back only
       // Workbench's loopback-local MCP surface so Codex does not try to curl
       // the host UI from inside its command sandbox.
-      args: ['exec', '--ephemeral', '--ignore-user-config', '--sandbox', 'workspace-write', '--skip-git-repo-check', '--json', '-c', `model_reasoning_effort="${effort}"`, ...CODEX_WORKBENCH_MCP_ARGS, '--model', model, '-C', cwd, '-'],
+      args: ['exec', '--ephemeral', '--ignore-user-config', '--sandbox', 'danger-full-access', '--skip-git-repo-check', '--json', '-c', `model_reasoning_effort="${effort}"`, ...CODEX_WORKBENCH_MCP_ARGS, '--model', model, '-C', cwd, '-'],
     };
   }
   const model = modelOverride ?? modelFor(agent, profile);
@@ -1519,18 +1500,15 @@ ${AGENT_EXECUTION_CONTRACT}`;
         // Bash tool's real cwd. Only direct binary bypasses are decided here,
         // where the provider process cwd is the best available boundary.
         const blockedWriterSuite = Boolean(toolCommand && isWriterWorkspace(cwd) && bypassesWriterTestCommandGuard(toolCommand) && blockedWriterTestSuiteCommand(toolCommand));
-        const blockedWorkbenchBranch = Boolean(toolCommand && isWorkbenchWorkspace(cwd) && blockedWorkbenchBranchCommand(toolCommand));
         const blockedDependencyBootstrap = Boolean(toolCommand && cwd.includes('/.workbench/run-worktrees/') && blockedWorkbenchDependencyBootstrapCommand(toolCommand));
         const blockedPersistentForeground = Boolean(toolCommand && blockedPersistentForegroundCommand(toolCommand));
-        const blockedCommand = blockedWriterSuite || blockedWorkbenchBranch || blockedDependencyBootstrap || blockedPersistentForeground;
+        const blockedCommand = blockedWriterSuite || blockedDependencyBootstrap || blockedPersistentForeground;
         if (toolCommand && blockedCommand) {
           const reason = blockedWriterSuite
             ? 'a full Writer test-suite command'
-            : blockedWorkbenchBranch
-              ? 'a Workbench Git branch/worktree mutation'
-              : blockedDependencyBootstrap
-                ? 'a dependency bootstrap inside a provisioned run worktree'
-                : 'a persistent foreground command that would strand the agent turn';
+            : blockedDependencyBootstrap
+              ? 'a dependency bootstrap inside a provisioned run worktree'
+              : 'a persistent foreground command that would strand the agent turn';
           terminationError = new Error(`Workbench blocked ${reason} before execution: ${toolCommand.slice(0, 500)}`);
           progress += `${progress ? '\n\n' : ''}● Blocked ${reason}.`;
           stopProcessTree();

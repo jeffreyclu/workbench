@@ -119,10 +119,10 @@ describe('classifyExecution', () => {
     expect(isAgentCapacityError(new Error('Task implementation failed a test'))).toBe(false);
   });
 
-  it('runs agents in local-only, fail-closed modes while retaining the task workspace as cwd', () => {
+  it('runs agents with full local-repository access while retaining the task workspace as cwd', () => {
     const codex = commandFor('codex', '/tmp/project', 'economy').args;
     const claude = commandFor('claude', '/tmp/project', 'economy').args;
-    expect(codex).toEqual(expect.arrayContaining(['--ignore-user-config', '--sandbox', 'workspace-write']));
+    expect(codex).toEqual(expect.arrayContaining(['--ignore-user-config', '--sandbox', 'danger-full-access']));
     expect(codex).toContain('mcp_servers.workbench.url="http://localhost:5180/mcp"');
     expect(codex).toContain('mcp_servers.workbench.bearer_token_env_var=""');
     expect(codex).not.toContain('--dangerously-bypass-approvals-and-sandbox');
@@ -216,7 +216,7 @@ describe('classifyExecution', () => {
     const codexPrompt = buildPrompt(task, { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun);
     expect(claudePrompt).not.toContain(RUNNER_SYSTEM_CONTRACT);
     expect(codexPrompt).toContain(RUNNER_SYSTEM_CONTRACT);
-    expect(claudePrompt).toContain('write-enabled for the resolved workspace');
+    expect(claudePrompt).toContain('write-enabled across every local repository');
     expect(buildPrompt(task, { agent: 'claude', kind: 'analysis', instructions: '' } as AgentRun)).toContain('read-only by task type');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('Review questions are read-only');
   });
@@ -254,9 +254,9 @@ describe('classifyExecution', () => {
   });
 
   it('keeps every task kind tool-capable while routing read-only behavior through instructions', () => {
-    expect(commandFor('codex', '/tmp/project', 'standard', undefined, undefined, 'research').args).toEqual(expect.arrayContaining(['--sandbox', 'workspace-write']));
+    expect(commandFor('codex', '/tmp/project', 'standard', undefined, undefined, 'research').args).toEqual(expect.arrayContaining(['--sandbox', 'danger-full-access']));
     expect(commandFor('claude', '/tmp/project', 'standard', undefined, undefined, 'review').args).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--disallowedTools', 'Task']));
-    expect(commandFor('codex', '/tmp/project', 'standard', undefined, undefined, 'execute').args).toEqual(expect.arrayContaining(['--sandbox', 'workspace-write']));
+    expect(commandFor('codex', '/tmp/project', 'standard', undefined, undefined, 'execute').args).toEqual(expect.arrayContaining(['--sandbox', 'danger-full-access']));
   });
 
   it('keeps Claude stdin open and appends an interjection after the initial prompt', async () => {
@@ -606,8 +606,8 @@ fi`;
   it('injects the explicit-order external-source guardrail into every work-item prompt', () => {
     const prompt = buildPrompt(item('Fix a component'), { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun);
     expect(prompt.startsWith(EXTERNAL_ACTION_CONTRACT)).toBe(true);
-    expect(prompt).toContain('Workspace isolation:');
-    expect(prompt).toContain('Never create or update `docs/shared-memory*`');
+    expect(prompt).toContain('Repository access: every Workbench agent has unrestricted filesystem access');
+    expect(prompt).toContain('keep Workbench bookkeeping in Workbench and project files in their owning repositories');
     expect(prompt).toContain('if it launches a forbidden full suite, use `git push --no-verify`');
   });
 
@@ -1232,6 +1232,7 @@ Question or requested change: Replace this hook with the established memoized he
       '/opt/homebrew/bin',
       '/usr/local/bin',
     ]));
+    expect(env.PATH).not.toContain('workbench-agent-bin');
   });
 
   it('passes context handles to the agent without ambient retrieval payloads', () => {

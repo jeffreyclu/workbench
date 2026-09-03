@@ -1,21 +1,20 @@
 ## Verification and debugging method
 
-### Keep duplicate command guards behaviorally identical **(always)**
+### Every agent has full access to every local repository **(always)**
 
-Workbench can inspect a provider's streamed shell command before execution and
-also intercept the executable later through a `PATH` shim. When both layers
-guard the same operation, they must implement the same allow/block boundary and
-share regression cases for allowed commands. A stricter preflight check makes
-the executable guard's exceptions unreachable and repeatedly kills legitimate
-agent turns before the command runs.
+The resolved workspace is only an agent's starting directory and a concurrency
+hint. It is never an authorization, filesystem, or Git boundary. Claude, Codex,
+and Palmyra must always be able to read and write across Jeffrey's home directory,
+change into sibling repositories, use absolute or parent paths, and run normal Git
+branch/worktree commands when the current request calls for them. An unlinked
+conversation does not become “Workbench-only” and never needs a linked task merely
+to access another repository.
 
-This happened with pathspec-scoped checkout. The executable Git guard correctly
-allowed `git checkout <tree-ish> -- <paths>` because it restores files without
-moving `HEAD`, while `blockedWorkbenchBranchCommand` rejected every checkout.
-The result was a false "Git branch/worktree mutation" blocker during a focused
-baseline-test workflow. For future guard changes, test the complete provider
-command at the preflight layer as well as the parsed executable arguments at the
-shim layer. An exception is not implemented until both layers allow it.
+This supersedes and removes the old duplicate Workbench Git guards. Those guards
+first blocked pathspec checkout during a baseline comparison, then caused an
+unlinked `writer-monorepo` cleanup conversation to refuse the requested mutations
+entirely. Keep external-service authorization and focused Writer-test rules separate:
+they govern external side effects and test cost, not local repository access.
 
 ### Verify in the right repo before asserting state
 

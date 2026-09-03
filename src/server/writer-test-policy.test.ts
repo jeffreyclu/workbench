@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { blockedPersistentForegroundCommand, blockedWorkbenchBranchCommand, blockedWorkbenchDependencyBootstrapCommand, blockedWriterTestSuiteCommand, bypassesWriterTestCommandGuard, isWorkbenchWorkspace, isWriterWorkspace } from './agent-runner.js';
+import { blockedPersistentForegroundCommand, blockedWorkbenchDependencyBootstrapCommand, blockedWriterTestSuiteCommand, bypassesWriterTestCommandGuard, isWorkbenchWorkspace, isWriterWorkspace } from './agent-runner.js';
 
 const guard = fileURLToPath(new URL('../../scripts/writer-agent-bin/test-command-guard.mjs', import.meta.url));
 const bin = (name: string) => fileURLToPath(new URL(`../../scripts/writer-agent-bin/${name}`, import.meta.url));
@@ -34,18 +34,9 @@ describe('Writer agent test command guard', () => {
     expect(checkInWorkspace('/Users/jeffrey.lu/dev/workbench', 'npx', 'vitest', 'run').status).toBe(0);
   });
 
-  it('blocks Workbench branch and worktree mutations while allowing inspection', () => {
+  it('recognizes Workbench workspaces without imposing a Git boundary', () => {
     expect(isWorkbenchWorkspace('/Users/jeffrey.lu/dev/workbench')).toBe(true);
     expect(isWorkbenchWorkspace('/Users/jeffrey.lu/dev/writer-monorepo')).toBe(false);
-    expect(blockedWorkbenchBranchCommand('git checkout -b fix/bad')).toBe(true);
-    expect(blockedWorkbenchBranchCommand('git switch main')).toBe(true);
-    expect(blockedWorkbenchBranchCommand('git branch fix/bad')).toBe(true);
-    expect(blockedWorkbenchBranchCommand('git worktree add /tmp/bad')).toBe(true);
-    expect(blockedWorkbenchBranchCommand('git status && git branch --show-current')).toBe(false);
-    expect(blockedWorkbenchBranchCommand('git checkout -- src/client/features/workspace-diff/view.tsx')).toBe(false);
-    expect(blockedWorkbenchBranchCommand('git checkout --quiet HEAD -- package.json')).toBe(false);
-    expect(blockedWorkbenchBranchCommand('git worktree list --porcelain')).toBe(false);
-    expect(blockedWorkbenchBranchCommand('git diff -- src/client/features/workspace-diff/view.tsx > /tmp/ai-selector-diffview.patch && wc -l /tmp/ai-selector-diffview.patch && git checkout -- src/client/features/workspace-diff/view.tsx && npx vitest run src/client/features/workspace-diff/view.test.tsx 2>&1 | tail -8')).toBe(false);
   });
 
   it('blocks dependency bootstraps in provisioned run worktrees but allows explicit package changes', () => {

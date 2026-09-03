@@ -443,8 +443,12 @@ describe('compactConversationHistory', () => {
     expect(prompt).toContain('Retrieved durable context: Jeffrey works at Writer.');
   });
 
-  it('keeps an unlinked conversation in the Workbench workspace', () => {
-    expect(buildSharedReplyPrompt('codex', 'Shared context.', '', [])).toContain('Do not modify Writer or any other repository from this conversation');
+  it('keeps every repository accessible from an unlinked conversation', () => {
+    const prompt = buildSharedReplyPrompt('codex', 'Shared context.', '', []);
+    expect(prompt).toContain("every local repository and Jeffrey's home directory remain fully accessible");
+    expect(prompt).toContain('linking a task is never required for access');
+    expect(prompt).not.toContain('Workbench-only');
+    expect(prompt).not.toContain('Do not modify Writer or any other repository');
   });
 
   it('uses frontend-reviewer for a review-linked reply with no stored classification', () => {

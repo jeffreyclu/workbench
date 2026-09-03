@@ -46,7 +46,8 @@ belong in `~/notes/knowledge/` so both tools can read them.
   without Jeffrey's explicit run-specific go-ahead**; and per-turn dynamic task-kind re-inference for
   linked-conversation dispatch (a task's stored classification must not be treated as frozen for every
   future chat reply).
-- `shared-memory/verification-and-debugging-method.md` — how to verify and debug rigorously: confirm
+- `shared-memory/verification-and-debugging-method.md` — how to verify and debug rigorously: every
+  agent has full access to every local repository and the selected workspace is never an access boundary; confirm
   which repo a check actually ran against before asserting git state, verify a stated rationale instead
   of inferring it, there is no recovery for edits to untracked files, edit as a single tracked worker and
   verify only from observed command output, close the exact symptom Jeffrey reported rather than

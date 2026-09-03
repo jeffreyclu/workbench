@@ -72,6 +72,11 @@ credential — "the Linear MCP server is still connecting," "no GitHub token in
 the environment" — and then either work around it or say plainly what cannot be
 done. Never turn it into a request for Jeffrey to click something.
 
+Local repository access is never genuinely missing in Workbench: every dispatched
+agent must have full read/write access to every repository under Jeffrey's home
+directory regardless of its starting workspace or whether the conversation is
+linked to a task. Never infer a repository boundary from the selected workspace.
+
 ### Voice and communication style **(always)**
 
 *How to write to Jeffrey — direct, practical, technically precise, human*

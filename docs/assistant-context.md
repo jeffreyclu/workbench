@@ -74,6 +74,11 @@ Assistant-authored mutations accept `codex`, `claude`, or `palmyra` actors for a
 attribution, not as a permission check. A durable orchestrator owns conflicting local
 operations: it leases each mutable workspace to one run.
 
+Every agent has unrestricted filesystem access to every local repository and Jeffrey's home
+directory. A selected workspace or run worktree is a starting directory and concurrency mechanism,
+not an authorization boundary. Claude, Codex, and Palmyra may change directories, use absolute or
+parent paths, and perform normal Git branch/worktree operations when the current request requires it.
+
 Only data-integrity conflicts remain: impossible dependency cycles, stale plans/results,
 and concurrent writes to one working tree. These are reported as concrete state conflicts
 and are retried or resolved by the agent; they are never framed as an authority limitation.

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 
 import { DEFAULT_ACCOUNT_PROFILE } from '../shared/contracts.js';
 import {
@@ -9,7 +9,6 @@ import {
   TOOL_OUTPUT_CONTRACT,
   agentEnvironmentForWorkspace,
   blockedPersistentForegroundCommand,
-  blockedWorkbenchBranchCommand,
   blockedWorkbenchDependencyBootstrapCommand,
   blockedWriterTestSuiteCommand,
   isWorkbenchWorkspace,
@@ -30,7 +29,7 @@ const localTools: PalmyraTool[] = [
     type: 'function',
     function: {
       name: 'read_file',
-      description: 'Read a UTF-8 file in the current workspace. Use line bounds for large files.',
+      description: 'Read a UTF-8 file anywhere on the local filesystem. Relative paths start from the current workspace; absolute and parent paths are allowed. Use line bounds for large files.',
       parameters: { type: 'object', properties: { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1 }, line_count: { type: 'integer', minimum: 1, maximum: 1000 } }, required: ['path'] },
     },
   },
@@ -38,7 +37,7 @@ const localTools: PalmyraTool[] = [
     type: 'function',
     function: {
       name: 'write_file',
-      description: 'Create or replace a UTF-8 file in the current workspace. Inspect an existing file before replacing it.',
+      description: 'Create or replace a UTF-8 file anywhere on the local filesystem. Relative paths start from the current workspace; absolute and parent paths are allowed. Inspect an existing file before replacing it.',
       parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
     },
   },
@@ -76,14 +75,9 @@ function requiredString(input: JsonObject, key: string): string {
   return value;
 }
 
-function workspacePath(cwd: string, requested: string): string {
+function accessiblePath(cwd: string, requested: string): string {
   if (!requested.trim()) throw new Error('path must not be empty.');
-  const target = resolve(cwd, requested);
-  const rel = relative(resolve(cwd), target);
-  if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)) {
-    throw new Error(`Path is outside the resolved workspace: ${requested}`);
-  }
-  return target;
+  return isAbsolute(requested) ? resolve(requested) : resolve(cwd, requested);
 }
 
 function bounded(value: string): string {
@@ -93,7 +87,6 @@ function bounded(value: string): string {
 
 function commandPolicyError(command: string, cwd: string): string | null {
   if (blockedPersistentForegroundCommand(command)) return 'Persistent foreground commands are not allowed; use a managed launcher that returns after readiness.';
-  if (isWorkbenchWorkspace(cwd) && blockedWorkbenchBranchCommand(command)) return 'Workbench branch and worktree state is runtime-owned; this Git mutation is not allowed.';
   if (isWorkbenchWorkspace(cwd) && blockedWorkbenchDependencyBootstrapCommand(command)) return 'Workbench worktrees already receive dependencies; dependency bootstrap is not allowed.';
   if (isWriterWorkspace(cwd) && blockedWriterTestSuiteCommand(command)) return 'Writer full-suite test commands are not allowed; run an explicit test-file path.';
   return null;
@@ -146,7 +139,7 @@ async function executeTool(call: PalmyraToolCall, cwd: string, signal?: AbortSig
   const input = parseArguments(call);
   if (call.function.name === 'read_file') {
     const requested = requiredString(input, 'path');
-    const path = workspacePath(cwd, requested);
+    const path = accessiblePath(cwd, requested);
     const text = await readFile(path, 'utf8');
     const start = typeof input.start_line === 'number' ? Math.max(1, Math.floor(input.start_line)) : 1;
     const count = typeof input.line_count === 'number' ? Math.min(1000, Math.max(1, Math.floor(input.line_count))) : 250;
@@ -156,7 +149,7 @@ async function executeTool(call: PalmyraToolCall, cwd: string, signal?: AbortSig
   if (call.function.name === 'write_file') {
     const requested = requiredString(input, 'path');
     const content = requiredString(input, 'content');
-    const path = workspacePath(cwd, requested);
+    const path = accessiblePath(cwd, requested);
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, content, 'utf8');
     return { content: `Wrote ${Buffer.byteLength(content)} bytes to ${requested}.`, audit: { category: 'agent_file_write', streamKind: 'file_write', detail: requested } };
@@ -166,7 +159,7 @@ async function executeTool(call: PalmyraToolCall, cwd: string, signal?: AbortSig
     const oldText = requiredString(input, 'old_text');
     const newText = requiredString(input, 'new_text');
     if (!oldText) throw new Error('old_text must not be empty.');
-    const path = workspacePath(cwd, requested);
+    const path = accessiblePath(cwd, requested);
     const content = await readFile(path, 'utf8');
     const first = content.indexOf(oldText);
     if (first < 0) throw new Error(`old_text was not found in ${requested}.`);
@@ -252,7 +245,7 @@ export async function runPalmyraAgent(options: {
   imageAttachments?: PalmyraImageAttachment[];
   workbenchTools?: PalmyraWorkbenchToolBridge | null;
 }): Promise<PalmyraAgentResult> {
-  const systemMessage: PalmyraMessage = { role: 'system', content: `You are Palmyra, a first-class coding agent running inside Workbench. Use the provided tools to inspect, execute, edit, and verify directly in the resolved workspace. Follow the task's requested execution mode and external-action guardrail.\n\n${AGENT_EXECUTION_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\n${AGENT_DEBUGGER_CONTRACT}` };
+  const systemMessage: PalmyraMessage = { role: 'system', content: `You are Palmyra, a first-class coding agent running inside Workbench. Use the provided tools to inspect, execute, edit, and verify anywhere on the local filesystem. The resolved workspace is only your starting directory, never an access boundary. Follow the task's requested execution mode and external-action guardrail.\n\n${AGENT_EXECUTION_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\n${AGENT_DEBUGGER_CONTRACT}` };
   const imageContent = await Promise.all((options.imageAttachments ?? [])
     .filter((attachment) => attachment.mimeType.startsWith('image/'))
     .map(async (attachment) => ({ type: 'image_url' as const, image_url: { url: `data:${attachment.mimeType};base64,${(await readFile(attachment.path)).toString('base64')}` } })));
