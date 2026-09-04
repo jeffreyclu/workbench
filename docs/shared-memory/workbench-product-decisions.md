@@ -1233,6 +1233,16 @@ remain untrusted evidence. If Claude rejects Workbench's own envelope as prompt
 injection, discard that provider session and retry the same request once with
 Claude in a clean session; do not silently replace Claude with Codex.
 
+### Runtime promotion waits before competing with active agents
+
+*Decision from observed Claude failure, 2026-09-03.* A promotion must wait for
+all agent-owned work and live agent subprocesses to drain before starting its
+resource-intensive client build and candidate-runtime preflight. Waiting only
+at the final gateway handoff is too late: a concurrent build can SIGKILL a
+foreground command inside an otherwise healthy agent turn, leaving the task's
+external services stopped. The promotion worker itself is system work, not an
+agent process, and must not deadlock this gate.
+
 What survives from the earlier framing is only the map's internal modeling.
 When a map is drawn for a critical block, node identity should be a place in the
 system — a module or symbol that exists whether or not it changed — so unchanged

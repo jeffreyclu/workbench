@@ -3,6 +3,11 @@ import { join, resolve } from 'node:path';
 
 const MAX_OUTPUT = 20_000;
 
+export function promotionMustWaitForAgents(status: { ownedAgentWorkActive?: unknown; liveAgentProcessCount?: unknown }): boolean {
+  return status.ownedAgentWorkActive === true
+    || (typeof status.liveAgentProcessCount === 'number' && status.liveAgentProcessCount > 0);
+}
+
 export function isRuntimeApproval(message: string): boolean {
   return /^\s*(?:approve|publish|promote|deploy|ship)(?:\s+(?:the\s+)?)?(?:workbench\s+)?preview[.!]?\s*$/i.test(message);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isRuntimeApproval } from './runtime-promotion.js';
+import { isRuntimeApproval, promotionMustWaitForAgents } from './runtime-promotion.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 
@@ -25,6 +25,12 @@ describe('isRuntimeApproval', () => {
 });
 
 describe('runtime drain state', () => {
+  it('waits for agent-owned work without deadlocking on the promotion worker itself', () => {
+    expect(promotionMustWaitForAgents({ ownedAgentWorkActive: true, liveAgentProcessCount: 0 })).toBe(true);
+    expect(promotionMustWaitForAgents({ ownedAgentWorkActive: false, liveAgentProcessCount: 1 })).toBe(true);
+    expect(promotionMustWaitForAgents({ ownedAgentWorkActive: false, liveAgentProcessCount: 0 })).toBe(false);
+  });
+
   it('keeps the old runtime alive for both agent work and system promotion progress', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);

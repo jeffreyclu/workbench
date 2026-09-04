@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { get as httpGet } from 'node:http';
 import { runtimeSourceFingerprint } from '../src/server/runtime-preview.js';
 import { markRuntimePromotionPending, publishRuntimeRelease } from '../src/server/runtime-release.js';
+import { promotionMustWaitForAgents } from '../src/server/runtime-promotion.js';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
 const runtimeRoot = join(root, '.workbench-runtime');
@@ -16,6 +17,40 @@ const databasePath = process.env.DATABASE_PATH?.trim() || join(root, 'data', 'wo
 
 function wait(milliseconds: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function activeAgentWork(): Promise<boolean | null> {
+  return new Promise((resolveStatus) => {
+    const request = httpGet({ hostname: '127.0.0.1', port: 5180, path: '/api/health', timeout: 750 }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => { body = `${body}${chunk}`.slice(-4_000); });
+      response.on('end', () => {
+        try {
+          const status = JSON.parse(body) as { ownedAgentWorkActive?: unknown; liveAgentProcessCount?: unknown };
+          resolveStatus(promotionMustWaitForAgents(status));
+        } catch { resolveStatus(null); }
+      });
+    });
+    request.on('timeout', () => request.destroy());
+    request.on('error', () => resolveStatus(null));
+  });
+}
+
+async function waitForAgentIdle(): Promise<void> {
+  let reported = false;
+  for (;;) {
+    const active = await activeAgentWork();
+    // No live runtime is normal for the first installation. A responding live
+    // runtime must drain every agent process before build/preflight can compete
+    // with the user's workload for memory and CPU.
+    if (active !== true) return;
+    if (!reported) {
+      reported = true;
+      console.log('Waiting for active Workbench agent work to finish before building the release…');
+    }
+    await new Promise<void>((resolveWait) => setTimeout(resolveWait, 1_000));
+  }
 }
 
 function lockOwnerIsAlive(): boolean {
@@ -113,6 +148,8 @@ async function preflightCandidate(): Promise<void> {
 assertMainIsPushed();
 const releaseLock = acquirePromotionLock();
 try {
+
+await waitForAgentIdle();
 
 const build = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], {
   cwd: root,
