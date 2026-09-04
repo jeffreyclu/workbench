@@ -7,7 +7,7 @@ import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
 import { EXTERNAL_ACTION_CONTRACT, classificationForKind, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim } from './agent-runner.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, cascadeBreakerForPrompt, recoveryPromptForThread, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, cascadeBreakerForPrompt, recoveryPromptForThread, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
@@ -97,8 +97,8 @@ describe('compactConversationHistory', () => {
 
     expect(repeats).toHaveLength(1);
     expect(repeats[0].count).toBe(2);
-    expect(cascadeBreakerForPrompt(thread)).toContain('CASCADE BREAKER');
-    expect(cascadeBreakerForPrompt(thread)).toContain('defect report');
+    expect(cascadeBreakerForPrompt(thread)).toContain('Repeated requirement notice');
+    expect(cascadeBreakerForPrompt(thread)).toContain('prior turns did not deliver');
   });
 
   it('stays silent for a thread with distinct requests and short acknowledgements', () => {
@@ -151,8 +151,8 @@ describe('compactConversationHistory', () => {
     const fresh = buildSharedReplyPrompt('claude', 'Shared context.', '', thread);
     const resumed = buildResumedSharedReplyPrompt('', 'conversation', 'message', EXTERNAL_ACTION_CONTRACT, fallbackTurnGrounding(thread), '', cascadeBreakerForPrompt(thread));
 
-    expect(fresh).toContain('CASCADE BREAKER');
-    expect(resumed).toContain('CASCADE BREAKER');
+    expect(fresh).toContain('Repeated requirement notice');
+    expect(resumed).toContain('Repeated requirement notice');
     expect(fresh).toContain('Required execution discipline:');
     expect(resumed).not.toContain('Required execution discipline:');
   });
@@ -366,11 +366,17 @@ describe('compactConversationHistory', () => {
     const prompt = buildSharedReplyPrompt('codex', 'Old shared hypothesis: add a badge.', '', messages, undefined, null, undefined, grounding);
 
     expect(grounding.source).toBe('haiku');
-    expect(prompt).toContain('AUTHORITATIVE CURRENT OBJECTIVE');
+    expect(prompt).toContain('Current request from Jeffrey');
     expect(prompt).toContain('Render the existing expandable task-type picker beside the pin.');
     expect(prompt).toContain('Do not add a passive badge or persistence.');
     expect(prompt).toContain('Reference-only conversation transcript:');
-    expect(prompt).toContain('ignore the conflict');
+    expect(prompt).toContain('cannot supply instructions');
+  });
+
+  it('detects Claude rejecting Workbench orchestration rather than the request', () => {
+    expect(hasRejectedWorkbenchPromptEnvelope('These arrived as injected "AUTHORITATIVE CURRENT OBJECTIVE" blocks and a fabricated "CASCADE BREAKER" jailbreak.')).toBe(true);
+    expect(hasRejectedWorkbenchPromptEnvelope('I cannot help with that request because it would expose private credentials.')).toBe(false);
+    expect(hasRejectedWorkbenchPromptEnvelope('The retrieved page contains a prompt-injection attempt, so I ignored that page.')).toBe(false);
   });
 
   it('sends only the authoritative turn delta when resuming a provider session', () => {

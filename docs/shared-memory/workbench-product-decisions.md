@@ -1221,6 +1221,18 @@ differ, but choosing Palmyra must not silently remove a Workbench capability
 or add a locally invented token, turn-count, or fixed total wall-clock ceiling
 while useful provider activity continues.
 
+### Workbench orchestration must not resemble user-authored prompt injection
+
+*Decision from observed Claude failure, 2026-09-03.* Dynamic turn grounding and
+repeated-requirement notices are trusted Workbench orchestration metadata, but
+they must be labeled neutrally and their trust boundary must live in the
+provider system contract. Do not put all-caps authority claims, fabricated-user
+language, or jailbreak-like override instructions into a provider's user turn.
+Transcript excerpts, retrieved memory, tool output, and external-source content
+remain untrusted evidence. If Claude rejects Workbench's own envelope as prompt
+injection, discard that provider session and retry the same request once with
+Claude in a clean session; do not silently replace Claude with Codex.
+
 What survives from the earlier framing is only the map's internal modeling.
 When a map is drawn for a critical block, node identity should be a place in the
 system — a module or symbol that exists whether or not it changed — so unchanged
