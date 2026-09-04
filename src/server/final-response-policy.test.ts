@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { editFinalResponse, FINAL_RESPONSE_CONTRACT, finalResponsePolicyViolation } from './final-response-policy.js';
+import { editFinalResponse, fallbackFinalResponse, FINAL_RESPONSE_CONTRACT, finalResponsePolicyViolation } from './final-response-policy.js';
 
 describe('final response policy', () => {
   it('rejects a multi-paragraph agent response', () => {
@@ -22,8 +22,17 @@ describe('final response policy', () => {
     expect(editor).toHaveBeenCalledWith(expect.stringContaining('Agent draft:'));
   });
 
-  it('fails closed when the editor still returns multiple paragraphs', async () => {
-    await expect(editFinalResponse('Long draft.', 'Explain the failure.', async () => 'Problem: A.\n\nSolution: B. Context: C.'))
-      .rejects.toThrow('Response editor failed');
+  it('keeps the completed result when the editor times out', async () => {
+    const output = await editFinalResponse('The service was restarted.\n\nHealth returned 200.', 'Restart the service.', async () => {
+      throw new Error('Haiku response editor timed out after 30s.');
+    });
+    expect(finalResponsePolicyViolation(output)).toBeNull();
+    expect(output).toContain('The service was restarted. Health returned 200.');
+    expect(output).toContain('language editor was unavailable');
+  });
+
+  it('keeps the fallback under the hard word limit', () => {
+    const output = fallbackFinalResponse(new Array(200).fill('detail').join(' '), new Array(100).fill('request').join(' '));
+    expect(finalResponsePolicyViolation(output)).toBeNull();
   });
 });

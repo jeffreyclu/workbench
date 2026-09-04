@@ -5,6 +5,7 @@ import { resolveAiProvider } from './providers/provider-choice.js';
 
 const IDLE_SHUTDOWN_MS = 5 * 60_000;
 const CLASSIFIER_TIMEOUT_MS = 8_000;
+const RESPONSE_EDITOR_TIMEOUT_MS = 30_000;
 const WARMUP_TIMEOUT_MS = 20_000;
 const SYSTEM_PROMPT = `You are Workbench's conversation supervisor. Every request starts with a MODE line. Follow only that mode.
 
@@ -36,11 +37,16 @@ Rules:
 - Output only the edited response.`;
 
 type Pending = { prompt: string; resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> | null; timeoutMs: number };
-let worker: ChildProcessWithoutNullStreams | null = null;
-let active: Pending | null = null;
-let buffer = '';
-const queue: Pending[] = [];
-let idleTimer: ReturnType<typeof setTimeout> | null = null;
+type SupervisorPool = {
+  label: string;
+  worker: ChildProcessWithoutNullStreams | null;
+  active: Pending | null;
+  buffer: string;
+  queue: Pending[];
+  idleTimer: ReturnType<typeof setTimeout> | null;
+};
+const groundingPool: SupervisorPool = { label: 'turn-grounding classifier', worker: null, active: null, buffer: '', queue: [], idleTimer: null };
+const responseEditorPool: SupervisorPool = { label: 'response editor', worker: null, active: null, buffer: '', queue: [], idleTimer: null };
 
 function settle(pending: Pending, error?: Error, output?: string): void {
   if (pending.timer) clearTimeout(pending.timer);
@@ -49,47 +55,47 @@ function settle(pending: Pending, error?: Error, output?: string): void {
   else pending.resolve(output ?? '');
 }
 
-function stop(error: Error): void {
-  if (idleTimer) clearTimeout(idleTimer);
-  idleTimer = null;
-  const child = worker;
-  worker = null;
-  buffer = '';
+function stop(pool: SupervisorPool, error: Error): void {
+  if (pool.idleTimer) clearTimeout(pool.idleTimer);
+  pool.idleTimer = null;
+  const child = pool.worker;
+  pool.worker = null;
+  pool.buffer = '';
   try { child?.kill('SIGTERM'); } catch { /* already stopped */ }
-  if (active) { settle(active, error); active = null; }
-  while (queue.length) settle(queue.shift()!, error);
+  if (pool.active) { settle(pool.active, error); pool.active = null; }
+  while (pool.queue.length) settle(pool.queue.shift()!, error);
 }
 
-function scheduleIdleShutdown(): void {
-  if (active || queue.length || !worker) return;
-  if (idleTimer) clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => stop(new Error('Turn-grounding classifier shut down while idle.')), IDLE_SHUTDOWN_MS);
-  idleTimer.unref();
+function scheduleIdleShutdown(pool: SupervisorPool): void {
+  if (pool.active || pool.queue.length || !pool.worker) return;
+  if (pool.idleTimer) clearTimeout(pool.idleTimer);
+  pool.idleTimer = setTimeout(() => stop(pool, new Error(`Haiku ${pool.label} shut down while idle.`)), IDLE_SHUTDOWN_MS);
+  pool.idleTimer.unref();
 }
 
-function dispatch(): void {
-  if (!worker || active || queue.length === 0) { scheduleIdleShutdown(); return; }
-  if (idleTimer) clearTimeout(idleTimer);
-  idleTimer = null;
-  active = queue.shift()!;
-  const pending = active;
+function dispatch(pool: SupervisorPool): void {
+  if (!pool.worker || pool.active || pool.queue.length === 0) { scheduleIdleShutdown(pool); return; }
+  if (pool.idleTimer) clearTimeout(pool.idleTimer);
+  pool.idleTimer = null;
+  pool.active = pool.queue.shift()!;
+  const pending = pool.active;
   pending.timer = setTimeout(() => {
-    if (active !== pending) return;
-    active = null;
-    try { worker?.kill('SIGTERM'); } catch { /* already stopped */ }
-    worker = null;
-    buffer = '';
-    settle(pending, new Error(`Haiku turn-grounding classifier timed out after ${pending.timeoutMs / 1_000}s.`));
-    if (queue.length) ensureWorker();
-    dispatch();
+    if (pool.active !== pending) return;
+    pool.active = null;
+    try { pool.worker?.kill('SIGTERM'); } catch { /* already stopped */ }
+    pool.worker = null;
+    pool.buffer = '';
+    settle(pending, new Error(`Haiku ${pool.label} timed out after ${pending.timeoutMs / 1_000}s.`));
+    if (pool.queue.length) ensureWorker(pool);
+    dispatch(pool);
   }, pending.timeoutMs);
   pending.timer.unref();
-  worker.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: pending.prompt } })}\n`);
+  pool.worker.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: pending.prompt } })}\n`);
 }
 
-function ensureWorker(): ChildProcessWithoutNullStreams {
-  if (worker && worker.exitCode === null && !worker.killed) return worker;
-  const classifier = worker = spawn('claude', [
+function ensureWorker(pool: SupervisorPool): ChildProcessWithoutNullStreams {
+  if (pool.worker && pool.worker.exitCode === null && !pool.worker.killed) return pool.worker;
+  const classifier = pool.worker = spawn('claude', [
     '-p', '--verbose', '--model', 'haiku', '--effort', 'low', '--tools', '',
     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '',
     '--no-session-persistence', '--no-chrome', '--system-prompt', SYSTEM_PROMPT,
@@ -97,36 +103,36 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
   ], { cwd: '/tmp', env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
   classifier.stdout.setEncoding('utf8');
   classifier.stdout.on('data', (chunk: string) => {
-    buffer += chunk;
+    pool.buffer += chunk;
     for (;;) {
-      const newline = buffer.indexOf('\n');
+      const newline = pool.buffer.indexOf('\n');
       if (newline < 0) break;
-      const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+      const line = pool.buffer.slice(0, newline); pool.buffer = pool.buffer.slice(newline + 1);
       try {
         const event = JSON.parse(line) as { type?: string; result?: string; is_error?: boolean };
-        if (event.type !== 'result' || !active) continue;
-        const pending = active; active = null;
-        if (event.is_error || typeof event.result !== 'string') settle(pending, new Error('Haiku turn-grounding classifier failed.'));
+        if (event.type !== 'result' || !pool.active) continue;
+        const pending = pool.active; pool.active = null;
+        if (event.is_error || typeof event.result !== 'string') settle(pending, new Error(`Haiku ${pool.label} failed.`));
         else settle(pending, undefined, event.result);
-        dispatch();
+        dispatch(pool);
       } catch { /* Ignore non-terminal stream records. */ }
     }
   });
   const stopClassifier = (error: Error) => {
-    if (worker === classifier) stop(error);
+    if (pool.worker === classifier) stop(pool, error);
   };
-  classifier.once('exit', () => stopClassifier(new Error('Haiku turn-grounding classifier stopped unexpectedly.')));
+  classifier.once('exit', () => stopClassifier(new Error(`Haiku ${pool.label} stopped unexpectedly.`)));
   classifier.once('error', stopClassifier);
   classifier.stdin.on('error', stopClassifier);
   return classifier;
 }
 
-function groundWithClaude(prompt: string, timeoutMs: number): Promise<string> {
-  ensureWorker();
+function runWithClaude(pool: SupervisorPool, prompt: string, timeoutMs: number): Promise<string> {
+  ensureWorker(pool);
   return new Promise((resolve, reject) => {
     const pending: Pending = { prompt, resolve, reject, timer: null, timeoutMs };
-    queue.push(pending);
-    dispatch();
+    pool.queue.push(pending);
+    dispatch(pool);
   });
 }
 
@@ -137,29 +143,30 @@ function groundWithClaude(prompt: string, timeoutMs: number): Promise<string> {
  * because the caller's only alternative is an ungrounded turn. */
 export function groundTurn(prompt: string, timeoutMs = CLASSIFIER_TIMEOUT_MS, provider: AiProviderChoice | null = null, accountProfile?: string): Promise<string> {
   const request = `MODE: GROUND\n\n${prompt}`;
-  if (resolveAiProvider(provider, accountProfile) !== 'palmyra') return groundWithClaude(request, timeoutMs);
+  if (resolveAiProvider(provider, accountProfile) !== 'palmyra') return runWithClaude(groundingPool, request, timeoutMs);
   return completeWithPalmyra({
     messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: request }],
     maxTokens: 800,
     timeoutMs,
   }).catch((error: unknown) => {
     console.warn(`[palmyra] turn grounding fell back to the Claude classifier: ${error instanceof Error ? error.message : String(error)}`);
-    return groundWithClaude(prompt, timeoutMs);
+    return runWithClaude(groundingPool, request, timeoutMs);
   });
 }
 
-export function editFinalResponseWithSupervisor(prompt: string, timeoutMs = CLASSIFIER_TIMEOUT_MS): Promise<string> {
-  return groundWithClaude(`MODE: EDIT\n\n${prompt}`, timeoutMs);
+export function editFinalResponseWithSupervisor(prompt: string, timeoutMs = RESPONSE_EDITOR_TIMEOUT_MS): Promise<string> {
+  return runWithClaude(responseEditorPool, `MODE: EDIT\n\n${prompt}`, timeoutMs);
 }
 
 /** Pay the one-time CLI/model handshake during server startup, off the request path. */
 export function warmTurnGroundingClassifier(): void {
-  if (resolveAiProvider('auto') === 'palmyra') return;
-  void groundTurn('Warm-up only. Return {"objective":"ready","acceptanceCriteria":[],"exclusions":[],"continuation":false}.', WARMUP_TIMEOUT_MS).catch(() => {
-    // Best effort. A real turn retains its human-only fallback.
-  });
+  if (resolveAiProvider('auto') !== 'palmyra') {
+    void groundTurn('Warm-up only. Return {"objective":"ready","acceptanceCriteria":[],"exclusions":[],"continuation":false}.', WARMUP_TIMEOUT_MS).catch(() => {});
+  }
+  void editFinalResponseWithSupervisor('User request or task:\nWarm the editor.\n\nAgent draft:\nNo user-facing response.', WARMUP_TIMEOUT_MS).catch(() => {});
 }
 
 export function shutdownTurnGroundingClassifier(): void {
-  stop(new Error('Turn-grounding classifier stopped during runtime shutdown.'));
+  stop(groundingPool, new Error('Turn-grounding classifier stopped during runtime shutdown.'));
+  stop(responseEditorPool, new Error('Response editor stopped during runtime shutdown.'));
 }

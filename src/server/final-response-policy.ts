@@ -17,13 +17,36 @@ export function finalResponseEditingEnabled(): boolean {
   return !process.env.VITEST || process.env.WORKBENCH_TEST_FINAL_RESPONSE_POLICY === '1';
 }
 
+function compactWords(value: string, limit: number): string {
+  const words = value
+    .replace(/<workbench-plan>[\s\S]*?<\/workbench-plan>/gi, '')
+    .replace(/```(?:\w+)?/g, '')
+    .replace(/^\s*(?:[-*#>]+|\d+[.)])\s*/gm, '')
+    .replace(/\b(?:Problem|Solution|Context):\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+  if (!words.length) return 'No usable detail was returned.';
+  return `${words.slice(0, limit).join(' ')}${words.length > limit ? '…' : ''}`;
+}
+
+export function fallbackFinalResponse(draft: string, objective: string): string {
+  return `Problem: ${compactWords(objective, 20)} Solution: ${compactWords(draft, 70)} Context: Workbench shortened the saved draft automatically because its language editor was unavailable.`;
+}
+
 export async function editFinalResponse(
   draft: string,
   objective: string,
   edit: (prompt: string) => Promise<string> = editFinalResponseWithSupervisor,
 ): Promise<string> {
-  const edited = (await edit(`User request or task:\n${objective.slice(0, 4_000)}\n\nAgent draft:\n${draft.slice(0, 16_000)}`)).trim();
-  const violation = finalResponsePolicyViolation(edited);
-  if (violation) throw new Error(`Response editor failed the Workbench final-response policy: ${violation}`);
-  return edited;
+  try {
+    const edited = (await edit(`User request or task:\n${objective.slice(0, 4_000)}\n\nAgent draft:\n${draft.slice(0, 16_000)}`)).trim();
+    const violation = finalResponsePolicyViolation(edited);
+    if (!violation) return edited;
+    console.warn(`[final-response-policy] response editor returned an invalid result: ${violation}`);
+  } catch (error) {
+    console.warn(`[final-response-policy] response editor unavailable; using the saved draft: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return fallbackFinalResponse(draft, objective);
 }

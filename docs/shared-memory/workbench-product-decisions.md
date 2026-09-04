@@ -1259,3 +1259,7 @@ response must use one short paragraph in this order: `Problem:`, `Solution:`,
 lists, headings, unexplained specialist language, or more than 120 words. The
 editor must preserve concrete outcomes, verification gaps, commands, paths,
 URLs, and blockers; brevity must not turn an unverified result into a claim.
+Response editing has its own warm Haiku worker and a 30-second active deadline,
+separate from turn grounding. If that editor is unavailable or returns invalid
+format, Workbench must keep the successful agent result and apply a bounded
+one-paragraph local rewrite; editor failure must never fail the agent turn.
