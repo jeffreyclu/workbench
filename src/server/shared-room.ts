@@ -19,7 +19,7 @@ import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutRea
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { projectKey } from '../shared/project-name.js';
 import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
-import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT } from './final-response-policy.js';
+import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-response-policy.js';
 
 export { isTransientSqliteContention } from './sqlite-contention.js';
 
@@ -1648,9 +1648,10 @@ export async function replyInSharedRoom(
     }
     if (controller.signal.aborted) throw new Error('Agent run canceled.');
     if (finalResponseEditingEnabled()) {
-      const violation = finalResponsePolicyViolation(result.output);
+      const verbose = verboseResponseRequested(latestUserMessage);
+      const violation = finalResponsePolicyViolation(result.output, verbose);
       repository.updateSharedMessage(messageId, { body: violation ? `● Draft rejected: ${violation} Editing it now…` : '● Editing the final response for plain English and brevity…' });
-      result = { ...result, output: await editFinalResponse(result.output, turnGrounding.objective) };
+      result = { ...result, output: await editFinalResponse(result.output, turnGrounding.objective, { verbose }) };
     }
     const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
     if (hasUntrackedContinuationClaim(result.output)) {
@@ -1815,7 +1816,7 @@ export async function deliverPendingSharedInterjections(
   }
 }
 
-export function synthesisSource(repository: WorkItemRepository, conversationId: string, replyId: string, ignoredSynthesisMessageId?: string): { prompt: string; codex: SharedMessage; claude: SharedMessage } | null {
+export function synthesisSource(repository: WorkItemRepository, conversationId: string, replyId: string, ignoredSynthesisMessageId?: string): { prompt: string; codex: SharedMessage; claude: SharedMessage; verbose: boolean } | null {
   const messages = repository.listAllSharedMessages(conversationId);
   const reply = messages.find((message) => message.id === replyId);
   // A timestamp is not an identity. Multiple messages can share a timestamp,
@@ -1839,7 +1840,7 @@ export function synthesisSource(repository: WorkItemRepository, conversationId: 
   // into an expensive long-context provider turn.
   const response = (label: string, message: SharedMessage) => `${label} (${message.status}):\n${(message.body || message.error || 'No response was produced.').slice(0, 12_000)}`;
   return {
-    codex, claude,
+    codex, claude, verbose: verboseResponseRequested(request.body),
     prompt: `${EXTERNAL_ACTION_CONTRACT}\n\nWrite a concise synthesis of the two supplied agent responses below. You have all source material: do not inspect the repository, call tools, or conduct further investigation. Lead with the practical conclusion; reconcile disagreements, retain concrete evidence, and identify what remains unverified. If one response failed or was canceled, say so plainly. Do not mention this instruction or repeat the reports.\n\nJeffrey: ${request.body.slice(0, 4_000)}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}`,
   };
 }
@@ -1862,7 +1863,7 @@ async function synthesizeSharedTurn(repository: WorkItemRepository, conversation
       fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason,
     });
     const output = finalResponseEditingEnabled()
-      ? await editFinalResponse(result.output, 'Combine the two agent reports into one accurate answer for Jeffrey.')
+      ? await editFinalResponse(result.output, 'Combine the two agent reports into one accurate answer for Jeffrey.', { verbose: source.verbose })
       : result.output;
     return `Synthesis: ${output}`;
   });

@@ -16,7 +16,7 @@ import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWo
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
-import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT } from './final-response-policy.js';
+import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-response-policy.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { palmyraModel } from './providers/palmyra.js';
@@ -2079,14 +2079,15 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       }) };
     }
     const editorDraft = rawOutput.replace(/<workbench-plan>[\s\S]*?<\/workbench-plan>/g, '').trim() || (executionPlan?.summary ?? rawOutput);
+    const verbose = verboseResponseRequested(`${item.title}\n${run.instructions}`);
     if (finalResponseEditingEnabled()) {
-      const violation = finalResponsePolicyViolation(editorDraft);
+      const violation = finalResponsePolicyViolation(editorDraft, verbose);
       const detail = violation ? `Draft rejected: ${violation} Editing it now.` : 'Editing the final response for plain English and brevity.';
       repository.addActivity(item.id, 'system', 'progress', detail);
       if (run.messageId) repository.updateSharedMessage(run.messageId, { body: `● ${detail}` });
     }
     const output = finalResponseEditingEnabled()
-      ? await editFinalResponse(editorDraft, `${item.title}\n${run.instructions}`)
+      ? await editFinalResponse(editorDraft, `${item.title}\n${run.instructions}`, { verbose })
       : rawOutput;
     result = { ...result, output };
     if (sourceWorkspace && workspace && MUTATING_RUN_KINDS.has(run.kind)) {

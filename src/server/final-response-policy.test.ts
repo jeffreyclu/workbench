@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { editFinalResponse, fallbackFinalResponse, FINAL_RESPONSE_CONTRACT, finalResponsePolicyViolation } from './final-response-policy.js';
+import { editFinalResponse, fallbackFinalResponse, FINAL_RESPONSE_CONTRACT, finalResponsePolicyViolation, verboseResponseRequested } from './final-response-policy.js';
 
 describe('final response policy', () => {
   it('rejects a multi-paragraph agent response', () => {
@@ -12,6 +12,18 @@ describe('final response policy', () => {
     expect(finalResponsePolicyViolation('Problem: The service is down. Solution: Restart it. Context: Health is not verified.')).toBeNull();
     expect(finalResponsePolicyViolation('Restart the service.')).toContain('Problem, Solution, Context');
     expect(FINAL_RESPONSE_CONTRACT).toContain('plain-English paragraph');
+  });
+
+  it('allows a multi-paragraph answer only for an explicit verbose request', async () => {
+    const verbose = 'Problem: The service is down.\n\nSolution: Restart it and inspect the logs.\n\nContext: The health route has not been checked.';
+    expect(verboseResponseRequested('Give me a verbose response explaining this.')).toBe(true);
+    expect(verboseResponseRequested("Don't be verbose; give me the short answer.")).toBe(false);
+    expect(finalResponsePolicyViolation(verbose)).not.toBeNull();
+    expect(finalResponsePolicyViolation(verbose, true)).toBeNull();
+
+    const editor = vi.fn(async () => verbose);
+    await expect(editFinalResponse('Draft.', 'Explain it verbosely.', { verbose: true }, editor)).resolves.toBe(verbose);
+    expect(editor).toHaveBeenCalledWith(expect.stringContaining('VERBOSITY: VERBOSE'));
   });
 
   it('edits a rejected draft and validates the replacement before delivery', async () => {

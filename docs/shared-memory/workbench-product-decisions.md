@@ -1263,3 +1263,6 @@ Response editing has its own warm Haiku worker and a 30-second active deadline,
 separate from turn grounding. If that editor is unavailable or returns invalid
 format, Workbench must keep the successful agent result and apply a bounded
 one-paragraph local rewrite; editor failure must never fail the agent turn.
+An explicit request to "be verbose" or provide a "verbose response" overrides
+only the one-paragraph and 120-word limits for that turn. The editor still uses
+plain English and keeps `Problem:`, `Solution:`, and `Context:` in that order.

@@ -47,7 +47,7 @@ describe('shared-room final response supervision', () => {
       body: 'Problem: The API process stopped. Solution: I restarted it. Context: The health route passed.',
     }));
 
-    expect(editFinalResponse).toHaveBeenCalledWith(expect.stringContaining('\n\n'), 'Restart the API.');
+    expect(editFinalResponse).toHaveBeenCalledWith(expect.stringContaining('\n\n'), 'Restart the API.', { verbose: false });
     database.close();
   });
 });

@@ -1465,17 +1465,18 @@ describe('WorkItemRepository', () => {
     const firstRequest = repository.createSharedMessage('jeffrey', 'Earlier dual request', 'completed', conversation.id, [], 'both');
     repository.createSharedMessage('codex', 'Earlier Codex answer', 'completed', conversation.id, [], 'none', null, null, firstRequest.id);
     repository.createSharedMessage('claude', 'Earlier Claude answer', 'completed', conversation.id, [], 'none', null, null, firstRequest.id);
-    const request = repository.createSharedMessage('jeffrey', 'Current dual request', 'completed', conversation.id, [], 'both');
+    const request = repository.createSharedMessage('jeffrey', 'Give me a verbose response to the current dual request', 'completed', conversation.id, [], 'both');
     const codex = repository.createSharedMessage('codex', 'Current Codex answer', 'completed', conversation.id, [], 'none', null, null, request.id);
     const claude = repository.createSharedMessage('claude', '', 'failed', conversation.id, [], 'none', null, null, request.id);
     repository.updateSharedMessage(claude.id, { error: 'Claude unavailable.' });
 
     const source = synthesisSource(repository, conversation.id, codex.id);
 
-    expect(source?.prompt).toContain('Current dual request');
+    expect(source?.prompt).toContain('Give me a verbose response to the current dual request');
     expect(source?.prompt).toContain('Current Codex answer');
     expect(source?.prompt).toContain('Claude unavailable.');
     expect(source?.prompt).not.toContain('Earlier Codex answer');
+    expect(source?.verbose).toBe(true);
   });
 
   it('does not run ambient retrieval before concurrent Codex and Claude replies', async () => {

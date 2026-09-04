@@ -28,12 +28,12 @@ MODE: EDIT
 Rewrite an agent's draft before Jeffrey sees it.
 
 Rules:
-- Return exactly one paragraph on one line. Never use a blank line, list, heading, preamble, or closing remark.
 - Use exactly this order: Problem: ... Solution: ... Context: ...
 - Use plain English. Replace specialist shorthand with ordinary words unless an exact command, file, URL, error, or code name is necessary.
-- Keep the whole response at or below 120 words.
 - Preserve concrete outcomes, changed files, verification, URLs, and blockers. Do not invent facts or improve the claimed verification.
 - State what is still unverified when the draft says it was not checked.
+- For VERBOSITY: SHORT, return exactly one paragraph on one line, use no list or heading, and stay at or below 120 words.
+- For VERBOSITY: VERBOSE, use as many paragraphs and lists as the request needs, but keep the Problem, Solution, Context order and do not ramble or repeat yourself.
 - Output only the edited response.`;
 
 type Pending = { prompt: string; resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> | null; timeoutMs: number };

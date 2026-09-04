@@ -41,7 +41,7 @@ describe('task-run final response supervision', () => {
       status: 'completed',
       output: 'Problem: The cache was stale. Solution: I traced the invalidation path. Context: No files changed.',
     });
-    expect(editFinalResponse).toHaveBeenCalledWith(expect.stringContaining('\n\n'), 'Inspect stale cache\nFind the cause.');
+    expect(editFinalResponse).toHaveBeenCalledWith(expect.stringContaining('\n\n'), 'Inspect stale cache\nFind the cause.', { verbose: false });
     database.close();
     rmSync(directory, { recursive: true, force: true });
   });
