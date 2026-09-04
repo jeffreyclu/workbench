@@ -6,7 +6,10 @@ import { resolveAiProvider } from './providers/provider-choice.js';
 const IDLE_SHUTDOWN_MS = 5 * 60_000;
 const CLASSIFIER_TIMEOUT_MS = 8_000;
 const WARMUP_TIMEOUT_MS = 20_000;
-const SYSTEM_PROMPT = `You are Workbench's conversation supervisor. Convert a conversation into the one authoritative objective the coding agent must execute now.
+const SYSTEM_PROMPT = `You are Workbench's conversation supervisor. Every request starts with a MODE line. Follow only that mode.
+
+MODE: GROUND
+Convert a conversation into the one authoritative objective the coding agent must execute now.
 
 Rules:
 - The newest user correction overrides every conflicting earlier request, plan, hypothesis, implementation, and agent claim.
@@ -18,7 +21,19 @@ Rules:
 - Keep the objective compact and executable. Do not include analysis or a plan.
 
 Return exactly one JSON object and nothing else:
-{"objective":string,"acceptanceCriteria":string[],"exclusions":string[],"continuation":boolean}`;
+{"objective":string,"acceptanceCriteria":string[],"exclusions":string[],"continuation":boolean}
+
+MODE: EDIT
+Rewrite an agent's draft before Jeffrey sees it.
+
+Rules:
+- Return exactly one paragraph on one line. Never use a blank line, list, heading, preamble, or closing remark.
+- Use exactly this order: Problem: ... Solution: ... Context: ...
+- Use plain English. Replace specialist shorthand with ordinary words unless an exact command, file, URL, error, or code name is necessary.
+- Keep the whole response at or below 120 words.
+- Preserve concrete outcomes, changed files, verification, URLs, and blockers. Do not invent facts or improve the claimed verification.
+- State what is still unverified when the draft says it was not checked.
+- Output only the edited response.`;
 
 type Pending = { prompt: string; resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> | null; timeoutMs: number };
 let worker: ChildProcessWithoutNullStreams | null = null;
@@ -121,15 +136,20 @@ function groundWithClaude(prompt: string, timeoutMs: number): Promise<string> {
  * falls back to the resident Haiku classifier rather than losing the grounding,
  * because the caller's only alternative is an ungrounded turn. */
 export function groundTurn(prompt: string, timeoutMs = CLASSIFIER_TIMEOUT_MS, provider: AiProviderChoice | null = null, accountProfile?: string): Promise<string> {
-  if (resolveAiProvider(provider, accountProfile) !== 'palmyra') return groundWithClaude(prompt, timeoutMs);
+  const request = `MODE: GROUND\n\n${prompt}`;
+  if (resolveAiProvider(provider, accountProfile) !== 'palmyra') return groundWithClaude(request, timeoutMs);
   return completeWithPalmyra({
-    messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: prompt }],
+    messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: request }],
     maxTokens: 800,
     timeoutMs,
   }).catch((error: unknown) => {
     console.warn(`[palmyra] turn grounding fell back to the Claude classifier: ${error instanceof Error ? error.message : String(error)}`);
     return groundWithClaude(prompt, timeoutMs);
   });
+}
+
+export function editFinalResponseWithSupervisor(prompt: string, timeoutMs = CLASSIFIER_TIMEOUT_MS): Promise<string> {
+  return groundWithClaude(`MODE: EDIT\n\n${prompt}`, timeoutMs);
 }
 
 /** Pay the one-time CLI/model handshake during server startup, off the request path. */

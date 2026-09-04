@@ -16,6 +16,7 @@ import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWo
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
+import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT } from './final-response-policy.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { palmyraModel } from './providers/palmyra.js';
@@ -102,7 +103,9 @@ Writer test-suite safety: in every Writer repository, full-suite commands are fo
 
 Emit brief progress updates before/after meaningful steps — what you're checking, why, what you learned, what's next — as concise decisions/summaries, not chain-of-thought.
 
-Complete the requested capability. Report decisions, evidence, risks, files changed, and verification. Do not change the Workbench database directly.`;
+Complete the requested capability. Report decisions, evidence, risks, files changed, and verification. Do not change the Workbench database directly.
+
+${FINAL_RESPONSE_CONTRACT}`;
 
 export { classifyExternalActionAuthorization } from './external-action-authorization.js';
 export type { ExternalActionAuthorization, ExternalActionAuthorizationContext } from './external-action-authorization.js';
@@ -2062,11 +2065,11 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     if (!executed && hasUnverifiedCompletionClaim(result.output)) {
       throw new Error('Agent reported the work complete while this run executed no command and changed no file. The response was rejected by the Workbench harness.');
     }
-    const { output } = result;
+    const rawOutput = result.output;
     const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason, costUsd: result.costUsd ?? null };
     let executionPlan: { summary: string; tasks: Array<{ title: string; description: string; workspacePath: string | null }> } | null = null;
     if (run.instructions.includes('WORKBENCH_DECOMPOSITION')) {
-      const match = output.match(/<workbench-plan>([\s\S]*?)<\/workbench-plan>/);
+      const match = rawOutput.match(/<workbench-plan>([\s\S]*?)<\/workbench-plan>/);
       if (!match) throw new Error('Strategy completed without a valid Workbench task decomposition.');
       const parsed = JSON.parse(match[1]) as { summary?: unknown; tasks?: Array<{ title?: unknown; description?: unknown; workspacePath?: unknown }> };
       if (typeof parsed.summary !== 'string' || !Array.isArray(parsed.tasks) || parsed.tasks.length < 2) throw new Error('Complex work must be decomposed into at least two independently executable follow-up tasks.');
@@ -2075,6 +2078,17 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         return { title: task.title, description: task.description, workspacePath: typeof task.workspacePath === 'string' ? task.workspacePath : null };
       }) };
     }
+    const editorDraft = rawOutput.replace(/<workbench-plan>[\s\S]*?<\/workbench-plan>/g, '').trim() || (executionPlan?.summary ?? rawOutput);
+    if (finalResponseEditingEnabled()) {
+      const violation = finalResponsePolicyViolation(editorDraft);
+      const detail = violation ? `Draft rejected: ${violation} Editing it now.` : 'Editing the final response for plain English and brevity.';
+      repository.addActivity(item.id, 'system', 'progress', detail);
+      if (run.messageId) repository.updateSharedMessage(run.messageId, { body: `● ${detail}` });
+    }
+    const output = finalResponseEditingEnabled()
+      ? await editFinalResponse(editorDraft, `${item.title}\n${run.instructions}`)
+      : rawOutput;
+    result = { ...result, output };
     if (sourceWorkspace && workspace && MUTATING_RUN_KINDS.has(run.kind)) {
       // Integration reports; it never decides whether the run finished. This
       // await sits before finishRun, so a throw here would erase a completed

@@ -1250,3 +1250,12 @@ surroundings can be shown and the change reads as an overlay rather than as the
 whole graph. Risk, priority, review state, and tokens spent are overlay layers on
 that view. But the map is built on demand for escalated blocks; low-priority or
 mechanically settled blocks never pay its analysis or rendering cost.
+
+### Final agent responses are one plain-English paragraph
+
+*Decision from Jeffrey, 2026-09-04.* Every Claude, Codex, and Palmyra final
+response must use one short paragraph in this order: `Problem:`, `Solution:`,
+`Context:`. Workbench must reject and edit drafts that use multiple paragraphs,
+lists, headings, unexplained specialist language, or more than 120 words. The
+editor must preserve concrete outcomes, verification gaps, commands, paths,
+URLs, and blockers; brevity must not turn an unverified result into a claim.

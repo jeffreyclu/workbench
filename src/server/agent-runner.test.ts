@@ -1214,6 +1214,7 @@ Question or requested change: Replace this hook with the established memoized he
     expect(RUNNER_SYSTEM_CONTRACT).toContain('make at most one focused recall near the start');
     expect(RUNNER_SYSTEM_CONTRACT).not.toContain('not a mandatory preflight');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('An assistant-authored statement is not corroboration for itself');
+    expect(RUNNER_SYSTEM_CONTRACT).toContain('Problem: ... Solution: ... Context: ...');
   });
 
   it('rejects uninvestigated requests for evidence as a harness violation', () => {

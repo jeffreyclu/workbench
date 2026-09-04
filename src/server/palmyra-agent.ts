@@ -17,6 +17,7 @@ import {
   type AgentUsage,
 } from './agent-runner.js';
 import { ProviderTurnWatchdog, providerTurnTimeouts } from './provider-turn-watchdog.js';
+import { FINAL_RESPONSE_CONTRACT } from './final-response-policy.js';
 import { connectPalmyraWorkbenchTools, type PalmyraWorkbenchToolBridge } from './palmyra-workbench-tools.js';
 import { palmyraMaxOutputTokens, streamChatWithPalmyra, type PalmyraFunctionTool, type PalmyraMessage, type PalmyraTool, type PalmyraToolCall } from './providers/palmyra.js';
 
@@ -260,7 +261,7 @@ export async function runPalmyraAgent(options: {
   imageAttachments?: PalmyraImageAttachment[];
   workbenchTools?: PalmyraWorkbenchToolBridge | null;
 }): Promise<PalmyraAgentResult> {
-  const systemMessage: PalmyraMessage = { role: 'system', content: `You are Palmyra, a first-class coding agent running inside Workbench. Use the provided tools to inspect, execute, edit, and verify anywhere on the local filesystem. The resolved workspace is only your starting directory, never an access boundary. Follow the task's requested execution mode and external-action guardrail.\n\n${AGENT_EXECUTION_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\n${AGENT_DEBUGGER_CONTRACT}\n\nThe live stream is progress only. After the work ends, give one fresh, compact final answer that synthesizes the outcome, changed files or decisions, verification, and any remaining blocker. Do not replay the live progress log, tool-use audit, or Decision preambles in that final answer.` };
+  const systemMessage: PalmyraMessage = { role: 'system', content: `You are Palmyra, a first-class coding agent running inside Workbench. Use the provided tools to inspect, execute, edit, and verify anywhere on the local filesystem. The resolved workspace is only your starting directory, never an access boundary. Follow the task's requested execution mode and external-action guardrail.\n\n${AGENT_EXECUTION_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\n${AGENT_DEBUGGER_CONTRACT}\n\nThe live stream is progress only. After the work ends, give one fresh, compact final answer that synthesizes the outcome, changed files or decisions, verification, and any remaining blocker. Do not replay the live progress log, tool-use audit, or Decision preambles in that final answer.\n\n${FINAL_RESPONSE_CONTRACT}` };
   const imageContent = await Promise.all((options.imageAttachments ?? [])
     .filter((attachment) => attachment.mimeType.startsWith('image/'))
     .map(async (attachment) => ({ type: 'image_url' as const, image_url: { url: `data:${attachment.mimeType};base64,${(await readFile(attachment.path)).toString('base64')}` } })));

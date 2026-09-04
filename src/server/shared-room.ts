@@ -19,6 +19,7 @@ import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutRea
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { projectKey } from '../shared/project-name.js';
 import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
+import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT } from './final-response-policy.js';
 
 export { isTransientSqliteContention } from './sqlite-contention.js';
 
@@ -1030,7 +1031,7 @@ ${connectionContext}
 Reference-only conversation transcript:
 ${compactConversationHistory(thread)}
 
-Complete the current request above. Answer Jeffrey concisely. State the decision, handoff, or blocker you are continuing and any conflict with observed state. The live stream is progress only; after work ends, give one fresh, compact final handoff that synthesizes the outcome, changed files or decisions, verification, and any remaining blocker. Do not replay the live progress log or narrate steps verbatim. Before each tool call, emit a separate, concise \`Decision: <why this tool is the next correct action>\` statement. It is recorded in the agent debugger, so make it concrete and human-readable; never claim hidden reasoning. Durable context is available through the Workbench MCP \`recall_context\` tool; use it under the shared harness policy when prior work could help, especially for research, analysis, strategy, and bug-fix turns. Repository access is global: the starting workspace is never an authorization boundary, and every local repository remains readable and writable when the objective requires it. Keep Workbench bookkeeping in Workbench and project files in their owning repositories. Workbench is non-interactive: use tools directly and report exact missing access. Finish foreground work now; never detach work or promise a later result.`;
+Complete the current request above. Answer Jeffrey concisely. State the decision, handoff, or blocker you are continuing and any conflict with observed state. The live stream is progress only; after work ends, give one fresh, compact final handoff that synthesizes the outcome, changed files or decisions, verification, and any remaining blocker. Do not replay the live progress log or narrate steps verbatim. Before each tool call, emit a separate, concise \`Decision: <why this tool is the next correct action>\` statement. It is recorded in the agent debugger, so make it concrete and human-readable; never claim hidden reasoning. Durable context is available through the Workbench MCP \`recall_context\` tool; use it under the shared harness policy when prior work could help, especially for research, analysis, strategy, and bug-fix turns. Repository access is global: the starting workspace is never an authorization boundary, and every local repository remains readable and writable when the objective requires it. Keep Workbench bookkeeping in Workbench and project files in their owning repositories. Workbench is non-interactive: use tools directly and report exact missing access. Finish foreground work now; never detach work or promise a later result. ${FINAL_RESPONSE_CONTRACT}`;
 }
 
 /** A resumed provider thread already contains the invariant persona, tools,
@@ -1646,6 +1647,11 @@ export async function replyInSharedRoom(
       if (runId) repository.updateRun(runId, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
     }
     if (controller.signal.aborted) throw new Error('Agent run canceled.');
+    if (finalResponseEditingEnabled()) {
+      const violation = finalResponsePolicyViolation(result.output);
+      repository.updateSharedMessage(messageId, { body: violation ? `● Draft rejected: ${violation} Editing it now…` : '● Editing the final response for plain English and brevity…' });
+      result = { ...result, output: await editFinalResponse(result.output, turnGrounding.objective) };
+    }
     const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
     if (hasUntrackedContinuationClaim(result.output)) {
       const error = 'Agent claimed background or later-reported work. Workbench cannot track detached actions; the response was not marked finished.';
@@ -1855,7 +1861,10 @@ async function synthesizeSharedTurn(repository: WorkItemRepository, conversation
       model: modelFor(result.agent, profile), inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens,
       fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason,
     });
-    return `Synthesis:\n${result.output}`;
+    const output = finalResponseEditingEnabled()
+      ? await editFinalResponse(result.output, 'Combine the two agent reports into one accurate answer for Jeffrey.')
+      : result.output;
+    return `Synthesis: ${output}`;
   });
   const completed = repository.getSharedMessageById(message.id);
   if (completed?.status === 'completed') repository.recordAgentHandoff(conversationId, message.id, 'system', completed.body);
