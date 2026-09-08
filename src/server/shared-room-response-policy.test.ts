@@ -76,4 +76,33 @@ describe('shared-room final response supervision', () => {
     expect(repository.getSharedMessageById(reply.id)?.body).not.toContain('Draft rejected');
     database.close();
   });
+
+  it('preserves the complete agent result when local formatting adds sections', async () => {
+    const draft = `${Array.from({ length: 160 }, (_, index) => `result-${index}`).join(' ')} FINAL-RESULT`;
+    const actualPolicy = await vi.importActual<typeof import('./final-response-policy.js')>('./final-response-policy.js');
+    editFinalResponse.mockImplementation(actualPolicy.editFinalResponse);
+    runAgentCommandWithFallback.mockResolvedValue({
+      output: draft,
+      agent: 'claude',
+      usage: { inputTokens: 10, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: 161 },
+      fallbackFrom: null,
+      fallbackReason: null,
+      sessionId: 'session',
+      peakContextTokens: 10,
+    });
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const conversation = repository.createConversation('Report all results');
+    repository.createSharedMessage('jeffrey', 'Report every result.', 'queued', conversation.id, [], 'claude', 'standard');
+
+    const [reply] = dispatchNextSharedTurn(repository, conversation.id);
+    await vi.waitFor(() => expect(repository.getSharedMessageById(reply.id)).toMatchObject({ status: 'completed' }));
+    const body = repository.getSharedMessageById(reply.id)?.body ?? '';
+
+    expect(body).toContain('## Problem\nReport every result.');
+    expect(body).toContain('result-0');
+    expect(body).toContain('result-159 FINAL-RESULT');
+    expect(body).not.toContain('…');
+    database.close();
+  });
 });

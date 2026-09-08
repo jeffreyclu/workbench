@@ -1,4 +1,4 @@
-export const FINAL_RESPONSE_CONTRACT = `Final response: Workbench will reject and rewrite the draft before delivery unless it uses exactly three Markdown sections in this order: ## Problem, ## Solution, ## Context. Put each heading on its own line. For a normal response, give each section one short plain-English paragraph and keep the whole response at or below 120 words. Do not add a preamble, closing remark, repeated conclusion, or unexplained specialist shorthand. Keep exact commands, paths, URLs, error text, verification, and blockers when they matter. If Jeffrey's current request explicitly asks you to be verbose or to give a verbose response, keep the same three sections but allow multiple paragraphs, lists, and the length needed for that answer. This override applies only to that request.`;
+export const FINAL_RESPONSE_CONTRACT = `Final response: Workbench will reject and rewrite the draft before delivery unless it uses exactly three Markdown sections in this order: ## Problem, ## Solution, ## Context. Put each heading on its own line. For a normal response, give each section one short plain-English paragraph and target 120 words or fewer. Do not add a preamble, closing remark, repeated conclusion, or unexplained specialist shorthand. Keep exact commands, paths, URLs, error text, verification, and blockers when they matter. Never truncate an answer or omit material results to meet the length target. If Jeffrey's current request explicitly asks you to be verbose or to give a verbose response, keep the same three sections but allow multiple paragraphs, lists, and the length needed for that answer. This override applies only to that request.`;
 
 const SHORT_SECTIONS = /^## Problem\r?\n[^\r\n]+\r?\n\r?\n## Solution\r?\n[^\r\n]+\r?\n\r?\n## Context\r?\n[^\r\n]+$/;
 const VERBOSE_SECTIONS = /^## Problem\r?\n[\s\S]+?\r?\n\r?\n## Solution\r?\n[\s\S]+?\r?\n\r?\n## Context\r?\n[\s\S]+$/;
@@ -23,7 +23,6 @@ export function finalResponsePolicyViolation(output: string, verbose = false): s
   if (!trimmed) return 'The response is empty.';
   if (!(verbose ? VERBOSE_SECTIONS : SHORT_SECTIONS).test(trimmed)) return 'The response does not use separate Problem, Solution, and Context sections in that order.';
   if (verbose) return null;
-  if (trimmed.split(/\s+/).length > 120) return 'The response is longer than 120 words.';
   return null;
 }
 
@@ -31,7 +30,7 @@ export function finalResponseEditingEnabled(): boolean {
   return !process.env.VITEST || process.env.WORKBENCH_TEST_FINAL_RESPONSE_POLICY === '1';
 }
 
-function compactWords(value: string, limit: number): string {
+function plainParagraph(value: string): string {
   const words = value
     .replace(/<workbench-plan>[\s\S]*?<\/workbench-plan>/gi, '')
     .replace(/```(?:\w+)?/g, '')
@@ -42,12 +41,12 @@ function compactWords(value: string, limit: number): string {
     .split(' ')
     .filter(Boolean);
   if (!words.length) return 'No usable detail was returned.';
-  return `${words.slice(0, limit).join(' ')}${words.length > limit ? '…' : ''}`;
+  return words.join(' ');
 }
 
 export function fallbackFinalResponse(draft: string, objective: string, verbose = false): string {
-  if (verbose) return `## Problem\n${compactWords(objective, 40)}\n\n## Solution\n${draft.trim()}\n\n## Context\nNo additional context.`;
-  return `## Problem\n${compactWords(objective, 20)}\n\n## Solution\n${compactWords(draft, 80)}\n\n## Context\nNo additional context.`;
+  if (verbose) return `## Problem\n${plainParagraph(objective)}\n\n## Solution\n${draft.trim()}\n\n## Context\nNo additional context.`;
+  return `## Problem\n${plainParagraph(objective)}\n\n## Solution\n${plainParagraph(draft)}\n\n## Context\nNo additional context.`;
 }
 
 type FinalResponseOptions = { verbose?: boolean };

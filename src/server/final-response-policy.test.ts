@@ -50,8 +50,13 @@ describe('final response policy', () => {
     expect(editor).not.toHaveBeenCalled();
   });
 
-  it('keeps the fallback under the hard word limit', () => {
-    const output = fallbackFinalResponse(new Array(200).fill('detail').join(' '), new Array(100).fill('request').join(' '));
+  it('never cuts off a long completed result to meet the length target', () => {
+    const draft = `${Array.from({ length: 160 }, (_, index) => `result-${index}`).join(' ')} FINAL-RESULT`;
+    const output = fallbackFinalResponse(draft, 'Report every result.');
+
+    expect(output).toContain('result-0');
+    expect(output).toContain('result-159 FINAL-RESULT');
+    expect(output).not.toContain('…');
     expect(finalResponsePolicyViolation(output)).toBeNull();
   });
 });
