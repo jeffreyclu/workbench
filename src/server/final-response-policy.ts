@@ -1,5 +1,3 @@
-import { editFinalResponseWithSupervisor } from './turn-grounding-ai.js';
-
 export const FINAL_RESPONSE_CONTRACT = `Final response: Workbench will reject and rewrite the draft before delivery unless it uses exactly three Markdown sections in this order: ## Problem, ## Solution, ## Context. Put each heading on its own line. For a normal response, give each section one short plain-English paragraph and keep the whole response at or below 120 words. Do not add a preamble, closing remark, repeated conclusion, or unexplained specialist shorthand. Keep exact commands, paths, URLs, error text, verification, and blockers when they matter. If Jeffrey's current request explicitly asks you to be verbose or to give a verbose response, keep the same three sections but allow multiple paragraphs, lists, and the length needed for that answer. This override applies only to that request.`;
 
 const SHORT_SECTIONS = /^## Problem\r?\n[^\r\n]+\r?\n\r?\n## Solution\r?\n[^\r\n]+\r?\n\r?\n## Context\r?\n[^\r\n]+$/;
@@ -58,18 +56,11 @@ export async function editFinalResponse(
   draft: string,
   objective: string,
   optionsOrEdit: FinalResponseOptions | ((prompt: string) => Promise<string>) = {},
-  suppliedEdit: (prompt: string) => Promise<string> = editFinalResponseWithSupervisor,
+  _suppliedEdit?: (prompt: string) => Promise<string>,
 ): Promise<string> {
   const options = typeof optionsOrEdit === 'function' ? {} : optionsOrEdit;
-  const edit = typeof optionsOrEdit === 'function' ? optionsOrEdit : suppliedEdit;
   const verbose = options.verbose === true;
-  try {
-    const edited = normalizeFinalResponse(await edit(`VERBOSITY: ${verbose ? 'VERBOSE' : 'SHORT'}\n\nUser request or task:\n${objective.slice(0, 4_000)}\n\nAgent draft:\n${draft.slice(0, 16_000)}`));
-    const violation = finalResponsePolicyViolation(edited, verbose);
-    if (!violation) return edited;
-    console.warn(`[final-response-policy] response editor returned an invalid result: ${violation}`);
-  } catch (error) {
-    console.warn(`[final-response-policy] response editor unavailable; using the saved draft: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  const normalized = normalizeFinalResponse(draft);
+  if (!finalResponsePolicyViolation(normalized, verbose)) return normalized;
   return fallbackFinalResponse(draft, objective, verbose);
 }

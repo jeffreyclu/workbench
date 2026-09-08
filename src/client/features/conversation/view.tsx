@@ -153,6 +153,12 @@ export function latestConversationExecutionMessage(messages: SharedMessage[]): S
   ) ?? null;
 }
 
+export function executionKindForConversationSend(linkedKind: string | null | undefined, manualKind: AgentRun['kind']): AgentRun['kind'] {
+  return linkedKind && ['research', 'analysis', 'strategy', 'execute', 'review', 'bugfix'].includes(linkedKind)
+    ? linkedKind as AgentRun['kind']
+    : manualKind;
+}
+
 /**
  * Unlike latestConversationExecutionMessage, this does not require the
  * message to already carry a kind — it is the target the manual-conversation
@@ -711,7 +717,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           const reader = new FileReader(); reader.onerror = () => reject(reader.error); reader.onload = () => resolveValue(String(reader.result).split(',')[1] ?? ''); reader.readAsDataURL(file);
         }),
       })));
-      const executionKind = !selectedConversation?.workItemId && !manualConversationExecutionMessage ? newConversationExecutionKind : undefined;
+      const executionKind = executionKindForConversationSend(linkedWorkItem.data?.item?.classificationKind, manualConversationExecutionKind);
       const created = await api.createSharedMessage(conversationId!, body, composerSelection.dispatchTarget, attachments, composerSelection.executionProfile, composerSelection.accountProfile, executionKind);
       // A normal send can be dispatched synchronously by the create endpoint.
       // `replies` is definitive even if a stale API response labels the human
@@ -1142,7 +1148,10 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   };
   // Sending before the agent target / conversation state has finished
   // initializing for this conversation can dispatch to the wrong agent.
-  const conversationReadyToSend = Boolean(conversationId) && selectionHydratedFor === conversationId && !messages.isLoading;
+  const conversationReadyToSend = Boolean(conversationId)
+    && selectionHydratedFor === conversationId
+    && !messages.isLoading
+    && (!selectedConversation?.workItemId || Boolean(linkedWorkItem.data?.item));
 
   function submit(event: FormEvent) {
     event.preventDefault();

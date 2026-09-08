@@ -28,26 +28,26 @@ describe('final response policy', () => {
     expect(finalResponsePolicyViolation(verbose, true)).toBeNull();
 
     const editor = vi.fn(async () => verbose);
-    await expect(editFinalResponse('Draft.', 'Explain it verbosely.', { verbose: true }, editor)).resolves.toBe(verbose);
-    expect(editor).toHaveBeenCalledWith(expect.stringContaining('VERBOSITY: VERBOSE'));
+    await expect(editFinalResponse(verbose, 'Explain it verbosely.', { verbose: true }, editor)).resolves.toBe(verbose);
+    expect(editor).not.toHaveBeenCalled();
   });
 
-  it('edits a rejected draft and validates the replacement before delivery', async () => {
+  it('formats a rejected draft locally without another model turn', async () => {
     const editor = vi.fn(async () => '## Problem\nThe local app was down.\n\n## Solution\nRestarted it.\n\n## Context\nHealth returned 200.');
     const output = await editFinalResponse('The daemon failed.\n\nI restarted several processes.', 'Restart the local app.', editor);
 
-    expect(output).toBe('## Problem\nThe local app was down.\n\n## Solution\nRestarted it.\n\n## Context\nHealth returned 200.');
-    expect(editor).toHaveBeenCalledWith(expect.stringContaining('Agent draft:'));
+    expect(output).toBe('## Problem\nRestart the local app.\n\n## Solution\nThe daemon failed. I restarted several processes.\n\n## Context\nNo additional context.');
+    expect(editor).not.toHaveBeenCalled();
   });
 
-  it('keeps the completed result when the editor times out', async () => {
-    const output = await editFinalResponse('The service was restarted.\n\nHealth returned 200.', 'Restart the service.', async () => {
-      throw new Error('Haiku response editor timed out after 30s.');
-    });
+  it('keeps the completed result without calling the supplied editor', async () => {
+    const editor = vi.fn(async () => { throw new Error('must not run'); });
+    const output = await editFinalResponse('The service was restarted.\n\nHealth returned 200.', 'Restart the service.', editor);
     expect(finalResponsePolicyViolation(output)).toBeNull();
     expect(output).toContain('The service was restarted. Health returned 200.');
     expect(output).toContain('## Context\nNo additional context.');
     expect(output).not.toContain('editor');
+    expect(editor).not.toHaveBeenCalled();
   });
 
   it('keeps the fallback under the hard word limit', () => {

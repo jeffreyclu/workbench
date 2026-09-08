@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type SharedMessage } from '../../../shared/contracts';
 import { conversationCacheSpendWarning } from './cache-spend';
-import { composerSelectionFromConversation, latestConversationExecutionKind, replyBadge } from './view';
+import { composerSelectionFromConversation, executionKindForConversationSend, latestConversationExecutionKind, replyBadge } from './view';
 
 describe('replyBadge', () => {
   it('shows the actual model alongside the compact agent, profile, usage, and duration telemetry', () => {
@@ -76,7 +76,7 @@ describe('composerSelectionFromConversation', () => {
       preferredExecutionProfile: 'deep',
       preferredAccountProfile: 'personal',
       preferredDispatchTarget: 'claude',
-    })).toEqual({ executionProfile: 'deep', accountProfile: 'personal', dispatchTarget: 'claude' });
+    })).toEqual({ executionProfile: 'deep', accountProfile: 'personal', aiProvider: 'auto', dispatchTarget: 'claude' });
   });
 
   it('uses stable defaults for a legacy conversation without stored preferences', () => {
@@ -84,7 +84,7 @@ describe('composerSelectionFromConversation', () => {
       preferredExecutionProfile: null,
       preferredAccountProfile: null,
       preferredDispatchTarget: null,
-    })).toEqual({ executionProfile: null, accountProfile: 'default', dispatchTarget: 'both' });
+    })).toEqual({ executionProfile: null, accountProfile: 'default', aiProvider: 'auto', dispatchTarget: 'both' });
   });
 });
 
@@ -100,6 +100,13 @@ describe('latestConversationExecutionKind', () => {
 
   it('does not invent an execution type when a manual conversation has no classified reply', () => {
     expect(latestConversationExecutionKind([{ author: 'claude', kind: null }] as SharedMessage[])).toBeNull();
+  });
+});
+
+describe('executionKindForConversationSend', () => {
+  it('sends the dropdown category on every linked and manual turn', () => {
+    expect(executionKindForConversationSend('review', 'execute')).toBe('review');
+    expect(executionKindForConversationSend(null, 'strategy')).toBe('strategy');
   });
 });
 

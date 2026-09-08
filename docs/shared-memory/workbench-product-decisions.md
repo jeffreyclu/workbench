@@ -1259,20 +1259,20 @@ three separate Markdown sections in this order: `Problem`, `Solution`,
 `Context`. A normal response gives each section one short paragraph and stays
 under 120 words. Workbench must reject and edit drafts that collapse those
 labels into one paragraph, add unexplained specialist language, or exceed the
-normal limit. The editor must preserve concrete outcomes, verification gaps,
+normal limit. The formatter must preserve concrete outcomes, verification gaps,
 commands, paths, URLs, and blockers; brevity must not create a false claim.
-Response editing has its own warm Haiku worker and a 30-second active deadline,
-separate from turn grounding. If that editor is unavailable or returns invalid
-format, Workbench must keep the successful agent result and apply a bounded
-three-section local rewrite; editor failure must never fail the agent turn.
+Response formatting is deterministic and local. It must never start a Haiku or
+other model turn after the agent has finished. Invalid drafts are immediately
+converted into the bounded three-section shape without a visible formatting
+delay; formatting failure must never fail the agent turn.
 An explicit request to "be verbose" or provide a "verbose response" overrides
-only the one-paragraph-per-section and 120-word limits for that turn. The editor still uses
+only the one-paragraph-per-section and 120-word limits for that turn. The formatter still uses
 plain English and keeps `Problem:`, `Solution:`, and `Context:` in that order.
 Inline `Problem: … Solution: … Context: …` drafts are already structurally
 complete: Workbench converts them to headings locally and does not spend an
 editor turn. Validation and editing are internal; never show “Draft rejected”
-to Jeffrey. A truly unstructured draft may show only “Formatting response…”
-until its final three-section answer replaces the live activity.
+to Jeffrey. A truly unstructured draft is converted locally before its final
+three-section answer replaces live activity; no formatting status is shown.
 
 ### Active memory lives on disk; closed history is retrieved from the database
 
@@ -1293,10 +1293,9 @@ window than routine RAG so work executed over time is represented instead of
 being cut down to the ordinary eight-result prompt. This policy applies equally
 to Codex, Claude/Opus, and Palmyra.
 
-### Response-editor failures stay internal
+### Response-formatting mechanics stay internal
 
-*Correction from Jeffrey, 2026-09-08.* Editor availability is internal runtime
-state and must never be fabricated into the response's `Context` section. If
-the editor fails, the deterministic fallback keeps the agent's saved result,
-uses `No additional context.` when the draft supplies none, and logs the editor
-failure only on the server.
+*Correction from Jeffrey, 2026-09-08.* Formatting is internal runtime state and
+must never be fabricated into the response's `Context` section. The
+deterministic formatter keeps the agent's saved result and uses
+`No additional context.` when the draft supplies none.

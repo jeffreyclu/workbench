@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExternalActionAuthorization, classifyMessageIntent, externalActionContractForAuthorization, hasExplicitImplementationDirective, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionContractForAuthorization, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -703,38 +703,16 @@ export function recoveryPromptForThread(freshPrompt: string, requirement: string
   return resumeThreadId ? requirement : `${freshPrompt}\n\n${requirement}`;
 }
 
-/**
- * A linked task's stored classification reflects intent at creation time, not
- * whatever Jeffrey is asking for in the current turn. When the current message
- * carries a clear deliverable signal (e.g. "now implement this" after a research
- * reply), route this turn on that inferred kind instead of the stale stored one.
- * Ambiguous or context-dependent turns (short follow-ups) fall back to storage.
- */
-export function classificationForLinkedItem(repository: WorkItemRepository, item: WorkItem, currentMessage?: string) {
-  const stored = repository.getClassification(item.id) ?? repository.setClassification(item.id, classifyExecution(item));
-  const inferredKind = currentMessage ? classifyMessageIntent(currentMessage) : null;
-  // A one-word follow-up in an already read-only investigation keeps that
-  // investigation's persona. This is safe because neither kind can mutate.
-  if (stored.kind === 'research' && inferredKind === 'analysis' && currentMessage && /^\s*(?:why|how|what)\??\s*$/i.test(currentMessage)) return stored;
-  // Review is a durable read-only boundary. A keyword inside pasted code or a
-  // generated handoff cannot override it; only Jeffrey's explicit current-turn
-  // implementation directive can make this one turn write-enabled.
-  if (stored.kind === 'review' && inferredKind === 'analysis') return stored;
-  if (stored.kind === 'review' && inferredKind === 'execute' && currentMessage && !hasExplicitImplementationDirective(currentMessage)) return stored;
-  if (!inferredKind || inferredKind === stored.kind) return stored;
-  return { ...classificationForKind(item, inferredKind), reason: `keyword rules: this turn's request reads as ${inferredKind}, overriding the task's original ${stored.kind} classification` };
+/** A linked task's dropdown selection is authoritative; message text never reclassifies it. */
+export function classificationForLinkedItem(repository: WorkItemRepository, item: WorkItem, _currentMessage?: string) {
+  return repository.getClassification(item.id) ?? classificationForKind(item, 'execute');
 }
 
-/**
- * Manual conversations have no stored task classification. Infer a clear
- * deliverable from the current message before falling back to analysis; using
- * analysis unconditionally made requests such as "build the pool warming"
- * run in an intentionally read-only sandbox.
- */
-export function sharedTurnKindForMessage(repository: WorkItemRepository, linkedItem: WorkItem | null, currentMessage: string): AgentRun['kind'] {
+/** Legacy queued turns without a persisted selection use the visible dropdown default. */
+export function sharedTurnKindForMessage(repository: WorkItemRepository, linkedItem: WorkItem | null, _currentMessage: string): AgentRun['kind'] {
   return linkedItem
-    ? classificationForLinkedItem(repository, linkedItem, currentMessage).kind
-    : classifyMessageIntent(currentMessage) ?? 'analysis';
+    ? classificationForLinkedItem(repository, linkedItem).kind
+    : 'execute';
 }
 
 /** Linked conversations inherit their task workspace rather than the Workbench server cwd. */
@@ -1659,7 +1637,6 @@ export async function replyInSharedRoom(
       const normalized = normalizeFinalResponse(result.output);
       const violation = finalResponsePolicyViolation(normalized, verbose);
       if (violation) {
-        repository.updateSharedMessage(messageId, { body: '● Formatting response…' });
         result = { ...result, output: await editFinalResponse(normalized, turnGrounding.objective, { verbose }) };
       } else {
         result = { ...result, output: normalized };

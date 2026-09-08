@@ -2085,10 +2085,6 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const editorDraft = normalizeFinalResponse(rawOutput.replace(/<workbench-plan>[\s\S]*?<\/workbench-plan>/g, '').trim() || (executionPlan?.summary ?? rawOutput));
     const verbose = verboseResponseRequested(`${item.title}\n${run.instructions}`);
     const responseViolation = finalResponsePolicyViolation(editorDraft, verbose);
-    if (finalResponseEditingEnabled() && responseViolation) {
-      repository.addActivity(item.id, 'system', 'progress', 'Formatting response.');
-      if (run.messageId) repository.updateSharedMessage(run.messageId, { body: '● Formatting response…' });
-    }
     const output = finalResponseEditingEnabled() && responseViolation
       ? await editFinalResponse(editorDraft, `${item.title}\n${run.instructions}`, { verbose })
       : editorDraft;

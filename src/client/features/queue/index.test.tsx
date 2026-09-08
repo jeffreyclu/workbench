@@ -55,6 +55,13 @@ describe('TaskClassificationSelect', () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/work-items/${item.id}/classify`, expect.objectContaining({ method: 'POST', body: JSON.stringify({ kind: 'bugfix' }) })));
   });
 
+  it('always shows Execute when an older task has no saved category', () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><TaskClassificationSelect itemId={item.id} kind={null} disclosure /></QueryClientProvider>);
+
+    expect(screen.getByRole('button', { name: 'Task type: Execute' })).toBeTruthy();
+  });
+
   it('closes the disclosure menu with Escape and returns focus to its toggle', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><TaskClassificationSelect itemId={item.id} kind={item.classificationKind} disclosure /></QueryClientProvider>);

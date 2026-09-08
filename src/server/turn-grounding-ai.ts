@@ -5,7 +5,6 @@ import { resolveAiProvider } from './providers/provider-choice.js';
 
 const IDLE_SHUTDOWN_MS = 5 * 60_000;
 const CLASSIFIER_TIMEOUT_MS = 8_000;
-const RESPONSE_EDITOR_TIMEOUT_MS = 30_000;
 const WARMUP_TIMEOUT_MS = 20_000;
 const SYSTEM_PROMPT = `You are Workbench's conversation supervisor. Every request starts with a MODE line. Follow only that mode.
 
@@ -22,19 +21,7 @@ Rules:
 - Keep the objective compact and executable. Do not include analysis or a plan.
 
 Return exactly one JSON object and nothing else:
-{"objective":string,"acceptanceCriteria":string[],"exclusions":string[],"continuation":boolean}
-
-MODE: EDIT
-Rewrite an agent's draft before Jeffrey sees it.
-
-Rules:
-- Use exactly three Markdown sections in this order: ## Problem, ## Solution, ## Context. Put each heading on its own line.
-- Use plain English. Replace specialist shorthand with ordinary words unless an exact command, file, URL, error, or code name is necessary.
-- Preserve concrete outcomes, changed files, verification, URLs, and blockers. Do not invent facts or improve the claimed verification.
-- State what is still unverified when the draft says it was not checked.
-- For VERBOSITY: SHORT, give each section one short paragraph, use no lists, and stay at or below 120 words total.
-- For VERBOSITY: VERBOSE, use as many paragraphs and lists as the request needs inside those sections, but do not ramble or repeat yourself.
-- Output only the edited response.`;
+{"objective":string,"acceptanceCriteria":string[],"exclusions":string[],"continuation":boolean}`;
 
 type Pending = { prompt: string; resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> | null; timeoutMs: number };
 type SupervisorPool = {
@@ -46,7 +33,6 @@ type SupervisorPool = {
   idleTimer: ReturnType<typeof setTimeout> | null;
 };
 const groundingPool: SupervisorPool = { label: 'turn-grounding classifier', worker: null, active: null, buffer: '', queue: [], idleTimer: null };
-const responseEditorPool: SupervisorPool = { label: 'response editor', worker: null, active: null, buffer: '', queue: [], idleTimer: null };
 
 function settle(pending: Pending, error?: Error, output?: string): void {
   if (pending.timer) clearTimeout(pending.timer);
@@ -154,19 +140,13 @@ export function groundTurn(prompt: string, timeoutMs = CLASSIFIER_TIMEOUT_MS, pr
   });
 }
 
-export function editFinalResponseWithSupervisor(prompt: string, timeoutMs = RESPONSE_EDITOR_TIMEOUT_MS): Promise<string> {
-  return runWithClaude(responseEditorPool, `MODE: EDIT\n\n${prompt}`, timeoutMs);
-}
-
 /** Pay the one-time CLI/model handshake during server startup, off the request path. */
 export function warmTurnGroundingClassifier(): void {
   if (resolveAiProvider('auto') !== 'palmyra') {
     void groundTurn('Warm-up only. Return {"objective":"ready","acceptanceCriteria":[],"exclusions":[],"continuation":false}.', WARMUP_TIMEOUT_MS).catch(() => {});
   }
-  void editFinalResponseWithSupervisor('User request or task:\nWarm the editor.\n\nAgent draft:\nNo user-facing response.', WARMUP_TIMEOUT_MS).catch(() => {});
 }
 
 export function shutdownTurnGroundingClassifier(): void {
   stop(groundingPool, new Error('Turn-grounding classifier stopped during runtime shutdown.'));
-  stop(responseEditorPool, new Error('Response editor stopped during runtime shutdown.'));
 }

@@ -463,12 +463,12 @@ describe('compactConversationHistory', () => {
     expect(prompt).not.toContain('Do not modify Writer or any other repository');
   });
 
-  it('uses frontend-reviewer for a review-linked reply with no stored classification', () => {
+  it('uses frontend-reviewer when the linked task dropdown is set to review', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);
     const task = repository.create({ title: 'Review PR 5246 for regressions', description: 'Review the code changes.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     repository.createConversation('Review thread', task.id);
-    expect(repository.getClassification(task.id)).toBeNull();
+    repository.setClassification(task.id, classificationForKind(task, 'review'), 'manual');
 
     const classification = classificationForLinkedItem(repository, task);
     const run = repository.createRun(task.id, classification.kind, 'claude', 'claude', 'Please continue the review.');
@@ -496,42 +496,34 @@ describe('compactConversationHistory', () => {
     database.close();
   });
 
-  it('reclassifies a turn when the current message asks for different work than the task started as', () => {
+  it('never overrides the dropdown category from the current message text', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);
     const task = repository.create({ title: 'Research pagination approaches', description: 'Investigate cursor vs offset pagination.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     repository.createConversation('Pagination thread', task.id);
 
-    const initial = classificationForLinkedItem(repository, task);
-    expect(initial.kind).toBe('research');
-
-    const followUp = classificationForLinkedItem(repository, task, 'Great, now implement the cursor-based approach.');
-    expect(followUp.kind).toBe('execute');
-
-    // The task's stored classification is untouched; only this turn's routing changes.
+    repository.setClassification(task.id, classificationForKind(task, 'research'), 'manual');
+    expect(classificationForLinkedItem(repository, task, 'Great, now implement the cursor-based approach.').kind).toBe('research');
     expect(repository.getClassification(task.id)?.kind).toBe('research');
-
-    const ambiguous = classificationForLinkedItem(repository, task, 'why?');
-    expect(ambiguous.kind).toBe('research');
 
     const executeTask = repository.create({ title: 'Build connector search', description: 'Implement server-side connector search.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     expect(classificationForLinkedItem(repository, executeTask).kind).toBe('execute');
-    expect(sharedTurnKindForMessage(repository, executeTask, 'ok now what')).toBe('analysis');
+    expect(sharedTurnKindForMessage(repository, executeTask, 'Explain this without changing anything.')).toBe('execute');
 
     const reviewTask = repository.create({ title: 'Review connector PR', description: 'Review the code changes.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     repository.setClassification(reviewTask.id, classificationForKind(reviewTask, 'review'));
     expect(sharedTurnKindForMessage(repository, reviewTask, 'This code calls fixHeaders(). Is it safe?')).toBe('review');
     expect(sharedTurnKindForMessage(repository, reviewTask, 'Should we fix this allocation pattern?')).toBe('review');
-    expect(sharedTurnKindForMessage(repository, reviewTask, 'Fix this allocation pattern.')).toBe('execute');
+    expect(sharedTurnKindForMessage(repository, reviewTask, 'Fix this allocation pattern.')).toBe('review');
     database.close();
   });
 
-  it('routes an unlinked manual implementation request as write-enabled execution', () => {
+  it('uses execute for a legacy manual turn missing its persisted dropdown selection', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);
 
     expect(sharedTurnKindForMessage(repository, null, 'Build the pool warming.')).toBe('execute');
-    expect(sharedTurnKindForMessage(repository, null, 'Explain why the pool is slow.')).toBe('analysis');
+    expect(sharedTurnKindForMessage(repository, null, 'Explain why the pool is slow.')).toBe('execute');
 
     database.close();
   });

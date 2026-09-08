@@ -465,6 +465,17 @@ describe('conversation router', () => {
       expect(seams.dispatchNextSharedTurn).toHaveBeenCalledWith(expect.anything(), conversation.id);
     });
 
+    it('persists the dropdown category and never infers one from message text', async () => {
+      const conversation = await createConversation();
+      seams.dispatchNextSharedTurn.mockReturnValue([]);
+
+      const selected = await request('/api/shared/messages', 'POST', { conversationId: conversation.id, body: 'Explain this.', dispatchTo: 'claude', executionKind: 'review' });
+      expect((await selected.json() as { message: { kind: string } }).message.kind).toBe('review');
+
+      const legacy = await request('/api/shared/messages', 'POST', { conversationId: conversation.id, body: 'Analyze this.', dispatchTo: 'claude' });
+      expect((await legacy.json() as { message: { kind: string } }).message.kind).toBe('execute');
+    });
+
     it('queues a promotion reply for a runtime-approval message without dispatching', async () => {
       const conversation = await createConversation();
       const response = await request('/api/shared/messages', 'POST', { conversationId: conversation.id, body: 'approve preview', dispatchTo: 'none' });

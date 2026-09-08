@@ -99,7 +99,7 @@ export function TaskClassificationSelect({ itemId, kind, compact = false, disclo
   const selectedKind = (kind ?? 'execute') as AgentRun['kind'];
 
   if (disclosure) {
-    return <ClassificationKindDisclosure kind={kind} onChange={(next) => update.mutate(next)} pending={update.isPending} label="Task type" />;
+    return <ClassificationKindDisclosure kind={selectedKind} onChange={(next) => update.mutate(next)} pending={update.isPending} label="Task type" />;
   }
 
   const select = <select className="card-classification-select" aria-label="Task type" value={selectedKind} onChange={(event) => update.mutate(event.target.value as AgentRun['kind'])} disabled={update.isPending}>
