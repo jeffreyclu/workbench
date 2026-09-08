@@ -1865,7 +1865,7 @@ async function synthesizeSharedTurn(repository: WorkItemRepository, conversation
     const output = finalResponseEditingEnabled()
       ? await editFinalResponse(result.output, 'Combine the two agent reports into one accurate answer for Jeffrey.', { verbose: source.verbose })
       : result.output;
-    return `Synthesis: ${output}`;
+    return `Synthesis:\n${output}`;
   });
   const completed = repository.getSharedMessageById(message.id);
   if (completed?.status === 'completed') repository.recordAgentHandoff(conversationId, message.id, 'system', completed.body);

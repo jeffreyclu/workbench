@@ -27,7 +27,7 @@ describe('shared-room final response supervision', () => {
       sessionId: 'session',
       peakContextTokens: 10,
     });
-    editFinalResponse.mockResolvedValue('Problem: The API process stopped. Solution: I restarted it. Context: The health route passed.');
+    editFinalResponse.mockResolvedValue('## Problem\nThe API process stopped.\n\n## Solution\nI restarted it.\n\n## Context\nThe health route passed.');
   });
 
   afterEach(() => {
@@ -44,7 +44,7 @@ describe('shared-room final response supervision', () => {
     const [reply] = dispatchNextSharedTurn(repository, conversation.id);
     await vi.waitFor(() => expect(repository.getSharedMessageById(reply.id)).toMatchObject({
       status: 'completed',
-      body: 'Problem: The API process stopped. Solution: I restarted it. Context: The health route passed.',
+      body: '## Problem\nThe API process stopped.\n\n## Solution\nI restarted it.\n\n## Context\nThe health route passed.',
     }));
 
     expect(editFinalResponse).toHaveBeenCalledWith(expect.stringContaining('\n\n'), 'Restart the API.', { verbose: false });

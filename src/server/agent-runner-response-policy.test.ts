@@ -25,7 +25,7 @@ describe('task-run final response supervision', () => {
 
   it('edits the task result before the run is completed', async () => {
     process.env.WORKBENCH_TEST_FINAL_RESPONSE_POLICY = '1';
-    editFinalResponse.mockResolvedValue('Problem: The cache was stale. Solution: I traced the invalidation path. Context: No files changed.');
+    editFinalResponse.mockResolvedValue('## Problem\nThe cache was stale.\n\n## Solution\nI traced the invalidation path.\n\n## Context\nNo files changed.');
     const { directory } = fakeAgentDirectory(
       `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'The cache was stale.\n\nI traced the invalidation path.' } })}'`,
       'exit 1',
@@ -39,7 +39,7 @@ describe('task-run final response supervision', () => {
 
     expect(repository.getRun(run.id)).toMatchObject({
       status: 'completed',
-      output: 'Problem: The cache was stale. Solution: I traced the invalidation path. Context: No files changed.',
+      output: '## Problem\nThe cache was stale.\n\n## Solution\nI traced the invalidation path.\n\n## Context\nNo files changed.',
     });
     expect(editFinalResponse).toHaveBeenCalledWith(expect.stringContaining('\n\n'), 'Inspect stale cache\nFind the cause.', { verbose: false });
     database.close();

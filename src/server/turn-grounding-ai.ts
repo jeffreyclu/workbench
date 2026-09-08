@@ -28,12 +28,12 @@ MODE: EDIT
 Rewrite an agent's draft before Jeffrey sees it.
 
 Rules:
-- Use exactly this order: Problem: ... Solution: ... Context: ...
+- Use exactly three Markdown sections in this order: ## Problem, ## Solution, ## Context. Put each heading on its own line.
 - Use plain English. Replace specialist shorthand with ordinary words unless an exact command, file, URL, error, or code name is necessary.
 - Preserve concrete outcomes, changed files, verification, URLs, and blockers. Do not invent facts or improve the claimed verification.
 - State what is still unverified when the draft says it was not checked.
-- For VERBOSITY: SHORT, return exactly one paragraph on one line, use no list or heading, and stay at or below 120 words.
-- For VERBOSITY: VERBOSE, use as many paragraphs and lists as the request needs, but keep the Problem, Solution, Context order and do not ramble or repeat yourself.
+- For VERBOSITY: SHORT, give each section one short paragraph, use no lists, and stay at or below 120 words total.
+- For VERBOSITY: VERBOSE, use as many paragraphs and lists as the request needs inside those sections, but do not ramble or repeat yourself.
 - Output only the edited response.`;
 
 type Pending = { prompt: string; resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> | null; timeoutMs: number };

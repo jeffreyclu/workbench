@@ -1251,18 +1251,20 @@ whole graph. Risk, priority, review state, and tokens spent are overlay layers o
 that view. But the map is built on demand for escalated blocks; low-priority or
 mechanically settled blocks never pay its analysis or rendering cost.
 
-### Final agent responses are one plain-English paragraph
+### Final agent responses use three plain-English sections
 
-*Decision from Jeffrey, 2026-09-04.* Every Claude, Codex, and Palmyra final
-response must use one short paragraph in this order: `Problem:`, `Solution:`,
-`Context:`. Workbench must reject and edit drafts that use multiple paragraphs,
-lists, headings, unexplained specialist language, or more than 120 words. The
-editor must preserve concrete outcomes, verification gaps, commands, paths,
-URLs, and blockers; brevity must not turn an unverified result into a claim.
+*Decision from Jeffrey, 2026-09-08, superseding the 2026-09-04 single-paragraph
+rule.* Every Claude, Codex, Palmyra, and synthesis final response must render as
+three separate Markdown sections in this order: `Problem`, `Solution`,
+`Context`. A normal response gives each section one short paragraph and stays
+under 120 words. Workbench must reject and edit drafts that collapse those
+labels into one paragraph, add unexplained specialist language, or exceed the
+normal limit. The editor must preserve concrete outcomes, verification gaps,
+commands, paths, URLs, and blockers; brevity must not create a false claim.
 Response editing has its own warm Haiku worker and a 30-second active deadline,
 separate from turn grounding. If that editor is unavailable or returns invalid
 format, Workbench must keep the successful agent result and apply a bounded
-one-paragraph local rewrite; editor failure must never fail the agent turn.
+three-section local rewrite; editor failure must never fail the agent turn.
 An explicit request to "be verbose" or provide a "verbose response" overrides
-only the one-paragraph and 120-word limits for that turn. The editor still uses
+only the one-paragraph-per-section and 120-word limits for that turn. The editor still uses
 plain English and keeps `Problem:`, `Solution:`, and `Context:` in that order.

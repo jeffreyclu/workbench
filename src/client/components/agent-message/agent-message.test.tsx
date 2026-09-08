@@ -20,6 +20,24 @@ describe('splitAgentResponse', () => {
     ]);
   });
 
+  it('renders supervised replies as separate Problem, Solution, and Context cards', () => {
+    const body = '## Problem\nThe service is down.\n\n## Solution\nRestart it.\n\n## Context\nHealth is not verified.';
+    expect(splitAgentResponse(body).map((section) => section.title)).toEqual(['Problem', 'Solution', 'Context']);
+
+    const { container } = render(<AgentMessageBody body={body} running={false} detailForSingle />);
+    expect(screen.getByLabelText('Agent response in 3 parts')).toBeInTheDocument();
+    expect([...container.querySelectorAll('.agent-response-section-heading h3')].map((heading) => heading.textContent)).toEqual(['Problem', 'Solution', 'Context']);
+    expect(container.querySelector('.agent-response-section-heading h3')?.textContent).not.toBe('Detail');
+  });
+
+  it('hides the synthesis marker before rendering the same three sections', () => {
+    expect(splitAgentResponse('Synthesis:\n## Problem\nReports differ.\n\n## Solution\nReconcile them.\n\n## Context\nNo files changed.')).toEqual([
+      { title: 'Problem', body: 'Reports differ.' },
+      { title: 'Solution', body: 'Reconcile them.' },
+      { title: 'Context', body: 'No files changed.' },
+    ]);
+  });
+
   it('keeps headings inside fenced code in the same section', () => {
     expect(splitAgentResponse('```md\n## Not a report heading\n```\n\nDone.')).toEqual([
       { title: 'Brief', body: '```md\n## Not a report heading\n```' },

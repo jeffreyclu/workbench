@@ -1,8 +1,9 @@
 import { editFinalResponseWithSupervisor } from './turn-grounding-ai.js';
 
-export const FINAL_RESPONSE_CONTRACT = `Final response: Workbench will reject and rewrite the draft before delivery unless it is one plain-English paragraph of at most 120 words in exactly this order: Problem: ... Solution: ... Context: ... Never use a list, heading, blank line, preamble, repeated conclusion, or unexplained specialist shorthand. Keep exact commands, paths, URLs, error text, verification, and blockers when they matter. If Jeffrey's current request explicitly asks you to be verbose or to give a verbose response, keep the same plain-English Problem, Solution, Context order but allow multiple paragraphs, lists, and the length needed for that answer. This override applies only to that request.`;
+export const FINAL_RESPONSE_CONTRACT = `Final response: Workbench will reject and rewrite the draft before delivery unless it uses exactly three Markdown sections in this order: ## Problem, ## Solution, ## Context. Put each heading on its own line. For a normal response, give each section one short plain-English paragraph and keep the whole response at or below 120 words. Do not add a preamble, closing remark, repeated conclusion, or unexplained specialist shorthand. Keep exact commands, paths, URLs, error text, verification, and blockers when they matter. If Jeffrey's current request explicitly asks you to be verbose or to give a verbose response, keep the same three sections but allow multiple paragraphs, lists, and the length needed for that answer. This override applies only to that request.`;
 
-const LABELS = /^Problem:\s+.+\s+Solution:\s+.+\s+Context:\s+.+$/s;
+const SHORT_SECTIONS = /^## Problem\r?\n[^\r\n]+\r?\n\r?\n## Solution\r?\n[^\r\n]+\r?\n\r?\n## Context\r?\n[^\r\n]+$/;
+const VERBOSE_SECTIONS = /^## Problem\r?\n[\s\S]+?\r?\n\r?\n## Solution\r?\n[\s\S]+?\r?\n\r?\n## Context\r?\n[\s\S]+$/;
 
 export function verboseResponseRequested(request: string): boolean {
   if (/\b(?:do not|don't|never|not|less)\s+(?:be\s+)?verbose\b/i.test(request)) return false;
@@ -14,9 +15,8 @@ export function verboseResponseRequested(request: string): boolean {
 export function finalResponsePolicyViolation(output: string, verbose = false): string | null {
   const trimmed = output.trim();
   if (!trimmed) return 'The response is empty.';
-  if (!LABELS.test(trimmed)) return 'The response does not use Problem, Solution, Context in that order.';
+  if (!(verbose ? VERBOSE_SECTIONS : SHORT_SECTIONS).test(trimmed)) return 'The response does not use separate Problem, Solution, and Context sections in that order.';
   if (verbose) return null;
-  if (/\r?\n/.test(trimmed)) return 'The response uses more than one line or paragraph.';
   if (trimmed.split(/\s+/).length > 120) return 'The response is longer than 120 words.';
   return null;
 }
@@ -40,8 +40,8 @@ function compactWords(value: string, limit: number): string {
 }
 
 export function fallbackFinalResponse(draft: string, objective: string, verbose = false): string {
-  if (verbose) return `Problem: ${compactWords(objective, 40)}\n\nSolution: ${draft.trim()}\n\nContext: Workbench preserved the saved draft because its language editor was unavailable.`;
-  return `Problem: ${compactWords(objective, 20)} Solution: ${compactWords(draft, 70)} Context: Workbench shortened the saved draft automatically because its language editor was unavailable.`;
+  if (verbose) return `## Problem\n${compactWords(objective, 40)}\n\n## Solution\n${draft.trim()}\n\n## Context\nWorkbench preserved the saved draft because its language editor was unavailable.`;
+  return `## Problem\n${compactWords(objective, 20)}\n\n## Solution\n${compactWords(draft, 70)}\n\n## Context\nWorkbench shortened the saved draft automatically because its language editor was unavailable.`;
 }
 
 type FinalResponseOptions = { verbose?: boolean };

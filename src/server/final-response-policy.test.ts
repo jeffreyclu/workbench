@@ -3,19 +3,19 @@ import { describe, expect, it, vi } from 'vitest';
 import { editFinalResponse, fallbackFinalResponse, FINAL_RESPONSE_CONTRACT, finalResponsePolicyViolation, verboseResponseRequested } from './final-response-policy.js';
 
 describe('final response policy', () => {
-  it('rejects a multi-paragraph agent response', () => {
-    expect(finalResponsePolicyViolation('Problem: The service is down.\n\nSolution: Restart it. Context: Not verified.'))
-      .toBe('The response uses more than one line or paragraph.');
+  it('rejects inline labels that render as one long paragraph', () => {
+    expect(finalResponsePolicyViolation('Problem: The service is down. Solution: Restart it. Context: Not verified.'))
+      .toBe('The response does not use separate Problem, Solution, and Context sections in that order.');
   });
 
-  it('requires the problem, solution, and context in one short paragraph', () => {
-    expect(finalResponsePolicyViolation('Problem: The service is down. Solution: Restart it. Context: Health is not verified.')).toBeNull();
-    expect(finalResponsePolicyViolation('Restart the service.')).toContain('Problem, Solution, Context');
-    expect(FINAL_RESPONSE_CONTRACT).toContain('plain-English paragraph');
+  it('requires three short problem, solution, and context sections', () => {
+    expect(finalResponsePolicyViolation('## Problem\nThe service is down.\n\n## Solution\nRestart it.\n\n## Context\nHealth is not verified.')).toBeNull();
+    expect(finalResponsePolicyViolation('Restart the service.')).toContain('Problem, Solution, and Context');
+    expect(FINAL_RESPONSE_CONTRACT).toContain('exactly three Markdown sections');
   });
 
   it('allows a multi-paragraph answer only for an explicit verbose request', async () => {
-    const verbose = 'Problem: The service is down.\n\nSolution: Restart it and inspect the logs.\n\nContext: The health route has not been checked.';
+    const verbose = '## Problem\nThe service is down.\n\n## Solution\nRestart it.\n\nThen inspect the logs.\n\n## Context\nThe health route has not been checked.';
     expect(verboseResponseRequested('Give me a verbose response explaining this.')).toBe(true);
     expect(verboseResponseRequested("Don't be verbose; give me the short answer.")).toBe(false);
     expect(finalResponsePolicyViolation(verbose)).not.toBeNull();
@@ -27,10 +27,10 @@ describe('final response policy', () => {
   });
 
   it('edits a rejected draft and validates the replacement before delivery', async () => {
-    const editor = vi.fn(async () => 'Problem: The local app was down. Solution: Restarted it. Context: Health returned 200.');
+    const editor = vi.fn(async () => '## Problem\nThe local app was down.\n\n## Solution\nRestarted it.\n\n## Context\nHealth returned 200.');
     const output = await editFinalResponse('The daemon failed.\n\nI restarted several processes.', 'Restart the local app.', editor);
 
-    expect(output).toBe('Problem: The local app was down. Solution: Restarted it. Context: Health returned 200.');
+    expect(output).toBe('## Problem\nThe local app was down.\n\n## Solution\nRestarted it.\n\n## Context\nHealth returned 200.');
     expect(editor).toHaveBeenCalledWith(expect.stringContaining('Agent draft:'));
   });
 
