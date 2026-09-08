@@ -25,6 +25,7 @@ import { QueuePlanningService } from './services/queue-planning-service.js';
 import { ExecutionService } from './services/execution-service.js';
 import { WorkItemService } from './services/work-item-service.js';
 import { ConversationService } from './services/conversation-service.js';
+import { ShortTermMemoryStore } from './short-term-memory.js';
 import { normalizeLabels, providerSyncFields, providerValues, sameProviderValue, type ProviderFieldValue, type ProviderSnapshotRow, type ProviderSnapshotValues } from './repositories/provider-sync-support.js';
 
 export type { ProviderWorkItem } from './services/provider-sync-service.js';
@@ -211,13 +212,15 @@ export class WorkItemRepository {
   private readonly execution: ExecutionService;
   private readonly workItemLifecycle: WorkItemService;
   private readonly conversationService: ConversationService;
+  private readonly shortTermMemory: ShortTermMemoryStore;
 
-  constructor(readonly database: WorkbenchDatabase, private readonly timeZone = process.env.WORKBENCH_TIMEZONE ?? DEFAULT_WORKBENCH_TIMEZONE) {
+  constructor(readonly database: WorkbenchDatabase, private readonly timeZone = process.env.WORKBENCH_TIMEZONE ?? DEFAULT_WORKBENCH_TIMEZONE, shortTermMemoryRoot: string | null = process.env.VITEST ? null : process.env.WORKBENCH_SHORT_TERM_MEMORY_DIR?.trim() || 'data/short-term-memory') {
     this.unitOfWork = new UnitOfWork(database);
     this.telemetry = new TelemetryRepository(this.unitOfWork);
     this.sourceConnections = new SourceConnectionRepository(this.unitOfWork);
     this.discovery = new DiscoveryRepository(this.unitOfWork);
     this.conversations = new ConversationRepository(this.unitOfWork);
+    this.shortTermMemory = new ShortTermMemoryStore(database, shortTermMemoryRoot);
     this.queue = new QueueRepository(this.unitOfWork);
     this.runs = new RunRepository(this.unitOfWork);
     this.workItems = new WorkItemTableRepository(this.unitOfWork);
@@ -356,7 +359,9 @@ export class WorkItemRepository {
   }
 
   createConversation(title = 'New conversation', workItemId: string | null = null): SharedConversation {
-    return this.conversations.create(title, workItemId);
+    const conversation = this.conversations.create(title, workItemId);
+    this.shortTermMemory.syncConversation(conversation.id);
+    return conversation;
   }
 
   markConversationRead(id: string): SharedConversation | null {
@@ -364,7 +369,9 @@ export class WorkItemRepository {
   }
 
   setConversationSharedBrief(id: string, brief: string): SharedConversation | null {
-    return this.conversations.setSharedBrief(id, brief) ? this.getConversation(id) : null;
+    if (!this.conversations.setSharedBrief(id, brief)) return null;
+    this.shortTermMemory.syncConversation(id);
+    return this.getConversation(id);
   }
 
   getSharedTurnGrounding(messageId: string): string | null {
@@ -528,6 +535,7 @@ export class WorkItemRepository {
       conversation = this.getConversation(id);
     }
     if (conversation?.workItemId) this.syncConversationAttachmentsToWorkItem(conversation);
+    if (conversation) this.shortTermMemory.syncConversation(id);
     return conversation;
   }
 
@@ -542,7 +550,9 @@ export class WorkItemRepository {
   }
 
   setConversationArchived(id: string, archived: boolean): SharedConversation | null {
-    return this.conversationService.setArchived(id, archived);
+    const conversation = this.conversationService.setArchived(id, archived);
+    if (conversation) this.shortTermMemory.syncConversation(id);
+    return conversation;
   }
 
   forkConversation(id: string): SharedConversation | null {
@@ -563,12 +573,16 @@ export class WorkItemRepository {
 
   /** Soft delete: flags the conversation row so it drops out of every list/get query but stays recoverable in the database. Messages are left in place for the same reason. */
   deleteConversation(id: string): boolean {
-    return this.conversations.delete(id);
+    const deleted = this.conversations.delete(id);
+    if (deleted) this.shortTermMemory.syncConversation(id);
+    return deleted;
   }
 
   /** Reverses `deleteConversation` within the same recoverability window; returns the restored conversation or null if it was never deleted. */
   undeleteConversation(id: string): SharedConversation | null {
-    return this.conversations.undelete(id) ? this.getConversation(id) : null;
+    if (!this.conversations.undelete(id)) return null;
+    this.shortTermMemory.syncConversation(id);
+    return this.getConversation(id);
   }
 
   listSourceConnections(): SourceConnection[] {
@@ -1227,13 +1241,16 @@ export class WorkItemRepository {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(message_id) DO UPDATE SET author = excluded.author, kind = excluded.kind, facts = excluded.facts, decisions = excluded.decisions, blockers = excluded.blockers, evidence = excluded.evidence, created_at = excluded.created_at`)
       .run(randomUUID(), conversationId, conversation?.workItemId ?? null, messageId, author, kind, facts, decisions, blockers, evidence, new Date().toISOString());
+    this.shortTermMemory.syncConversation(conversationId);
   }
 
   /**
    * Returns only handoffs relevant to this conversation or its linked task.
    * Scope is explicit so unrelated rooms cannot leak context into an agent run.
    */
-  getSharedContext(_excludeConversationId?: string, scope?: { workItemId?: string; conversationId?: string }): string {
+  getSharedContext(_excludeConversationId?: string, scope?: { workItemId?: string; conversationId?: string; query?: string }): string {
+    const shortTerm = this.shortTermMemory.context(scope);
+    if (shortTerm) return shortTerm;
     // Compatibility-only diagnostic path. Agent runners always provide a
     // scope; never use this global scrape to build an agent prompt.
     if (!scope?.conversationId && !scope?.workItemId) {
@@ -1252,7 +1269,7 @@ export class WorkItemRepository {
       row.evidence ? `  Evidence: ${row.evidence.slice(0, 700)}` : '',
     ].filter(Boolean).join('\n'));
     const editableBrief = scope.conversationId ? this.getConversation(scope.conversationId)?.sharedBrief?.trim() : '';
-    return ['Structured shared brief for Codex and Claude:', editableBrief ? `Jeffrey's maintained brief:\n${editableBrief}` : '', entries.length ? entries.join('\n\n') : 'No completed handoffs or decisions yet.'].filter(Boolean).join('\n\n');
+    return ['Structured shared brief for every agent:', editableBrief ? `Jeffrey's maintained brief:\n${editableBrief}` : '', entries.length ? entries.join('\n\n') : 'No completed handoffs or decisions yet.'].filter(Boolean).join('\n\n');
   }
 
   list(): WorkItem[] {

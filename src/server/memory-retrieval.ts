@@ -22,12 +22,22 @@ export interface DurableMemoryEvidence {
   actor: string | null;
 }
 
-const EXPLICIT_MEMORY_REQUEST = /\b(?:memory|memories|remember|recall|recalled|prior context|previous context|conversation history|what (?:do|did) you know about|know about me|about jeffrey|my (?:background|bio(?:graphy)?|profile|preferences|history))\b/i;
+const EXPLICIT_MEMORY_REQUEST = /\b(?:memory|memories|remember|recall|recalled|prior context|previous context|conversation history|what (?:do|did) you know about|know about me|about jeffrey|my (?:background|bio(?:graphy)?|profile|preferences|history)|self[- ]review|performance review|staff promo(?:tion)?|promotion (?:case|packet|review)|accomplishments?|career (?:history|story)|impact (?:summary|over time)|(?:intro(?:duction)?|introduce).*(?:me|jeffrey))\b/i;
 const CONTEXT_DEPENDENT_ANALYSIS = /\b(?:again|still|prior|previous|earlier|history|context|decision|regression|root cause|what happened|why did|status|compare|investigate|recurring)\b/i;
-const PERSONAL_MEMORY_REQUEST = /\b(?:about me|about jeffrey|jeffrey(?:'s)?|my (?:background|bio(?:graphy)?|profile|preferences|history)|introduc(?:e|tion).*(?:me|jeffrey))\b/i;
+const PERSONAL_MEMORY_REQUEST = /\b(?:about me|about jeffrey|jeffrey(?:'s)?|my (?:background|bio(?:graphy)?|profile|preferences|history)|self[- ]review|performance review|staff promo(?:tion)?|promotion (?:case|packet|review)|accomplishments?|career (?:history|story)|impact (?:summary|over time)|(?:intro(?:duction)?|introduce).*(?:me|jeffrey))\b/i;
 
 export function isExplicitMemoryRequest(message: string): boolean {
   return EXPLICIT_MEMORY_REQUEST.test(message);
+}
+
+export function isPersonalLongTermMemoryRequest(message: string): boolean {
+  return PERSONAL_MEMORY_REQUEST.test(message);
+}
+
+export function durableMemoryRetrievalPlan(message: string): { candidateLimit: number; evidenceLimit: number; promptBudget: number } {
+  return isPersonalLongTermMemoryRequest(message)
+    ? { candidateLimit: 100, evidenceLimit: 32, promptBudget: 16_000 }
+    : { candidateLimit: 40, evidenceLimit: 8, promptBudget: 4_000 };
 }
 
 /**
@@ -47,7 +57,7 @@ export function shouldPrefetchDurableMemory(kind: AgentRun['kind'], message: str
 export function durableMemoryQuery(message: string, context: { conversationTitle?: string | null; taskTitle?: string | null; projectName?: string | null } = {}): string {
   const parts = [message.trim(), context.conversationTitle?.trim(), context.taskTitle?.trim(), context.projectName?.trim()].filter(Boolean);
   if (PERSONAL_MEMORY_REQUEST.test(message)) {
-    parts.push('Jeffrey Lu personal profile biography introduction background role employer previous company location family interests hobbies preferences');
+    parts.push('Jeffrey Lu personal profile biography introduction background role employer previous company location family interests hobbies preferences accomplishments impact projects leadership career growth performance self review Staff promotion evidence');
   } else {
     parts.push('Relevant prior decisions constraints preferences ownership implementation failures and related work');
   }
@@ -73,7 +83,7 @@ export function selectDurableMemoryEvidence(candidates: DurableMemoryEvidence[],
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).slice(0, Math.max(1, Math.min(20, limit)));
+  }).slice(0, Math.max(1, Math.min(50, limit)));
 }
 
 export function durableMemoryPrompt(evidence: DurableMemoryEvidence[], budget = 4_000): string {

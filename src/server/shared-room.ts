@@ -16,7 +16,7 @@ import { groundTurn } from './turn-grounding-ai.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
-import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { projectKey } from '../shared/project-name.js';
 import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
 import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, normalizeFinalResponse, verboseResponseRequested } from './final-response-policy.js';
@@ -292,7 +292,7 @@ export function warmSharedRoomCodex(cwd: string, accountProfile = DEFAULT_ACCOUN
 }
 
 /** Codex's app-server is the provider protocol that supports turn/steer. */
-function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, mutating = false): Promise<{ output: string; threadId: string; usage: AgentUsage; peakContextTokens: number; cacheHandoffRequested: boolean; terminalWarning?: string | null }> {
+function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, _mutating = false): Promise<{ output: string; threadId: string; usage: AgentUsage; peakContextTokens: number; cacheHandoffRequested: boolean; terminalWarning?: string | null }> {
   return new Promise((resolveOutput, reject) => {
     const command = codexAppServerCommand();
     const claimed = claimWarmProcess('codex', cwd, command, CODEX_APP_SERVER_ARGS, accountProfile);
@@ -1007,7 +1007,7 @@ You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey 
 
 This conversation is not linked to a project task. Start in Workbench, but treat that directory only as execution context: every local repository and Jeffrey's home directory remain fully accessible. Follow Jeffrey's current request directly, including repository edits and Git branch/worktree operations; linking a task is never required for access.
 
-${compactSharedBrief(sharedContext)}`;
+${compactSharedBrief(sharedContext, 2_400)}`;
   const grounding = turnGrounding ?? fallbackTurnGrounding(thread);
   const cascadeBreaker = cascadeBreakerForPrompt(thread);
   return `${roleContext}
@@ -1046,6 +1046,7 @@ export function buildResumedSharedReplyPrompt(
   turnGrounding: TurnGrounding,
   memoryContext = '',
   cascadeBreaker = '',
+  shortTermContext = '',
 ): string {
   return `${externalActionContract}
 
@@ -1060,6 +1061,9 @@ Workbench context handles:
 ${turnGroundingForPrompt(turnGrounding)}
 
 ${cascadeBreaker}
+
+Short-term memory from active conversations:
+${compactSharedBrief(shortTermContext, 2_400)}
 
 ${memoryContext}
 
@@ -1151,14 +1155,15 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     taskTitle: linkedItem?.title,
     projectName: linkedItem?.projectName,
   });
+  const memoryPlan = durableMemoryRetrievalPlan(currentMessage);
   const memory: SharedReplyMemory = {
     query: memoryQuery,
     resolved: shouldPrefetchDurableMemory(taskKind, currentMessage)
-      ? repository.searchActivityMemory(memoryQuery, 40, {
+      ? repository.searchActivityMemory(memoryQuery, memoryPlan.candidateLimit, {
         refresh: false,
         projectKey: !isExplicitMemoryRequest(currentMessage) && linkedItem?.projectName ? projectKey(linkedItem.projectName) || undefined : undefined,
         sources: [...DEFAULT_DURABLE_MEMORY_SOURCES],
-      }).then((candidates) => selectDurableMemoryEvidence(candidates, conversationId, 8)).catch((error) => {
+      }).then((candidates) => selectDurableMemoryEvidence(candidates, conversationId, memoryPlan.evidenceLimit)).catch((error) => {
         console.error('[shared-room] automatic durable-memory retrieval failed; continuing without it', error);
         return [];
       })
@@ -1408,19 +1413,20 @@ export async function replyInSharedRoom(
       projectName: linkedItem?.projectName,
     });
     const memoryQuery = memorySnapshot?.query ?? automaticMemoryQuery;
+    const memoryPlan = durableMemoryRetrievalPlan(latestUserMessage);
     const memoryPromise = memorySnapshot?.resolved ?? (shouldPrefetchDurableMemory(runKind, latestUserMessage)
-      ? repository.searchActivityMemory(memoryQuery, 40, {
+      ? repository.searchActivityMemory(memoryQuery, memoryPlan.candidateLimit, {
         refresh: false,
         projectKey: !isExplicitMemoryRequest(latestUserMessage) && linkedItem?.projectName ? projectKey(linkedItem.projectName) || undefined : undefined,
         sources: [...DEFAULT_DURABLE_MEMORY_SOURCES],
-      }).then((candidates) => selectDurableMemoryEvidence(candidates, target.conversationId, 8)).catch((error) => {
+      }).then((candidates) => selectDurableMemoryEvidence(candidates, target.conversationId, memoryPlan.evidenceLimit)).catch((error) => {
         console.error('[shared-room] automatic durable-memory retrieval failed; continuing without it', error);
         return [];
       })
       : Promise.resolve([]));
     const [externalAuthorization, turnGrounding, memoryEvidence] = await Promise.all([externalAuthorizationPromise, groundingPromise, memoryPromise]);
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
-    const memoryContext = durableMemoryPrompt(memoryEvidence);
+    const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget);
     repository.updateSharedMessage(messageId, {
       retrievedMemoryCount: memoryEvidence.length,
       retrievedMemoryDetail: memoryEvidence.length ? {
@@ -1428,9 +1434,10 @@ export async function replyInSharedRoom(
         items: memoryEvidence.map(({ source, title, body, createdAt }) => ({ source, title, body, createdAt })),
       } : null,
     });
+    const shortTermContext = repository.getSharedContext(target.conversationId, { conversationId: target.conversationId, workItemId: linkedItem?.id, query: latestUserMessage });
     const freshPrompt = buildSharedReplyPrompt(
       agent,
-      repository.getSharedContext(target.conversationId, { conversationId: target.conversationId }),
+      shortTermContext,
       connectionContext,
       thread,
       linkedRun && linkedItem ? { item: linkedItem, run: linkedRun } : undefined,
@@ -1445,11 +1452,11 @@ export async function replyInSharedRoom(
       ? linkedConversation?.codexThreadId ?? null
       : agent === 'claude' ? linkedConversation?.claudeSessionId ?? null : palmyraContext?.length ? 'palmyra-context' : null;
     const prompt = resumeProviderId
-      ? buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread))
+      ? buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread), shortTermContext)
       : freshPrompt;
     if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'prompt', {
       promptChars: prompt.length,
-      sharedContextChars: repository.getSharedContext(target.conversationId, { conversationId: target.conversationId }).length,
+      sharedContextChars: shortTermContext.length,
       connectionContextChars: connectionContext.length,
       conversationMessageCount: thread.length,
       retrievedMemoryCount: memoryEvidence.length,

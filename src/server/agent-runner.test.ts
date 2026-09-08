@@ -1199,8 +1199,9 @@ Question or requested change: Replace this hook with the established memoized he
   it('injects shared room context into execution prompts', () => {
     const run = { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun;
     expect(buildPrompt(item('Build it'), run, 'jeffrey: Prefer small React components.'))
-      .toContain('Shared context available to every agent:\njeffrey: Prefer small React components.');
+      .toContain('Short-term memory available to every agent:\njeffrey: Prefer small React components.');
     expect(buildPrompt(item('Build it'), run)).toContain('no permission prompts or dialogs exist to approve');
+    expect(buildResumedPrompt(item('Build it'), run, EXTERNAL_ACTION_CONTRACT, '', 'Active short-term decision.')).toContain('Active short-term decision.');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('does not authorize resuming a prior plan');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('never trap a turn inside a foreground dev server');
     expect(EXECUTION_FIDELITY_CONTRACT).toContain('compare the complete diff against its base');
@@ -1210,7 +1211,8 @@ Question or requested change: Replace this hook with the established memoized he
 
   it('keeps automatic durable retrieval bounded to historically dependent runs', () => {
     expect(RUNNER_SYSTEM_CONTRACT).toContain('recall_context');
-    expect(RUNNER_SYSTEM_CONTRACT).toContain('Self-contained implementation and review turns do not pay that prompt cost');
+    expect(RUNNER_SYSTEM_CONTRACT).toContain('start with the on-disk short-term memory');
+    expect(RUNNER_SYSTEM_CONTRACT).toContain('Self-contained implementation and review turns do not pay that long-term retrieval cost');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('make at most one focused recall near the start');
     expect(RUNNER_SYSTEM_CONTRACT).not.toContain('not a mandatory preflight');
     expect(RUNNER_SYSTEM_CONTRACT).toContain('An assistant-authored statement is not corroboration for itself');

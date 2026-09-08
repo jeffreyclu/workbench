@@ -248,7 +248,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       workItemId: z.string().uuid().optional().describe('Current work-item handle from the task prompt. Required for task scope and usable to infer project scope.'),
       projectName: z.string().trim().min(1).max(200).optional().describe('Current project name from the task prompt. Required for project scope unless workItemId or a linked conversation supplies it.'),
       sources: z.array(memorySourceSchema).min(1).max(9).optional().describe('Optional source restriction. Omit for the normal durable corpus; include audit only when operational mutation history specifically matters.'),
-      limit: z.number().int().min(1).max(20).default(8),
+      limit: z.number().int().min(1).max(50).default(8),
     },
     annotations: readOnlyAnnotations,
   }, async ({ query, scope, conversationId, messageId, workItemId, projectName, sources, limit }) => runTool('recall_context', async () => {

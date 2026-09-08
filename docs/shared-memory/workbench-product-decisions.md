@@ -1273,3 +1273,22 @@ complete: Workbench converts them to headings locally and does not spend an
 editor turn. Validation and editing are internal; never show “Draft rejected”
 to Jeffrey. A truly unstructured draft may show only “Formatting response…”
 until its final three-section answer replaces the live activity.
+
+### Active memory lives on disk; closed history is retrieved from the database
+
+*Decision from Jeffrey, 2026-09-08.* Every active conversation has a rebuildable
+short-term memory file under `data/short-term-memory/`. All agents receive a
+bounded, relevant view of those active files on every fresh or resumed turn and
+use it before searching older history. Archiving or deleting a conversation
+removes its short-term file; restoring it rebuilds the file from Workbench's
+database record. The database remains the durable source for closed conversation
+messages, task activity, agent instructions/results/errors, and shared docs.
+
+Long-term RAG stays selective for ordinary self-contained work, but it is
+mandatory for requests about Jeffrey: personal introductions, self-reviews,
+performance evidence, accomplishments over time, career history, and Staff
+promotion cases. Those searches must span projects so accumulated impact is not
+lost behind the current task's project scope, and they use a broader evidence
+window than routine RAG so work executed over time is represented instead of
+being cut down to the ordinary eight-result prompt. This policy applies equally
+to Codex, Claude/Opus, and Palmyra.

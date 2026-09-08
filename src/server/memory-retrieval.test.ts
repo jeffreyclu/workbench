@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   durableMemoryPrompt,
   durableMemoryQuery,
+  durableMemoryRetrievalPlan,
   isExplicitMemoryRequest,
   selectDurableMemoryEvidence,
   shouldPrefetchDurableMemory,
@@ -24,6 +25,10 @@ describe('durable memory prefetch', () => {
   it('always retrieves for an explicit memory request, regardless of run kind', () => {
     expect(isExplicitMemoryRequest('Write the intro from your memories.')).toBe(true);
     expect(shouldPrefetchDurableMemory('execute', 'Write the intro from your memories.')).toBe(true);
+    expect(shouldPrefetchDurableMemory('execute', 'Help me write my self review.')).toBe(true);
+    expect(shouldPrefetchDurableMemory('strategy', 'Build my Staff promotion case.')).toBe(true);
+    expect(shouldPrefetchDurableMemory('analysis', 'Summarize my accomplishments over time.')).toBe(true);
+    expect(shouldPrefetchDurableMemory('execute', 'Write an intro for me.')).toBe(true);
   });
 
   it('retrieves for context-heavy work without charging self-contained implementation and review turns', () => {
@@ -42,6 +47,9 @@ describe('durable memory prefetch', () => {
     const query = durableMemoryQuery('Write an intro about me from memory.');
     expect(query).toContain('Jeffrey Lu personal profile');
     expect(query).toContain('previous company');
+    expect(durableMemoryQuery('Help me write my Staff promotion case.')).toContain('accomplishments impact projects leadership');
+    expect(durableMemoryRetrievalPlan('Help me write my Staff promotion case.')).toEqual({ candidateLimit: 100, evidenceLimit: 32, promptBudget: 16_000 });
+    expect(durableMemoryRetrievalPlan('Fix this recurring bug.')).toEqual({ candidateLimit: 40, evidenceLimit: 8, promptBudget: 4_000 });
   });
 
   it('deduplicates evidence and excludes generated output from the current room', () => {

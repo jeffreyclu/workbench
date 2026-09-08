@@ -388,6 +388,8 @@ describe('compactConversationHistory', () => {
       'Supervisor-issued external-action capability: Commit and push once.',
       grounding,
       'Retrieved durable context: Jeffrey works at Writer.',
+      '',
+      'Short-term active context: Staff promotion draft is in progress.',
     );
 
     expect(prompt).toContain('Commit and push the finished fix.');
@@ -395,6 +397,7 @@ describe('compactConversationHistory', () => {
     expect(prompt).toContain('Supervisor-issued external-action capability');
     expect(prompt.startsWith('Supervisor-issued external-action capability')).toBe(true);
     expect(prompt).toContain('Current reply message ID: message-id');
+    expect(prompt).toContain('Short-term active context: Staff promotion draft is in progress.');
     expect(prompt).toContain('already present in this session');
     expect(prompt).toContain('disregard any earlier instruction that called this conversation Workbench-only');
     expect(prompt).toContain('Every local repository and Jeffrey\'s home directory are fully readable and writable');
