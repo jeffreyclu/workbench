@@ -1292,3 +1292,11 @@ lost behind the current task's project scope, and they use a broader evidence
 window than routine RAG so work executed over time is represented instead of
 being cut down to the ordinary eight-result prompt. This policy applies equally
 to Codex, Claude/Opus, and Palmyra.
+
+### Response-editor failures stay internal
+
+*Correction from Jeffrey, 2026-09-08.* Editor availability is internal runtime
+state and must never be fabricated into the response's `Context` section. If
+the editor fails, the deterministic fallback keeps the agent's saved result,
+uses `No additional context.` when the draft supplies none, and logs the editor
+failure only on the server.

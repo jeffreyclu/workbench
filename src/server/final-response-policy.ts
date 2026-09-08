@@ -48,8 +48,8 @@ function compactWords(value: string, limit: number): string {
 }
 
 export function fallbackFinalResponse(draft: string, objective: string, verbose = false): string {
-  if (verbose) return `## Problem\n${compactWords(objective, 40)}\n\n## Solution\n${draft.trim()}\n\n## Context\nWorkbench preserved the saved draft because its language editor was unavailable.`;
-  return `## Problem\n${compactWords(objective, 20)}\n\n## Solution\n${compactWords(draft, 70)}\n\n## Context\nWorkbench shortened the saved draft automatically because its language editor was unavailable.`;
+  if (verbose) return `## Problem\n${compactWords(objective, 40)}\n\n## Solution\n${draft.trim()}\n\n## Context\nNo additional context.`;
+  return `## Problem\n${compactWords(objective, 20)}\n\n## Solution\n${compactWords(draft, 80)}\n\n## Context\nNo additional context.`;
 }
 
 type FinalResponseOptions = { verbose?: boolean };

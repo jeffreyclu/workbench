@@ -46,7 +46,8 @@ describe('final response policy', () => {
     });
     expect(finalResponsePolicyViolation(output)).toBeNull();
     expect(output).toContain('The service was restarted. Health returned 200.');
-    expect(output).toContain('language editor was unavailable');
+    expect(output).toContain('## Context\nNo additional context.');
+    expect(output).not.toContain('editor');
   });
 
   it('keeps the fallback under the hard word limit', () => {
