@@ -18,7 +18,14 @@ function headingTitle(line: string): string {
  * older replies that arrived as unstructured prose.
  */
 export function splitAgentResponse(body: string): AgentResponseSection[] {
-  const lines = body.trim().replace(/^Synthesis:\s*(?=## Problem(?:\r?\n|$))/, '').split('\n');
+  const normalized = body.trim().replace(/^Synthesis:\s*(?=(?:## )?Problem(?::|\r?\n))/, '');
+  const inline = normalized.match(/^Problem:\s+([\s\S]+?)\s+Solution:\s+([\s\S]+?)\s+Context:\s+([\s\S]+)$/);
+  if (inline) return [
+    { title: 'Problem', body: inline[1].trim() },
+    { title: 'Solution', body: inline[2].trim() },
+    { title: 'Context', body: inline[3].trim() },
+  ];
+  const lines = normalized.split('\n');
   const sections: AgentResponseSection[] = [];
   let currentTitle = 'Brief';
   let currentLines: string[] = [];

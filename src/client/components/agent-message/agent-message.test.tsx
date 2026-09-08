@@ -38,6 +38,16 @@ describe('splitAgentResponse', () => {
     ]);
   });
 
+  it('reformats stored inline responses into the same three cards', () => {
+    const body = 'Problem: Reports differ. Solution: Reconcile the current findings. Context: No files changed.';
+    expect(splitAgentResponse(body)).toEqual([
+      { title: 'Problem', body: 'Reports differ.' },
+      { title: 'Solution', body: 'Reconcile the current findings.' },
+      { title: 'Context', body: 'No files changed.' },
+    ]);
+    expect(splitAgentResponse(`Synthesis: ${body}`).map((section) => section.title)).toEqual(['Problem', 'Solution', 'Context']);
+  });
+
   it('keeps headings inside fenced code in the same section', () => {
     expect(splitAgentResponse('```md\n## Not a report heading\n```\n\nDone.')).toEqual([
       { title: 'Brief', body: '```md\n## Not a report heading\n```' },
