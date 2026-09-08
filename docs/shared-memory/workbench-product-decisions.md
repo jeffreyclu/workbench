@@ -1268,3 +1268,8 @@ three-section local rewrite; editor failure must never fail the agent turn.
 An explicit request to "be verbose" or provide a "verbose response" overrides
 only the one-paragraph-per-section and 120-word limits for that turn. The editor still uses
 plain English and keeps `Problem:`, `Solution:`, and `Context:` in that order.
+Inline `Problem: … Solution: … Context: …` drafts are already structurally
+complete: Workbench converts them to headings locally and does not spend an
+editor turn. Validation and editing are internal; never show “Draft rejected”
+to Jeffrey. A truly unstructured draft may show only “Formatting response…”
+until its final three-section answer replaces the live activity.

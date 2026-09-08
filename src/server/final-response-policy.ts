@@ -4,6 +4,14 @@ export const FINAL_RESPONSE_CONTRACT = `Final response: Workbench will reject an
 
 const SHORT_SECTIONS = /^## Problem\r?\n[^\r\n]+\r?\n\r?\n## Solution\r?\n[^\r\n]+\r?\n\r?\n## Context\r?\n[^\r\n]+$/;
 const VERBOSE_SECTIONS = /^## Problem\r?\n[\s\S]+?\r?\n\r?\n## Solution\r?\n[\s\S]+?\r?\n\r?\n## Context\r?\n[\s\S]+$/;
+const INLINE_SECTIONS = /^Problem:\s+([\s\S]+?)\s+Solution:\s+([\s\S]+?)\s+Context:\s+([\s\S]+)$/;
+
+export function normalizeFinalResponse(output: string): string {
+  const trimmed = output.trim();
+  const inline = trimmed.match(INLINE_SECTIONS);
+  if (!inline) return trimmed;
+  return `## Problem\n${inline[1].trim()}\n\n## Solution\n${inline[2].trim()}\n\n## Context\n${inline[3].trim()}`;
+}
 
 export function verboseResponseRequested(request: string): boolean {
   if (/\b(?:do not|don't|never|not|less)\s+(?:be\s+)?verbose\b/i.test(request)) return false;
@@ -56,7 +64,7 @@ export async function editFinalResponse(
   const edit = typeof optionsOrEdit === 'function' ? optionsOrEdit : suppliedEdit;
   const verbose = options.verbose === true;
   try {
-    const edited = (await edit(`VERBOSITY: ${verbose ? 'VERBOSE' : 'SHORT'}\n\nUser request or task:\n${objective.slice(0, 4_000)}\n\nAgent draft:\n${draft.slice(0, 16_000)}`)).trim();
+    const edited = normalizeFinalResponse(await edit(`VERBOSITY: ${verbose ? 'VERBOSE' : 'SHORT'}\n\nUser request or task:\n${objective.slice(0, 4_000)}\n\nAgent draft:\n${draft.slice(0, 16_000)}`));
     const violation = finalResponsePolicyViolation(edited, verbose);
     if (!violation) return edited;
     console.warn(`[final-response-policy] response editor returned an invalid result: ${violation}`);

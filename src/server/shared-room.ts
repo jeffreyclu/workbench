@@ -19,7 +19,7 @@ import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutRea
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { projectKey } from '../shared/project-name.js';
 import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
-import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-response-policy.js';
+import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, normalizeFinalResponse, verboseResponseRequested } from './final-response-policy.js';
 
 export { isTransientSqliteContention } from './sqlite-contention.js';
 
@@ -1649,9 +1649,14 @@ export async function replyInSharedRoom(
     if (controller.signal.aborted) throw new Error('Agent run canceled.');
     if (finalResponseEditingEnabled()) {
       const verbose = verboseResponseRequested(latestUserMessage);
-      const violation = finalResponsePolicyViolation(result.output, verbose);
-      repository.updateSharedMessage(messageId, { body: violation ? `● Draft rejected: ${violation} Editing it now…` : '● Editing the final response for plain English and brevity…' });
-      result = { ...result, output: await editFinalResponse(result.output, turnGrounding.objective, { verbose }) };
+      const normalized = normalizeFinalResponse(result.output);
+      const violation = finalResponsePolicyViolation(normalized, verbose);
+      if (violation) {
+        repository.updateSharedMessage(messageId, { body: '● Formatting response…' });
+        result = { ...result, output: await editFinalResponse(normalized, turnGrounding.objective, { verbose }) };
+      } else {
+        result = { ...result, output: normalized };
+      }
     }
     const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason };
     if (hasUntrackedContinuationClaim(result.output)) {
@@ -1862,9 +1867,10 @@ async function synthesizeSharedTurn(repository: WorkItemRepository, conversation
       model: modelFor(result.agent, profile), inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens,
       fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason,
     });
-    const output = finalResponseEditingEnabled()
-      ? await editFinalResponse(result.output, 'Combine the two agent reports into one accurate answer for Jeffrey.', { verbose: source.verbose })
-      : result.output;
+    const normalized = normalizeFinalResponse(result.output);
+    const output = finalResponseEditingEnabled() && finalResponsePolicyViolation(normalized, source.verbose)
+      ? await editFinalResponse(normalized, 'Combine the two agent reports into one accurate answer for Jeffrey.', { verbose: source.verbose })
+      : normalized;
     return `Synthesis:\n${output}`;
   });
   const completed = repository.getSharedMessageById(message.id);

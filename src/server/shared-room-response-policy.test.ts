@@ -50,4 +50,30 @@ describe('shared-room final response supervision', () => {
     expect(editFinalResponse).toHaveBeenCalledWith(expect.stringContaining('\n\n'), 'Restart the API.', { verbose: false });
     database.close();
   });
+
+  it('formats inline labels without showing a rejection or calling the editor', async () => {
+    runAgentCommandWithFallback.mockResolvedValue({
+      output: 'Problem: The API stopped. Solution: Restart it. Context: Health passed.',
+      agent: 'claude',
+      usage: { inputTokens: 10, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: 5 },
+      fallbackFrom: null,
+      fallbackReason: null,
+      sessionId: 'session',
+      peakContextTokens: 10,
+    });
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const conversation = repository.createConversation('Restart API');
+    repository.createSharedMessage('jeffrey', 'Restart the API.', 'queued', conversation.id, [], 'claude', 'standard');
+
+    const [reply] = dispatchNextSharedTurn(repository, conversation.id);
+    await vi.waitFor(() => expect(repository.getSharedMessageById(reply.id)).toMatchObject({
+      status: 'completed',
+      body: '## Problem\nThe API stopped.\n\n## Solution\nRestart it.\n\n## Context\nHealth passed.',
+    }));
+
+    expect(editFinalResponse).not.toHaveBeenCalled();
+    expect(repository.getSharedMessageById(reply.id)?.body).not.toContain('Draft rejected');
+    database.close();
+  });
 });

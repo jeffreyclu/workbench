@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { editFinalResponse, fallbackFinalResponse, FINAL_RESPONSE_CONTRACT, finalResponsePolicyViolation, verboseResponseRequested } from './final-response-policy.js';
+import { editFinalResponse, fallbackFinalResponse, FINAL_RESPONSE_CONTRACT, finalResponsePolicyViolation, normalizeFinalResponse, verboseResponseRequested } from './final-response-policy.js';
 
 describe('final response policy', () => {
   it('rejects inline labels that render as one long paragraph', () => {
     expect(finalResponsePolicyViolation('Problem: The service is down. Solution: Restart it. Context: Not verified.'))
       .toBe('The response does not use separate Problem, Solution, and Context sections in that order.');
+  });
+
+  it('converts inline labels into valid sections without a model call', () => {
+    const normalized = normalizeFinalResponse('Problem: Reports differ. Solution: Reconcile them. Context: No files changed.');
+    expect(normalized).toBe('## Problem\nReports differ.\n\n## Solution\nReconcile them.\n\n## Context\nNo files changed.');
+    expect(finalResponsePolicyViolation(normalized)).toBeNull();
   });
 
   it('requires three short problem, solution, and context sections', () => {
