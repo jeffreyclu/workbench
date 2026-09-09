@@ -77,6 +77,32 @@ describe('shared-room final response supervision', () => {
     database.close();
   });
 
+  it('stores structured lists without flattening them into the Solution card', async () => {
+    runAgentCommandWithFallback.mockResolvedValue({
+      output: 'Decision: answer directly.\n\n## Problem\nHardware roles are buried in software listings.\n\n## Solution\nUse targeted sources:\n\n1. [IEEE Job Site](https://jobs.ieee.org)\n2. [iHireEngineering](https://www.ihireengineering.com)\n\n## Context\nPrioritize the specialist boards.',
+      agent: 'claude',
+      usage: { inputTokens: 10, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: 30 },
+      fallbackFrom: null,
+      fallbackReason: null,
+      sessionId: 'session',
+      peakContextTokens: 10,
+    });
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const conversation = repository.createConversation('Find hardware job boards');
+    repository.createSharedMessage('jeffrey', 'Find hardware job boards.', 'queued', conversation.id, [], 'claude', 'standard');
+
+    const [reply] = dispatchNextSharedTurn(repository, conversation.id);
+    await vi.waitFor(() => expect(repository.getSharedMessageById(reply.id)).toMatchObject({ status: 'completed' }));
+    const body = repository.getSharedMessageById(reply.id)?.body ?? '';
+
+    expect(body).not.toContain('Decision:');
+    expect(body).toContain('## Solution\nUse targeted sources:\n\n1. [IEEE Job Site]');
+    expect(body).toContain('2. [iHireEngineering]');
+    expect(editFinalResponse).not.toHaveBeenCalled();
+    database.close();
+  });
+
   it('preserves the complete agent result when local formatting adds sections', async () => {
     const draft = `${Array.from({ length: 160 }, (_, index) => `result-${index}`).join(' ')} FINAL-RESULT`;
     const actualPolicy = await vi.importActual<typeof import('./final-response-policy.js')>('./final-response-policy.js');

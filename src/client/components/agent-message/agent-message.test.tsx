@@ -30,6 +30,15 @@ describe('splitAgentResponse', () => {
     expect(container.querySelector('.agent-response-section-heading h3')?.textContent).not.toBe('Detail');
   });
 
+  it('renders a solution list as separate linked items instead of one text wall', () => {
+    const body = '## Problem\nHardware roles are buried in software listings.\n\n## Solution\nUse targeted sources:\n\n1. [IEEE Job Site](https://jobs.ieee.org)\n2. [iHireEngineering](https://www.ihireengineering.com)\n\n## Context\nPrioritize the specialist boards.';
+    const { container } = render(<AgentMessageBody body={body} running={false} detailForSingle />);
+
+    expect(container.querySelectorAll('.agent-response-section')).toHaveLength(3);
+    expect(container.querySelectorAll('.agent-response-section:nth-child(2) ol li')).toHaveLength(2);
+    expect(screen.getByRole('link', { name: 'IEEE Job Site' })).toHaveAttribute('href', 'https://jobs.ieee.org');
+  });
+
   it('hides the synthesis marker before rendering the same three sections', () => {
     expect(splitAgentResponse('Synthesis:\n## Problem\nReports differ.\n\n## Solution\nReconcile them.\n\n## Context\nNo files changed.')).toEqual([
       { title: 'Problem', body: 'Reports differ.' },

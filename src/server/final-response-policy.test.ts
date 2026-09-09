@@ -20,16 +20,26 @@ describe('final response policy', () => {
     expect(FINAL_RESPONSE_CONTRACT).toContain('exactly three Markdown sections');
   });
 
-  it('allows a multi-paragraph answer only for an explicit verbose request', async () => {
+  it('preserves readable paragraphs while recognizing an explicit verbose request', async () => {
     const verbose = '## Problem\nThe service is down.\n\n## Solution\nRestart it.\n\nThen inspect the logs.\n\n## Context\nThe health route has not been checked.';
     expect(verboseResponseRequested('Give me a verbose response explaining this.')).toBe(true);
     expect(verboseResponseRequested("Don't be verbose; give me the short answer.")).toBe(false);
-    expect(finalResponsePolicyViolation(verbose)).not.toBeNull();
+    expect(finalResponsePolicyViolation(verbose)).toBeNull();
     expect(finalResponsePolicyViolation(verbose, true)).toBeNull();
 
     const editor = vi.fn(async () => verbose);
     await expect(editFinalResponse(verbose, 'Explain it verbosely.', { verbose: true }, editor)).resolves.toBe(verbose);
     expect(editor).not.toHaveBeenCalled();
+  });
+
+  it('removes a decision preamble without flattening section lists', () => {
+    const draft = `Decision: answer directly.\n\n## Problem\nHardware roles are buried in software listings.\n\n## Solution\nUse targeted sources:\n\n1. [IEEE Job Site](https://jobs.ieee.org)\n2. [iHireEngineering](https://www.ihireengineering.com)\n\n## Context\nPrioritize the specialist boards.`;
+    const normalized = normalizeFinalResponse(draft);
+
+    expect(normalized).not.toContain('Decision:');
+    expect(normalized).toContain('## Solution\nUse targeted sources:\n\n1. [IEEE Job Site]');
+    expect(normalized).toContain('2. [iHireEngineering]');
+    expect(finalResponsePolicyViolation(normalized)).toBeNull();
   });
 
   it('formats a rejected draft locally without another model turn', async () => {

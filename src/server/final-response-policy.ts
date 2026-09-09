@@ -1,11 +1,15 @@
-export const FINAL_RESPONSE_CONTRACT = `Final response: Workbench will reject and rewrite the draft before delivery unless it uses exactly three Markdown sections in this order: ## Problem, ## Solution, ## Context. Put each heading on its own line. For a normal response, give each section one short plain-English paragraph and target 120 words or fewer. Do not add a preamble, closing remark, repeated conclusion, or unexplained specialist shorthand. Keep exact commands, paths, URLs, error text, verification, and blockers when they matter. Never truncate an answer or omit material results to meet the length target. If Jeffrey's current request explicitly asks you to be verbose or to give a verbose response, keep the same three sections but allow multiple paragraphs, lists, and the length needed for that answer. This override applies only to that request.`;
+export const FINAL_RESPONSE_CONTRACT = `Final response: use exactly three Markdown sections in this order: ## Problem, ## Solution, ## Context. Put each heading on its own line. Use short plain-English paragraphs and target 120 words or fewer. When the answer contains several items, use a readable Markdown list inside the relevant section. Do not add a preamble, closing remark, repeated conclusion, or unexplained specialist shorthand. Keep exact commands, paths, URLs, error text, verification, and blockers when they matter. Never truncate an answer, flatten a list, or omit material results to meet the length target. If Jeffrey's current request explicitly asks you to be verbose or to give a verbose response, keep the same three sections but use the length needed for that answer. This override applies only to that request.`;
 
-const SHORT_SECTIONS = /^## Problem\r?\n[^\r\n]+\r?\n\r?\n## Solution\r?\n[^\r\n]+\r?\n\r?\n## Context\r?\n[^\r\n]+$/;
-const VERBOSE_SECTIONS = /^## Problem\r?\n[\s\S]+?\r?\n\r?\n## Solution\r?\n[\s\S]+?\r?\n\r?\n## Context\r?\n[\s\S]+$/;
+const STRUCTURED_SECTIONS = /^## Problem\r?\n[\s\S]+?\r?\n\r?\n## Solution\r?\n[\s\S]+?\r?\n\r?\n## Context\r?\n[\s\S]+$/;
 const INLINE_SECTIONS = /^Problem:\s+([\s\S]+?)\s+Solution:\s+([\s\S]+?)\s+Context:\s+([\s\S]+)$/;
 
 export function normalizeFinalResponse(output: string): string {
   const trimmed = output.trim();
+  const structuredStart = trimmed.search(/(?:^|\n)## Problem\r?\n/);
+  if (structuredStart >= 0) {
+    const structured = trimmed.slice(structuredStart).trim();
+    if (STRUCTURED_SECTIONS.test(structured)) return structured;
+  }
   const inline = trimmed.match(INLINE_SECTIONS);
   if (!inline) return trimmed;
   return `## Problem\n${inline[1].trim()}\n\n## Solution\n${inline[2].trim()}\n\n## Context\n${inline[3].trim()}`;
@@ -18,11 +22,10 @@ export function verboseResponseRequested(request: string): boolean {
     || /\b(?:give|provide|write|send|make)\s+(?:me\s+)?(?:an?\s+)?verbose\s+(?:response|answer|explanation|breakdown)\b/i.test(request);
 }
 
-export function finalResponsePolicyViolation(output: string, verbose = false): string | null {
+export function finalResponsePolicyViolation(output: string, _verbose = false): string | null {
   const trimmed = output.trim();
   if (!trimmed) return 'The response is empty.';
-  if (!(verbose ? VERBOSE_SECTIONS : SHORT_SECTIONS).test(trimmed)) return 'The response does not use separate Problem, Solution, and Context sections in that order.';
-  if (verbose) return null;
+  if (!STRUCTURED_SECTIONS.test(trimmed)) return 'The response does not use separate Problem, Solution, and Context sections in that order.';
   return null;
 }
 

@@ -1256,12 +1256,15 @@ mechanically settled blocks never pay its analysis or rendering cost.
 *Decision from Jeffrey, 2026-09-08, superseding the 2026-09-04 single-paragraph
 rule.* Every Claude, Codex, Palmyra, and synthesis final response must render as
 three separate Markdown sections in this order: `Problem`, `Solution`,
-`Context`. A normal response gives each section one short paragraph and targets
-120 words or fewer. Workbench must reject and edit drafts that collapse those
-labels into one paragraph or add unexplained specialist language. The formatter
+`Context`. A normal response uses short paragraphs and targets 120 words or
+fewer. When an answer contains multiple items, preserve a readable Markdown
+list inside its section. Workbench must reject and edit drafts that collapse
+the three sections into one paragraph or add unexplained specialist language. The formatter
 must preserve the complete agent result, concrete outcomes, verification gaps,
 commands, paths, URLs, and blockers; brevity must not create a false claim.
-It must never truncate or drop material content to meet the length target.
+It must never truncate, flatten lists, or drop material content to meet the
+length target. If a draft has a `Decision` preamble before valid sections,
+remove only that preamble and preserve the section Markdown unchanged.
 Response formatting is deterministic and local. It must never start a Haiku or
 other model turn after the agent has finished. Invalid drafts are immediately
 converted into the bounded three-section shape without a visible formatting
