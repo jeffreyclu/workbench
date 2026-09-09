@@ -51,7 +51,7 @@ export function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (i
     </div>}
     <div className="discovery-list">
       {inbox.isLoading && <DiscoveryCardSkeleton count={5} />}
-      {inbox.isError && <div className="discovery-empty error-message" role="alert"><Search size={26} /><h3>Could not load discoveries.</h3><p>Check your network and try again.</p><button type="button" className="button secondary compact" onClick={() => void inbox.refetch()} disabled={inbox.isFetching}>Retry</button></div>}
+      {inbox.isError && <div className="discovery-empty error-message" role="alert"><Search size={26} /><h3>Could not load discoveries.</h3>{' '}<p>Check your network and try again.</p><button type="button" className="button secondary compact" onClick={() => void inbox.refetch()} disabled={inbox.isFetching}>Retry</button></div>}
       {!inbox.isLoading && !inbox.isError && !inbox.data?.candidates.length && <div className="discovery-empty"><Search size={26} /><h3>{inboxView === 'pending' ? 'Inbox clear' : 'No reviewed discoveries'}</h3><p>{inboxView === 'pending' ? 'The 5:00 AM scan will put new signals here for review.' : 'Decisions you make in the inbox will appear here.'}</p></div>}
       {inboxView === 'reviewed' ? inbox.data?.candidates.map((candidate) => {
         const isRestoring = restore.isPending && restore.variables === candidate.id;

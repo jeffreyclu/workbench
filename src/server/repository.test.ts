@@ -22,7 +22,14 @@ describe('WorkItemRepository', () => {
     setEmbedder(deterministicTestEmbedder);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const activeMessages = (database.prepare('SELECT id FROM shared_messages').all() as Array<{ id: string }>)
+      .filter(({ id }) => isSharedReplyActive(id));
+    for (const { id } of activeMessages) cancelSharedReply(repository, id);
+    await vi.waitFor(() => {
+      const messages = database.prepare('SELECT id FROM shared_messages').all() as Array<{ id: string }>;
+      expect(messages.some(({ id }) => isSharedReplyActive(id))).toBe(false);
+    }, { timeout: 10_000 });
     database.close();
     setEmbedder(null);
   });
@@ -1495,6 +1502,7 @@ describe('WorkItemRepository', () => {
         if (Date.now() > deadline) throw new Error('Timed out waiting for concurrent replies.');
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
+      await vi.waitFor(() => expect(replies.some((reply) => isSharedReplyActive(reply.id))).toBe(false), { timeout: 5_000 });
       expect(retrieval).not.toHaveBeenCalled();
       expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(expect.arrayContaining(['claude', 'codex']));
       expect(replies.map((reply) => repository.getRetrievedMemoryDetail(reply.id))).toEqual([null, null]);
@@ -1532,6 +1540,7 @@ describe('WorkItemRepository', () => {
         if (Date.now() > deadline) throw new Error('Timed out waiting for reply.');
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
+      await vi.waitFor(() => expect(isSharedReplyActive(reply.id)).toBe(false), { timeout: 5_000 });
     } finally {
       process.env.PATH = previousPath;
       rmSync(directory, { recursive: true, force: true });
@@ -1551,6 +1560,7 @@ describe('WorkItemRepository', () => {
         if (Date.now() > deadline) throw new Error('Timed out waiting for reply.');
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
+      await vi.waitFor(() => expect(replies.some((reply) => isSharedReplyActive(reply.id))).toBe(false), { timeout: 5_000 });
       expect(replies.length).toBeGreaterThan(0);
       expect(repository.get(task.id)?.status).toBe('pinned');
     } finally {
@@ -1575,6 +1585,7 @@ describe('WorkItemRepository', () => {
         if (Date.now() > deadline) throw new Error('Timed out waiting for reply.');
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
+      await vi.waitFor(() => expect(replies.some((reply) => isSharedReplyActive(reply.id))).toBe(false), { timeout: 5_000 });
       expect(repository.getSharedMessageById(replies[0].id)?.kind).toBe('execute');
     } finally {
       process.env.PATH = previousPath;
@@ -1596,6 +1607,7 @@ describe('WorkItemRepository', () => {
         if (Date.now() > deadline) throw new Error('Timed out waiting for reply.');
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
+      await vi.waitFor(() => expect(replies.some((reply) => isSharedReplyActive(reply.id))).toBe(false), { timeout: 5_000 });
     } finally {
       process.env.PATH = previousPath;
       rmSync(directory, { recursive: true, force: true });

@@ -16,7 +16,7 @@ function cached(key: string, load: () => Promise<SourceSignal[]>): Promise<Sourc
   return value;
 }
 
-function scanAtlassian(repository: WorkItemRepository, settings: Record<string, string>, query: string, signal?: AbortSignal): Promise<SourceSignal[]> {
+function scanAtlassian(repository: WorkItemRepository, settings: Record<string, string>, query: string, _signal?: AbortSignal): Promise<SourceSignal[]> {
   return scanRemoteMcp('confluence', settings, query, (next) => repository.updateSourceSettings('confluence', next));
 }
 

@@ -97,11 +97,17 @@ describe('work item router', () => {
     await expect(response.json()).resolves.toEqual({ file: { path: 'src/worker.ts', content: 'export {}', error: null } });
   });
 
-  it('requires a usable workspace before reading a diff file or committing', async () => {
+  it('falls back to the inferred repository when a task has no saved workspace', async () => {
     const item = await createItem({ workspacePath: null });
+    seams.getWorkspaceFileSource.mockResolvedValue({ path: 'src/a.ts', content: 'export {}', error: null });
+    seams.commitAndPushWorkspace.mockResolvedValue({ committed: true, pushed: true, commit: 'abc123' });
 
-    expect((await request(`/api/work-items/${item.id}/workspace-diff/file?path=src%2Fa.ts`)).status).toBe(409);
-    expect((await request(`/api/work-items/${item.id}/workspace-diff/commit-and-push`, 'POST', { revision: 'revision' })).status).toBe(409);
+    expect((await request(`/api/work-items/${item.id}/workspace-diff/file?path=src%2Fa.ts`)).status).toBe(200);
+    expect((await request(`/api/work-items/${item.id}/workspace-diff/commit-and-push`, 'POST', { revision: 'revision' })).status).toBe(200);
+    const inferredWorkspace = seams.getWorkspaceFileSource.mock.calls[0][0];
+    expect(inferredWorkspace).toEqual(expect.any(String));
+    expect(seams.getWorkspaceFileSource).toHaveBeenCalledWith(inferredWorkspace, 'src/a.ts', null);
+    expect(seams.commitAndPushWorkspace).toHaveBeenCalledWith(inferredWorkspace, 'chore: Publish workspace', 'revision');
   });
 
   it('commits and pushes the selected workspace with the default item message', async () => {

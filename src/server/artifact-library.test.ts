@@ -1,6 +1,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { ArtifactLibrary, artifactFeedbackConfig, createCommentRateLimiter } from './artifact-library.js';
 import { openDatabase } from './database.js';
@@ -135,15 +136,23 @@ describe('artifact library', () => {
   it('gives artifacts published before the library existed a version 1 history', () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-library-'));
     const path = join(directory, 'legacy.db');
-    const first = openDatabase(path);
+    // This is the actual pre-ledger shape: an existing artifact table, with
+    // the rest of the schema and migration ledger still absent.
+    const first = new DatabaseSync(path);
     first.exec(`
+      CREATE TABLE published_artifacts (
+        id TEXT PRIMARY KEY,
+        source_path TEXT NOT NULL,
+        work_item_id TEXT,
+        conversation_id TEXT,
+        title TEXT NOT NULL,
+        public_url TEXT NOT NULL,
+        content_hash TEXT,
+        published_at TEXT NOT NULL,
+        revoked_at TEXT
+      );
       INSERT INTO published_artifacts (id, source_path, title, public_url, content_hash, published_at)
       VALUES ('legacy-1', '/dev/workbench/notes/legacy.md', 'Legacy report', 'https://artifacts.example.com/legacy-1/', 'hash-legacy', '2026-08-01T00:00:00.000Z');
-      DELETE FROM artifact_versions WHERE artifact_id = 'legacy-1';
-      DELETE FROM artifact_events WHERE artifact_id = 'legacy-1';
-      -- This represents a database created before the migration ledger. A
-      -- versioned current database is intentionally not repaired at startup.
-      DELETE FROM schema_migrations;
     `);
     first.close();
 

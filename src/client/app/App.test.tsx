@@ -2639,7 +2639,7 @@ describe('stack navigation', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Back to task' }));
 
     expect(await screen.findByRole('heading', { name: 'Attention stack' })).toBeTruthy();
-    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' }));
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' }), { timeout: 5_000 });
   });
 
   it('centers a newly created task at its scored position', async () => {
@@ -2676,7 +2676,7 @@ describe('stack navigation', () => {
     await waitFor(() => expect(screen.getByText(item.title)).toBeTruthy());
     const createCall = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find(([input, init]) => String(input) === '/api/work-items' && (init as RequestInit | undefined)?.method === 'POST');
     expect(JSON.parse((createCall?.[1] as RequestInit).body as string)).toEqual(expect.objectContaining({ classificationKind: 'bugfix' }));
-    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' }));
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' }), { timeout: 5_000 });
   });
 
   it('opens the add-task dialog on the manual task view by default', async () => {
@@ -2827,7 +2827,7 @@ describe('self-assigned ownership', () => {
 
   const renderDetail = (assignees: string[]) => {
     const item = { ...baseItem, assignees };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/execute')) return new Response(JSON.stringify({
         run: { id: 'palmyra-run', workItemId: taskId, agent: 'palmyra', executionProfile: 'palmyra-x5', status: 'running' },

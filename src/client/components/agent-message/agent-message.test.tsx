@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { act, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
 import { AgentMessageBody } from './agent-message';
 import { splitAgentResponse } from './agent-message-logic';
 
@@ -10,6 +10,13 @@ async function waitForFrame() {
     await new Promise((resolve) => requestAnimationFrame(resolve));
   });
 }
+
+afterEach(async () => {
+  cleanup();
+  // React schedules state work with setImmediate. Let that queue drain while
+  // jsdom's window still exists instead of after Vitest tears it down.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+});
 
 describe('splitAgentResponse', () => {
   it('uses authored top-level headings as report sections', () => {

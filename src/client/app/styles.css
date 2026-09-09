@@ -1740,6 +1740,9 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
   .mobile-composer-handle:active { cursor: grabbing; }
   .mobile-composer-handle:focus-visible { outline: 2px solid var(--acid); outline-offset: -6px; }
   .agent-console .shared-thread { padding: 68px 14px 28px; }
+  .agent-console .shared-thread .jump-to-latest-button {
+    position: sticky; bottom: 12px; left: 50%; z-index: 5; margin: 12px 0;
+  }
   .agent-console:has(.agent-console-header:not(.is-mobile-header-collapsed)) .shared-thread { padding-top: 140px; }
   /* Chrome lives over the surface, never in front of it in document flow. */
   .agent-console-header { position: absolute; inset: 0; z-index: 6; flex: 0 0 0; min-height: 0; height: 0; padding: 0; overflow: visible; border: 0; }

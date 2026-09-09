@@ -174,6 +174,35 @@ const baselineInventory = [
   'GET /api/providers/linear/teams',
   'GET /api/providers/linear/teams/:id/projects',
   'PUT /api/providers/linear/config',
+  'DELETE /api/reviews/:id',
+  'GET /api/ai/providers',
+  'GET /api/github/pull-request-commit-diff',
+  'GET /api/github/pull-request-commits',
+  'GET /api/insights/memory',
+  'GET /api/reviews',
+  'GET /api/reviews/:id',
+  'GET /api/reviews/:id/workspace-diff',
+  'GET /api/reviews/:id/workspace-diff/block-reviews',
+  'GET /api/reviews/:id/workspace-diff/commit',
+  'GET /api/reviews/:id/workspace-diff/file',
+  'GET /api/reviews/:id/workspace-diff/hunk-reviews',
+  'GET /api/reviews/:id/workspace-diff/ref',
+  'GET /api/reviews/:id/workspace-diff/ref/commits',
+  'GET /api/reviews/:id/workspace-diff/refs',
+  'GET /api/reviews/:id/workspace-diff/snapshots',
+  'GET /api/reviews/:id/workspace-diff/status',
+  'GET /api/reviews/repositories',
+  'GET /api/reviews/repositories/refs',
+  'GET /api/shared/conversations/:id/workspace-diff/commit',
+  'GET /api/shared/conversations/:id/workspace-diff/ref/commits',
+  'GET /api/work-items/:id/workspace-diff/commit',
+  'GET /api/work-items/:id/workspace-diff/ref/commits',
+  'PATCH /api/artifacts/:id/favorite',
+  'POST /api/desktop-notifications',
+  'POST /api/reviews',
+  'PUT /api/reviews/:id/workspace-diff/block-reviews',
+  'PUT /api/reviews/:id/workspace-diff/hunk-reviews',
+  'PUT /api/reviews/:id/workspace-diff/hunk-reviews/batch',
 ].sort();
 
 function routeInventory(app: Express): string[] {
@@ -195,7 +224,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(160);
+    expect(baselineInventory).toHaveLength(190);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

@@ -505,7 +505,7 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(await screen.findByLabelText('2 decisions across 1 file, 0 completed')).toBeInTheDocument();
 
     await openDecisionDetail(2);
-    fireEvent.click(screen.getByRole('button', { name: 'Fix' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
     expect(fixRequests).toHaveLength(1);
     expect(fixRequests[0]).toContain('src/skipped.ts');
     expect(fixRequests[0]).toContain('@@ -10 +10 @@ secondBehavior');
@@ -626,7 +626,8 @@ describe('WorkspaceDiffView pull-request source', () => {
 
     expect(await screen.findByRole('heading', { name: 'Selectable scopes' })).toBeInTheDocument();
     expect(screen.getByLabelText('Pull request')).toHaveValue(pullRequestUrl);
-    expect(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
+    const restoredQueue = await screen.findByRole('navigation', { name: 'Review decision queue' });
+    expect(within(restoredQueue).getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
   });
 
   it('opens the linked pull request when the local checkout has nothing to review', async () => {

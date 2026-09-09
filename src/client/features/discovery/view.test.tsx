@@ -166,7 +166,7 @@ describe('DiscoveryInboxView restore', () => {
     const secondCard = screen.getByText('Second reviewed discovery').closest<HTMLElement>('.discovery-card')!;
     fireEvent.click(within(firstCard).getByRole('button', { name: 'Restore to inbox' }));
 
-    expect(within(firstCard).getByRole('button', { name: 'Restoring…' })).toBeDisabled();
+    expect(await within(firstCard).findByRole('button', { name: 'Restoring…' })).toBeDisabled();
     expect(within(secondCard).getByRole('button', { name: 'Restore to inbox' })).toBeEnabled();
 
     completeRestore!();

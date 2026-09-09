@@ -55,17 +55,18 @@ function useTypewriter(text: string, active: boolean, startAtBeginning = false, 
       const dt = lastTime === null ? 0 : time - lastTime;
       lastTime = time;
       const target = textRef.current.length;
-      setRevealed((current) => {
-        if (current >= target) return current;
-        const backlog = target - current;
-        const charsPerSec = TYPEWRITER_BASE_CHARS_PER_SEC + backlog * TYPEWRITER_BACKLOG_CATCHUP_RATE;
-        return Math.min(target, current + Math.max(1, Math.round((charsPerSec * dt) / 1000)));
-      });
-      frame = requestAnimationFrame(step);
+      const current = revealedRef.current;
+      if (current >= target) return;
+      const backlog = target - current;
+      const charsPerSec = TYPEWRITER_BASE_CHARS_PER_SEC + backlog * TYPEWRITER_BACKLOG_CATCHUP_RATE;
+      const next = Math.min(target, current + Math.max(1, Math.round((charsPerSec * dt) / 1000)));
+      revealedRef.current = next;
+      setRevealed(next);
+      if (next < target) frame = requestAnimationFrame(step);
     };
     frame = requestAnimationFrame(step);
     return () => cancelAnimationFrame(frame);
-  }, [active]);
+  }, [active, text]);
 
   // A server chunk can extend the final word of the last rendered chunk
   // (`Hello` -> `Hello, ...`). Keep that completed prefix visible while the

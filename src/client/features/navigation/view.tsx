@@ -1,5 +1,5 @@
 import { Cloud, Command, MessageCircle, MoreHorizontal, Search, Settings, Wrench, X } from 'lucide-react';
-import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import type { MemorySearchResult } from '../../../shared/contracts';
@@ -25,6 +25,7 @@ function useGlobalSearch(onSelectResult: (result: MemorySearchResult) => void) {
   const [activeResultIndex, setActiveResultIndex] = useState(-1);
   const debouncedQuery = useDebouncedValue(query.trim(), 300);
   const inputRef = useRef<HTMLInputElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const results = useQuery({
     queryKey: ['global-memory-search', debouncedQuery, resultLimit],
     queryFn: () => api.searchMemory(debouncedQuery, resultLimit),
@@ -36,8 +37,14 @@ function useGlobalSearch(onSelectResult: (result: MemorySearchResult) => void) {
     setActiveResultIndex(-1);
     setResultLimit(GLOBAL_SEARCH_RESULT_LIMIT);
   }, [debouncedQuery]);
-  useEffect(() => {
-    if (open) inputRef.current?.focus();
+  useLayoutEffect(() => {
+    if (!open) return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    inputRef.current?.focus();
+    return () => {
+      if (previousFocusRef.current?.isConnected) previousFocusRef.current.focus();
+      previousFocusRef.current = null;
+    };
   }, [open]);
   useEffect(() => {
     function handleGlobalKeyDown(event: globalThis.KeyboardEvent) {
@@ -89,6 +96,21 @@ function GlobalSearchTrigger({ search }: { search: GlobalSearchState }) {
 
 function GlobalSearchPanel({ search }: { search: GlobalSearchState }) {
   const { open, query, setQuery, activeResultIndex, setActiveResultIndex, debouncedQuery, inputRef, results, visibleResults, selectableResults, closeOverlay, selectResult, handleKeyDown, resultLimit, setResultLimit } = search;
+  function trapFocus(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === 'Escape') { closeOverlay(); return; }
+    if (event.key !== 'Tab') return;
+    const focusable = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])')];
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
   return <>
     {open && createPortal(
       <div
@@ -101,7 +123,7 @@ function GlobalSearchPanel({ search }: { search: GlobalSearchState }) {
           role="dialog"
           aria-modal="true"
           aria-label="Search everything"
-          onKeyDown={(event) => { if (event.key === 'Escape') closeOverlay(); }}
+          onKeyDown={trapFocus}
         >
           <div className="search-box">
             <Search size={15} />

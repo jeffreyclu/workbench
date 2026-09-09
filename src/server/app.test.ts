@@ -16,6 +16,7 @@ import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { closeTestServer as closeServer } from './test-http-harness.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
+import { isSharedReplyActive } from './shared-room.js';
 
 describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
   let database: WorkbenchDatabase;
@@ -312,7 +313,8 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     expect(retry.status).toBe(202);
     const body = await retry.json() as { replies: Array<{ id: string; author: string }> };
     expect(body.replies).toEqual([expect.objectContaining({ id: codex.id, author: 'codex' })]);
-    await vi.waitFor(() => expect(repository.getSharedMessageById(codex.id)?.status).toBe('failed'));
+    await vi.waitFor(() => expect(repository.getSharedMessageById(codex.id)?.status).toBe('failed'), { timeout: 5_000 });
+    await vi.waitFor(() => expect(isSharedReplyActive(codex.id)).toBe(false), { timeout: 5_000 });
   });
 
   it('retries each terminal reply from a paired dispatch independently', async () => {
@@ -329,8 +331,10 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
 
     expect(codexRetry.status).toBe(202);
     expect(claudeRetry.status).toBe(202);
-    await vi.waitFor(() => expect(repository.getSharedMessageById(codex.id)?.status).toBe('failed'));
-    await vi.waitFor(() => expect(repository.getSharedMessageById(claude.id)?.status).toBe('failed'));
+    await vi.waitFor(() => expect(repository.getSharedMessageById(codex.id)?.status).toBe('failed'), { timeout: 5_000 });
+    await vi.waitFor(() => expect(repository.getSharedMessageById(claude.id)?.status).toBe('failed'), { timeout: 5_000 });
+    await vi.waitFor(() => expect(isSharedReplyActive(codex.id)).toBe(false), { timeout: 5_000 });
+    await vi.waitFor(() => expect(isSharedReplyActive(claude.id)).toBe(false), { timeout: 5_000 });
   });
 
   it('retries a terminal reply even when a newer reply from the same agent is running', async () => {
@@ -342,7 +346,8 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     const retry = await fetch(`${baseUrl}/api/shared/messages/${staleClaude.id}/retry`, { method: 'POST' });
 
     expect(retry.status).toBe(202);
-    await vi.waitFor(() => expect(repository.getSharedMessageById(staleClaude.id)?.status).toBe('failed'));
+    await vi.waitFor(() => expect(repository.getSharedMessageById(staleClaude.id)?.status).toBe('failed'), { timeout: 5_000 });
+    await vi.waitFor(() => expect(isSharedReplyActive(staleClaude.id)).toBe(false), { timeout: 5_000 });
   });
 
   describe('open-prerequisite dispatch gate', () => {

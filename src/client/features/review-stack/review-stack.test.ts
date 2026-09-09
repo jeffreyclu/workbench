@@ -631,7 +631,7 @@ describe('spending on what the compiler found', () => {
     expect(grave.tier).toBe('T3');
     expect(grave.reason).toBe(LOGIC_HAZARD_REASONS.guard_removed);
     const light = routeReviewBlock(decision, blockObligations(decision), { effect: 'return_value', score: 7, hazards: ['return_path_added'] });
-    expect(light.tier).toBe('T2');
+    expect(light.tier).toBe('T1');
     expect(light.autoSettled).toBe(false);
   });
 
@@ -660,10 +660,10 @@ describe('spending on what the compiler found', () => {
       '   id: string;',
       ' }',
     ].join('\n')));
-    // The regex reads `export interface` in a `contracts.` path and calls it a
-    // public API, so without the compiler this outranks real business logic.
+    // The regex still reports public API context, but that label alone no
+    // longer buys an expensive review tier.
     expect(decision.riskSignals).toContain('public_api');
-    expect(routeReviewBlock(decision, blockObligations(decision)).tier).toBe('T3');
+    expect(routeReviewBlock(decision, blockObligations(decision)).tier).toBe('T1');
 
     const read = routeReviewBlock(decision, blockObligations(decision), { effect: 'declaration', score: 0, hazards: [] });
     expect(read.tier).toBe('T1');
@@ -690,7 +690,7 @@ describe('spending on what the compiler found', () => {
     const queue = buildReviewQueue(decisions, buildChangeMap(decisions), indexReviewBlocks(files));
     expect(queue.map((entry) => entry.decision.filePaths[0])).toEqual(['src/costly.ts', 'src/cheap.ts']);
     expect(queue[0].analysis).toEqual({ effect: 'branch', score: 20, hazards: ['boundary_moved'] });
-    expect(queue[0].routing.tier).toBe('T2');
+    expect(queue[0].routing.tier).toBe('T1');
     expect(queue[0].routing.reason).toBe(LOGIC_HAZARD_REASONS.boundary_moved);
   });
 });

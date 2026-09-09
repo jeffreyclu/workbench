@@ -154,7 +154,6 @@ export class ExecutionService {
   }
 
   renewLeases(ownerId: string, leaseMs: number, adoptRunIds: readonly string[] = []): void {
-    const now = new Date().toISOString();
     const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
     this.runs.renewOwnedLeases(ownerId, leaseMs, adoptRunIds);
     // If the event loop was saturated, this heartbeat can arrive just after

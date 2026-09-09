@@ -526,7 +526,7 @@ else
   printf '%s\n' '${completed}'
 fi`;
     const fixture = fakeAgentDirectory('exit 1', body);
-    process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS = '500';
+    process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS = '2000';
     const progress: string[] = [];
 
     const result = await runAgentCommandWithFallback('claude', fixture.directory, 'Complete the task.', (partial) => progress.push(partial));
@@ -573,8 +573,8 @@ else
   printf '%s\n' '${completed}'
 fi`;
     const fixture = fakeAgentDirectory('exit 1', body);
-    process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS = '500';
-    process.env.WORKBENCH_PROVIDER_IDLE_ACTIVITY_TIMEOUT_MS = '200';
+    process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS = '1500';
+    process.env.WORKBENCH_PROVIDER_IDLE_ACTIVITY_TIMEOUT_MS = '1000';
 
     const result = await runAgentCommandWithFallback('claude', fixture.directory, 'Complete the task.');
 

@@ -107,7 +107,7 @@ describe('conversation view controls', () => {
     expect(styles).toContain('.sidebar .nav-item.active { justify-content: center; gap: 0; padding: 11px 0; font-size: 0; }');
     expect(styles).toContain('.sidebar .sidebar-footer { display: grid; place-items: center; padding-inline: 0; }');
     expect(styles).toContain('.sidebar:focus-within .nav-item, .sidebar:focus-within .nav-item.active { justify-content: flex-start; gap: 10px; padding: 10px; font-size: 13px; }');
-    expect(styles).toContain('.sidebar:hover .sidebar-footer, .sidebar:focus-within .sidebar-footer { display: block; padding-inline: 9px; }');
+    expect(styles).toContain('.sidebar:hover .sidebar-footer, .sidebar:focus-within .sidebar-footer { display: flex; padding-inline: 9px; }');
   });
 
   it('stretches Search into a wide bar with the expanded desktop navigation', () => {

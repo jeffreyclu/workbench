@@ -225,10 +225,6 @@ function explainProduction(hunks: ChangeTypeHunk[]): { rules: ChangeTypeRule[]; 
   return { rules: trace.rules, type: trace.verdict ?? 'behavior_edit' };
 }
 
-function classifyProduction(hunks: ChangeTypeHunk[]): ReviewChangeType {
-  return explainProduction(hunks).type;
-}
-
 /** The classifier and its own explanation, from one pass. `classifyChangeType`
  * is a projection of this, so the trace a reviewer reads is by construction the
  * trace that produced the verdict. */
