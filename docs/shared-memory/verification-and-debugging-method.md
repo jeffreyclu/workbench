@@ -1,5 +1,13 @@
 ## Verification and debugging method
 
+### Start every agent-debugging investigation with the decision graph **(always)**
+
+When an agent behaves incorrectly, inspect that turn's decision graph before diagnosing the cause or
+changing code. The graph is the primary evidence for what Workbench selected, what context and memory
+it supplied, which rules fired, and why the agent produced that result. Correlate it with the stored
+message, activity log, and runtime evidence as needed, but never skip it or substitute a source-only
+hypothesis. This applies to Claude, Codex, Palmyra, and every future provider.
+
 ### Every agent has full access to every local repository **(always)**
 
 The resolved workspace is only an agent's starting directory and a concurrency

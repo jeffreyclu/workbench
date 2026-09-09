@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionContractForAuthorization, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionContractForAuthorization, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -202,6 +202,8 @@ export function codexTurnStartParams(threadId: string, cwd: string, prompt: stri
   return {
     threadId,
     cwd,
+    approvalPolicy: 'never',
+    sandboxPolicy: { type: 'dangerFullAccess' },
     effort: 'medium',
     // The debugger needs a provider-authored, human-readable decision record.
     // `concise` provides that without exposing encrypted chain-of-thought.
@@ -218,8 +220,8 @@ export function codexAppServerInitialRequest(cwd: string, resumeThreadId: string
 
 export function codexThreadBootstrapRequest(cwd: string, resumeThreadId?: string | null): { method: 'thread/start' | 'thread/resume'; params: Record<string, unknown> } {
   return resumeThreadId
-    ? { method: 'thread/resume', params: { threadId: resumeThreadId, cwd, approvalPolicy: 'never' } }
-    : { method: 'thread/start', params: { cwd, ephemeral: false, model: null, approvalPolicy: 'never' } };
+    ? { method: 'thread/resume', params: { threadId: resumeThreadId, cwd, approvalPolicy: 'never', sandbox: 'danger-full-access' } }
+    : { method: 'thread/start', params: { cwd, ephemeral: false, model: null, approvalPolicy: 'never', sandbox: 'danger-full-access' } };
 }
 
 export const CODEX_APP_SERVER_ARGS = ['app-server', '--stdio', ...CODEX_WORKBENCH_MCP_ARGS];
@@ -852,10 +854,29 @@ function isContinuationTurn(message: string): boolean {
  * can be evidence, but can never silently become Jeffrey's requested outcome.
  */
 export function fallbackTurnGrounding(thread: SharedMessage[], priorGrounding?: TurnGrounding | null): TurnGrounding {
-  const humanTurns = thread.filter((message) => message.author === 'jeffrey' && message.body.trim()).map((message) => message.body.trim());
-  const current = humanTurns.at(-1) ?? 'Respond to Jeffrey’s current request.';
+  const humanMessages = thread.filter((message) => message.author === 'jeffrey' && message.body.trim());
+  const humanTurns = humanMessages.map((message) => message.body.trim());
+  const currentMessage = humanMessages.at(-1);
+  const current = currentMessage?.body.trim() ?? 'Respond to Jeffrey’s current request.';
   const continuation = isContinuationTurn(current);
-  if (continuation && priorGrounding) return { ...priorGrounding, continuation: true, source: 'persisted' };
+  if (continuation && priorGrounding) {
+    if (currentMessage?.kind === 'execute' && /\b(?:do|run|fix|build|implement|apply|execute|start|ship|continue|proceed|go)\b/i.test(current.replace(/\b(?:fucking|fuck|damn|please|now|just|freaking)\b/gi, ' '))) {
+      return {
+        objective: `Execute the concrete action referenced by Jeffrey's latest command: ${JSON.stringify(current)}. Use the immediately preceding agent response and conversation context to resolve the referent. Do not answer the previous question, return another plan, or ask for confirmation.`,
+        acceptanceCriteria: [
+          'Perform the referenced action in this turn and report the observed result.',
+          ...priorGrounding.acceptanceCriteria.filter((criterion) => !/\b(?:tell|provide|explain|recommend|outline|list|answer|describe|estimate)\b/i.test(criterion)),
+        ].slice(0, 6),
+        exclusions: [
+          'Do not substitute instructions, recommendations, or a promise of future work for execution.',
+          ...priorGrounding.exclusions,
+        ].slice(0, 6),
+        continuation: true,
+        source: 'persisted',
+      };
+    }
+    return { ...priorGrounding, continuation: true, source: 'persisted' };
+  }
   const priorConcrete = continuation
     ? [...humanTurns.slice(0, -1)].reverse().find((message) => !isContinuationTurn(message))
     : undefined;
@@ -1596,6 +1617,16 @@ export async function replyInSharedRoom(
     // A completion claim is the last point where a cascade can leave the harness
     // and become Jeffrey's problem. Refuse to deliver one that this run did
     // nothing to earn; an honestly reported gap passes untouched.
+    if (runKind === 'execute' && hasDeferredExecutionResponse(result.output)) {
+      const reason = 'Agent returned a plan or promise instead of executing the selected execute turn.';
+      if (isPairedReply || recoveryUsed) throw new Error(reason);
+      repository.updateSharedMessage(messageId, { body: `● ${reason} Recovering this tracked turn with an execution-first pass…` });
+      const recovered = await recoveryRun(`Recovery requirement: the selected category is execute, but the previous response only described future actions. Perform the referenced action now using the available tools. Do not return another plan, ask for confirmation, or say what you will do. If a concrete tool error blocks execution, report that exact observed error.`);
+      if (hasDeferredExecutionResponse(recovered.output)) throw new Error(reason);
+      result = { ...recovered, fallbackFrom: result.agent === 'claude' ? 'claude' : result.fallbackFrom, fallbackReason: reason };
+      repository.updateSharedMessage(messageId, { author: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
+      if (runId) repository.updateRun(runId, { agent: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
+    }
     const executed = turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_write');
     if (!executed && hasUnverifiedCompletionClaim(result.output)) {
       const reason = 'Agent reported the work complete while this run executed no command and changed no file.';

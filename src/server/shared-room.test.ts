@@ -6,7 +6,7 @@ import type { SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
-import { EXTERNAL_ACTION_CONTRACT, classificationForKind, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim } from './agent-runner.js';
+import { EXTERNAL_ACTION_CONTRACT, classificationForKind, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim } from './agent-runner.js';
 import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, cascadeBreakerForPrompt, recoveryPromptForThread, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
@@ -139,6 +139,13 @@ describe('compactConversationHistory', () => {
     expect(hasUnverifiedCompletionClaim('Fixed the cascade in the shared-room harness.')).toBe(true);
     expect(hasUnverifiedCompletionClaim('Changed the prompt builder; not verified end to end.')).toBe(false);
     expect(hasUnverifiedCompletionClaim('Here is what the profanity trend shows across the window.')).toBe(false);
+  });
+
+  it('rejects an execute reply that only plans or promises the requested work', () => {
+    expect(hasDeferredExecutionResponse('## Solution\n\n1. Fix H01 first.\n2. Then fix H02.\n3. Run both cases.')).toBe(true);
+    expect(hasDeferredExecutionResponse('Nothing changed. Say the word and I run it.')).toBe(true);
+    expect(hasDeferredExecutionResponse('I changed both paths and the focused tests passed.')).toBe(false);
+    expect(hasDeferredExecutionResponse('Blocked: apply_patch returned permission denied.')).toBe(false);
   });
 
   it('carries the cascade breaker into both the fresh and resumed provider prompts', () => {
@@ -299,6 +306,38 @@ describe('compactConversationHistory', () => {
 
     expect(classifierCalls).toBe(0);
     expect(grounding).toEqual({ ...prior, continuation: true, source: 'persisted' });
+  });
+
+  it('upgrades an execute continuation instead of persisting a prior answer-only objective', async () => {
+    const prior = {
+      objective: 'Tell the user exactly what to do next to address the failed H01 and H02 cases.',
+      acceptanceCriteria: ['Provide a clear next step.'],
+      exclusions: [],
+      continuation: false,
+      source: 'haiku' as const,
+    };
+    const current = message(0, 'do it');
+    current.kind = 'execute';
+    const grounding = await resolveTurnGrounding([current], async () => {
+      throw new Error('the deterministic continuation must not call the classifier');
+    }, prior);
+
+    expect(grounding.objective).toContain('Execute the concrete action');
+    expect(grounding.objective).toContain('do it');
+    expect(grounding.objective).not.toContain('Tell the user exactly what to do next');
+    expect(grounding.acceptanceCriteria).toContain('Perform the referenced action in this turn and report the observed result.');
+    expect(grounding.exclusions[0]).toContain('Do not substitute instructions');
+
+    for (const command of ['ok fucking do it then', 'I SAID TO FUCKING RUN IT']) {
+      const imperative = message(0, command);
+      imperative.kind = 'execute';
+      const resolved = await resolveTurnGrounding([imperative], async () => {
+        throw new Error('the deterministic continuation must not call the classifier');
+      }, prior);
+      expect(resolved.objective).toContain('Execute the concrete action');
+      expect(resolved.objective).toContain(command);
+      expect(resolved.objective).not.toContain('Tell the user exactly what to do next');
+    }
   });
 
   it('keeps a correction authoritative instead of treating it as a continuation', () => {
@@ -588,8 +627,9 @@ describe('agentStreamEventForCodexAppServerItem', () => {
     expect(codexTurnStartParams('thread', '/workspace', 'Fix it')).toMatchObject({
       threadId: 'thread', cwd: '/workspace', effort: 'medium', summary: 'concise',
     });
-    expect(codexThreadBootstrapRequest('/workspace')).toEqual({ method: 'thread/start', params: { cwd: '/workspace', ephemeral: false, model: null, approvalPolicy: 'never' } });
-    expect(codexThreadBootstrapRequest('/workspace', 'thread-1')).toEqual({ method: 'thread/resume', params: { threadId: 'thread-1', cwd: '/workspace', approvalPolicy: 'never' } });
+    expect(codexThreadBootstrapRequest('/workspace')).toEqual({ method: 'thread/start', params: { cwd: '/workspace', ephemeral: false, model: null, approvalPolicy: 'never', sandbox: 'danger-full-access' } });
+    expect(codexThreadBootstrapRequest('/workspace', 'thread-1')).toEqual({ method: 'thread/resume', params: { threadId: 'thread-1', cwd: '/workspace', approvalPolicy: 'never', sandbox: 'danger-full-access' } });
+    expect(codexTurnStartParams('thread-1', '/workspace', 'do it')).toMatchObject({ approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' } });
     expect(codexAppServerInitialRequest('/workspace', null, true)).toMatchObject({ method: 'thread/start' });
     expect(codexAppServerInitialRequest('/workspace', null, false)).toMatchObject({ method: 'initialize' });
   });

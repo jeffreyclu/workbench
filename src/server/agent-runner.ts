@@ -72,6 +72,16 @@ const ACKNOWLEDGED_GAP = /\b(?:not verified|unverified|could ?n[o']t verify|cann
 export function hasUnverifiedCompletionClaim(output: string): boolean {
   return COMPLETION_CLAIM.test(output) && !ACKNOWLEDGED_GAP.test(output);
 }
+
+const DEFERRED_EXECUTION_PROMISE = /\b(?:say the word|tell me (?:to )?(?:go|run|do|start)|ready to (?:run|apply|implement|fix|change|build)|i(?:'ll| will| can) (?:now )?(?:run|apply|implement|fix|change|update|build|execute|start)|we(?:'ll| will| can) (?:now )?(?:run|apply|implement|fix|change|update|build|execute|start)|next step(?: is)?)\b/i;
+const PLANNED_ACTION_LINE = /^\s*\d+[.)]\s+(?:then\s+)?(?:fix|add|update|run|implement|persist|apply|change|create|write|build|execute|start)\b/gim;
+
+/** Detects an execute-category answer that only promises or prescribes later execution. */
+export function hasDeferredExecutionResponse(output: string): boolean {
+  if (ACKNOWLEDGED_GAP.test(output)) return false;
+  if (DEFERRED_EXECUTION_PROMISE.test(output)) return true;
+  return [...output.matchAll(PLANNED_ACTION_LINE)].length >= 2;
+}
 export const EXTERNAL_ACTION_CONTRACT = 'External-action guardrail: read-only research is allowed, including WebSearch, WebFetch, documentation, and inspection. Default deny only mutations to external websites, services, or networked CLIs, including posting, editing, deleting, publishing, deploying, or sending through GitHub, Slack, Confluence, Linear, and their APIs. An explicit order must be represented by a supervisor-issued capability; never infer authorization from task text. No external mutation capability is issued for this run, so report a blocked mutation without performing it.';
 const EXTERNAL_ACTION_CAPABILITY_PREFIX = 'Supervisor-issued external-action capability:';
 const EXTERNAL_ACTION_CAPABILITY_SUFFIX = 'This capability expires when this run completes; do not reuse it for any later message or related external operation.';
@@ -2067,6 +2077,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       throw new Error('Agent asked Jeffrey for inspectable evidence without investigating the conversation, memory, repository, logs, or database first. The response was rejected by the Workbench harness.');
     }
     const executed = observedRunEvents.some((event) => event.streamKind === 'tool' || event.streamKind === 'file_write');
+    if (run.kind === 'execute' && hasDeferredExecutionResponse(result.output)) {
+      throw new Error('Agent returned a plan or promise instead of executing the selected execute task. The response was rejected by the Workbench harness.');
+    }
     if (!executed && hasUnverifiedCompletionClaim(result.output)) {
       throw new Error('Agent reported the work complete while this run executed no command and changed no file. The response was rejected by the Workbench harness.');
     }
