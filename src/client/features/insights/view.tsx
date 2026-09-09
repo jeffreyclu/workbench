@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { api } from '../../data/api';
 import { InsightsSkeleton } from '../../components/skeleton/skeleton';
 import type { InsightsTimeframe, RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsTokenUsage } from '../../../shared/contracts';
+import { MemoryDiagnosticsPanel } from './memory-diagnostics';
 
 const INSIGHTS_TIMEFRAMES: readonly { value: InsightsTimeframe; label: string }[] = [
   { value: '15m', label: 'Last 15 minutes' },
@@ -161,6 +162,7 @@ function CursingInsight({ data }: { data: RunInsights['cursing'] }) {
 export function InsightsView() {
   const [timeframe, setTimeframe] = useState<InsightsTimeframe>('all');
   const insights = useQuery({ queryKey: ['insights', timeframe], queryFn: () => api.getInsights(timeframe), refetchInterval: 10_000 });
+  const memoryDiagnostics = useQuery({ queryKey: ['memory-diagnostics'], queryFn: api.getMemoryDiagnostics, refetchInterval: 10_000 });
   const data = insights.data;
 
   return (
@@ -181,6 +183,15 @@ export function InsightsView() {
           </select>
         </label>
       </header>
+
+      <div className="memory-diagnostics-wrap">
+        <MemoryDiagnosticsPanel
+          data={memoryDiagnostics.data}
+          loading={memoryDiagnostics.isLoading}
+          error={memoryDiagnostics.isError}
+          onRetry={() => { void memoryDiagnostics.refetch(); }}
+        />
+      </div>
 
       {insights.isLoading && <InsightsSkeleton />}
       {insights.isError && <div className="list-state error-message">Could not load insights. <button className="button secondary compact" onClick={() => insights.refetch()}>Retry</button></div>}

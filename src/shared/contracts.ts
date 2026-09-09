@@ -1391,6 +1391,47 @@ export interface DiagnosticEvent {
   createdAt: string;
 }
 
+export interface MemoryDiagnosticsRecentRetrieval {
+  messageId: string;
+  conversationId: string;
+  conversationTitle: string;
+  author: string;
+  createdAt: string;
+  query: string;
+  retrievedCount: number;
+  directCount: number;
+  graphExpandedCount: number;
+  paths: string[][];
+}
+
+export interface MemoryDiagnostics {
+  status: 'healthy' | 'ready' | 'degraded';
+  summary: string;
+  checkedAt: string;
+  migrationApplied: boolean;
+  graph: {
+    nodeCount: number;
+    edgeCount: number;
+    canonicalNodeCount: number;
+    missingNodeCount: number;
+    staleNodeCount: number;
+    danglingEdgeCount: number;
+    triggerCount: number;
+    requiredTriggerCount: number;
+  };
+  traversalCanary: {
+    status: 'passed' | 'no_data' | 'failed';
+    path: string[];
+    detail: string;
+  };
+  retrievals: {
+    totalReplies: number;
+    graphExpandedReplies: number;
+    lastRetrievedAt: string | null;
+    recent: MemoryDiagnosticsRecentRetrieval[];
+  };
+}
+
 export interface RunInsights {
   /** Retry lifecycle events per terminal agent run. This may exceed 1 when a run is retried repeatedly. */
   retryRate: number | null;

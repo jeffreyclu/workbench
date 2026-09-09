@@ -142,37 +142,45 @@ export function expandKnowledgeGraph(
     const stateByNode = new Map(states.map((state) => [state.nodeId, state]));
     const nodeIds = states.map(({ nodeId }) => nodeId);
     const placeholders = nodeIds.map(() => '?').join(',');
-    const sourceValues = options.sources?.length ? options.sources : [];
-    const sourceClause = sourceValues.length ? `AND md.source IN (${sourceValues.map(() => '?').join(',')})` : '';
-    const rows = database.prepare(`
-      SELECT n.id AS node_id, md.source, md.source_id, md.title, md.body, md.created_at,
-             md.conversation_id, md.work_item_id, md.actor
-      FROM knowledge_graph_nodes n
-      JOIN memory_documents md ON (
-        (n.entity_type = 'message' AND md.source = 'message' AND md.source_id = n.source_id)
-        OR (n.entity_type = 'conversation' AND md.source = 'conversation' AND md.source_id = n.source_id)
-        OR (n.entity_type = 'activity' AND md.source = 'activity' AND md.source_id = n.source_id)
-        OR (n.entity_type = 'work_item' AND md.source = 'work_item' AND md.source_id = n.source_id)
-        OR (n.entity_type = 'audit' AND md.source = 'audit' AND md.source_id = n.source_id)
-        OR (n.entity_type = 'artifact' AND md.source = 'artifact' AND md.source_id = n.source_id)
-        OR (n.entity_type = 'agent_run' AND md.source IN ('run_instructions', 'run_output', 'run_error')
-            AND substr(md.source_id, 1, length(n.source_id) + 1) = n.source_id || ':')
-      )
-      WHERE n.id IN (${placeholders})
-        AND (? IS NULL OR md.work_item_id IN (SELECT id FROM work_items WHERE project_key = ? AND deleted_at IS NULL))
-        AND (? IS NULL OR md.conversation_id = ?)
-        AND (? IS NULL OR md.work_item_id = ?)
-        ${sourceClause}
-    `).all(
-      ...nodeIds,
-      options.projectKey ?? null, options.projectKey ?? null,
-      options.conversationId ?? null, options.conversationId ?? null,
-      options.workItemId ?? null, options.workItemId ?? null,
-      ...sourceValues,
-    ) as Array<{
-      node_id: string; source: string; source_id: string; title: string; body: string; created_at: string;
-      conversation_id: string | null; work_item_id: string | null; actor: string | null;
-    }>;
+    const nodes = database.prepare(`SELECT id, entity_type, source_id FROM knowledge_graph_nodes WHERE id IN (${placeholders})`)
+      .all(...nodeIds) as Array<{ id: string; entity_type: string; source_id: string }>;
+    const allowedSources = options.sources?.length ? new Set(options.sources) : null;
+    const getDocument = database.prepare(`SELECT source, source_id, title, body, created_at, conversation_id, work_item_id, actor
+      FROM memory_documents
+      WHERE source = ? AND source_id = ?
+        AND (? IS NULL OR work_item_id IN (SELECT id FROM work_items WHERE project_key = ? AND deleted_at IS NULL))
+        AND (? IS NULL OR conversation_id = ?)
+        AND (? IS NULL OR work_item_id = ?)`);
+    const documentsForNode = (node: { id: string; entity_type: string; source_id: string }) => {
+      const sourceIds: Array<[string, string]> = node.entity_type === 'agent_run'
+        ? [
+            ['run_instructions', `${node.source_id}:instructions`],
+            ['run_output', `${node.source_id}:output`],
+            ['run_error', `${node.source_id}:error`],
+          ]
+        : node.entity_type === 'message' || node.entity_type === 'conversation' || node.entity_type === 'activity'
+          || node.entity_type === 'work_item' || node.entity_type === 'audit' || node.entity_type === 'artifact'
+          ? [[node.entity_type, node.source_id]]
+          : [];
+      return sourceIds
+        .filter(([source]) => !allowedSources || allowedSources.has(source))
+        .flatMap(([source, sourceId]) => {
+          const row = getDocument.get(
+            source, sourceId,
+            options.projectKey ?? null, options.projectKey ?? null,
+            options.conversationId ?? null, options.conversationId ?? null,
+            options.workItemId ?? null, options.workItemId ?? null,
+          ) as {
+            source: string; source_id: string; title: string; body: string; created_at: string;
+            conversation_id: string | null; work_item_id: string | null; actor: string | null;
+          } | undefined;
+          return row ? [{ node_id: node.id, ...row }] : [];
+        });
+    };
+    // Resolve at most 120 graph nodes through the indexed (source, source_id)
+    // memory key. A single OR-heavy join made SQLite scan the full memory table
+    // and added seconds to every graph-assisted turn on a mature database.
+    const rows = nodes.flatMap(documentsForNode);
 
     return rows.map((row) => {
       const state = stateByNode.get(row.node_id)!;

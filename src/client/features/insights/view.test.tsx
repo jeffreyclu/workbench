@@ -6,9 +6,17 @@ import { InsightsView } from './view';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-function stubInsightsFetch(insightsPayload: unknown) {
-  vi.stubGlobal('fetch', vi.fn(async () => {
-    return new Response(JSON.stringify(insightsPayload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+const healthyMemoryDiagnostics = {
+  status: 'healthy', summary: 'The memory graph is synced and live traversal passed.', checkedAt: '2026-09-09T12:00:00.000Z', migrationApplied: true,
+  graph: { nodeCount: 119097, edgeCount: 50760, canonicalNodeCount: 119097, missingNodeCount: 0, staleNodeCount: 0, danglingEdgeCount: 0, triggerCount: 20, requiredTriggerCount: 20 },
+  traversalCanary: { status: 'passed', path: ['Matched request', 'Same conversation'], detail: 'A live read followed the graph to a related memory.' },
+  retrievals: { totalReplies: 8, graphExpandedReplies: 1, lastRetrievedAt: '2026-09-09T12:00:00.000Z', recent: [] },
+};
+
+function stubInsightsFetch(insightsPayload: unknown, memoryPayload: unknown = healthyMemoryDiagnostics) {
+  vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+    const payload = String(input).includes('/api/insights/memory') ? memoryPayload : insightsPayload;
+    return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }));
 }
 
@@ -162,5 +170,51 @@ describe('InsightsView', () => {
     await screen.findByRole('heading', { name: /insights/i });
     expect(screen.queryByRole('heading', { name: /weekly usage/i })).toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/api/usage/weekly'))).toBe(false);
+  });
+
+  it('keeps memory health visible even when there are no run insights', async () => {
+    stubInsightsFetch({
+      retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
+      medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
+      cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
+
+    expect(await screen.findByRole('heading', { name: 'Working' })).toBeTruthy();
+    expect(screen.getByText('Live traversal passed')).toBeTruthy();
+    expect(screen.getByText('20/20')).toBeTruthy();
+    expect(screen.getByText('Nothing to show yet')).toBeTruthy();
+  });
+
+  it('links recent graph-expanded retrieval evidence to its conversation', async () => {
+    const memoryPayload = {
+      ...healthyMemoryDiagnostics,
+      retrievals: { totalReplies: 1, graphExpandedReplies: 1, lastRetrievedAt: '2026-09-09T12:00:00.000Z', recent: [{
+        messageId: 'message-1', conversationId: 'conversation-1', conversationTitle: 'Staff promotion history', author: 'palmyra', createdAt: '2026-09-09T12:00:00.000Z', query: 'promotion evidence', retrievedCount: 2, directCount: 1, graphExpandedCount: 1,
+        paths: [['Matched request'], ['Matched request', 'Same task']],
+      }] },
+    };
+    stubInsightsFetch({ retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0, medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [], cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] } }, memoryPayload);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
+
+    expect(await screen.findByText('Staff promotion history')).toBeTruthy();
+    expect(screen.getByText('palmyra · 2 retrieved · 1 via graph')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open conversation' }).getAttribute('href')).toBe('/conversations/conversation-1');
+  });
+
+  it('shows graph failures plainly', async () => {
+    const degraded = { ...healthyMemoryDiagnostics, status: 'degraded', summary: 'The memory graph needs attention. See the failed checks below.', graph: { ...healthyMemoryDiagnostics.graph, triggerCount: 19 }, traversalCanary: { status: 'failed', path: [], detail: 'Graph traversal did not return a linked memory.' } };
+    stubInsightsFetch({ retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0, medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [], cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] } }, degraded);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
+
+    expect(await screen.findByRole('heading', { name: 'Needs attention' })).toBeTruthy();
+    expect(screen.getByText('19/20')).toBeTruthy();
+    expect(screen.getByText('Live traversal failed')).toBeTruthy();
   });
 });

@@ -1326,6 +1326,12 @@ selection reserves the strongest direct matches, then reduces repetition by
 task, conversation, source, and calendar quarter so historical reviews cover
 distinct work instead of returning many versions of one event.
 
+Insights exposes a Memory diagnostics panel as the observable proof surface.
+It compares graph nodes with canonical database rows, verifies every sync
+trigger and relationship target, runs a live read-only traversal, and lists
+recent replies with their direct and graph-expanded retrieval paths. A deployed
+graph is not considered observable until these checks are visible to Jeffrey.
+
 ### Response-formatting mechanics stay internal
 
 *Correction from Jeffrey, 2026-09-08.* Formatting is internal runtime state and

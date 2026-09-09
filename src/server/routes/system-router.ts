@@ -11,6 +11,7 @@ import { activeAgentProcessCount } from '../agent-runner.js';
 import { sendMacDesktopNotification } from '../desktop-notifications.js';
 import { aiProviderAvailability } from '../providers/provider-choice.js';
 import { parseAiProviderChoice } from '../../shared/ai-providers.js';
+import { getMemoryDiagnostics } from '../memory-diagnostics.js';
 
 export function createHealthRouter({ repository, capabilities, buildId }: RouteContext) {
   const router = Router();
@@ -20,7 +21,7 @@ export function createHealthRouter({ repository, capabilities, buildId }: RouteC
   return router;
 }
 
-export function createSystemRouter({ repository }: RouteContext) {
+export function createSystemRouter({ repository, database }: RouteContext) {
   const router = Router();
   /** Backs every provider selector in the UI. Availability is decided here, on
    * the machine that holds the key, so no surface has to guess whether its
@@ -63,6 +64,9 @@ export function createSystemRouter({ repository }: RouteContext) {
   router.get('/api/insights', (request, response) => {
     const timeframe = z.enum(['15m', '1h', '1d', '7d', '30d', 'all']).catch('all').parse(request.query.timeframe);
     response.json(repository.getRunInsights(timeframe));
+  });
+  router.get('/api/insights/memory', (_request, response) => {
+    response.json(getMemoryDiagnostics(database));
   });
   router.get('/api/audit-log', (request, response) => {
     const input = listAuditLogQuerySchema.parse(request.query);

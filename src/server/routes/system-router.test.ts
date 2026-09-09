@@ -49,4 +49,14 @@ describe('system router desktop notifications', () => {
     expect(response.status).toBe(400);
     expect(seams.sendMacDesktopNotification).not.toHaveBeenCalled();
   });
+
+  it('exposes read-only memory graph diagnostics', async () => {
+    const response = await fetch(`${baseUrl}/api/insights/memory`);
+    const body = await response.json() as { status: string; graph: { triggerCount: number; requiredTriggerCount: number }; traversalCanary: { status: string } };
+
+    expect(response.status).toBe(200);
+    expect(body.status).toBe('ready');
+    expect(body.graph).toMatchObject({ triggerCount: 20, requiredTriggerCount: 20 });
+    expect(body.traversalCanary.status).toBe('no_data');
+  });
 });
